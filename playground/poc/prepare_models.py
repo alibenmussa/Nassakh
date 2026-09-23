@@ -153,6 +153,31 @@ def write_legacy_config(model_dir: Path, base_dir: Path, dtype_name: str) -> boo
     return True
 
 
+def stage_snapshot(snapshot_dir: Path, dst: Path) -> None:
+    """Materialise a Hugging Face snapshot as a normal writable folder.
+
+    Small files (config, tokenizer, processor) are copied without the cache's
+    read-only mode bits; the multi-GB safetensors files are symlinked. mlx-vlm's
+    converter copies the tokenizer into the output folder and then rewrites it,
+    which fails on read-only cache files (Permission denied).
+    """
+    if dst.is_symlink() or dst.is_file():
+        dst.unlink()
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in snapshot_dir.iterdir():
+        if f.name.startswith("."):
+            continue
+        target = dst / f.name
+        if target.is_symlink() or target.exists():
+            target.unlink()
+        real = f.resolve()
+        if f.suffix == ".safetensors":
+            target.symlink_to(real)
+        else:
+            shutil.copyfile(real, target)
+            os.chmod(target, 0o644)
+
+
 def convert_mlx(src: Path, dst: Path) -> None:
     if is_complete(dst):
         print(f"  mlx: {dst} exists, skip")
@@ -195,17 +220,9 @@ def main() -> None:
             mark_complete(local, info)
         else:
             snap = snapshot(spec["hf_id"])
-            if local.is_symlink() or local.exists():
-                if local.is_symlink() or local.is_file():
-                    local.unlink()
-                else:
-                    shutil.rmtree(local)
-            local.parent.mkdir(parents=True, exist_ok=True)
-            local.symlink_to(snap, target_is_directory=True)
-            # markers must live next to the real files, not inside the HF cache snapshot
-            write_json_atomic(local.parent / f"{local.name}.nassakh_info.json",
-                              {"kind": "full", "repo": spec["hf_id"], "revision": revision_of(snap)})
-            print(f"  linked {local} -> {snap}")
+            stage_snapshot(snap, local)
+            mark_complete(local, {"kind": "full", "repo": spec["hf_id"], "revision": revision_of(snap)})
+            print(f"  staged {local} (small files copied, weights linked to {snap})")
         if args.mlx:
             convert_mlx(local, spec["mlx"])
     print("\nmodels ready.")
