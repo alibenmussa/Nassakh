@@ -130,7 +130,27 @@ def merge_adapter(base_dir: Path, adapter_dir: Path, out_dir: Path, dtype_name: 
     print(f"  saving merged model to {out_dir} ...", flush=True)
     model.save_pretrained(out_dir, safe_serialization=True)
     AutoProcessor.from_pretrained(base_dir).save_pretrained(out_dir)
+    write_legacy_config(out_dir, base_dir, dtype_name)
     return {"merged_tensors": merged, "scaling": scaling, "r": r, "lora_alpha": alpha}
+
+
+def write_legacy_config(model_dir: Path, base_dir: Path, dtype_name: str) -> bool:
+    """Rewrite config.json in the flat legacy Qwen2-VL layout.
+
+    transformers 5 saves a nested config (text_config / rope_parameters) that
+    mlx-vlm's Qwen2-VL loader cannot read; transformers itself still reads the
+    legacy layout (the v0.3 repo uses it). Returns True when a rewrite happened.
+    """
+    cfg_path = model_dir / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    if "text_config" not in cfg:
+        return False
+    legacy = json.loads((base_dir / "config.json").read_text())
+    legacy["torch_dtype"] = dtype_name
+    legacy["architectures"] = cfg.get("architectures", legacy.get("architectures"))
+    legacy.pop("_name_or_path", None)
+    cfg_path.write_text(json.dumps(legacy, indent=2, ensure_ascii=False) + "\n")
+    return True
 
 
 def convert_mlx(src: Path, dst: Path) -> None:
@@ -140,7 +160,7 @@ def convert_mlx(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         shutil.rmtree(dst)
-    cmd = [sys.executable, "-m", "mlx_vlm.convert", "--hf-path", str(src), "--mlx-path", str(dst)]
+    cmd = [sys.executable, "-m", "mlx_vlm", "convert", "--hf-path", str(src), "--mlx-path", str(dst)]
     print("  " + " ".join(cmd), flush=True)
     res = subprocess.run(cmd)
     if res.returncode != 0:
@@ -164,6 +184,8 @@ def main() -> None:
         print(f"\n== {key} ({spec['hf_id']})")
         if is_complete(local):
             print(f"  {local} ready, skip")
+            if spec["adapter"] and write_legacy_config(local, snapshot(spec["base"]), args.dtype):
+                print("  rewrote config.json in the legacy layout (mlx-vlm compatibility)")
         elif spec["adapter"]:
             base_dir = snapshot(spec["base"])
             adapter_dir = snapshot(spec["hf_id"])

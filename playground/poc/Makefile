@@ -22,7 +22,7 @@ models:
 	$(PY) prepare_models.py
 
 models-mlx:
-	$(PY) prepare_models.py --mlx
+	$(PY) prepare_models.py --engines qari_v02,qari_v03 --mlx
 
 selftest:
 	$(PY) run_ocr.py --self-test
