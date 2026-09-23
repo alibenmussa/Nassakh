@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+.env
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Node
+node_modules/
+
+# PoC: large generated artefacts (inputs, images, model weights). Keep runs/*.json, gt/, REPORT.md.
+playground/poc/input/
+playground/poc/pages/
+playground/poc/gray/
+playground/poc/gray_2x/
+playground/poc/bw/
+playground/poc/overlays/
+playground/poc/models/
+playground/poc/tmp/

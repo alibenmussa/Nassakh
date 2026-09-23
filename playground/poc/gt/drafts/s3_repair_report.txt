@@ -1,0 +1,3 @@
+s3_p001: 1477 chars, 23 lam-alef repaired, 0 spurious spaces dropped, 'لا' occurs 14x, suspicious leftovers 0 -> gt/drafts/s3_p001.txt
+s3_p003: 1306 chars, 19 lam-alef repaired, 0 spurious spaces dropped, 'لا' occurs 12x, suspicious leftovers 0 -> gt/drafts/s3_p003.txt
+s3_p004: 1266 chars, 14 lam-alef repaired, 0 spurious spaces dropped, 'لا' occurs 6x, suspicious leftovers 0 -> gt/drafts/s3_p004.txt

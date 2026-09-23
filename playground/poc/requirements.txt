@@ -1,0 +1,17 @@
+# Phase 1 proof-of-concept dependencies (macOS / Apple Silicon, Python 3.13)
+torch
+torchvision
+transformers
+accelerate
+safetensors
+huggingface_hub
+qwen-vl-utils
+mlx-vlm
+pillow
+pymupdf
+opencv-python-headless
+scikit-image
+numpy
+rapidfuzz
+jiwer
+pytesseract
