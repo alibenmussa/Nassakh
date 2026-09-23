@@ -52,3 +52,21 @@ revision and duration, which is also what the future `OcrRun` model stores.
 ## D10 — Prompts copied verbatim from the model cards (2026-09-23)
 Qari v0.2 and v0.3 share one plain-text prompt; KITAB has its own. Stored in `config.py` and in every
 run record, so a prompt change is visible in the data.
+
+## D11 — OCR body and footnotes as separate regions (2026-09-23, from the quick run)
+Whole-page Qari runs loop on footnote/reference lists on 3 of 12 quick runs (repeating one line until
+the 3000-token cap). A repetition penalty fixed one page and not another, and changed digits. Sending the
+body above the footnote rule and the footnote block (upscaled 2x) as two images stopped cleanly on the
+same pages and read the footnotes better. The product OCRs per region derived from the guide lines (D4),
+and the run store keeps a `looped` flag plus a truncated tail for whole-page runs.
+
+## D12 — Line linking in the review screen comes from image geometry, not OCR line breaks (2026-09-23)
+Qari v0.2 returns the page as one paragraph even when asked for line breaks; v0.3's HTML tags do not
+follow visual lines. Detected line boxes (projection profile) are reliable, so the review screen will map
+OCR words to lines by proportional length or by anchoring to a word-box detector (Tesseract) rather than
+counting newlines. To be designed in Phase 3.
+
+## D13 — Metrics include an order-insensitive word F1 (2026-09-23)
+On the born-digital sample the OCR reads table cells in a different order than the text layer, which CER
+counts as 12% error although the characters are right. The report shows word F1 next to CER so table
+pages and looped outputs are judged fairly.

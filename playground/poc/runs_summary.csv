@@ -1,0 +1,14 @@
+run_id,page_id,sample,engine,variant,backend,status,duration_s,output_tokens,finish,looped,chars,n_ocr_lines,n_img_lines,lines_match,has_gt,word_f1_lenient,cer_raw,wer_raw,cer_no_tashkeel,wer_no_tashkeel,cer_lenient,wer_lenient
+s1_p006__qari_v02__gray__torch,s1_p006,s1,qari_v02,gray,torch,ok,17.65,595,stop,False,1596,1,25,False,False,,,,,,,
+s1_p006__qari_v03__gray__torch,s1_p006,s1,qari_v03,gray,torch,ok,26.28,1058,stop,False,1586,8,25,False,False,,,,,,,
+s1_p012__qari_v02__gray__torch,s1_p012,s1,qari_v02,gray,torch,ok,14.74,598,stop,False,1697,1,26,False,False,,,,,,,
+s1_p012__qari_v03__gray__torch,s1_p012,s1,qari_v03,gray,torch,ok,27.47,1016,stop,False,1692,3,26,False,False,,,,,,,
+s2_p003R__qari_v02__gray__torch,s2_p003R,s2,qari_v02,gray,torch,ok,62.35,3000,length,True,1229,1,20,False,False,,,,,,,
+s2_p003R__qari_v02__regions__torch,s2_p003R,s2,qari_v02,regions,torch,ok,12.69,388,stop,False,970,2,20,False,False,,,,,,,
+s2_p003R__qari_v03__gray__torch,s2_p003R,s2,qari_v03,gray,torch,ok,18.49,653,stop,False,976,3,20,False,False,,,,,,,
+s3_p001__qari_v02__gray__torch,s3_p001,s3,qari_v02,gray,torch,ok,13.04,509,stop,False,1463,1,20,False,True,0.9933774834437086,0.13639479095270735,0.14601769911504425,0.13809854267869534,0.14601769911504425,0.1327182398864443,0.12389380530973451
+s3_p001__qari_v03__gray__torch,s3_p001,s3,qari_v03,gray,torch,ok,21.11,786,stop,False,1465,7,20,False,True,0.9911504424778761,0.13365318711446195,0.15486725663716813,0.1339347675225538,0.14601769911504425,0.12845990063875087,0.12389380530973451
+s4_p003__qari_v02__gray__torch,s4_p003,s4,qari_v02,gray,torch,ok,67.98,3000,length,True,4664,1,30,False,False,,,,,,,
+s4_p003__qari_v03__gray__torch,s4_p003,s4,qari_v03,gray,torch,ok,64.63,3000,length,True,2187,5,30,False,False,,,,,,,
+s4_p011__qari_v02__gray__torch,s4_p011,s4,qari_v02,gray,torch,ok,18.29,844,stop,False,2160,1,33,False,False,,,,,,,
+s4_p011__qari_v03__gray__torch,s4_p011,s4,qari_v03,gray,torch,ok,36.58,1720,stop,False,2130,5,33,False,False,,,,,,,

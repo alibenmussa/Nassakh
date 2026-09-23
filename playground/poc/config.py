@@ -13,6 +13,7 @@ INPUT = POC / "input"          # the four sample PDFs (not committed)
 PAGES = POC / "pages"          # extracted page images + manifest + preprocessing params
 GRAY = POC / "gray"            # cleaned grayscale pages (OCR input)
 GRAY_2X = POC / "gray_2x"      # 2x upscaled grayscale for low-resolution pages
+REGIONS = POC / "regions"      # <id>_body.png and <id>_foot.png split at the footnote rule
 BW = POC / "bw"                # Sauvola black & white (display / comparison)
 OVERLAYS = POC / "overlays"    # visual checks: line boxes, footnote rule, gutter split
 RUNS = POC / "runs"            # one JSON per OCR run (the resumable store)
@@ -123,8 +124,11 @@ QWEN_ENGINES = [k for k, v in ENGINES.items() if v["kind"] == "qwen2vl"]
 DEFAULT_ENGINES = ["qari_v02", "qari_v03", "qari_kitab", "tesseract"]
 
 # Image variants fed to the engines. gray_2x exists only for low_res pages.
-VARIANTS: dict[str, Path] = {"gray": GRAY, "bw": BW, "gray_2x": GRAY_2X}
-DEFAULT_VARIANTS = ["gray", "bw"]
+VARIANTS: dict[str, Path] = {"gray": GRAY, "bw": BW, "gray_2x": GRAY_2X, "regions": REGIONS}
+DEFAULT_VARIANTS = ["gray", "bw", "regions"]
+# The "regions" variant OCRs <id>_body.png and <id>_foot.png (footnotes, 2x) separately
+# and joins the texts. It exists only for pages where a footnote rule was found.
+REGION_MAX_TOKENS = {"body": 2500, "foot": 1000}
 
 # Generation parameters (recorded in every run JSON).
 GEN = {
@@ -134,6 +138,7 @@ GEN = {
     "max_pixels": 2048 * 28 * 28,
     "min_pixels": 256 * 28 * 28,
     "max_new_tokens": 3000,
+    "repetition_penalty": 1.0,   # 1.0 = off; 1.1 stopped one looping page but changed digits
     "dtype": "bfloat16",
 }
 DEFAULT_BACKEND = "torch"   # torch (PyTorch on MPS) | mlx (Apple MLX)

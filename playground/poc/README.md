@@ -35,12 +35,19 @@ make selftest        # 10 MB download; runs a tiny random model on MPS to check 
 ## 3. OCR runs (the slow part, resumable)
 
 ```bash
-make quick                       # 6 pages, gray only, v0.2 + v0.3  (~20-40 min)
-make full                        # the whole grid, PyTorch on MPS      (hours)
-MAX_MINUTES=120 make full        # work 2 hours, stop cleanly, continue tomorrow
+make quick                       # 6 pages, gray + regions, v0.2 + v0.3  (~10 min)
+make full                        # the whole grid, PyTorch on MPS         (~1-2 h)
+MAX_MINUTES=60 make full         # work 1 hour, stop cleanly, continue later
 make mlx ENGINE=qari_v02         # same pages through MLX for the speed/accuracy comparison
 make status                      # show the grid and what is done / pending / error
 ```
+
+Image variants: `gray` (cleaned page), `bw` (Sauvola), `gray_2x` (low-res pages
+upscaled), `regions` (body and footnotes OCR'd separately, footnotes at 2x; only
+pages where a footnote rule was found). `regions` exists because whole-page runs
+tend to loop on footnote lists; the run JSON then carries `looped: true` and the
+repeated tail is cut before scoring. `python run_ocr.py --repetition-penalty 1.1`
+adds a penalised variant (`gray+rp1.1`) for comparison.
 
 Stopping: press Ctrl+C at any time, or set `MAX_MINUTES`. Every finished page
 is already saved in `runs/<run_id>.json`; the run in progress is lost and
@@ -66,6 +73,7 @@ accuracy tables fill in as pages are promoted.
 | `config.py` | page selection, engines, prompts, variants, generation parameters |
 | `pages/manifest.json` | one entry per page: source PDF, page, half, size, dpi, split position |
 | `pages/<id>.prep.json` | preprocessing parameters and detected line boxes for the page |
-| `runs/<id>__<engine>__<variant>__<backend>.json` | one OCR run: model, revision, prompt, raw output, duration |
+| `runs/<id>__<engine>__<variant>__<backend>.json` | one OCR run: model, revision, prompt, raw output, duration, loop flag, region parts |
+| `regions/<id>_body.png`, `<id>_foot.png` | page split at the footnote rule (footnotes upscaled 2x) |
 | `gt/<id>.txt` | ground truth used by the evaluation |
 | `REPORT.md` | generated comparison tables |

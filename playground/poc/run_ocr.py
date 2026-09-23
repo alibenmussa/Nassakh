@@ -23,7 +23,7 @@ import traceback
 from pathlib import Path
 
 import config
-from common import fmt_secs, load_manifest, read_json, strip_markup, write_json_atomic
+from common import fmt_secs, load_manifest, parse_output, read_json, write_json_atomic
 
 
 def run_id(page_id: str, engine: str, variant: str, backend: str) -> str:
@@ -32,6 +32,7 @@ def run_id(page_id: str, engine: str, variant: str, backend: str) -> str:
 
 def plan(pages: list[dict], engines: list[str], variants: list[str], backend: str) -> list[dict]:
     """Ordered list of runs: grouped by engine so each model loads once."""
+    rp = config.GEN.get("repetition_penalty", 1.0)
     runs = []
     for eng in engines:
         spec = config.ENGINES[eng]
@@ -40,10 +41,40 @@ def plan(pages: list[dict], engines: list[str], variants: list[str], backend: st
             for var in variants:
                 if var == "gray_2x" and not page.get("low_res"):
                     continue
-                img = config.VARIANTS[var] / f"{page['id']}.png"
-                runs.append({"run_id": run_id(page["id"], eng, var, be), "page_id": page["id"], "sample": page["sample"],
-                             "engine": eng, "variant": var, "backend": be, "image": img})
+                if var == "regions":
+                    img = config.REGIONS / f"{page['id']}_body.png"
+                    if not img.exists():
+                        continue  # no footnote rule on this page
+                else:
+                    img = config.VARIANTS[var] / f"{page['id']}.png"
+                label = var + (f"+rp{rp}" if rp != 1.0 and spec["kind"] == "qwen2vl" else "")
+                runs.append({"run_id": run_id(page["id"], eng, label, be), "page_id": page["id"], "sample": page["sample"],
+                             "engine": eng, "variant": label, "backend": be, "image": img})
     return runs
+
+
+def recognize_run(engine, r: dict):
+    """Run one grid cell; the regions variant OCRs body and footnotes separately and joins them."""
+    if not r["variant"].startswith("regions"):
+        res = engine.recognize(r["image"])
+        return res, None
+    parts = []
+    texts = []
+    for region in ("body", "foot"):
+        img = config.REGIONS / f"{r['page_id']}_{region}.png"
+        if not img.exists():
+            continue
+        res = engine.recognize(img, max_new_tokens=config.REGION_MAX_TOKENS[region])
+        parts.append({"region": region, "image": str(img.relative_to(config.POC)), "text": res.text,
+                      "duration_s": round(res.duration_s, 2), "output_tokens": res.output_tokens, "finish": res.finish,
+                      "image_size": res.image_size, "resized_to": res.resized_to})
+        texts.append(res.text)
+    from engines import OcrResult
+    joined = OcrResult(text="\n\n".join(texts), duration_s=sum(p["duration_s"] for p in parts),
+                       prompt_tokens=None, output_tokens=sum((p["output_tokens"] or 0) for p in parts),
+                       finish="length" if any(p["finish"] == "length" for p in parts) else "stop",
+                       image_size=parts[0]["image_size"] if parts else None, resized_to=None, extra={})
+    return joined, parts
 
 
 def status_of(run: dict) -> str:
@@ -110,13 +141,17 @@ def execute(runs: list[dict], max_minutes: float, dry_run: bool) -> None:
                       "host": f"{platform.system()} {platform.machine()} {platform.mac_ver()[0]}".strip(),
                       "created_at": dt.datetime.now().isoformat(timespec="seconds")}
             try:
-                res = engine.recognize(r["image"])
-                record.update({"status": "ok", "raw_output": res.text, "parsed_text": strip_markup(res.text),
+                res, parts = recognize_run(engine, r)
+                parsed, looped = parse_output(res.text, hit_cap=res.finish == "length")
+                record.update({"status": "ok", "raw_output": res.text, "parsed_text": parsed,
+                               "looped": looped or res.finish == "length",
                                "duration_s": round(res.duration_s, 2), "prompt_tokens": res.prompt_tokens,
                                "output_tokens": res.output_tokens, "finish": res.finish,
                                "image_size": res.image_size, "resized_to": res.resized_to, "extra": res.extra})
-                print(f"     {res.duration_s:6.1f}s  {res.output_tokens or '?'} tokens  finish={res.finish}  "
-                      f"{len(record['parsed_text'].splitlines())} lines", flush=True)
+                if parts is not None:
+                    record["parts"] = parts
+                print(f"     {res.duration_s:6.1f}s  {res.output_tokens or '?'} tokens  finish={res.finish}"
+                      f"{'  LOOP' if record['looped'] else ''}  {len(parsed)} chars", flush=True)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:  # noqa: BLE001 - record and continue with the next run
@@ -168,7 +203,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--engines", default=",".join(config.DEFAULT_ENGINES))
     ap.add_argument("--variants", default=",".join(config.DEFAULT_VARIANTS) + ",gray_2x",
-                    help="gray,bw,gray_2x (gray_2x applies to low-res pages only)")
+                    help="gray,bw,regions,gray_2x (regions: pages with a footnote rule; gray_2x: low-res pages)")
     ap.add_argument("--backend", default=config.DEFAULT_BACKEND, choices=["torch", "mlx"])
     ap.add_argument("--pages", help="comma-separated page ids")
     ap.add_argument("--quick", action="store_true", help="6 pages, gray only, qari_v02 + qari_v03")
@@ -178,6 +213,7 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="redo everything selected")
     ap.add_argument("--max-pixels", type=int)
     ap.add_argument("--max-new-tokens", type=int)
+    ap.add_argument("--repetition-penalty", type=float, help="e.g. 1.1; default off (1.0)")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
@@ -185,6 +221,8 @@ def main() -> None:
         config.GEN["max_pixels"] = args.max_pixels
     if args.max_new_tokens:
         config.GEN["max_new_tokens"] = args.max_new_tokens
+    if args.repetition_penalty:
+        config.GEN["repetition_penalty"] = args.repetition_penalty
     if args.self_test:
         self_test()
         return
@@ -195,7 +233,7 @@ def main() -> None:
     if args.quick:
         pages = [p for p in pages if p["id"] in config.QUICK_PAGES]
         engines = [e for e in ("qari_v02", "qari_v03") if e in engines] or ["qari_v02", "qari_v03"]
-        variants = ["gray"]
+        variants = ["gray", "regions"]
     if args.pages:
         wanted = set(args.pages.split(","))
         pages = [p for p in pages if p["id"] in wanted]

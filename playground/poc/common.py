@@ -64,6 +64,52 @@ def strip_markup(text: str) -> str:
     return normalize_ws(t)
 
 
+_DIGIT = re.compile(r"[0-9٠-٩۰-۹]")
+
+
+def _cut_repeats(text: str, key: str, min_unit: int, max_unit: int, min_repeats: int, keep: int) -> tuple[str, bool]:
+    """Cut trailing repeats found on `key` (same length as `text`), keeping `keep` copies."""
+    truncated = False
+    while True:
+        found = False
+        for unit in range(min_unit, min(max_unit, len(key) // min_repeats) + 1):
+            tail = key[-unit:]
+            if all(key[-(k + 1) * unit: -k * unit or None] == tail for k in range(1, min_repeats)):
+                copies = 1
+                while len(key) >= (copies + 1) * unit and key[-(copies + 1) * unit: -copies * unit] == tail:
+                    copies += 1
+                drop = max(0, copies - keep) * unit
+                if drop:
+                    text, key = text[:-drop], key[:-drop]
+                    truncated = True
+                found = drop > 0
+                break
+        if not found:
+            return text.rstrip(), truncated
+
+
+def truncate_repetition(text: str, hit_cap: bool = False, min_unit: int = 8, max_unit: int = 400) -> tuple[str, bool]:
+    """Cut a degenerate repeating tail (model loop). Returns (text, was_truncated).
+
+    Pass 1 (always): a unit of 8..400 chars repeated verbatim 3+ times at the end
+    is reduced to one copy. Pass 2 (only when the run hit the token cap): the same
+    with digits masked, so incrementing loops like "(131) … (132) …" are caught;
+    the first five copies are kept because short footnote lists look alike.
+    """
+    text, t1 = _cut_repeats(text, text, min_unit, max_unit, 3, 1)
+    t2 = False
+    if hit_cap:
+        key = _DIGIT.sub("0", text)
+        text, t2 = _cut_repeats(text, key, min_unit, max_unit, 4, 5)
+    return text, t1 or t2
+
+
+def parse_output(raw: str, hit_cap: bool = False) -> tuple[str, bool]:
+    """Plain text from a raw model output: loop-truncated, markup stripped."""
+    text, looped = truncate_repetition(raw, hit_cap=hit_cap)
+    return strip_markup(text), looped
+
+
 def normalize(text: str, level: str) -> str:
     """Normalise text for metrics. level: raw | no_tashkeel | lenient.
 

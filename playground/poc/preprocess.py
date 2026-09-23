@@ -7,7 +7,8 @@ For every page in pages/manifest.json:
   4. deskew (projection-profile variance on a cleaned ink mask, coarse then fine)
   5. crop to the text block with a constant margin
   6. write gray/<id>.png (OCR input), bw/<id>.png (Sauvola, display),
-     gray_2x/<id>.png (low-res pages only), overlays/<id>.png (line boxes)
+     gray_2x/<id>.png (low-res pages only), overlays/<id>.png (line boxes),
+     regions/<id>_body.png + <id>_foot.png (2x) when a footnote rule is found
   7. detect text lines and a footnote separator rule
   8. save all parameters to pages/<id>.prep.json
 
@@ -274,6 +275,16 @@ def preprocess_page(entry: dict, prep: dict) -> dict:
         cv2.imwrite(str(config.GRAY_2X / f"{pid}.png"), up)
         upscaled = True
     overlay(gray_c, lines, rule_y, config.OVERLAYS / f"{pid}.png")
+    if rule_y is not None:
+        pad = max(2, int(0.15 * med_h)) if med_h else 3
+        body = gray_c[: max(1, rule_y - pad)]
+        foot = gray_c[min(gray_c.shape[0] - 1, rule_y + pad):]
+        cv2.imwrite(str(config.REGIONS / f"{pid}_body.png"), body)
+        foot2 = cv2.resize(foot, None, fx=2, fy=2, interpolation=cv2.INTER_LANCZOS4)
+        cv2.imwrite(str(config.REGIONS / f"{pid}_foot.png"), foot2)
+    else:
+        for suffix in ("_body", "_foot"):
+            (config.REGIONS / f"{pid}{suffix}.png").unlink(missing_ok=True)
 
     flags = []
     if abs(angle) > 3.0:
@@ -313,7 +324,7 @@ def main() -> None:
     ap.add_argument("--force", action="store_true", help="redo pages that already have a prep.json")
     args = ap.parse_args()
 
-    for d in (config.GRAY, config.BW, config.GRAY_2X, config.OVERLAYS):
+    for d in (config.GRAY, config.BW, config.GRAY_2X, config.OVERLAYS, config.REGIONS):
         d.mkdir(exist_ok=True)
     pages = load_manifest(config.MANIFEST)
     if args.pages:

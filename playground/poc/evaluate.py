@@ -18,7 +18,7 @@ from pathlib import Path
 import jiwer
 
 import config
-from common import LEVELS, load_manifest, normalize, read_json, strip_markup
+from common import LEVELS, load_manifest, normalize, parse_output, read_json
 
 
 def load_runs() -> list[dict]:
@@ -38,8 +38,18 @@ def load_prep() -> dict[str, dict]:
     return {p.name.split(".")[0]: read_json(p) for p in config.PAGES.glob("*.prep.json")}
 
 
+def word_f1(ref: str, hyp: str) -> float:
+    """Order-insensitive word overlap (multiset F1). Fair for tables and reordered blocks."""
+    from collections import Counter
+
+    r, h = Counter(ref.split()), Counter(hyp.split())
+    common = sum((r & h).values())
+    total = sum(r.values()) + sum(h.values())
+    return (2 * common / total) if total else 0.0
+
+
 def score(rec: dict, gt: str) -> dict:
-    hyp_src = strip_markup(rec.get("raw_output", ""))
+    hyp_src, _ = parse_output(rec.get("raw_output", ""), hit_cap=rec.get("finish") == "length")
     out = {}
     for level in LEVELS:
         ref, hyp = normalize(gt, level), normalize(hyp_src, level)
@@ -48,6 +58,7 @@ def score(rec: dict, gt: str) -> dict:
         hyp = hyp or "∅"
         out[f"cer_{level}"] = jiwer.cer(ref, hyp)
         out[f"wer_{level}"] = jiwer.wer(ref, hyp)
+    out["word_f1_lenient"] = word_f1(normalize(gt, "lenient"), normalize(hyp_src, "lenient"))
     return out
 
 
@@ -83,7 +94,8 @@ def main() -> None:
                "status": rec.get("status"), "duration_s": rec.get("duration_s"), "output_tokens": rec.get("output_tokens"),
                "finish": rec.get("finish"), "has_gt": rec.get("page_id") in gt}
         if rec.get("status") == "ok":
-            parsed = strip_markup(rec.get("raw_output", ""))
+            parsed, looped = parse_output(rec.get("raw_output", ""), hit_cap=rec.get("finish") == "length")
+            row["looped"] = looped or rec.get("finish") == "length"
             row["n_ocr_lines"] = len(parsed.splitlines())
             row["n_img_lines"] = prep.get(rec["page_id"], {}).get("n_lines")
             row["lines_match"] = (row["n_img_lines"] is not None and row["n_ocr_lines"] == row["n_img_lines"])
@@ -94,7 +106,7 @@ def main() -> None:
 
     # ---------------------------------------------------------------- csv
     fields = ["run_id", "page_id", "sample", "engine", "variant", "backend", "status", "duration_s", "output_tokens",
-              "finish", "chars", "n_ocr_lines", "n_img_lines", "lines_match", "has_gt"] + \
+              "finish", "looped", "chars", "n_ocr_lines", "n_img_lines", "lines_match", "has_gt", "word_f1_lenient"] + \
              [f"{m}_{lvl}" for lvl in LEVELS for m in ("cer", "wer")]
     with open(config.POC / "runs_summary.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
@@ -123,10 +135,11 @@ def main() -> None:
         sc = [r for r in rs if r.get("cer_raw") is not None]
         rows1.append([eng, var, be, len(rs), len(sc), mean([r.get("cer_raw") for r in sc]),
                       mean([r.get("cer_no_tashkeel") for r in sc]), mean([r.get("cer_lenient") for r in sc]),
-                      mean([r.get("wer_lenient") for r in sc]), mean([r["duration_s"] for r in rs]),
-                      sum(r.get("finish") == "length" for r in rs)])
+                      mean([r.get("wer_lenient") for r in sc]), mean([r.get("word_f1_lenient") for r in sc]),
+                      mean([r["duration_s"] for r in rs]), sum(bool(r.get("looped")) for r in rs)])
     md.append(md_table(["engine", "variant", "backend", "runs", "scored", "CER raw", "CER no tashkeel", "CER lenient",
-                        "WER lenient", "mean s/page", "hit token cap"], rows1))
+                        "WER lenient", "word F1", "mean s/page", "loops"], rows1))
+    md += ["", "`word F1` ignores word order (fair for tables and reordered blocks); 1.0 = every word present."]
 
     # 2. per sample x engine (best variant by lenient CER)
     md += ["", "## 2. Accuracy per sample (best variant per engine, lenient CER)", ""]
@@ -144,11 +157,10 @@ def main() -> None:
                          key=lambda kv: mean([r["cer_lenient"] for r in kv[1]]))
         (beng, bvar, bbe), brs = best_combo
         md += ["", f"## 3. Per page for the best combination: {beng} / {bvar} / {bbe}", ""]
-        rows3 = [[r["page_id"], r["cer_raw"], r["cer_no_tashkeel"], r["cer_lenient"], r["wer_lenient"], r["duration_s"],
-                  r.get("n_ocr_lines"), r.get("n_img_lines"), "yes" if r.get("lines_match") else "no", r.get("finish")]
+        rows3 = [[r["page_id"], r["cer_raw"], r["cer_no_tashkeel"], r["cer_lenient"], r["wer_lenient"],
+                  r.get("word_f1_lenient"), r["duration_s"], "yes" if r.get("looped") else "no"]
                  for r in sorted(brs, key=lambda r: r["page_id"])]
-        md.append(md_table(["page", "CER raw", "CER no tashkeel", "CER lenient", "WER lenient", "s", "OCR lines",
-                            "image lines", "match", "finish"], rows3))
+        md.append(md_table(["page", "CER raw", "CER no tashkeel", "CER lenient", "WER lenient", "word F1", "s", "loop"], rows3))
 
     # 4. backend comparison (same engine/variant/page)
     pairs = []
@@ -178,7 +190,10 @@ def main() -> None:
                md_table(["page", "engine", "CER gray", "CER gray_2x", "delta"], ups)]
 
     # 6. line alignment feasibility
-    md += ["", "## 6. Line alignment: OCR line count vs detected image lines", ""]
+    md += ["", "## 6. Line alignment: OCR line count vs detected image lines", "",
+           "Qari v0.2 returns the page as one paragraph and v0.3's tags do not follow visual lines, so this "
+           "table mostly documents that line linking in the review screen must come from image geometry, "
+           "not from OCR line breaks.", ""]
     rows6 = []
     for (eng, var), rs in sorted(group(ok, ["engine", "variant"]).items()):
         with_lines = [r for r in rs if r.get("n_img_lines") is not None]

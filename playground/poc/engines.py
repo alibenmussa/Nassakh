@@ -73,9 +73,13 @@ class TorchQwenEngine:
         if ip is not None and isinstance(getattr(ip, "size", None), dict):
             ip.size = {**ip.size, "shortest_edge": self.gen["min_pixels"], "longest_edge": self.gen["max_pixels"]}
 
-    def recognize(self, image_path: Path) -> OcrResult:
+    def recognize(self, image_path: Path, max_new_tokens: int | None = None) -> OcrResult:
         import torch
 
+        max_new_tokens = max_new_tokens or self.gen["max_new_tokens"]
+        extra = {}
+        if self.gen.get("repetition_penalty", 1.0) != 1.0:
+            extra["repetition_penalty"] = self.gen["repetition_penalty"]
         img, orig, new = prepare_image(image_path, self.gen["max_pixels"], self.gen["min_pixels"])
         messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": self.prompt}]}]
         chat = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -83,11 +87,11 @@ class TorchQwenEngine:
         n_prompt = int(inputs["input_ids"].shape[1])
         t0 = time.time()
         with torch.inference_mode():
-            out = self.model.generate(**inputs, max_new_tokens=self.gen["max_new_tokens"], do_sample=False)
+            out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, **extra)
         duration = time.time() - t0
         gen_ids = out[0, n_prompt:]
         text = self.processor.batch_decode([gen_ids], skip_special_tokens=True)[0]
-        finish = "length" if gen_ids.shape[0] >= self.gen["max_new_tokens"] else "stop"
+        finish = "length" if gen_ids.shape[0] >= max_new_tokens else "stop"
         if self.device == "mps":
             torch.mps.empty_cache()
         return OcrResult(text=text, duration_s=duration, prompt_tokens=n_prompt, output_tokens=int(gen_ids.shape[0]),
@@ -123,17 +127,20 @@ class MlxQwenEngine:
         self.config = load_config(str(self.model_dir))
         print(f"  [mlx] loaded {self.model_dir.name} in {time.time() - t0:.0f}s", flush=True)
 
-    def recognize(self, image_path: Path) -> OcrResult:
+    def recognize(self, image_path: Path, max_new_tokens: int | None = None) -> OcrResult:
         from mlx_vlm import generate
         from mlx_vlm.prompt_utils import apply_chat_template
 
+        max_new_tokens = max_new_tokens or self.gen["max_new_tokens"]
         img, orig, new = prepare_image(image_path, self.gen["max_pixels"], self.gen["min_pixels"])
         config.TMP.mkdir(exist_ok=True)
         tmp = config.TMP / f"mlx_{uuid.uuid4().hex}.png"
         img.save(tmp)
         try:
             formatted = apply_chat_template(self.processor, self.config, self.prompt, num_images=1)
-            wanted = {"max_tokens": self.gen["max_new_tokens"], "temperature": 0.0, "verbose": False}
+            wanted = {"max_tokens": max_new_tokens, "temperature": 0.0, "verbose": False}
+            if self.gen.get("repetition_penalty", 1.0) != 1.0:
+                wanted["repetition_penalty"] = self.gen["repetition_penalty"]
             sig = inspect.signature(generate).parameters
             accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.values())
             kwargs = {k: v for k, v in wanted.items() if k in sig or accepts_kwargs}
@@ -145,7 +152,7 @@ class MlxQwenEngine:
         text = getattr(out, "text", out)
         n_out = getattr(out, "generation_tokens", None)
         n_prompt = getattr(out, "prompt_tokens", None)
-        finish = "unknown" if n_out is None else ("length" if n_out >= self.gen["max_new_tokens"] else "stop")
+        finish = "unknown" if n_out is None else ("length" if n_out >= max_new_tokens else "stop")
         extra = {k: getattr(out, k) for k in ("generation_tps", "prompt_tps", "peak_memory") if hasattr(out, k)}
         return OcrResult(text=str(text), duration_s=duration, prompt_tokens=n_prompt, output_tokens=n_out,
                          finish=finish, image_size=orig, resized_to=new, extra=extra)
@@ -169,7 +176,7 @@ class TesseractEngine:
             raise SystemExit(f"tesseract language '{self.lang}' missing (have {langs}). Run: brew install tesseract-lang")
         print(f"  [tesseract] {pytesseract.get_tesseract_version()} lang={self.lang} psm={self.psm}", flush=True)
 
-    def recognize(self, image_path: Path) -> OcrResult:
+    def recognize(self, image_path: Path, max_new_tokens: int | None = None) -> OcrResult:
         import pytesseract
         from PIL import Image
 
