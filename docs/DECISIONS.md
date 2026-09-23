@@ -70,3 +70,30 @@ counting newlines. To be designed in Phase 3.
 On the born-digital sample the OCR reads table cells in a different order than the text layer, which CER
 counts as 12% error although the characters are right. The report shows word F1 next to CER so table
 pages and looped outputs are judged fairly.
+
+## D14 — Engine set after the PoC: Qari v0.3 primary, Qari v0.2 secondary, Tesseract always; KITAB dropped (2026-09-24)
+On 17 ground-truth pages (lenient CER): v0.3 median 3.8% with one failure; v0.2 median 14.8% because it
+looped on 9/17 whole pages although it is the most accurate model when it works (0.7–4.5%); KITAB
+returned an empty output on 8/17 pages; Tesseract median 8.9%, never catastrophic, 0.5 s/page, and its
+lines match the detected image lines. Full tables in `playground/poc/REPORT.md`.
+
+## D15 — Region OCR is the default; grayscale for Qari, Sauvola B&W for Tesseract; no 2x upscaling (2026-09-24)
+Body/footnote regions cut v0.2 loops from 9/17 to 1/8 and gave the best mean of the grid (6.7%). Black-
+and-white input destroyed v0.2 (69% vs 38%) but helped Tesseract (10.7% vs 12.9%). Upscaling low-
+resolution pages 2x was erratic across engines and pages and is not a default.
+
+## D16 — Automatic failure detection with Tesseract as the reference (2026-09-24)
+Qari failures are loops, empty outputs, garbage from a facing-page strip at the scan edge, and silent
+paragraph omissions. All are visible by comparing word count and word overlap with Tesseract's output.
+Pipeline: Qari v0.3 → if it fails the check, Qari v0.2 → if both fail, Tesseract text; page flagged.
+Picking the better of two engines per page halves the error in the PoC (oracle 7.2% for v0.3+Tesseract,
+3.8% for v0.2+v0.3 regions), so word-level agreement of three engines is the confidence signal.
+
+## D17 — Digits are always low-confidence; Tesseract runs with `ara+eng` (2026-09-24)
+Every model misread years and footnote numbers on several pages. Latin words inside Arabic pages are
+kept by v0.2, sometimes dropped by v0.3, and garbled by Tesseract `ara` alone.
+
+## D18 — Preprocessing removes facing-page strips at the scan edge (2026-09-24)
+A narrow column of characters from the neighbouring page (sample 1 page 18) made both Qari models emit
+nonsense for the whole page. The crop step must keep only the main text block: narrow ink bands at the
+edge separated from the block by a wide empty gap are dropped.

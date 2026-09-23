@@ -1,0 +1,82 @@
+{
+ "run_id": "s2_p010R__qari_kitab__regions__torch",
+ "page_id": "s2_p010R",
+ "sample": "s2",
+ "engine": "qari_kitab",
+ "variant": "regions",
+ "backend": "torch",
+ "image": "regions/s2_p010R_body.png",
+ "model_id": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+ "model_path": "/Users/alibenmussa/PycharmProjects/me/Nassakh/playground/poc/models/qari-kitab-merged",
+ "model_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+ "model_info": {
+  "merged_tensors": 324,
+  "scaling": 1.0,
+  "r": 16,
+  "lora_alpha": 16,
+  "kind": "merged_lora",
+  "base": "Qwen/Qwen2-VL-2B-Instruct",
+  "base_revision": "895c3a49bc3fa70a340399125c650a463535e71c",
+  "adapter": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+  "adapter_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+  "dtype": "bfloat16"
+ },
+ "prompt": "Below is the image of one page of a document. Please provide the plain text representation of this document as if you were reading it naturally, ensuring high accuracy.",
+ "params": {
+  "max_pixels": 1605632,
+  "min_pixels": 200704,
+  "max_new_tokens": 3000,
+  "repetition_penalty": 1.0,
+  "dtype": "bfloat16"
+ },
+ "host": "Darwin arm64 26.5.1",
+ "created_at": "2026-09-24T00:28:23",
+ "status": "ok",
+ "raw_output": "\n\n١ ج . ل . ميرزا ، تاريخ العالم ، مجلد الثاني ، ٩٤ هـ . ص ٢٠",
+ "parsed_text": "١ ج . ل . ميرزا ، تاريخ العالم ، مجلد الثاني ، ٩٤ هـ . ص ٢٠",
+ "looped": false,
+ "duration_s": 6.12,
+ "prompt_tokens": null,
+ "output_tokens": 33,
+ "finish": "stop",
+ "image_size": [
+  1106,
+  1271
+ ],
+ "resized_to": null,
+ "extra": {},
+ "parts": [
+  {
+   "region": "body",
+   "image": "regions/s2_p010R_body.png",
+   "text": "",
+   "duration_s": 2.56,
+   "output_tokens": 1,
+   "finish": "stop",
+   "image_size": [
+    1106,
+    1271
+   ],
+   "resized_to": [
+    1120,
+    1260
+   ]
+  },
+  {
+   "region": "foot",
+   "image": "regions/s2_p010R_foot.png",
+   "text": "١ ج . ل . ميرزا ، تاريخ العالم ، مجلد الثاني ، ٩٤ هـ . ص ٢٠",
+   "duration_s": 3.56,
+   "output_tokens": 32,
+   "finish": "stop",
+   "image_size": [
+    2212,
+    718
+   ],
+   "resized_to": [
+    2212,
+    700
+   ]
+  }
+ ]
+}

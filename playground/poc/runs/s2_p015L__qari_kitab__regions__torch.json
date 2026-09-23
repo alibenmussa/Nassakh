@@ -1,0 +1,82 @@
+{
+ "run_id": "s2_p015L__qari_kitab__regions__torch",
+ "page_id": "s2_p015L",
+ "sample": "s2",
+ "engine": "qari_kitab",
+ "variant": "regions",
+ "backend": "torch",
+ "image": "regions/s2_p015L_body.png",
+ "model_id": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+ "model_path": "/Users/alibenmussa/PycharmProjects/me/Nassakh/playground/poc/models/qari-kitab-merged",
+ "model_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+ "model_info": {
+  "merged_tensors": 324,
+  "scaling": 1.0,
+  "r": 16,
+  "lora_alpha": 16,
+  "kind": "merged_lora",
+  "base": "Qwen/Qwen2-VL-2B-Instruct",
+  "base_revision": "895c3a49bc3fa70a340399125c650a463535e71c",
+  "adapter": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+  "adapter_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+  "dtype": "bfloat16"
+ },
+ "prompt": "Below is the image of one page of a document. Please provide the plain text representation of this document as if you were reading it naturally, ensuring high accuracy.",
+ "params": {
+  "max_pixels": 1605632,
+  "min_pixels": 200704,
+  "max_new_tokens": 3000,
+  "repetition_penalty": 1.0,
+  "dtype": "bfloat16"
+ },
+ "host": "Darwin arm64 26.5.1",
+ "created_at": "2026-09-24T00:28:59",
+ "status": "ok",
+ "raw_output": "الذي أريد الإشارة إليه، أن بعض المؤرخين طابق بين البحر الذي يحيط بالمدينة التي أشار اليها الوحي ، وبين مستنقع الماء الذي يقع بالقرب من مدينة المرج ، وخاصة في الشتاء لانحدار مياه الأمطار من سفوح الجبل المطل على المدينة ، معتبراً أن هذا المستنقع هو البحر المذكور . في حين قد يرمز البحر في النبوءة إلى خندق المدينة المحيط بها والمملوء ماء ، وقد يعني وادي القطارة الذي يشغل قسماً كبيراً من هضاب بنغازي والأبيار وكذلك الأجزاء الغربية من الجبل الأخضر. \n\n\n",
+ "parsed_text": "الذي أريد الإشارة إليه، أن بعض المؤرخين طابق بين البحر الذي يحيط بالمدينة التي أشار اليها الوحي ، وبين مستنقع الماء الذي يقع بالقرب من مدينة المرج ، وخاصة في الشتاء لانحدار مياه الأمطار من سفوح الجبل المطل على المدينة ، معتبراً أن هذا المستنقع هو البحر المذكور . في حين قد يرمز البحر في النبوءة إلى خندق المدينة المحيط بها والمملوء ماء ، وقد يعني وادي القطارة الذي يشغل قسماً كبيراً من هضاب بنغازي والأبيار وكذلك الأجزاء الغربية من الجبل الأخضر.",
+ "looped": false,
+ "duration_s": 7.62,
+ "prompt_tokens": null,
+ "output_tokens": 156,
+ "finish": "stop",
+ "image_size": [
+  977,
+  1064
+ ],
+ "resized_to": null,
+ "extra": {},
+ "parts": [
+  {
+   "region": "body",
+   "image": "regions/s2_p015L_body.png",
+   "text": "الذي أريد الإشارة إليه، أن بعض المؤرخين طابق بين البحر الذي يحيط بالمدينة التي أشار اليها الوحي ، وبين مستنقع الماء الذي يقع بالقرب من مدينة المرج ، وخاصة في الشتاء لانحدار مياه الأمطار من سفوح الجبل المطل على المدينة ، معتبراً أن هذا المستنقع هو البحر المذكور . في حين قد يرمز البحر في النبوءة إلى خندق المدينة المحيط بها والمملوء ماء ، وقد يعني وادي القطارة الذي يشغل قسماً كبيراً من هضاب بنغازي والأبيار وكذلك الأجزاء الغربية من الجبل الأخضر. \n",
+   "duration_s": 4.55,
+   "output_tokens": 155,
+   "finish": "stop",
+   "image_size": [
+    977,
+    1064
+   ],
+   "resized_to": [
+    980,
+    1064
+   ]
+  },
+  {
+   "region": "foot",
+   "image": "regions/s2_p015L_foot.png",
+   "text": "",
+   "duration_s": 3.07,
+   "output_tokens": 1,
+   "finish": "stop",
+   "image_size": [
+    1954,
+    1146
+   ],
+   "resized_to": [
+    1652,
+    952
+   ]
+  }
+ ]
+}

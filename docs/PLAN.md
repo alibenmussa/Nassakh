@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **v2 approved; Phase 1 (PoC) scripts written 2026-09-23, OCR runs pending on the owner's Mac.** No Django application code yet.
+Status: **Phase 1 complete (2026-09-24): 184 runs, 17 ground-truth pages, results in `playground/poc/REPORT.md`, decisions D14–D18. Phase 2 awaiting go-ahead.** No Django application code yet.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 
@@ -112,7 +112,7 @@ Page state machine: `uploaded → preprocessed → layout_done → ocr_done → 
 |---|---|---|---|
 | PDF → images | **PyMuPDF** | pdf2image | Native embedded-image extraction (samples are ≤ 200 DPI, rendering would only upsample), rotation handling (sample 2), text-layer access, glyph-level `rawdict` for the lam-alef repair |
 | Image processing | **OpenCV headless + scikit-image** | Pillow | Deskew, crop, background flattening, Sauvola, line detection |
-| OCR models | **Qari v0.2.2.1** (text) + **Qari v0.3** (structure); **KITAB LoRA** evaluated | — | PoC decides. **Tesseract `ara`** as CPU baseline and test engine. **PDF text layer** wrapped as an engine (with repair) for born-digital books like sample 3 |
+| OCR models | **Qari v0.3** primary, **Qari v0.2** secondary, **Tesseract `ara+eng`** always (geometry, sanity check, fallback). KITAB dropped | KITAB LoRA | PoC result (D14–D16): v0.3 most reliable, v0.2 most accurate when it works, Tesseract never collapses and provides line/word boxes. **PDF text layer** with lam-alef repair replaces OCR for born-digital books |
 | Inference on the Mac | **MLX (`mlx-vlm`)** as the fast Apple-Silicon backend, **PyTorch MPS + transformers** as the reference backend | vLLM | vLLM is CUDA-only. MLX runs Qwen2-VL natively on Apple Silicon and is typically 2–4× faster than MPS; the Qari checkpoints are Qwen2-VL-2B fine-tunes and convert with `mlx_vlm.convert` (bf16, no quantisation, to protect accuracy). PoC compares both on identical pages; MLX is adopted only if its CER matches MPS within noise. Both sit behind the same `OcrEngine` class, chosen by `OCR_BACKEND` |
 | GPU worker link | **Celery `gpu` queue** | internal HTTP | One task infrastructure; model resident per worker process (`--pool=solo`) |
 | Layout analysis | **Master guides + heuristics** behind a `LayoutAnalyzer` interface | Surya, Kraken | Owner's request: set the footnote line and header cut once per book, apply to all pages, adjust per page. Deterministic and easy to understand. Auto-detection proposes the guide positions (horizontal rule near the bottom, repeated top line). Surya's weights are non-commercial above a revenue threshold; Kraken is heavy |
@@ -136,12 +136,12 @@ Page state machine: `uploaded → preprocessed → layout_done → ocr_done → 
 
 - **Ingest**: for each PDF page in `[skip_first, N − skip_last)`, extract the embedded image if the page is one full-page image (apply rotation), else render at 300 DPI. If `pages_per_sheet = 2`, cut at `split_ratio` (per-page override) into **right page then left page**. Per-page exclude toggle for stray covers/blank pages. Born-digital PDFs get `has_text_layer = true` and the option to skip OCR.
 - **Deskew**: binarise → coarse angle (Hough / `minAreaRect`) → refine by maximising projection-profile variance over ±5° in 0.1° steps. Confidence from peak sharpness; `|angle| > 3°` or low confidence ⇒ attention flag.
-- **Crop**: remove dark scan borders (sample 4), morphological close → largest text block → bbox + constant margin.
-- **Clean**: background flattening (divide by large blur) → mild non-local-means → speck removal by component area (small enough to keep diacritics). Optional **2× upscale** (Lanczos or a light super-resolution model) for low-resolution scans; PoC decides. Output grayscale PNG for OCR; Sauvola B&W for display only.
+- **Crop**: remove dark scan borders (sample 4), morphological close → largest text block → bbox + constant margin; narrow ink strips at the edge that belong to the facing page are dropped (D18).
+- **Clean**: background flattening (divide by large blur) → mild non-local-means → speck removal by component area (small enough to keep diacritics). Output grayscale PNG for Qari; Sauvola B&W for Tesseract and display. 2× upscaling was erratic in the PoC and is not applied (D15).
 - **Line detection**: horizontal projection profile of the cropped, deskewed block; smooth; valleys separate lines; merge slivers < 35% of median line height.
 - **Guides → regions**: `y < header_cut_y` ⇒ `running_header`; `y > footnote_line_y` ⇒ `footnote`; page-number zone ⇒ `page_number`; everything else `body`. Heuristics then refine inside body: short isolated/bold line ⇒ `heading`; paired lines with central gap ⇒ `poetry`. Auto-proposal of guides: detect the footnote rule (long thin horizontal component in the lower third) and a repeated top line across pages.
 - **Dual-model diff**: strip v0.3 markup → whitespace tokens → opcodes via rapidfuzz/SequenceMatcher → disagreeing tokens become `alternatives` spans. Diacritic differences count as disagreement.
-- **Line alignment**: equal counts ⇒ 1:1; otherwise flag `line_count_mismatch` and map proportionally so hover still lands nearby.
+- **Line alignment**: Qari returns no line breaks (D12), so Qari words are anchored to Tesseract word boxes by fuzzy alignment; the detected line boxes then give each word its line. Pages where the anchoring is poor are flagged.
 - **Paragraph merge**: last body paragraph of page *n* lacks terminal punctuation (`. ؟ ! : » ) ]`) and the next page's first body paragraph is not a heading/poetry ⇒ merge with a space; record both pages. Poetry never merges.
 - **Footnotes**: markers `(١)`, `(1)`, `[١]`, superscripts, bare digit after a word (sample 2); footnote lines starting with the same marker are linked within the page; unmatched ⇒ warnings. Renumber per chapter (default) or per book.
 - **Digits**: OCR raw output is stored untouched. At assembly, Arabic-Indic digits are converted to **Western digits (0–9) by default**; the editor has a one-click "convert digits" action and find & replace. Page numbers and footnote markers in output use Western digits.

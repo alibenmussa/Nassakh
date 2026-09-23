@@ -1,0 +1,54 @@
+{
+ "run_id": "s1_p009__qari_kitab__bw__torch",
+ "page_id": "s1_p009",
+ "sample": "s1",
+ "engine": "qari_kitab",
+ "variant": "bw",
+ "backend": "torch",
+ "image": "bw/s1_p009.png",
+ "model_id": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+ "model_path": "/Users/alibenmussa/PycharmProjects/me/Nassakh/playground/poc/models/qari-kitab-merged",
+ "model_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+ "model_info": {
+  "merged_tensors": 324,
+  "scaling": 1.0,
+  "r": 16,
+  "lora_alpha": 16,
+  "kind": "merged_lora",
+  "base": "Qwen/Qwen2-VL-2B-Instruct",
+  "base_revision": "895c3a49bc3fa70a340399125c650a463535e71c",
+  "adapter": "FatimahEmadEldin/Qari-OCR-Fine-Tuned-Kitab-Benchmark",
+  "adapter_revision": "438af146f5b500afb6e9a51df777afc0dbab0414",
+  "dtype": "bfloat16"
+ },
+ "prompt": "Below is the image of one page of a document. Please provide the plain text representation of this document as if you were reading it naturally, ensuring high accuracy.",
+ "params": {
+  "max_pixels": 1605632,
+  "min_pixels": 200704,
+  "max_new_tokens": 3000,
+  "repetition_penalty": 1.0,
+  "dtype": "bfloat16"
+ },
+ "host": "Darwin arm64 26.5.1",
+ "created_at": "2026-09-24T00:26:50",
+ "status": "ok",
+ "raw_output": "\n\t\t\t—  هـ\n\t\t\t\t\n\t\t\t Renaud Pottier; Un Prince Saharien Méconnu, Henri Duveyrier; Librairie Plon, Paris, 1938; p. V.\n\t\t\t\t\n\t\t\t H. Duveyrier; La Confrérie Musulmane de Sidi Mohammed Ben 'Ali, El-Senouf et Son Domaine\n\tgéographique. Société de Géographie; Paris; 1884, 81 pp.\n\t\t\t\t\n\t\t\t تناول في كتابه الطرق الدينية المنتشرة في الشمال الانفرىق حتى ذلك الوقت إلا أنه\n\tأعطى عناية خاصة للطريقة السنوسية مستفيدًا من الارشيف الذي خصصته وزارة الخارجية\n\tلهذه الطريقة في باريس ومستفيدًا أيضاً من الملمومات التي جمعها شخصياً اثناء عمله في\n\tالإدارة الفرنسية بالجزائر ووقوفه على نشاط اتباع الدعوة السنوسية هناك.\n\t\t\t\t\n\t\t\t وفي مقدمة الرحالة الفرنسيين الذين أتوا الى ليبيا للدراسة أوضاعها Henri Duveyrier\n\tوهو من مواليد ١٨٤٤ ومع أنه مات صغير السن في ١٨٩٢ الا أنه قام بنشاط كبير في الصحراء\n\tالكبرى وكانت له عدة زيارات في ليبيا متنكراً متخذاً لنفسه اسم «سمد»ٍ حتى يغنى حقيقته\n\tوقد ترك بعد وفاته ثروة علمية كبيرة عن الصحراء الكبرى وأهلها وما زالت هذه الثروة\n\tالملمة تعتبر المرجع الأول لدراسة هذه المنطقة. وقد عرفت السلطات الفرنسية كيف\n\tستفيد منها في سبيل مد نفوذها في الصحراء الكبرى واخضاع هذه المنطقة الواسعة لنفوذها\n\tرغم صموبة المواصلات في ذلك الوقت والموقف الصلب الذي اتخذه الطوارق — امراء\n\tالصحراء — تجاه التوسع الفرنسي.\n\t\t\t\t\n\t\t\t جاء الرحالة هنرى دوقريه الى ليبيا في عهد السيد محمد المهدي بن السنوسى الكبير\n\tوالرئيس الثانى للدعوة السنوسية ودرس نشاطها ونشر دراسته في كتاب باسم «طريقة سيدى\n\tمحمد بن على السنوسى الاسلامية والمناطق الجغرافية الخاضمة له وذلك في سنة ١٨٨١».\n\tوقد قامت الجمعية الجغرافية في باريس بنشر هذا الكتاب في سنة ١٨٨٤. ويعتبر هذا الكتاب\n\tمن أهم الكتب التى تناولت الطريقة السنوسية منذ نشأتها حتى ١٨٨١ وهو المرجع الاساسى\n\tكل ما كتبه الاوربيون عن الدعوة السنوسية فيما بعد وقد\n\t\t\t\t",
+ "parsed_text": "— هـ\nRenaud Pottier; Un Prince Saharien Méconnu, Henri Duveyrier; Librairie Plon, Paris, 1938; p. V.\nH. Duveyrier; La Confrérie Musulmane de Sidi Mohammed Ben 'Ali, El-Senouf et Son Domaine\ngéographique. Société de Géographie; Paris; 1884, 81 pp.\nتناول في كتابه الطرق الدينية المنتشرة في الشمال الانفرىق حتى ذلك الوقت إلا أنه\nأعطى عناية خاصة للطريقة السنوسية مستفيدًا من الارشيف الذي خصصته وزارة الخارجية\nلهذه الطريقة في باريس ومستفيدًا أيضاً من الملمومات التي جمعها شخصياً اثناء عمله في\nالإدارة الفرنسية بالجزائر ووقوفه على نشاط اتباع الدعوة السنوسية هناك.\nوفي مقدمة الرحالة الفرنسيين الذين أتوا الى ليبيا للدراسة أوضاعها Henri Duveyrier\nوهو من مواليد ١٨٤٤ ومع أنه مات صغير السن في ١٨٩٢ الا أنه قام بنشاط كبير في الصحراء\nالكبرى وكانت له عدة زيارات في ليبيا متنكراً متخذاً لنفسه اسم «سمد»ٍ حتى يغنى حقيقته\nوقد ترك بعد وفاته ثروة علمية كبيرة عن الصحراء الكبرى وأهلها وما زالت هذه الثروة\nالملمة تعتبر المرجع الأول لدراسة هذه المنطقة. وقد عرفت السلطات الفرنسية كيف\nستفيد منها في سبيل مد نفوذها في الصحراء الكبرى واخضاع هذه المنطقة الواسعة لنفوذها\nرغم صموبة المواصلات في ذلك الوقت والموقف الصلب الذي اتخذه الطوارق — امراء\nالصحراء — تجاه التوسع الفرنسي.\nجاء الرحالة هنرى دوقريه الى ليبيا في عهد السيد محمد المهدي بن السنوسى الكبير\nوالرئيس الثانى للدعوة السنوسية ودرس نشاطها ونشر دراسته في كتاب باسم «طريقة سيدى\nمحمد بن على السنوسى الاسلامية والمناطق الجغرافية الخاضمة له وذلك في سنة ١٨٨١».\nوقد قامت الجمعية الجغرافية في باريس بنشر هذا الكتاب في سنة ١٨٨٤. ويعتبر هذا الكتاب\nمن أهم الكتب التى تناولت الطريقة السنوسية منذ نشأتها حتى ١٨٨١ وهو المرجع الاساسى\nكل ما كتبه الاوربيون عن الدعوة السنوسية فيما بعد وقد",
+ "looped": false,
+ "duration_s": 15.95,
+ "prompt_tokens": 2033,
+ "output_tokens": 666,
+ "finish": "stop",
+ "image_size": [
+  1167,
+  1778
+ ],
+ "resized_to": [
+  1008,
+  1540
+ ],
+ "extra": {
+  "device": "mps",
+  "dtype": "bfloat16"
+ }
+}

@@ -212,8 +212,13 @@ def main() -> None:
     if errors:
         md += ["", "Errors:", ""] + [f"- `{r['run_id']}`" for r in errors[:30]]
 
-    md += ["", "## 8. Notes", "", "_Qualitative observations are added here by hand after reading the outputs "
-           "(structure tags of v0.3, footnote text, numerals, headers, marginalia)._", ""]
+    notes = config.POC / "notes.md"
+    md += ["", "## 8. Findings and decisions", ""]
+    if notes.exists():
+        md.append(notes.read_text(encoding="utf-8").strip())
+    else:
+        md.append("_Write qualitative findings in `notes.md`; they are inserted here on every `make report`._")
+    md.append("")
     config.REPORT.write_text("\n".join(md), encoding="utf-8")
     print(f"wrote {config.REPORT} and runs_summary.csv ({len(rows)} runs, {len(scored)} scored)")
 

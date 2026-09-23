@@ -1,0 +1,47 @@
+{
+ "run_id": "s1_p018__qari_v03__gray__torch",
+ "page_id": "s1_p018",
+ "sample": "s1",
+ "engine": "qari_v03",
+ "variant": "gray",
+ "backend": "torch",
+ "image": "gray/s1_p018.png",
+ "model_id": "NAMAA-Space/Qari-OCR-v0.3-VL-2B-Instruct",
+ "model_path": "/Users/alibenmussa/PycharmProjects/me/Nassakh/playground/poc/models/qari-v0.3",
+ "model_revision": "dabe11e3990176858b26eacfef3ee16fff1d5970",
+ "model_info": {
+  "kind": "full",
+  "repo": "NAMAA-Space/Qari-OCR-v0.3-VL-2B-Instruct",
+  "revision": "dabe11e3990176858b26eacfef3ee16fff1d5970"
+ },
+ "prompt": "Below is the image of one page of a document, as well as some raw textual content that was previously extracted for it. Just return the plain text representation of this document as if you were reading it naturally. Do not hallucinate.",
+ "params": {
+  "max_pixels": 1605632,
+  "min_pixels": 200704,
+  "max_new_tokens": 3000,
+  "repetition_penalty": 1.0,
+  "dtype": "bfloat16"
+ },
+ "host": "Darwin arm64 26.5.1",
+ "created_at": "2026-09-24T00:07:59",
+ "status": "ok",
+ "raw_output": "<p>و <u>الم</u> <b>ج</b> <u>ب</u> <u>ب</u> <u>ب</u> <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u>ب</u> ب <u",
+ "parsed_text": "و الم ج ب ب ب ب ب <u",
+ "looped": true,
+ "duration_s": 62.08,
+ "prompt_tokens": 2066,
+ "output_tokens": 3000,
+ "finish": "length",
+ "image_size": [
+  1199,
+  1748
+ ],
+ "resized_to": [
+  1036,
+  1512
+ ],
+ "extra": {
+  "device": "mps",
+  "dtype": "bfloat16"
+ }
+}

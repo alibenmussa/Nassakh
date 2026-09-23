@@ -20,7 +20,7 @@ PREFERENCE = ["qari_v02", "qari_v03", "qari_kitab", "tesseract"]
 
 def best_run_text(page_id: str) -> tuple[str, str] | None:
     for eng in PREFERENCE:
-        for variant in ("gray", "gray_2x", "bw"):
+        for variant in ("regions", "gray", "gray_2x", "bw"):
             for backend in ("torch", "mlx", "cpu"):
                 p = config.RUNS / f"{page_id}__{eng}__{variant}__{backend}.json"
                 if p.exists():
