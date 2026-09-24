@@ -180,11 +180,7 @@ CELERY_TASK_ALWAYS_EAGER=true LOG_LEVEL=INFO .venv/bin/python manage.py smoke_pi
     "playground/poc/input/sample 2.pdf" --pages-per-sheet 2 --skip-first 2 --skip-last 15
 ```
 
-The table below predates the Phase 2 review changes to the sanity check: footnotes whose Tesseract reading
-has fewer than 15 words are now only checked for runaway length, so the two footnotes below are expected to keep the
-Qari text.
-
-Result on the M5 Pro, 131 s wall clock for the 4 pages:
+Result on the M5 Pro after the review fixes (2026-09-24, commit 35c18e8), 134 s wall clock for the 4 pages:
 
 | Stage | Observed |
 |---|---|
@@ -193,9 +189,9 @@ Result on the M5 Pro, 131 s wall clock for the 4 pages:
 | guides | proposed automatically: footnote line at 0.7988 of the height (confidence 0.75 ≥ 0.4) → no `needs_guides` stop |
 | layout | body · footnote · page number (bottom 6 %) per page |
 | fast OCR | Tesseract `ara+eng` 0.7–1.0 s per page (3 regions), provisional text 860–940 characters |
-| full OCR | Qari v0.3 loaded in 4 s, v0.2 in 3 s (about 9 GB resident); per page v0.3 ≈ 18 s (body 15 s, footnote at 2× 3 s), v0.2 ≈ 11 s; 28–40 s per page for the stage |
-| sanity check (D16) | body passed on every page with both models; the two-line footnotes of pages 3 and 4 failed on both models (`low_overlap`) → Tesseract text used for those regions, pages flagged `ocr_fallback` |
-| result | 4 pages `ocr_done` / text `final`, 19–20 `Line` rows per page each with a box, 173–198 tokens per page (9–16 low-confidence, digits included), `final_text` 944–988 characters with Western digits (e.g. «سنة 21 ه»), 7 `OcrRun` rows per page (3 tesseract, 2 qari_v03, 2 qari_v02), book `ready_for_review` |
+| full OCR | Qari v0.3 loaded in 6 s, v0.2 in 3 s (about 9 GB resident); 28–42 s per page for the stage (both models, body + footnote at 2×) |
+| sanity check (D16) | every region on every page kept the Qari v0.3 text (`fallback=False`); short footnote references are now checked for runaway length only, and `models_agree` keeps the Qari text when both models agree with each other. Before the review fixes the two-line footnotes of pages 3 and 4 had fallen back to Tesseract |
+| result | 4 pages `ocr_done` / text `final`, 18–20 `Line` rows per page each with a box, 174–203 tokens per page (10–16 low-confidence, digits included), `final_text` 944–1014 characters with Western digits (e.g. «سنة 21 ه»), 7 `OcrRun` rows per page (3 tesseract, 2 qari_v03, 2 qari_v02), `edge_strip_removed` flagged on 3 pages, book `ready_for_review` |
 
 Screens and endpoints were then checked against `make web` with the real session: anonymous requests are
 redirected to `/accounts/login/` (HTML screens, media) or answered `403` (JSON API); signed in, `/books/`,
