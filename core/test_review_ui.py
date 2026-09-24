@@ -210,6 +210,14 @@ def test_review_template_words_popover_editing_and_states():
         and 'class="menu-item is-danger" role="menuitem" @click="removeLine(line)"' in body
     )
     assert 'x-text="undoToast && undoToast.message"' in body and ">تراجع</button>" in body
+    # one editor at a time, found by class (three templates render one; a shared x-ref broke the upward move)
+    assert body.count('class="rv-editor"') == 3 and 'x-ref="editor"' not in body
+    # Tab in the correction input saves a changed draft (Enter and Tab are both named in the sheet)
+    assert '@keydown.tab.prevent="onTypedTab($event.shiftKey)"' in body and "لحفظه والانتقال" in body
+    # the save chip counts the unsaved actions; the page turn carries its direction
+    assert "من الإجراءات · إعادة المحاولة" in body and ''':class="slide ? 'is-' + slide : ''"''' in body
+    # the sheet's 0 row names the fit the key returns to
+    assert 'العودة إلى <span x-text="fitLabel"></span>' in body
     # designed states: error (Arabic headline, dashboard retry), pending (decode noise),
     # loading skeleton, read-only
     assert 'x-text="errorHeadline"' in body and "فتح لوحة الكتاب لإعادة المرحلة" in body
@@ -239,6 +247,10 @@ def test_review_js_and_css_are_built():
     assert re.search(r"\.rv-sheet\.is-gliding\{transition:transform \.28s", css)  # smooth pan 200–300 ms
     assert ".main:has(>.review-screen){gap:0;padding:0}" in css
     assert re.search(r"\.is-swapped \.rv-scan-pane\{[^}]*order:1", css)
+    # turning back mirrors the forward motion (source: the built file follows the lead's rebuild)
+    src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
+    assert ".rv-split.is-out-back { transform: translateX(-3%)" in src
+    assert ".rv-split.is-in-back { transform: translateX(3%); opacity: 0; transition: none; }" in src
 
 
 # ------------------------------------------------ the component under Node (small Alpine stub)
@@ -284,11 +296,11 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   c.focusWord({ lineId: 52, index: 0 });
   globalThis.fetch = reply(500, { message: 'تعذّر' });
   await c.choose('primary');
-  out.rolledBack = { t: c.lines[1].tokens[0].t, res: c.lines[1].tokens[0].res, counts: clone(c.counts), save: c.save.state, retry: typeof c.save.retry, toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
-  // undo re-renders from the returned payload
+  out.rolledBack = { t: c.lines[1].tokens[0].t, res: c.lines[1].tokens[0].res, counts: clone(c.counts), save: c.save.state, failed: c.save.failed.length, retry: typeof c.save.failed[0].retry, toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
+  // undo re-renders from the returned payload (the failed resolve is dropped first: the chip stays in error while one is unsaved)
   const undone = clone(config); undone.lines = undone.lines.slice(0, 2); undone.counts = { low_total: 3, unresolved: 2, resolved: 1 };
   globalThis.fetch = reply(200, undone);
-  c.save.state = 'idle';
+  c.save.failed = []; c.save.state = 'idle';
   await c.undo();
   out.undone = { lines: c.lines.length, counts: clone(c.counts), save: c.save.state, focus: c.focus };
   // approve with unresolved words asks first (no request); a 409 from the server opens the same dialog
@@ -316,6 +328,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
     one: ka({ key: '1' }, ctx), three: ka({ key: '3' }, ctx), letter: ka({ key: 'ك' }, ctx), letterUnfocused: ka({ key: 'ك' }, { ...ctx, focused: false }),
     edit: ka({ key: 'e' }, ctx), approve: ka({ key: 'A' }, ctx), next: ka({ key: 'n' }, ctx), zoom: [ka({ key: '+' }, ctx), ka({ key: '-' }, ctx), ka({ key: '0' }, ctx)],
     inField: ka({ key: 'a' }, { ...ctx, inField: true }), escInField: ka({ key: 'Escape' }, { ...ctx, inField: true }),
+    undoInField: ka({ key: 'z', metaKey: true }, { ...ctx, inField: true }), redo: ka({ key: 'z', metaKey: true, shiftKey: true }, ctx),
   };
   // page text for the clipboard: body, blank line, footnotes
   out.copy = c.pageText();
@@ -412,6 +425,115 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
     delUnfocused: ka({ key: 'Backspace' }, { ...ctx, focused: false }), delInField: ka({ key: 'Backspace' }, { ...ctx, inField: true }),
     altArrowUnfocused: ka({ key: 'ArrowLeft', altKey: true }, { ...ctx, focused: false }),
   };
+  // ------------------------------------------------------------ Phase 3 review fixes
+  const flush = () => new Promise((r) => setImmediate(r));
+  const deferred = () => { let release; const done = new Promise((r) => { release = r; }); return { release, done }; };
+  const reqs = () => calls.filter((x) => x[0] !== 'toast').map((x) => x[1]);
+  const posts = () => calls.filter((x) => x[0] === 'POST');
+  // every answer is a fresh object: replaceLine keeps the object it is given, so a shared one would alias components
+  const answer = (make) => async (url, init) => { calls.push([init && init.method || 'GET', url, init && init.body ? JSON.parse(init.body) : null]); return { ok: true, status: 200, json: async () => make() }; };
+  const line51 = () => { const l = clone(config.lines[0]); l.tokens[1].t = 'الامير'; l.tokens[1].res = 'secondary'; l.n_low = 1; return l; };
+  const page4 = () => { const n = clone(config); n.page.id = 8; n.page.number = 4; n.lines = [Object.assign(clone(config.lines[0]), { id: 91 })]; n.counts = { low_total: 0, unresolved: 0, resolved: 0 }; n.urls.undo = '/api/pages/8/undo/'; return n; };
+  const film = { items: [{ id: 6, number: 2, url: '/books/1/review/2/', status: 'ocr_done' }, { id: 7, number: 3, status: 'ocr_done' }, { id: 8, number: 4, url: '/books/1/review/4/', status: 'ocr_done' }], state: 'ready' };
+  // a resolve answered after the next page's GET must land on its own page: the swap waits for the queue
+  const s1 = reg.reviewScreen(clone(config)); s1.init(); s1.film = clone(film);
+  const post1 = deferred();
+  globalThis.fetch = async (url, init) => { const method = (init && init.method) || 'GET'; calls.push([method, url]); if (method === 'POST') { await post1.done; return { ok: true, status: 200, json: async () => ({ line: line51(), counts: { line_n_low: 1, page_unresolved: 3, page_low_total: 5 }, page: { id: 7, number: 3 } }) }; } return { ok: true, status: 200, json: async () => page4() }; };
+  s1.focusWord({ lineId: 51, index: 1 }); calls.length = 0;
+  const s1p = s1.choose('secondary'); s1.runAction('nextPage'); await flush(); await flush();
+  out.swapWaits = { reqs: reqs(), loading: s1.loading };
+  post1.release(); await s1p; await flush(); await flush(); await flush();
+  out.afterSwap = { reqs: reqs(), page: s1.page.number, id: s1.page.id, lines: s1.lines.map((l) => l.id), counts: clone(s1.counts), save: s1.save.state, undo: s1.urls.undo };
+  // a failed answer for the old page (an editor's Enter during the load) neither rolls back onto the new page nor arms a retry
+  const s2 = reg.reviewScreen(clone(config)); s2.init();
+  const post2 = deferred(); const get2 = deferred();
+  globalThis.fetch = async (url, init) => { const method = (init && init.method) || 'GET'; calls.push([method, url]); if (method === 'POST') { await post2.done; return { ok: false, status: 500, json: async () => ({ message: 'تعذّر' }) }; } await get2.done; return { ok: true, status: 200, json: async () => page4() }; };
+  const s2sw = s2.swapTo('/api/pages/8/review/', '/books/1/review/4/', 1); await flush();
+  s2.edit = { lineId: 52, text: 'نص جديد' }; const s2e = s2.saveEdit(); await flush();
+  get2.release(); await s2sw; await flush(); await flush();
+  post2.release(); await s2e; await flush();
+  out.lateFail = { page: s2.page.number, counts: clone(s2.counts), lines: s2.lines.map((l) => l.id), save: s2.save.state, failed: s2.save.failed.length, toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
+  // a poll of the old page answered after the swap is dropped
+  const s3 = reg.reviewScreen(clone(config)); s3.init(); s3.page.text_state = 'provisional';
+  const finalOld = clone(config); finalOld.page.text_state = 'final'; const poll3 = deferred();
+  globalThis.fetch = async (url) => { calls.push(['GET', url]); if (url === '/api/pages/7/review/') { await poll3.done; return { ok: true, status: 200, json: async () => finalOld }; } return { ok: true, status: 200, json: async () => page4() }; };
+  const s3p = s3.poll(); await flush();
+  await s3.swapTo('/api/pages/8/review/', null, 1); await flush();
+  poll3.release(); await s3p; await flush();
+  out.latePoll = { page: s3.page.number, id: s3.page.id, lines: s3.lines.map((l) => l.id) };
+  // ⌘Z inside the line editor stays the field's own undo: no server undo, the draft survives
+  const s4 = reg.reviewScreen(clone(config)); s4.init(); s4.startEdit(s4.lines[1]); s4.edit.text = 'مسودة'; calls.length = 0;
+  let zPrevented = false; s4.onKey({ key: 'z', metaKey: true, target: { tagName: 'TEXTAREA' }, preventDefault: () => { zPrevented = true; } });
+  out.cmdZInEditor = { prevented: zPrevented, draft: s4.edit && s4.edit.text, posts: posts().length };
+  // the undo offer retires once a later action is sent, also when the delete's answer is still pending
+  const s5 = reg.reviewScreen(clone(config)); s5.init(); const del5 = deferred();
+  globalThis.fetch = async (url) => { if (url.includes('delete-word')) { await del5.done; return { ok: true, status: 200, json: async () => ({ line: clone(delLine), counts: {} }) }; } return { ok: true, status: 200, json: async () => ({ line: line51(), counts: {} }) }; };
+  s5.focusWord({ lineId: 53, index: 2 }); const s5d = s5.deleteWord(); s5.focusWord({ lineId: 51, index: 1 }); const s5r = s5.choose('secondary');
+  del5.release(); await s5d; await s5r; await flush();
+  out.undoPipelined = { toast: s5.undoToast, save: s5.save.state };
+  globalThis.fetch = answer(() => ({ line: clone(delLine), counts: {} }));
+  s5.focusWord({ lineId: 53, index: 1 }); await s5.deleteWord(); const offered = s5.undoToast && s5.undoToast.message;
+  globalThis.fetch = answer(() => ({ line: line51(), counts: {} })); s5.focusWord({ lineId: 51, index: 4 }); await s5.choose('primary');
+  out.undoRetired = { offered, after: s5.undoToast };
+  // Enter confirms the reading in the text: no request for a word the reviewer already resolved (or chose again),
+  // the primary reading for an unresolved word, the current reading's choice for one the chooser picked (D26)
+  const s6 = reg.reviewScreen(clone(config)); s6.init();
+  globalThis.fetch = answer(() => ({ line: line51(), counts: { line_n_low: 1, page_unresolved: 3, page_low_total: 5 } }));
+  s6.focusWord({ lineId: 51, index: 1 }); await s6.choose('secondary');
+  const enterOn = (inst) => inst.onKey({ key: 'Enter', target: { tagName: 'SPAN', closest: () => null }, preventDefault: () => {} });
+  s6.onTokClick(s6.lines[0], 1); calls.length = 0; enterOn(s6); await flush();
+  out.acceptResolved = { t: s6.lines[0].tokens[1].t, res: s6.lines[0].tokens[1].res, posts: posts().length, focus: clone(s6.focus) };
+  s6.onTokClick(s6.lines[0], 1); await s6.choose('secondary');
+  out.rechooseCurrent = { posts: posts().length, focus: clone(s6.focus) };
+  s6.focusWord({ lineId: 51, index: 4 }); enterOn(s6); await flush();
+  out.acceptUnresolved = posts().pop();
+  Object.assign(s6.lines[1].tokens[0], { res: 'chooser', t: 'وفي', orig: 'وَفِي' });
+  s6.focusWord({ lineId: 52, index: 0 }); enterOn(s6); await flush();
+  out.acceptChooser = posts().pop();
+  // Tab in the correction input saves a changed draft; an untouched prefill just moves on
+  const s7 = reg.reviewScreen(clone(config)); s7.init(); globalThis.fetch = answer(() => ({ line: line51(), counts: {} }));
+  s7.onTokClick(s7.lines[0], 1); s7.pop.typed = 'كلمة'; calls.length = 0; await s7.onTypedTab(false);
+  out.tabSaves = { post: posts().pop(), focus: clone(s7.focus) };
+  s7.onTokClick(s7.lines[1], 1); calls.length = 0; await s7.onTypedTab(false);
+  out.tabMoves = { posts: posts().length, focus: clone(s7.focus) };
+  // Esc on a confident word's prefilled correction closes the popover at once; with readings it steps back to them
+  const s8 = reg.reviewScreen(clone(config)); s8.init();
+  s8.onTokClick(s8.lines[1], 1); s8.closeTop(); out.escConfident = { open: s8.pop.open, typing: s8.pop.typing };
+  s8.onTokClick(s8.lines[0], 1); s8.startTyping('ك'); s8.closeTop(); out.escUncertain = { open: s8.pop.open, typing: s8.pop.typing, typed: s8.pop.typed };
+  // two failed saves then a success: the chip stays in error with both retries, which replay in order
+  const s9 = reg.reviewScreen(clone(config)); s9.init(); globalThis.fetch = reply(500, { message: 'تعذّر' });
+  s9.focusWord({ lineId: 51, index: 1 }); await s9.choose('secondary');
+  s9.focusWord({ lineId: 52, index: 0 }); await s9.choose('primary');
+  globalThis.fetch = reply(200, { counts: {} }); s9.focusWord({ lineId: 53, index: 1 }); await s9.choose('primary');
+  out.failures = { save: s9.save.state, failed: s9.save.failed.length, bar: stores.review.bar.failed, res: [s9.lines[0].tokens[1].res, s9.lines[1].tokens[0].res] };
+  calls.length = 0; s9.retrySave(); await s9.queue; await flush();
+  out.retried = { save: s9.save.state, failed: s9.save.failed.length, posts: posts().map((x) => [x[1], x[2].choice]) };
+  // failures do not follow a page swap (their retries target the old page): dropped, and said so
+  globalThis.fetch = reply(500, { message: 'تعذّر' }); s9.focusWord({ lineId: 51, index: 4 }); await s9.choose('primary');
+  globalThis.fetch = reply(200, page4()); calls.length = 0; await s9.swapTo('/api/pages/8/review/', null, 1); await flush();
+  out.failedDropped = { save: s9.save.state, failed: s9.save.failed.length, toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
+  // one toast at a time: the shared toast replaces the undo offer, and the undo offer hides the shared toast
+  const hidden = []; stores.toast = { visible: true, hide: () => hidden.push(1) };
+  const s10 = reg.reviewScreen(clone(config)); s10.init(); s10.showUndoToast('حُذفت الكلمة'); const undoShown = Boolean(s10.undoToast); s10.toast('تم النسخ');
+  out.oneToast = { hidShared: hidden.length, undoShown, after: s10.undoToast }; delete stores.toast;
+  // the turn's direction follows the page order (back for an earlier page; N wraps forward here)
+  const s11 = reg.reviewScreen(clone(config)); s11.init(); s11.film = clone(film);
+  const turns = []; s11.swapTo = (url, fb, dir) => { turns.push([url, dir]); return Promise.resolve(true); };
+  s11.goPrevPage(); s11.goNextPage(); s11.goTo(s11.film.items[0]); s11.goNextReview();
+  out.turns = turns;
+  // stale tab: a 409 carries the line as it is now; the view shows it and arms no retry (it would conflict again)
+  const cf = reg.reviewScreen(clone(config)); cf.init();
+  const nowLine = clone(config.lines[0]); nowLine.tokens[1].t = 'تغيّر'; nowLine.v = 'v2';
+  globalThis.fetch = reply(409, { message: 'تغيّر السطر في نافذة أخرى', line: nowLine }); calls.length = 0;
+  cf.focusWord({ lineId: 51, index: 1 });
+  await cf.choose('secondary');
+  const cfPost = calls.filter((x) => x[0] === 'POST').pop();
+  out.conflict = { t: cf.lines[0].tokens[1].t, failed: cf.save.failed.length, save: cf.save.state, sentT: Boolean(cfPost && cfPost[2] && cfPost[2].t),
+    toast: (calls.filter((x) => x[0] === 'toast').pop() || [])[1] || null };
+  // whole-line actions carry the line's version as it is when the request leaves the queue
+  cf.lines[0].v = 'v7'; globalThis.fetch = reply(200, { line: Object.assign(clone(cf.lines[0]), { role: 'heading', v: 'v8' }) }); calls.length = 0;
+  await cf.setRole(cf.lines[0], 'heading');
+  out.roleSent = (calls.filter((x) => x[0] === 'POST').pop() || [])[2];
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -471,11 +593,19 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
         and mo["focus"] == {"lineId": 52, "index": 1}
         and mo["popOpen"] is False
     )
-    assert out["mergeCall"][1] == "/api/lines/52/merge/" and out["mergeCall"][2] == {"index": 1}
+    assert out["mergeCall"][1] == "/api/lines/52/merge/"
+    assert (
+        out["conflict"]["t"] == "تغيّر" and out["conflict"]["failed"] == 0 and out["conflict"]["sentT"] is True
+    )
+    assert out["conflict"]["save"] != "error"
+    assert out["roleSent"] == {"role": "heading", "v": "v7"}
+    # the two words the reviewer saw travel with the merge, so a stale tab gets a 409 instead of a wrong merge
+    assert out["mergeCall"][2] == {"index": 1, "t": "الكتاب", "t_next": "حكاية"}
     assert out["mergeRolledBack"] == {"same": True, "save": "error"}
     assert out["deleted"]["words"] == ["(1)", "انظر"] and out["deleted"]["toast"] == "حُذفت الكلمة"
     assert out["deleted"]["call"][1] == "/api/lines/53/delete-word/" and out["deleted"]["call"][2] == {
-        "index": 2
+        "index": 2,
+        "t": "المصدر",
     }
     assert out["deletedLine"] == {"ids": [51, 53], "call": "/api/lines/52/delete/"}
     assert out["keysD31"] == {
@@ -523,12 +653,15 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
         "bookUnresolved": 379,
         "nLow": 1,
     }
-    assert out["resolveCall"] == ["POST", "/api/lines/51/resolve/", {"index": 1, "choice": "secondary"}]
+    assert out["resolveCall"][:2] == ["POST", "/api/lines/51/resolve/"]
+    assert out["resolveCall"][2]["index"] == 1 and out["resolveCall"][2]["choice"] == "secondary"
+    assert out["resolveCall"][2]["t"]  # the word as seen before the change
     # failure: rolled back, chip in error with a retry, Arabic toast
     assert out["rolledBack"]["t"] == "وَفِي" and out["rolledBack"]["res"] is None
     assert out["rolledBack"]["counts"] == {"low_total": 5, "unresolved": 3, "resolved": 2}
     assert (
         out["rolledBack"]["save"] == "error"
+        and out["rolledBack"]["failed"] == 1
         and out["rolledBack"]["retry"] == "function"
         and out["rolledBack"]["toast"] == "تعذّر"
     )
@@ -574,7 +707,90 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     assert keys["edit"] == "edit" and keys["approve"] == "approve" and keys["next"] == "nextReview"
     assert keys["zoom"] == ["zoomIn", "zoomOut", "zoomReset"]
     assert keys["inField"] is None and keys["escInField"] == "close"
+    assert keys["undoInField"] is None and keys["redo"] is None  # a field keeps its native ⌘Z
     assert out["copy"] == "قال الأمير في سنة 1966\nوَفِي الكتاب حكاية\n\n(1) انظر المصدر"
+    # --- Phase 3 review fixes
+    # a page swap waits for the queued actions, so a late resolve lands on its own page
+    assert out["swapWaits"] == {"reqs": ["/api/lines/51/resolve/"], "loading": True}
+    assert out["afterSwap"] == {
+        "reqs": ["/api/lines/51/resolve/", "/api/pages/8/review/"],
+        "page": 4,
+        "id": 8,
+        "lines": [91],
+        "counts": {"low_total": 0, "unresolved": 0, "resolved": 0},
+        "save": "saved",
+        "undo": "/api/pages/8/undo/",
+    }
+    # a request of the old page that fails after the swap: no rollback onto the new page, no stale retry
+    assert out["lateFail"] == {
+        "page": 4,
+        "counts": {"low_total": 0, "unresolved": 0, "resolved": 0},
+        "lines": [91],
+        "save": "idle",
+        "failed": 0,
+        "toast": "تعذّر",
+    }
+    assert out["latePoll"] == {"page": 4, "id": 8, "lines": [91]}
+    # ⌘Z in an editor is the field's own undo
+    assert out["cmdZInEditor"] == {"prevented": False, "draft": "مسودة", "posts": 0}
+    # the undo toast never outlives a newer action
+    assert out["undoPipelined"] == {"toast": None, "save": "saved"}
+    assert out["undoRetired"] == {"offered": "حُذفت الكلمة", "after": None}
+    # Enter confirms the current reading
+    assert out["acceptResolved"] == {
+        "t": "الامير",
+        "res": "secondary",
+        "posts": 0,
+        "focus": {"lineId": 51, "index": 4},
+    }
+    assert out["rechooseCurrent"] == {"posts": 0, "focus": {"lineId": 51, "index": 4}}
+
+    def unseen(call):  # the request without `t`, the word as the reviewer saw it (stale-tab check)
+        assert call[2].get("t"), call
+        return [call[0], call[1], {k: v for k, v in call[2].items() if k != "t"}]
+
+    assert unseen(out["acceptUnresolved"]) == [
+        "POST",
+        "/api/lines/51/resolve/",
+        {"index": 4, "choice": "primary"},
+    ]
+    assert unseen(out["acceptChooser"]) == [
+        "POST",
+        "/api/lines/52/resolve/",
+        {"index": 0, "choice": "secondary"},
+    ]
+    # Tab in the correction input
+    assert unseen(out["tabSaves"]["post"]) == [
+        "POST",
+        "/api/lines/51/resolve/",
+        {"index": 1, "choice": "typed", "text": "كلمة"},
+    ]
+    assert out["tabSaves"]["focus"] == {"lineId": 51, "index": 4}
+    assert out["tabMoves"] == {"posts": 0, "focus": {"lineId": 53, "index": 1}}
+    # Esc in the correction input
+    assert out["escConfident"] == {"open": False, "typing": False}
+    assert out["escUncertain"] == {"open": True, "typing": False, "typed": ""}
+    # failed saves are kept, counted on the chip, replayed in order, and dropped (with a word) on a page swap
+    assert out["failures"] == {"save": "error", "failed": 2, "bar": 2, "res": [None, None]}
+    assert out["retried"] == {
+        "save": "saved",
+        "failed": 0,
+        "posts": [["/api/lines/51/resolve/", "secondary"], ["/api/lines/52/resolve/", "primary"]],
+    }
+    assert out["failedDropped"] == {
+        "save": "idle",
+        "failed": 0,
+        "toast": "لم تُحفظ بعض الإجراءات في الصفحة التي غادرتها",
+    }
+    # one toast at a time
+    assert out["oneToast"] == {"hidShared": 1, "undoShown": True, "after": None}
+    # direction-aware page turns
+    assert out["turns"] == [
+        ["/api/pages/6/review/", -1],
+        ["/api/pages/8/review/", 1],
+        ["/api/pages/6/review/", -1],
+        ["/api/pages/8/review/", 1],
+    ]
 
 
 def test_review_popover_keeps_merge_and_delete_in_a_second_level_menu():

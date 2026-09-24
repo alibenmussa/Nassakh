@@ -59,7 +59,11 @@ FLAG_ALIGNMENT = "alignment_poor"
 _PN_CHARS = r"\s0-9٠-٩۰-۹\-‐‑‒–—―ـ.·•…()\[\]{}﴾﴿<>«»"
 _PAGE_NUMBER_LINE = re.compile(rf"^[{_PN_CHARS}]*[0-9٠-٩۰-۹][{_PN_CHARS}]*$")
 _DIGITS = re.compile(r"[0-9٠-٩۰-۹]+")
+_ARABIC_LETTER = re.compile(r"[\u0621-\u063A\u0641-\u064A\u0671-\u06D3]")
 PRINTED_NUMBER_MAX = 20
+# A page-number region whose readings hold no digit and at least this many Arabic letters (in a model
+# reading) holds words, a short last line of text, not a number (see `reads_as_words`).
+MIN_WORD_LETTERS = 2
 
 # Sanity thresholds (D16). A small absolute slack on the upper bound keeps tiny regions (a two-word
 # heading read as five words) from failing on the ratio check alone.
@@ -400,8 +404,11 @@ def run_fast_ocr(page: Page) -> None:
 
     Every region gets an OcrRun with word/line boxes in `params["lines"]`. `provisional_text` joins
     the body-like regions in order, then a blank line, then the footnotes; running header and page
-    number are omitted, and a leading / trailing line that is only a page number is dropped. The
-    page-number region's digits (else the dropped line's) are stored in `printed_number`.
+    number are omitted, and a leading / trailing line that is only a page number is dropped
+    (`strip_page_number_lines`). The page-number region's digits (else the dropped line's) are
+    stored in `printed_number`. A page that already has its final text (a re-run of this stage
+    alone) only gets new runs and a new provisional text: its text state and its voted
+    `printed_number` stay as they are (the full pass owns them).
     Born-digital pages with `use_text_layer` are finalised right away from the repaired text layer.
     """
     _, _, fast = engine_names()
@@ -412,6 +419,7 @@ def run_fast_ocr(page: Page) -> None:
     texts: list[tuple[str, str]] = []
     failures: list[str] = []
     printed = ""
+    is_final = page.text_state == Page.TextState.FINAL
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-fast-") as tmp:
         tmpdir = Path(tmp)
         for i, target in enumerate(targets):
@@ -443,11 +451,17 @@ def run_fast_ocr(page: Page) -> None:
     if failures and len(failures) == len(targets):
         raise OcrError(f"{TESSERACT_HEADLINE}\n{failures[0]}")
 
-    provisional, stripped = strip_page_number_lines(join_region_texts(texts))
+    has_region = any(target.kind == Region.Kind.PAGE_NUMBER for target in targets)
+    provisional, stripped = strip_page_number_lines(
+        join_region_texts(texts), has_region=has_region, known=printed
+    )
     page.provisional_text = provisional
-    page.printed_number = printed or stripped
-    page.text_state = Page.TextState.PROVISIONAL
-    page.save(update_fields=["provisional_text", "printed_number", "text_state"])
+    fields = ["provisional_text"]
+    if not is_final:  # the full pass owns the number and the text state once it has run
+        page.printed_number = printed or stripped
+        page.text_state = Page.TextState.PROVISIONAL
+        fields += ["printed_number", "text_state"]
+    page.save(update_fields=fields)
 
     if uses_text_layer(page):
         if _run_text_layer(page) is not None:
@@ -535,7 +549,10 @@ def run_full_ocr(page: Page) -> None:
     (`gray_2x`); running header and page number are skipped. The primary output is checked against
     Tesseract with `sanity_check`; the secondary runs in every case (as the candidate when the
     primary failed, as the source of alternatives when it passed). `finalize_page` then selects.
-    Born-digital pages that already have a text-layer run are only finalised.
+    Born-digital pages that already have a text-layer run are only finalised. The page-number
+    region is read first (`_vote_page_number`); when every reading of it is words, not digits, it
+    was a short last line of text: its detected box is dropped and the regions re-derived
+    (`processing.services.drop_detected_page_number`) so the models read those words with the body.
     """
     primary, secondary, fast = engine_names()
     if uses_text_layer(page) and _latest_text_layer_run(page) is not None:
@@ -544,7 +561,6 @@ def run_full_ocr(page: Page) -> None:
 
     pre = _preprocess_of(page)
     gray = _load_field_image(pre.gray_image, "الرمادية")
-    targets = _targets(page, gray.shape, ocr_only=True)
     upscale = int(nassakh().get("FOOTNOTE_UPSCALE", 2) or 1)
     for name in (primary, secondary):
         try:
@@ -560,6 +576,13 @@ def run_full_ocr(page: Page) -> None:
     n_model_runs = 0
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-full-") as tmp:
         tmpdir = Path(tmp)
+        number = _vote_page_number(page, gray, tmpdir, (primary, secondary))
+        if number is not None and number[1] and not _has_review_work(page):
+            from processing.services import drop_detected_page_number  # other app: lazy import
+
+            if drop_detected_page_number(page):
+                number = None  # the region is gone: its words are read with the body below
+        targets = _targets(page, gray.shape, ocr_only=True)
         for i, target in enumerate(targets):
             tess = _latest_runs(page, target).get(fast)
             if tess is None or tess.status != OcrRun.Status.OK:
@@ -585,8 +608,6 @@ def run_full_ocr(page: Page) -> None:
             _record_check(secondary_run, reference)
             n_model_runs += 2
             model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
-        if not (n_model_runs and len(model_errors) == n_model_runs):
-            _read_printed_number(page, gray, tmpdir, (primary, secondary))
     if n_model_runs and len(model_errors) == n_model_runs:
         # Every model call crashed (out of memory, broken weights...): this is an engine failure,
         # not a page to finalise from Tesseract; the page goes to `error` and can be retried.
@@ -594,29 +615,41 @@ def run_full_ocr(page: Page) -> None:
             "تعذّر تشغيل نماذج التعرّف على هذه الصفحة؛ راجع سجل عامل GPU ثم أعد تشغيل المرحلة.\n"
             f"{model_errors[0]}"
         )
+    if number is not None and number[0] != page.printed_number:
+        page.printed_number = number[0]
+        page.save(update_fields=["printed_number"])
     finalize_page(page)
 
 
 PAGE_NUMBER_VLM_TOKENS = 16
 
 
-def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engines: tuple[str, ...]) -> None:
-    """Read the page-number region with the given models and keep only an agreed number.
+def _vote_page_number(
+    page: Page, gray: np.ndarray, tmpdir: Path, engines: tuple[str, ...]
+) -> tuple[str, bool] | None:
+    """Read the page-number region with the given models: `(agreed number, reads as words)`.
 
-    Tesseract misreads isolated Arabic-Indic digits ("٦" as "+") and the models misread them too
-    now and then, so the number is decided by vote: the digits from each model call plus
-    Tesseract's guess from the fast pass. A value carried by at least two voters is stored; with no
-    agreement `printed_number` is cleared, because an unknown number is better than a wrong one
-    (the dashboard's sequence check would otherwise raise false alarms).
+    None when the page has no page-number region. Tesseract misreads isolated Arabic-Indic digits
+    ("٦" as "+", "٣١" as "اف") and the models misread them too now and then, so the number is
+    decided by vote: the digits from each model call plus Tesseract's reading of the region (its
+    latest run, not `printed_number`, which may hold an earlier vote). A value carried by at least
+    two voters is agreed; with no agreement the number is '' because an unknown number is better
+    than a wrong one (the dashboard's sequence check would otherwise raise false alarms). The
+    region reads as words when no reading holds a digit and a model read at least two Arabic
+    letters: a paragraph's short last line that the layout took for the page number.
     """
     region = page.regions.filter(kind=Region.Kind.PAGE_NUMBER).order_by("order").first()
     if region is None:
-        return
+        return None
     target = Target(region, _pad_bbox(region.bbox, PAGE_NUMBER_PAD, gray.shape))
     path = _save_temp(
         _crop_image(gray, target.bbox, upscale=PAGE_NUMBER_UPSCALE), tmpdir, f"gray-number-{target.kind}"
     )
-    votes: list[str] = [page.printed_number] if page.printed_number else []
+    _, _, fast = engine_names()
+    tess = _latest_runs(page, Target(region, list(region.bbox))).get(fast)
+    readings = [tess.parsed_text] if tess is not None and tess.status == OcrRun.Status.OK else []
+    votes: list[str] = [printed_number_of(readings[0])] if readings else []
+    model_texts: list[str] = []
     for name in engines:
         run = run_engine(
             page,
@@ -628,13 +661,12 @@ def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engines: tu
             scale=PAGE_NUMBER_UPSCALE,
         )
         if run.status == OcrRun.Status.OK:
-            digits = printed_number_of(run.parsed_text)
-            if digits:
-                votes.append(digits)
+            model_texts.append(run.parsed_text)
+            votes.append(printed_number_of(run.parsed_text))
+    votes = [v for v in votes if v]
     agreed = next((v for v in votes if votes.count(v) >= 2), "")
-    if agreed != page.printed_number:
-        page.printed_number = agreed
-        page.save(update_fields=["printed_number"])
+    no_digit = not any(_DIGITS.search(text or "") for text in readings + model_texts)
+    return agreed, no_digit and any(reads_as_words(text) for text in model_texts)
 
 
 # ---------------------------------------------------------------- selection and finalisation
@@ -747,31 +779,37 @@ def page_number_digits(line: str) -> str | None:
     return digits[:PRINTED_NUMBER_MAX] or None
 
 
-def page_number_edges(lines: list[str]) -> tuple[set[int], str]:
+def page_number_edges(lines: list[str], has_region: bool = False, known: str = "") -> tuple[set[int], str]:
     """Indices of the first / last non-empty lines that are only a page number, and the number.
 
     `digits` is the Western number of a dropped line (the last one when both are numbers), ''
     when none. A page with a single line is never emptied. Nothing between the first and the last
-    non-empty line is looked at.
+    non-empty line is looked at. With `has_region` (the lines come from region crops and the page
+    has a page-number region, which already cut the number out) an edge line that is only digits is
+    real text, a wrapped reference «٣٤» or a section marker «(١٢)», and is kept unless its digits
+    equal `known`, the number read in that region.
     """
     filled = [i for i, line in enumerate(lines) if line.strip()]
     if len(filled) < 2:
         return set(), ""
     first = page_number_digits(lines[filled[0]])
     last = page_number_digits(lines[filled[-1]])
+    if has_region:
+        first = first if known and first == known else None
+        last = last if known and last == known else None
     drop = ({filled[0]} if first else set()) | ({filled[-1]} if last else set())
     return drop, last or first or ""
 
 
-def strip_page_number_lines(text: str) -> tuple[str, str]:
+def strip_page_number_lines(text: str, has_region: bool = False, known: str = "") -> tuple[str, str]:
     """`text` without a leading / trailing page-number line, and that number ('' when none).
 
     The safety net for page numbers that reached the text (page order comes from the scan order;
     the printed number is kept as metadata only). Only the first and last non-empty lines are
-    candidates; the body is left exactly as it is.
+    candidates; the body is left exactly as it is. `has_region` / `known`: see `page_number_edges`.
     """
     lines = (text or "").split("\n")
-    drop, digits = page_number_edges(lines)
+    drop, digits = page_number_edges(lines, has_region=has_region, known=known)
     if not drop:
         return text, ""
     kept = "\n".join(line for i, line in enumerate(lines) if i not in drop)
@@ -782,6 +820,12 @@ def printed_number_of(text: str) -> str:
     """Western digits of a page-number region's OCR text ('' when it holds no number)."""
     digits = page_number_digits(" ".join((text or "").split()))
     return digits or ""
+
+
+def reads_as_words(text: str) -> bool:
+    """True when a page-number region's OCR text is words: no digit and at least two Arabic letters."""
+    value = text or ""
+    return not _DIGITS.search(value) and len(_ARABIC_LETTER.findall(value)) >= MIN_WORD_LETTERS
 
 
 def _set_flags(flags: list, updates: dict[str, bool]) -> list:
@@ -809,15 +853,20 @@ def finalize_page(page: Page) -> None:
     `Page.n_unresolved` their sum over the page. Review revisions recorded before this pass can no
     longer be undone (their lines are replaced).
 
-    Unreviewed lines are replaced; a reviewed line (Phase 3) is kept in place of the new line at
-    its `order` and its text goes into `final_text`. `final_text` gets Western
-    digits (D6) while `Line.ocr_text` and the tokens keep the raw OCR output. Sets or clears the
-    `ocr_fallback` and `alignment_poor` flags, then refreshes the book status (`ready_for_review`
-    once every non-excluded page is done). A first or last line of the page that is only a page
-    number is dropped (no Line row, not in the text) and its digits go to `printed_number`.
+    A page with review work (reviewed lines or an approval stamp; approved pages are refused by
+    `books.services.run_stage`, this guards a pass that was queued before) keeps its lines exactly
+    as they are: see `_keep_reviewed_lines`. Otherwise every line is replaced. `final_text` gets
+    Western digits (D6) while `Line.ocr_text` and the tokens keep the raw OCR output. Sets or clears
+    the `ocr_fallback` and `alignment_poor` flags, then refreshes the book status
+    (`ready_for_review` once every non-excluded page is done). A first or last line of the page
+    that is only a page number is dropped (no Line row, not in the text): without a page-number
+    region its digits go to `printed_number`; with one, only a line repeating the voted number is
+    dropped and the vote is never overwritten.
     """
+    if _has_review_work(page):
+        _keep_reviewed_lines(page)
+        return
     region_texts = _collect_region_texts(page)
-    reviewed = {line.order: line for line in page.lines.filter(is_reviewed=True)}
     new_lines: list[Line] = []
     main_parts: list[str] = []
     foot_parts: list[str] = []
@@ -826,20 +875,22 @@ def finalize_page(page: Page) -> None:
     order = 0
     built_per_region = [build_lines(rt.text, rt.alt_text, rt.tess_lines) for rt in region_texts]
     # Safety net: a first / last line of the page that is only a page number is dropped from the
-    # lines and the text; its number is kept as metadata (`printed_number`).
+    # lines and the text; its number is kept as metadata (`printed_number`). When the text comes
+    # from region crops of a page with a page-number region, that region already holds the number.
+    has_region = (
+        all(rt.target.region is not None for rt in region_texts)
+        and page.regions.filter(kind=Region.Kind.PAGE_NUMBER).exists()
+    )
     flat = [(r, k) for r, built in enumerate(built_per_region) for k in range(len(built))]
-    drop, printed = page_number_edges([built_per_region[r][k]["text"] for r, k in flat])
+    drop, printed = page_number_edges(
+        [built_per_region[r][k]["text"] for r, k in flat], has_region=has_region, known=page.printed_number
+    )
     dropped = {flat[i] for i in drop}
     for r, (rt, built) in enumerate(zip(region_texts, built_per_region, strict=True)):
         has_geometry = has_geometry or bool(rt.tess_lines)
         texts = []
         for k, b in enumerate(built):
             if (r, k) in dropped:
-                continue
-            kept = reviewed.get(order)
-            if kept is not None:  # a reviewed line wins over the new OCR line at its position
-                order += 1
-                texts.append(kept.text)
                 continue
             tokens = b["tokens"]
             chooser.apply_chooser(
@@ -873,7 +924,7 @@ def finalize_page(page: Page) -> None:
     from review.models import LineRevision  # review history of the page (other app: lazy import)
 
     with transaction.atomic():
-        page.lines.filter(is_reviewed=False).delete()
+        page.lines.all().delete()
         Line.objects.bulk_create(new_lines)
         LineRevision.objects.filter(page=page, undone=False).update(undone=True)
         page.final_text = to_western_digits(final_text)
@@ -881,11 +932,9 @@ def finalize_page(page: Page) -> None:
         page.attention_flags = _set_flags(
             page.attention_flags, {FLAG_FALLBACK: fallback, FLAG_ALIGNMENT: poor}
         )
-        page.n_unresolved = sum(line.n_low for line in new_lines) + sum(
-            line.n_low for line in reviewed.values()
-        )
+        page.n_unresolved = sum(line.n_low for line in new_lines)
         fields = ["final_text", "text_state", "attention_flags", "n_unresolved"]
-        if printed:
+        if printed and not has_region:
             page.printed_number = printed
             fields.append("printed_number")
         if not page.is_excluded:
@@ -894,10 +943,7 @@ def finalize_page(page: Page) -> None:
             page.error_message = ""
             fields += ["status", "error_from", "error_message"]
         page.save(update_fields=fields)
-    # Re-read the book: the instance on `page` may predate a long model run.
-    book = Book.objects.filter(pk=page.book_id).first()
-    if book is not None:
-        book.refresh_status()
+    _refresh_book_status(page)
     log.info(
         "page %s finalised: %d lines, %d tokens (%d low), fallback=%s, sources=%s",
         page.pk,
@@ -907,6 +953,44 @@ def finalize_page(page: Page) -> None:
         fallback,
         sorted({rt.source for rt in region_texts if rt.source}),
     )
+
+
+def _has_review_work(page: Page) -> bool:
+    """True for a page that was approved or has reviewed lines: a new OCR pass must not replace them."""
+    return page.reviewed_at is not None or page.lines.filter(is_reviewed=True).exists()
+
+
+def _keep_reviewed_lines(page: Page) -> None:
+    """Finalise a page that holds review work without touching its lines.
+
+    New OCR lines cannot be matched to reviewed ones (review renumbers, deletes and inserts lines),
+    so the lines stay exactly as they are, with their own order and region. The final text and
+    `n_unresolved` are rebuilt from them as the review screen does, the text becomes final, and the
+    page is `reviewed` again when it carries an approval stamp (else `ocr_done`). The new runs stay
+    on the page for the runs list; flags and review history are left alone.
+    """
+    from review.services import refresh_page_text  # the review app owns the text of reviewed lines
+
+    with transaction.atomic():
+        refresh_page_text(page)
+        page.text_state = Page.TextState.FINAL
+        fields = ["text_state"]
+        if not page.is_excluded:
+            approved = page.reviewed_at is not None
+            page.status = Page.Status.REVIEWED if approved else Page.Status.OCR_DONE
+            page.error_from = ""
+            page.error_message = ""
+            fields += ["status", "error_from", "error_message"]
+        page.save(update_fields=fields)
+    _refresh_book_status(page)
+    log.info("page %s holds review work: its %d lines were kept", page.pk, page.lines.count())
+
+
+def _refresh_book_status(page: Page) -> None:
+    """Re-read the book (the instance on `page` may predate a long model run) and re-derive its status."""
+    book = Book.objects.filter(pk=page.book_id).first()
+    if book is not None:
+        book.refresh_status()
 
 
 # ---------------------------------------------------------------- payloads for the API / panel

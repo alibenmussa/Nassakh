@@ -57,6 +57,17 @@ class ReviewBlocked(ReviewError):
         super().__init__(f"بقيت {unresolved} كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟")
 
 
+class ReviewConflict(ReviewError):
+    """The line changed since the client read it (another tab, a failed queued action); API 409.
+
+    Carries the line as it is now, so the client can replace its copy.
+    """
+
+    def __init__(self, line: Line):
+        self.line = line
+        super().__init__("تغيّر هذا السطر في نافذة أخرى؛ أُعيد تحميله.")
+
+
 # ====================================================================== small helpers
 
 
@@ -146,6 +157,23 @@ def line_snapshot(line: Line) -> dict:
         "n_low": line.n_low,
         "role": line.role,
     }
+
+
+def line_version(line: Line) -> str:
+    """The line's version (`v` in the payload): its last save time, sent back by whole-line actions."""
+    return line.updated_at.isoformat() if line.updated_at else ""
+
+
+def _check_version(line: Line, version) -> None:
+    """`ReviewConflict` when the client sent a version (`v`) and the line was saved since."""
+    if version is not None and str(version) != line_version(line):
+        raise ReviewConflict(line)
+
+
+def _check_word(line: Line, tokens: list[dict], index: int, expected) -> None:
+    """`ReviewConflict` when the client sent the word it saw at `index` (`t`) and it is not there now."""
+    if expected is not None and (index >= len(tokens) or tokens[index]["t"] != str(expected)):
+        raise ReviewConflict(line)
 
 
 def _record(page: Page, action: str, line: Line | None, before, after, user) -> LineRevision:
@@ -248,6 +276,7 @@ def line_item(line: Line) -> dict:
         "is_reviewed": line.is_reviewed,
         "n_low": line.n_low,
         "role": line.role,
+        "v": line_version(line),
         "tokens": [normalize_token(token) for token in line.tokens or []],
     }
 
@@ -396,6 +425,13 @@ def next_page_to_review(book: Book, after_number: int | None = None) -> Page | N
     return pending.filter(number__gt=after_number).first() or pending.exclude(number=after_number).first()
 
 
+def pending_page(book: Book, number: int | None) -> Page | None:
+    """Page `number` of the book when it still waits for review (non-excluded, `ocr_done`), else None."""
+    if number is None:
+        return None
+    return book.pages.filter(number=number, is_excluded=False, status=Page.Status.OCR_DONE).first()
+
+
 def book_review_summary(book: Book) -> dict:
     """Dashboard review numbers: `reviewed`, `total`, `pending`, `unresolved_total`, `next_review_url`.
 
@@ -466,13 +502,16 @@ def _clean_typed(text: str | None) -> str:
 
 
 @transaction.atomic
-def resolve_token(line: Line, index, choice: str, text: str | None = None, user=None) -> Line:
+def resolve_token(
+    line: Line, index, choice: str, text: str | None = None, user=None, expected: str | None = None
+) -> Line:
     """Resolve token `index` of `line` with a reading: `primary`, `secondary`, `tess` or `typed`.
 
     `primary` keeps the primary model's reading (restores it when another reading was chosen
     before), `secondary` takes `alt`, `tess` takes Tesseract's word, `typed` takes `text`. Sets
-    `res` to the choice (the token's `conf` is kept). Raises `ReviewError` (Arabic) on a bad
-    index / choice or a missing alternative.
+    `res` to the choice (the token's `conf` is kept). `expected` is the word the client saw at
+    `index`; when it is not there any more, `ReviewConflict` (the indices moved). Raises
+    `ReviewError` (Arabic) on a bad index / choice or a missing alternative.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -481,6 +520,7 @@ def resolve_token(line: Line, index, choice: str, text: str | None = None, user=
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
     tokens = [normalize_token(token) for token in line.tokens or []]
     i = _as_index(index, len(tokens))
+    _check_word(line, tokens, i, expected)
     if choice not in CHOICES:
         raise ReviewError("اختيار غير معروف.")
     token = tokens[i]
@@ -530,17 +570,19 @@ def retokenize(old_tokens: list[dict], text: str) -> list[dict]:
 
 
 @transaction.atomic
-def edit_line(line: Line, text: str, user=None) -> Line:
+def edit_line(line: Line, text: str, user=None, version: str | None = None) -> Line:
     """Replace the text of a whole line; unchanged words keep their boxes and resolutions.
 
     Words are separated by whitespace (collapsed to single spaces). `ocr_text` never changes.
     Empty text is refused (delete the line instead); an unchanged text is a no-op (no revision).
+    `version` is the line's `v` as the client read it; a line saved since is a `ReviewConflict`.
     """
     page = _lock_page(line.page)
     _check_editable(page)
     line = _line_of(page, line.pk)
     if line is None:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    _check_version(line, version)
     words = _clean_words(text)
     if not words:
         raise ReviewError("السطر فارغ؛ لحذفه استخدم «حذف السطر».")
@@ -606,13 +648,17 @@ def insert_line(page: Page, after_line_id: int | None, text: str, user=None) -> 
 
 
 @transaction.atomic
-def delete_line(line: Line, user=None) -> int:
-    """Delete a line (typically a manual or garbage one); the lines below move up. Returns its id."""
+def delete_line(line: Line, user=None, version: str | None = None) -> int:
+    """Delete a line (typically a manual or garbage one); the lines below move up. Returns its id.
+
+    `version`: as in `edit_line` (a line saved since the client read it is a `ReviewConflict`).
+    """
     page = _lock_page(line.page)
     _check_editable(page)
     line = _line_of(page, line.pk)
     if line is None:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    _check_version(line, version)
     line_id = line.pk
     _record(page, LineRevision.Action.DELETE, None, line_snapshot(line), None, user)
     line.delete()
@@ -635,12 +681,15 @@ def _union_box(a: list | None, b: list | None) -> list | None:
 
 
 @transaction.atomic
-def merge_tokens(line: Line, index, user=None) -> Line:
+def merge_tokens(
+    line: Line, index, user=None, expected: str | None = None, expected_next: str | None = None
+) -> Line:
     """Join word `index` with the word after it (reading order) into one word, e.g. «هير» + «ودوت».
 
     For a name or place the models split in two (D31). The two readings are written together without
     a space; the merged word's box is the union of both boxes and it counts as the reviewer's
-    decision (typed, high confidence, no alternatives). Undo restores both words. Raises
+    decision (typed, high confidence, no alternatives). Undo restores both words. `expected` /
+    `expected_next` are the two words the client saw (`ReviewConflict` when they moved). Raises
     `ReviewError` when there is no word after `index` on the line.
     """
     page = _lock_page(line.page)
@@ -650,6 +699,8 @@ def merge_tokens(line: Line, index, user=None) -> Line:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
     tokens = [normalize_token(token) for token in line.tokens or []]
     i = _as_index(index, len(tokens))
+    _check_word(line, tokens, i, expected)
+    _check_word(line, tokens, i + 1, expected_next)
     if i + 1 >= len(tokens):
         raise ReviewError("لا توجد كلمة بعدها في هذا السطر للدمج.")
     before = line_snapshot(line)
@@ -665,12 +716,12 @@ def merge_tokens(line: Line, index, user=None) -> Line:
 
 
 @transaction.atomic
-def delete_token(line: Line, index, user=None) -> dict:
+def delete_token(line: Line, index, user=None, expected: str | None = None) -> dict:
     """Remove one stray word (a lone letter or number the OCR added) from the line.
 
     Returns `{"line": Line | None, "deleted_line_id": int | None}`: removing the only word of a line
     deletes the line itself (recorded as a line delete, so undo brings the line back). Undo restores
-    the word with its box and readings.
+    the word with its box and readings. `expected`: as in `resolve_token`.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -679,6 +730,7 @@ def delete_token(line: Line, index, user=None) -> dict:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
     tokens = [normalize_token(token) for token in line.tokens or []]
     i = _as_index(index, len(tokens))
+    _check_word(line, tokens, i, expected)
     if len(tokens) == 1:
         line_id = line.pk
         _record(page, LineRevision.Action.DELETE, None, line_snapshot(line), None, user)
@@ -697,18 +749,20 @@ def delete_token(line: Line, index, user=None) -> dict:
 
 
 @transaction.atomic
-def set_line_role(line: Line, role: str, user=None) -> Line:
+def set_line_role(line: Line, role: str, user=None, version: str | None = None) -> Line:
     """Mark what a line is: body text «محتوى», a main heading «عنوان رئيسي» or a subheading «عنوان فرعي».
 
     Stored on the line (D32) for assembly (chapters, table of contents) and shown in the review
     screen. Footnote lines stay body text. An unchanged role records nothing; undo restores the
-    previous role. Raises `ReviewError` (Arabic) for an unknown role or a footnote line.
+    previous role. Raises `ReviewError` (Arabic) for an unknown role or a footnote line, and
+    `ReviewConflict` for a stale `version` (as in `edit_line`).
     """
     page = _lock_page(line.page)
     _check_editable(page)
     line = _line_of(page, line.pk)
     if line is None:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    _check_version(line, version)
     if role not in Line.Role.values:
         raise ReviewError("نوع السطر غير معروف.")
     if role != Line.Role.BODY and _region_kind(line) == Region.Kind.FOOTNOTE:

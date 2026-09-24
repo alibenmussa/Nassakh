@@ -91,10 +91,9 @@
   function keyAction(ev, ctx) {
     const k = ev.key;
     const mod = ev.metaKey || ev.ctrlKey;
-    if (mod && (k === 'z' || k === 'Z')) return ev.shiftKey ? null : 'undo';
-    if (mod) return null;
     if (k === 'Escape') return 'close';
-    if (ctx.inField) return null;
+    if (ctx.inField) return null; // an input keeps its own keys, including the native ⌘Z of its draft
+    if (mod) return (k === 'z' || k === 'Z') && !ev.shiftKey ? 'undo' : null;
     if (k === 'Tab') return ctx.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
     if (k === 'Enter') return ev.altKey ? 'insert' : (ctx.focused ? 'accept' : null);
     if (ev.altKey) {
@@ -155,8 +154,10 @@
       insert: null,       // { afterId, text }
       menuFor: null,      // line id whose «…» menu is open
       // ---- saving
-      save: { state: 'idle', pending: 0, retry: null },
+      save: { state: 'idle', pending: 0, failed: [] }, // failed: [{ message, retry }] in order, until retried
       queue: Promise.resolve(),
+      actionSeq: 0,       // counts requests; only the newest one may offer an undo toast
+      gen: 0,             // page generation: a page swap bumps it so late responses of the old page are dropped
       undoToast: null,
       // ---- page
       shown: 0,           // animated resolved counter
@@ -164,7 +165,7 @@
       sheetOpen: false,
       stamp: false,
       approving: false,
-      slide: '',          // '' | 'out' | 'in'
+      slide: '',          // '' | 'out' | 'in' | 'out-back' | 'in-back' (turning to an earlier page)
       loading: false,
       entering: false,
       pulsing: false,
@@ -193,6 +194,8 @@
         if (!hasDOM) return;
         if (this.$watch) {
           ['counts', 'save', 'page', 'shown', 'loading', 'canEdit'].forEach((key) => this.$watch(key, () => this.syncBar()));
+          // one toast at a time (DESIGN.md): a shared toast («تم النسخ», an error) takes the place of the undo offer
+          this.$watch('$store.toast.visible', (visible) => { if (visible) this.dismissUndo(); });
         }
         this.tick(() => { this.measure(); this.observe(); this.enter(); this.mountDecode(); });
         setTimeout(() => this.loadFilm(), 60);
@@ -256,6 +259,12 @@
         if (c.book_unresolved_total != null) this.book.unresolved_total = c.book_unresolved_total;
       },
 
+      // The line's server version (`v` in its payload) as it is now; sent with whole-line actions.
+      versionOf(line) {
+        const current = line ? this.lineById(line.id) : null;
+        const v = (current && current.v) || (line && line.v);
+        return v === undefined || v === null ? undefined : v;
+      },
       replaceLine(line) {
         const i = this.lines.findIndex((l) => l.id === line.id);
         if (i >= 0) this.lines.splice(i, 1, line); else { this.lines.push(line); this.lines.sort((a, b) => a.order - b.order); }
@@ -274,6 +283,7 @@
             unresolved: this.counts.unresolved,
             pct: this.pct,
             save: this.save.state,
+            failed: this.save.failed.length,
             reviewed: this.isReviewed,
             canEdit: this.canEdit,
             canApprove: this.editable && !this.isReviewed,
@@ -535,6 +545,29 @@
         return Promise.resolve(false);
       },
 
+      // Close the popover and move on to the next unresolved word; false when none is left (focus cleared).
+      advance(ref) {
+        this.closePop();
+        const next = this.nextUnresolved(1, ref);
+        if (next) this.focusWord(next, { open: true }); else this.focus = null;
+        return Boolean(next);
+      },
+
+      // Enter: confirm the reading now in the text. An unresolved word takes the primary reading (PHASE3_SPEC
+      // §4); a word the chooser picked (D26) records the reviewer's confirmation of that reading; a word the
+      // reviewer already resolved, or a confident one, needs no request: the popover closes and focus moves on.
+      accept() {
+        const tok = this.focused;
+        if (!tok || !this.editable) return Promise.resolve(false);
+        if (this.isUnresolved(tok)) return this.choose('primary');
+        if (tok.res === 'chooser') {
+          const cur = this.options().find((o) => o.current);
+          if (cur) return this.choose(cur.choice);
+        }
+        this.advance(this.focus);
+        return Promise.resolve(false);
+      },
+
       // Resolve the focused word. Optimistic: the word lands, the counter ticks, focus moves on; the
       // POST follows and a failure restores the word and the counts.
       choose(choice, text) {
@@ -548,6 +581,8 @@
         else if (choice === 'typed') value = String(text || '').replace(/\s+/g, ' ').trim();
         if (!value) return Promise.resolve(false);
         if (choice === 'typed' && value === tok.t && !this.isUnresolved(tok)) { this.closePop(); return Promise.resolve(false); }
+        // the reading already in the text, chosen again: a confirmation, nothing to record
+        if (choice !== 'typed' && choice === tok.res && value === tok.t) { this.advance(ref); return Promise.resolve(false); }
 
         const before = Object.assign({}, tok);
         const beforeCounts = Object.assign({}, this.counts);
@@ -561,12 +596,9 @@
           this.setCounts({ low_total: this.counts.low_total, unresolved: this.counts.unresolved - 1, resolved: this.counts.resolved + 1 });
         }
         this.flash(ref);
-        this.closePop();
-        const next = this.nextUnresolved(1, ref);
-        if (next) this.focusWord(next, { open: true });
-        else { this.focus = null; if (wasOpen && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A'); }
+        if (!this.advance(ref) && wasOpen && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A');
 
-        const body = { index: ref.index, choice };
+        const body = { index: ref.index, choice, t: before.t }; // t: the word as seen, so a stale tab gets a 409
         if (choice === 'typed') body.text = value;
         return this.request(() => api(fill(this.urls.resolve, line.id), { method: 'POST', body }), {
           apply: (data) => {
@@ -624,7 +656,8 @@
         const at = { lineId: line.id, index: k };
         this.focusWord(at, { open: false });
         this.flash(at);
-        return this.request(() => api(fill(this.urls.merge, line.id), { method: 'POST', body: { index: k } }), {
+        const seen = { index: k, t: before[k].t, t_next: before[k + 1].t };
+        return this.request(() => api(fill(this.urls.merge, line.id), { method: 'POST', body: seen }), {
           apply: (data) => {
             if (data.line) this.replaceLine(data.line);
             this.applyApiCounts(data.counts, this.lineById(line.id));
@@ -655,11 +688,12 @@
         this.recount();
         this.closePop();
         this.focusWord({ lineId: line.id, index: Math.min(ref.index, tokens.length - 1) }, { open: false });
-        return this.request(() => api(fill(this.urls.delete_word, line.id), { method: 'POST', body: { index: ref.index } }), {
-          apply: (data) => {
+        const seen = { index: ref.index, t: before[ref.index].t };
+        return this.request(() => api(fill(this.urls.delete_word, line.id), { method: 'POST', body: seen }), {
+          apply: (data, seq) => {
             if (data.line) this.replaceLine(data.line);
             this.applyApiCounts(data.counts, this.lineById(line.id));
-            this.showUndoToast('حُذفت الكلمة');
+            this.showUndoToast('حُذفت الكلمة', seq);
           },
           rollback: () => {
             const l = this.lineById(line.id);
@@ -686,6 +720,15 @@
         const value = this.pop.typed.trim();
         if (!value) return Promise.resolve(false);
         return this.choose('typed', value);
+      },
+
+      // Tab in the correction input: a draft that changes the word (or confirms an unresolved one) is saved,
+      // and choose() moves on; an untouched prefill just moves to the next / previous unresolved word.
+      onTypedTab(shift) {
+        const value = this.pop.typed.trim();
+        const tok = this.focused;
+        if (value && tok && (value !== tok.t || this.isUnresolved(tok))) return this.submitTyped();
+        return this.move(shift ? -1 : 1);
       },
 
       flash(ref) {
@@ -719,7 +762,7 @@
         if (!line || !this.editable || (line.role || 'body') === role) return Promise.resolve(false);
         const before = line.role || 'body';
         line.role = role;
-        return this.request(() => api(fill(this.urls.role, line.id), { method: 'POST', body: { role } }), {
+        return this.request(() => api(fill(this.urls.role, line.id), { method: 'POST', body: { role, v: this.versionOf(line) } }), {
           apply: (data) => { if (data.line) this.replaceLine(data.line); },
           rollback: () => { const l = this.lineById(line.id); if (l) l.role = before; },
           retry: () => this.setRole(this.lineById(line.id), role),
@@ -761,8 +804,11 @@
 
       cancelEdit() { this.edit = null; this.insert = null; },
 
+      // Only one line editor exists at a time; it is found by class because the three templates that render
+      // one (edit, insert after a line, insert first) would otherwise fight over a single shared x-ref.
       focusEditor() {
-        const el = this.$refs && this.$refs.editor;
+        const root = this.$root && this.$root.querySelector ? this.$root : (hasDOM ? document : null);
+        const el = root && root.querySelector ? root.querySelector('textarea.rv-editor') : null;
         if (!el) return;
         this.autosize(el);
         el.focus();
@@ -793,7 +839,7 @@
         this.recount();
         this.hotLine = line.id;
 
-        return this.request(() => api(fill(this.urls.edit, line.id), { method: 'POST', body: { text } }), {
+        return this.request(() => api(fill(this.urls.edit, line.id), { method: 'POST', body: { text, v: this.versionOf(line) } }), {
           apply: (data) => {
             if (data.line) this.replaceLine(data.line);
             this.applyApiCounts(data.counts, this.lineById(line.id));
@@ -872,8 +918,8 @@
         if (this.focus && this.focus.lineId === line.id) { this.focus = null; this.closePop(); }
         if (this.hotLine === line.id) this.hotLine = null;
 
-        return this.request(() => api(fill(this.urls.delete, line.id), { method: 'POST' }), {
-          apply: (data) => { this.applyApiCounts(data.counts); this.showUndoToast('حُذف السطر'); },
+        return this.request(() => api(fill(this.urls.delete, line.id), { method: 'POST', body: { v: this.versionOf(line) } }), {
+          apply: (data, seq) => { this.applyApiCounts(data.counts); this.showUndoToast('حُذف السطر', seq); },
           rollback: () => {
             this.lines.splice(Math.min(i, this.lines.length), 0, snapshot);
             this.renumber();
@@ -883,16 +929,25 @@
         });
       },
 
-      showUndoToast(message) {
+      // Offer «تراجع» for the action that just landed. `seq` is that request's number: when a later action has
+      // been sent since, the newest revision is no longer this one and the offer would undo the wrong thing.
+      showUndoToast(message, seq) {
+        if (seq !== undefined && seq !== this.actionSeq) return;
+        try { const shared = Alpine.store('toast'); if (shared && shared.hide) shared.hide(); } catch (_) { /* no store */ }
         clearTimeout(this.undoTimer);
         this.undoToast = { message };
         this.undoTimer = setTimeout(() => { this.undoToast = null; }, UNDO_TOAST_MS);
       },
 
+      dismissUndo() {
+        clearTimeout(this.undoTimer);
+        if (this.undoToast) this.undoToast = null;
+      },
+
       // Server-side undo (LineRevision): the whole payload comes back and the screen re-renders from it.
       undo() {
         if (!this.canEdit || this.loading) return Promise.resolve(false);
-        this.undoToast = null;
+        this.dismissUndo();
         this.edit = null;
         this.insert = null;
         this.closePop();
@@ -908,22 +963,39 @@
       // (returns true), `soft` failures only toast (nothing to roll back).
       request(send, handlers) {
         const h = handlers || {};
+        const gen = this.gen;
+        const seq = ++this.actionSeq;
+        this.dismissUndo(); // a newer action makes the undo offer stale
         this.save.pending += 1;
         this.save.state = 'saving';
         this.syncBar();
         const run = this.queue.then(() => send()).then((res) => {
           this.save.pending = Math.max(0, this.save.pending - 1);
+          if (gen !== this.gen) {
+            // the page this belonged to was swapped away meanwhile: nothing here to apply or roll back
+            if (!res.ok) this.toast(res.message);
+            if (!this.save.pending) this.settle('idle');
+            return null;
+          }
           if (res.ok) {
-            if (h.apply) h.apply(res.data || {});
+            if (h.apply) h.apply(res.data || {}, seq);
             if (!this.save.pending) this.settle('saved');
             return res.data || {};
           }
           if (h.onFail && h.onFail(res)) { if (!this.save.pending) this.settle('idle'); return null; }
+          if (res.status === 409 && res.data && res.data.line) {
+            // the line changed elsewhere (another tab): show it as it is now instead of offering a retry
+            if (h.rollback) h.rollback();
+            this.replaceLine(res.data.line);
+            this.recount();
+            if (!this.save.pending) this.settle('idle');
+            this.toast(res.message || 'تغيّر هذا السطر في نافذة أخرى، فعُرض كما هو الآن.');
+            return null;
+          }
           if (h.rollback) h.rollback();
           if (h.soft) { this.settle('idle'); this.toast(res.message); return null; }
-          this.save.state = 'error';
-          this.save.retry = h.retry || null;
-          this.syncBar();
+          if (h.retry) this.save.failed.push({ message: res.message, retry: h.retry });
+          this.settle('error');
           this.toast(res.message);
           return null;
         });
@@ -931,21 +1003,22 @@
         return run;
       },
 
+      // The chip never says «محفوظ» while an earlier action is still unsaved: the failures outrank a later success.
       settle(state) {
-        this.save.state = state;
+        this.save.state = state !== 'saving' && this.save.failed.length ? 'error' : state;
         this.syncBar();
         clearTimeout(this.saveTimer);
-        if (state === 'saved') {
+        if (this.save.state === 'saved') {
           this.saveTimer = setTimeout(() => { if (this.save.state === 'saved') { this.save.state = 'idle'; this.syncBar(); } }, SAVED_MS);
         }
       },
 
+      // Replay every failed action in its original order; one that fails again rejoins the list.
       retrySave() {
-        const fn = this.save.retry;
-        this.save.retry = null;
-        this.save.state = 'idle';
-        this.syncBar();
-        if (fn) fn();
+        const failed = this.save.failed.slice();
+        this.save.failed = [];
+        this.settle('idle');
+        failed.forEach((f) => f.retry());
       },
 
       // ------------------------------------------------------------ approve / reopen / pages
@@ -991,8 +1064,9 @@
         this.stamp = true;
         const after = () => {
           this.stamp = false;
-          const payloadUrl = d.next_payload_url || this.payloadUrlFor(this.nextIdFromFilm());
-          if (payloadUrl) { this.swapTo(payloadUrl, d.next_review_url); return; }
+          const item = d.next_payload_url ? null : this.nextFromFilm();
+          const payloadUrl = d.next_payload_url || this.payloadUrlFor(item && item.id);
+          if (payloadUrl) { this.swapTo(payloadUrl, d.next_review_url, this.turnDir(item)); return; }
           this.toast('لا صفحات بانتظار المراجعة');
         };
         if (this.reduced || !hasDOM) after(); else setTimeout(after, 800);
@@ -1021,12 +1095,15 @@
         if (item) Object.assign(item, patch, { n_unresolved: this.counts.unresolved });
       },
 
-      nextIdFromFilm() {
+      // The next page still to review: the first one after this page, else the first open page of the book.
+      nextFromFilm() {
         const items = this.film.items || [];
         const open = (p) => p.id && p.status === 'ocr_done' && !p.is_reviewed && p.number !== this.page.number;
-        const pick = items.find((p) => open(p) && p.number > this.page.number) || items.find(open);
-        return pick ? pick.id : null;
+        return items.find((p) => open(p) && p.number > this.page.number) || items.find(open) || null;
       },
+
+      // Reading direction of a turn to `item`: 1 forward (also when unknown), -1 back to an earlier page.
+      turnDir(item) { return item && item.number < this.page.number ? -1 : 1; },
 
       payloadUrlFor(id) {
         if (!id || !this.urls.payload) return null;
@@ -1042,11 +1119,15 @@
 
       // Fetch another page's payload and swap it in without a reload (old page leaves toward the end
       // side, the new one arrives from the start of the reading direction); the URL follows.
-      async swapTo(payloadUrl, fallbackUrl) {
+      // `dir`: 1 turns forward (the default), -1 back to an earlier page (the motion is mirrored).
+      async swapTo(payloadUrl, fallbackUrl, dir) {
         if (!payloadUrl) return false;
+        const back = dir < 0;
         this.loading = true;
-        this.slide = this.reduced || !hasDOM ? '' : 'out';
+        this.slide = this.reduced || !hasDOM ? '' : (back ? 'out-back' : 'out');
         clearTimeout(this.pollTimer);
+        // every queued action lands on the page it belongs to before the next page is fetched
+        await this.queue.catch(() => {});
         const res = await api(payloadUrl);
         if (!res.ok || !res.data || !res.data.page) {
           this.loading = false;
@@ -1056,8 +1137,15 @@
           return false;
         }
         const land = () => {
+          this.gen += 1; // responses still in flight for the old page are dropped when they arrive
           this.focus = null; this.hot = null; this.hotLine = null; this.closePop();
-          this.edit = null; this.insert = null; this.menuFor = null; this.dialog.open = false; this.undoToast = null;
+          this.edit = null; this.insert = null; this.menuFor = null; this.dialog.open = false; this.dismissUndo();
+          if (this.save.failed.length) {
+            // their retries target lines of the page being left: say so instead of keeping a chip that lies
+            this.save.failed = [];
+            this.toast('لم تُحفظ بعض الإجراءات في الصفحة التي غادرتها');
+          }
+          if (this.save.state === 'error') this.settle(this.save.pending ? 'saving' : 'idle');
           this.unmountDecode();
           this.apply(res.data);
           this.shown = this.counts.resolved;
@@ -1070,7 +1158,7 @@
             } catch (_) { /* fine */ }
           }
           this.loading = false;
-          this.slide = this.reduced || !hasDOM ? '' : 'in';
+          this.slide = this.reduced || !hasDOM ? '' : (back ? 'in-back' : 'in');
           const settle = () => {
             this.slide = '';
             this.enter();
@@ -1087,7 +1175,7 @@
       goTo(item) {
         if (!item || item.number === this.page.number) return;
         const payloadUrl = this.payloadUrlFor(item.id);
-        if (payloadUrl) this.swapTo(payloadUrl, item.url);
+        if (payloadUrl) this.swapTo(payloadUrl, item.url, this.turnDir(item));
         else if (item.url && hasDOM) window.location.assign(item.url);
       },
 
@@ -1106,8 +1194,9 @@
       },
 
       goNextReview() {
-        const payloadUrl = this.payloadUrlFor(this.nextIdFromFilm());
-        if (payloadUrl) { this.swapTo(payloadUrl, this.nav.next_review_url); return; }
+        const item = this.nextFromFilm();
+        const payloadUrl = this.payloadUrlFor(item && item.id);
+        if (payloadUrl) { this.swapTo(payloadUrl, this.nav.next_review_url, this.turnDir(item)); return; }
         if (this.nav.next_review_url && hasDOM) window.location.assign(this.nav.next_review_url);
         else this.toast('لا صفحات بانتظار المراجعة');
       },
@@ -1146,7 +1235,9 @@
 
       async poll() {
         if (!this.isPending || document.hidden) { if (this.isPending) this.schedulePoll(); return; }
+        const gen = this.gen;
         const res = await api(this.urls.payload);
+        if (gen !== this.gen) return; // another page landed meanwhile and schedules its own poll
         if (res.ok && res.data && res.data.page) {
           const p = res.data.page;
           if (p.text_state === 'final' || p.status === 'error') { this.landFinal(res.data); return; }
@@ -1159,7 +1250,9 @@
       // real lines take over (staggered in).
       landFinal(data) {
         const el = this.decodeEl;
+        const gen = this.gen;
         const finish = () => {
+          if (gen !== this.gen) return; // the wave outlived a page swap
           this.unmountDecode();
           this.apply(data);
           this.shown = this.counts.resolved;
@@ -1407,8 +1500,11 @@
         this.counterRaf = requestAnimationFrame(step);
       },
 
+      // The shared toast (one at a time, DESIGN.md): it takes the place of an undo offer still showing.
       toast(message) {
-        if (message && window.Nassakh && window.Nassakh.toast) window.Nassakh.toast(message);
+        if (!message) return;
+        this.dismissUndo();
+        if (window.Nassakh && window.Nassakh.toast) window.Nassakh.toast(message);
       },
 
       // Clean text of the page for the clipboard: body, blank line, footnotes.
@@ -1456,11 +1552,20 @@
       closeTop() {
         if (this.menuFor != null) { this.menuFor = null; return; }
         if (this.pop.more) { this.closeMore(true); return; }
-        if (this.pop.typing) { this.pop.typing = false; this.pop.typed = ''; this.tick(() => { const el = this.focus && document.getElementById(this.tokId(this.focus.lineId, this.focus.index)); if (el) el.focus(); }); return; }
+        if (this.pop.typing) {
+          // readings above the input: Esc returns to them; a correction-only popover (a confident word) just closes
+          if (this.options().length) { this.pop.typing = false; this.pop.typed = ''; } else this.closePop();
+          this.refocusWord();
+          return;
+        }
         if (this.pop.open) { this.closePop(); return; }
         if (this.edit || this.insert) { this.cancelEdit(); return; }
-        if (this.undoToast) { this.undoToast = null; return; }
+        if (this.undoToast) { this.dismissUndo(); return; }
         if (this.focus) { this.focus = null; return; }
+      },
+
+      refocusWord() {
+        this.tick(() => { const el = this.focus && document.getElementById(this.tokId(this.focus.lineId, this.focus.index)); if (el) el.focus(); });
       },
 
       // ------------------------------------------------------------ keyboard
@@ -1492,7 +1597,7 @@
           case 'next': stop(); this.move(1); break;
           case 'prev': stop(); this.move(-1); break;
           case 'insert': stop(); this.startInsert(); break;
-          case 'accept': stop(); this.choose('primary'); break;
+          case 'accept': stop(); this.accept(); break;
           case 'choose1': stop(); this.chooseNth(1); break;
           case 'choose2': stop(); this.chooseNth(2); break;
           case 'choose3': stop(); this.chooseNth(3); break;

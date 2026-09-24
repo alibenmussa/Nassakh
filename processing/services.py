@@ -202,6 +202,18 @@ def preprocess_is_quick(page: Page) -> bool:
 EXCLUDED_PAGE_ERROR = "الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا."
 
 
+def _refuse_approved(page: Page) -> None:
+    """ProcessingError for an approved page: it stays as reviewed until it is reopened.
+
+    New preprocessing or regions would move the page out of `reviewed` and leave its reviewed lines
+    on regions that no longer exist (`books.services.APPROVED_PAGE_STATUSES`).
+    """
+    from books.services import APPROVED_PAGE_ERROR, APPROVED_PAGE_STATUSES  # the books app owns them
+
+    if page.status in APPROVED_PAGE_STATUSES:
+        raise ProcessingError(APPROVED_PAGE_ERROR)
+
+
 def rerun_preprocess(page: Page, manual: dict | None) -> tuple[dict, bool]:
     """Re-run preprocessing from the panel with `manual` overrides (None = automatic values).
 
@@ -209,10 +221,11 @@ def rerun_preprocess(page: Page, manual: dict | None) -> tuple[dict, bool]:
     stay in its pixel space; OCR is not re-enqueued (D21). Ordinary pages run in the request and
     return `(payload, False)` with the new state; originals above `SYNC_MAX_PIXELS` are queued as
     preprocess → layout (layout only when regions exist) and return `({"task_id", "detail"}, True)`.
-    Raises ProcessingError (Arabic) for an excluded page or a failed run.
+    Raises ProcessingError (Arabic) for an excluded or approved page, or a failed run.
     """
     if page.is_excluded:
         raise ProcessingError(EXCLUDED_PAGE_ERROR)
+    _refuse_approved(page)
     rederive = page.regions.exists()
     if not preprocess_is_quick(page):
         from celery import chain
@@ -649,6 +662,27 @@ def derive_regions(page: Page) -> list[Region]:
     return regions
 
 
+def drop_detected_page_number(page: Page) -> bool:
+    """Forget a detected page number that OCR read as words, and re-derive the page's regions.
+
+    A short last line of text (a paragraph ending in one word) can pass the shape test of
+    `pipeline.detect_page_number`; as a page-number region its words would never reach the text.
+    Only a detected box is dropped: a page override or the manual book zone is the owner's choice.
+    The stored box is cleared (`Preprocess.page_number_box`) so the words join the body region.
+    Returns True when the regions changed.
+    """
+    pre = Preprocess.objects.filter(page=page).first()
+    if pre is None or not pre.output_height or not pre.page_number_box:
+        return False
+    if page_layout(page, pre).page_number_source != "detected":
+        return False
+    logger.info("page %s: detected page number %s reads as text; dropped", page.pk, pre.page_number_box)
+    pre.page_number_box = None
+    pre.save(update_fields=["page_number_box"])
+    _regions, changed = _derive_regions(page)
+    return changed
+
+
 def _run_stage(page: Page, stage: str) -> None:
     """Hand a page to `books.services.run_stage` (imported lazily; the books app owns the chain)."""
     from books import services as book_services
@@ -660,8 +694,11 @@ def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
     """Save manual guides for the book, re-derive every non-excluded page and re-OCR what changed.
 
     Pages that have not been preprocessed yet are skipped (their layout task will pick the new
-    guides up). Pages whose regions changed are handed to `books.services.run_stage(page, "ocr")`.
+    guides up), and so are approved pages (they keep their regions and reviewed lines until they
+    are reopened). Pages whose regions changed are handed to `books.services.run_stage(page, "ocr")`.
     """
+    from books.services import APPROVED_PAGE_STATUSES  # the books app owns the page statuses
+
     clean = clean_guides(data)
     guides, _ = LayoutGuides.objects.get_or_create(book=book)
     guides.header_cut = clean["header_cut"]
@@ -676,6 +713,7 @@ def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
     changed_pages: list[Page] = []
     pages = (
         book.pages.filter(is_excluded=False, preprocess__isnull=False)
+        .exclude(status__in=APPROVED_PAGE_STATUSES)
         .select_related("book")
         .order_by("number")
     )
@@ -700,10 +738,11 @@ def set_page_guides_override(page: Page, data: Mapping | None) -> tuple[list[Reg
     """Store a per-page guide override (or clear it when `data` is empty/`reset`) and re-derive.
 
     Returns `(regions, ocr_enqueued)`; OCR is re-run through the books chain when the regions
-    changed. Raises ProcessingError for an excluded page.
+    changed. Raises ProcessingError for an excluded or approved page.
     """
     if page.is_excluded:
         raise ProcessingError(EXCLUDED_PAGE_ERROR)
+    _refuse_approved(page)
     data = dict(data or {})
     reset = data.pop("reset", False)
     clean = {} if reset else clean_guides(data, partial=True)

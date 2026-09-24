@@ -107,8 +107,10 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
 
         from books.tasks import rerun_book_from
 
+        kept = services.approved_page_count(book)
         rerun_book_from.delay(book.pk, stage)
-        messages.success(request, f"أُعيد تشغيل الكتاب من مرحلة «{label}».")
+        note = f" تُركت {kept} صفحة معتمدة كما هي." if kept else ""
+        messages.success(request, f"أُعيد تشغيل الكتاب من مرحلة «{label}».{note}")
         return redirect("books:detail", book.pk)
 
     page = get_object_or_404(Page, book=book, number=number)

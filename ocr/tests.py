@@ -795,25 +795,49 @@ def test_full_ocr_drops_a_leading_page_number_line_from_lines_and_final_text(pag
     assert list(page.lines.order_by("order").values_list("order", flat=True)) == list(range(len(texts)))
 
 
-def test_finalize_page_replaces_unreviewed_lines_and_keeps_reviewed_ones(page):
+def test_finalize_page_replaces_every_line_of_a_page_without_review_work(page):
     add_regions(page)
     fakes = engines()
     with registry.override(fakes):
         services.run_fast_ocr(page)
         services.run_full_ocr(page)
-    first = page.lines.order_by("order").first()
-    first.is_reviewed = True
-    first.text = "نص مُراجَع"
-    first.save()
     stale = Line.objects.create(page=page, order=99, text="قديم")
     services.finalize_page(page)
     page.refresh_from_db()
-    assert Line.objects.filter(pk=first.pk, text="نص مُراجَع").exists()
     assert not Line.objects.filter(pk=stale.pk).exists()
-    # the reviewed line takes the place of the new line at its order: no duplicate (F54)
-    assert page.lines.count() == 3
     assert list(page.lines.order_by("order").values_list("order", flat=True)) == [0, 1, 2]
-    assert page.lines.get(order=0).is_reviewed and "نص مُراجَع" in page.final_text
+    assert page.status == Page.Status.OCR_DONE and page.reviewed_at is None
+
+
+def test_a_queued_ocr_pass_keeps_the_lines_of_an_approved_page(page):
+    # backend-1: review renumbers lines, so new OCR lines cannot be matched to reviewed ones by order
+    from review import services as review
+
+    add_regions(page)
+    with registry.override(engines()):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    lines = list(page.lines.order_by("order"))
+    review.approve_page(page, None, force=True)
+    review.delete_line(lines[0])  # the garbage first line
+    review.insert_line(page, lines[-1].pk, "سطر مكتوب")  # a line the models dropped, after the last one
+    page.refresh_from_db()
+    kept = list(page.lines.order_by("order").values_list("id", "order", "region_id", "text", "is_reviewed"))
+    final_text, stamp = page.final_text, page.reviewed_at
+
+    with pytest.raises(ValueError, match="أعد فتحها"):
+        run_stage(page, "ocr")  # an approved page is refused outright
+    with registry.override(engines()):
+        services.run_full_ocr(page)  # ... and a pass queued before the approval changes nothing
+    page.refresh_from_db()
+    assert (
+        list(page.lines.order_by("order").values_list("id", "order", "region_id", "text", "is_reviewed"))
+        == kept
+    )
+    assert page.final_text == final_text
+    assert final_text.count("(1) حاشية أولى") == 1 and final_text.endswith("سطر مكتوب")
+    assert page.status == Page.Status.REVIEWED and page.reviewed_at == stamp
+    assert page.text_state == Page.TextState.FINAL
 
 
 def test_finalize_page_uses_the_latest_run_per_engine(page):
@@ -1183,6 +1207,126 @@ def test_printed_number_is_cleared_when_the_three_readers_disagree(page):
         services.run_full_ocr(page)
     page.refresh_from_db()
     assert page.printed_number == ""  # 8 / 7 / 6: no two voters agree -> unknown, not wrong
+
+
+def number_engines(tess_number: str, v03_number: str, v02_number: str, tess_foot=TESS_FOOT, foot=FOOT):
+    """Fakes whose page-number readings (Tesseract, primary, secondary) and footnote text are given."""
+    fakes = engines()
+    fakes["tesseract"] = FakeEngine(
+        name="tesseract",
+        responder=by_kind(
+            {
+                "body": tess_result(TESS_BODY),
+                "footnote": tess_result(tess_foot),
+                "running_header": tess_result(TESS_HEADER),
+                "page_number": tess_result(tess_number),
+            }
+        ),
+    )
+    for name, body, number in (
+        ("qari_v03", PRIMARY_BODY, v03_number),
+        ("qari_v02", SECONDARY_BODY, v02_number),
+    ):
+        fakes[name] = FakeEngine(
+            name=name, responder=by_kind({"body": body, "footnote": foot, "page_number": number})
+        )
+        fakes[name].kind = "vlm"
+    return fakes
+
+
+def test_rerunning_only_the_fast_pass_keeps_the_final_text_and_the_voted_number(page):
+    # backend-3: an `ocr_fast` re-run refreshes the provisional text only
+    from review import services as review
+
+    add_regions(page)
+    with registry.override(number_engines("٢١", "٢١", "٢١")):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == "21"
+    with registry.override(number_engines("٨", "٢١", "٢١")):  # Tesseract misreads the number this time
+        run_stage(page, "ocr_fast")
+    page.refresh_from_db()
+    assert page.status == Page.Status.OCR_DONE and page.text_state == Page.TextState.FINAL
+    assert page.printed_number == "21"
+    assert review.review_payload(page, None)["page"]["text_state"] == "final"
+    review.approve_page(page, None, force=True)  # still approvable
+    # a fast pass that was queued before the approval does not touch the approved page either
+    with registry.override(number_engines("٨", "٢١", "٢١")):
+        services.run_fast_ocr(page)
+    page.refresh_from_db()
+    assert page.status == Page.Status.REVIEWED and page.text_state == Page.TextState.FINAL
+    assert page.printed_number == "21"
+
+
+def test_the_stored_page_number_does_not_vote_again(page):
+    # backend-3: Tesseract votes with its own reading of the region, not with an earlier result
+    add_regions(page)
+    with registry.override(number_engines("٨", "٥", "٧")):
+        services.run_fast_ocr(page)
+        Page.objects.filter(pk=page.pk).update(printed_number="5")  # an earlier vote
+        page.refresh_from_db()
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == ""  # 8 / 5 / 7: no agreement (the stored 5 does not count twice)
+
+
+def test_a_number_line_that_is_not_the_page_number_stays_in_the_text(page):
+    # backend-4: with a page-number region, only a line repeating the voted number is dropped
+    add_regions(page)
+    tess_foot = "(١) انظر تاريخ الطبري ج ٢ ص\n٣٤"
+    foot = "(١) انظر تاريخ الطبري ج ٢ ص\n٣٤"
+    with registry.override(number_engines("٢١", "٢١", "٢١", tess_foot=tess_foot, foot=foot)):
+        services.run_fast_ocr(page)
+        page.refresh_from_db()
+        assert page.provisional_text.endswith("ص\n٣٤") and page.printed_number == "21"
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == "21"
+    assert page.final_text.endswith("ج 2 ص\n34")
+    # a line that repeats the page number read in the region is still dropped
+    assert services.strip_page_number_lines("سطر\n— ٢١ —", has_region=True, known="21") == ("سطر", "21")
+    assert services.strip_page_number_lines("سطر\n(١٢)", has_region=True, known="21") == ("سطر\n(١٢)", "")
+    assert services.strip_page_number_lines("سطر\n(١٢)", has_region=True, known="") == ("سطر\n(١٢)", "")
+    assert services.strip_page_number_lines("سطر\n(١٢)") == ("سطر", "12")  # no region: the safety net
+
+
+def _detected_number_regions(page) -> None:
+    from processing import services as processing
+
+    Preprocess.objects.filter(page=page).update(
+        page_number_box={"bbox": [50, 182, 70, 196], "position": "bottom"}
+    )
+    processing.derive_regions(page)
+    assert list(page.regions.order_by("order").values_list("kind", flat=True)) == ["body", "page_number"]
+
+
+def test_a_page_number_region_read_as_words_joins_the_body(page):
+    # backend-2: a paragraph's one-word last line taken for the page number is not thrown away
+    _detected_number_regions(page)
+    with registry.override(number_engines("انتهى", "انتهى.", "انتهى")):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert Preprocess.objects.get(page=page).page_number_box is None
+    assert [(r.kind, r.bbox) for r in page.regions.all()] == [("body", [0, 0, W, H])]
+    assert page.status == Page.Status.OCR_DONE and page.printed_number == ""
+    assert all(line.region_id is not None for line in page.lines.all())
+    assert page.lines.exists()
+    assert services.reads_as_words("انتهى") and not services.reads_as_words("— ٢٢ —")
+    assert not services.reads_as_words("ا") and not services.reads_as_words("+")
+
+
+def test_a_misread_page_number_is_not_taken_for_words(page):
+    # Tesseract reads «٣١» as «اف», but the models read digits: the region stays a page number
+    _detected_number_regions(page)
+    with registry.override(number_engines("اف", "٣١", "٣١")):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert Preprocess.objects.get(page=page).page_number_box is not None
+    assert list(page.regions.order_by("order").values_list("kind", flat=True)) == ["body", "page_number"]
+    assert page.printed_number == "31"
 
 
 def test_build_lines_keeps_tesseract_reading_only_when_it_differs():

@@ -249,9 +249,13 @@ class Page(models.Model):
         self.save(update_fields=["status", "error_from", "error_message"])
 
     def _completed_status(self) -> str:
-        """Status implied by the artefacts that exist: text → ocr_done, regions → layout_done, ..."""
+        """Status implied by the artefacts that exist: approval → reviewed, text → ocr_done, regions → ...
+
+        `reviewed_at` is the approval marker: `approve_page` sets it and the paths that take a page
+        out of `reviewed` (reopen, undo of the approval) clear it; stage re-runs refuse approved pages.
+        """
         if self.text_state == self.TextState.FINAL:
-            return self.Status.OCR_DONE
+            return self.Status.REVIEWED if self.reviewed_at is not None else self.Status.OCR_DONE
         if self.regions.exists():
             return self.Status.LAYOUT_DONE
         if Page.objects.filter(pk=self.pk, preprocess__isnull=False).exists():

@@ -76,6 +76,9 @@
   /* the approved page leaves toward the end side; the next one arrives from the start of the reading direction */
   .rv-split.is-out { transform: translateX(3%); opacity: 0; transition: transform 200ms ease-in, opacity 200ms ease-in; }
   .rv-split.is-in { transform: translateX(-3%); opacity: 0; transition: none; }
+  /* turning back to an earlier page: the same motion mirrored */
+  .rv-split.is-out-back { transform: translateX(-3%); opacity: 0; transition: transform 200ms ease-in, opacity 200ms ease-in; }
+  .rv-split.is-in-back { transform: translateX(3%); opacity: 0; transition: none; }
 
   .rv-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .rv-scan-pane { order: 0; background: var(--color-bg-subtle); border-inline-end: 1px solid var(--color-border); }

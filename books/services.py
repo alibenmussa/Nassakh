@@ -74,6 +74,11 @@ ACTIVE_BOOK_STATUSES: frozenset[str] = frozenset({Book.Status.PROCESSING, Book.S
 ACTIVE_PAGE_STATUSES: frozenset[str] = frozenset(
     {Page.Status.UPLOADED, Page.Status.PREPROCESSED, Page.Status.LAYOUT_DONE}
 )
+# Approved pages are frozen: no stage re-runs on them until they are reopened in the review screen
+# (a new layout or OCR pass would renumber, misplace or drop the reviewed lines).
+APPROVED_PAGE_STATUSES: frozenset[str] = frozenset({Page.Status.REVIEWED, Page.Status.ASSEMBLED})
+APPROVED_PAGE_ERROR = "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة قبل إعادة تشغيلها."
+ALL_APPROVED_ERROR = "كل صفحات الكتاب معتمدة؛ أعد فتح الصفحات التي تريد إعادة تشغيلها من شاشة المراجعة أولًا."
 
 # Text-layer detection (spec §6): average characters per sampled page and Arabic share of letters.
 TEXT_LAYER_MIN_CHARS = 200
@@ -511,9 +516,12 @@ def _reset_to_stage_input(page: Page, stage: str) -> None:
     stage then reports the missing input). The text state drops to `none`, or to `provisional` for
     `ocr_full`, which keeps the Tesseract text; the OCR attention flags are dropped because the
     re-run recomputes them. `ocr_fast` alone does not reset: it only refreshes the provisional
-    text and the Tesseract geometry of a page whose final text stays valid.
+    text and the Tesseract geometry of a page whose final text stays valid. An approved page is
+    never moved back (`run_stage` refuses it, `rerun_book` skips it).
     """
     target = _STAGE_INPUT_STATUS.get(stage)
+    if page.status in APPROVED_PAGE_STATUSES:
+        return
     if target is None or _STATUS_RANK.get(page.status, -1) <= _STATUS_RANK[target]:
         return
     page.status = target
@@ -530,8 +538,9 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True):
 
     A page in `error` is cleared first (it falls back to its last completed status), then put back
     to the stage's input state (`_reset_to_stage_input`) and the book status is re-derived so the
-    dashboard polls until the page is through. Excluded pages are refused. Stores the chain's task
-    id on the page and returns the AsyncResult.
+    dashboard polls until the page is through. Excluded pages are refused, and so are approved
+    pages (`APPROVED_PAGE_ERROR`: reopen them first). Stores the chain's task id on the page and
+    returns the AsyncResult.
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
@@ -539,6 +548,8 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True):
         raise ValueError("الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا.")
     if page.status == Page.Status.ERROR:
         page.clear_error()
+    if page.status in APPROVED_PAGE_STATUSES:
+        raise ValueError(APPROVED_PAGE_ERROR)
     _reset_to_stage_input(page, stage)
     if refresh_book:
         _refresh_started_book(page.book)
@@ -560,29 +571,41 @@ def validate_rerun(book: Book, stage: str) -> None:
     """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage`.
 
     Every stage can be re-run, including on a book that an earlier version parked in
-    `needs_guides` (regions are now derived per page, so nothing waits for the guides).
+    `needs_guides` (regions are now derived per page, so nothing waits for the guides). Refused
+    when every non-excluded page is approved (`rerun_book` would have nothing to run).
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
+    pages = book.pages.filter(is_excluded=False)
+    if pages.exists() and not pages.exclude(status__in=APPROVED_PAGE_STATUSES).exists():
+        raise ValueError(ALL_APPROVED_ERROR)
+
+
+def approved_page_count(book: Book) -> int:
+    """Non-excluded approved pages of the book: a book re-run leaves them as they are."""
+    return book.pages.filter(is_excluded=False, status__in=APPROVED_PAGE_STATUSES).count()
 
 
 def rerun_book(book: Book, stage: str) -> int:
-    """Re-run every non-excluded page of the book from `stage`; returns how many were enqueued.
+    """Re-run every non-excluded, unapproved page of the book from `stage`; returns how many were enqueued.
 
-    Every page is first put back to the stage's input state, then the chains are enqueued and the
-    book status is re-derived (`processing` or `ocr` while work is pending), so the book cannot
-    settle before its last page is through. Raises ValueError (see `validate_rerun`).
+    Approved pages are skipped (frozen until reopened, see `APPROVED_PAGE_STATUSES`). Every other
+    page is first put back to the stage's input state, then the chains are enqueued and the book
+    status is re-derived (`processing` or `ocr` while work is pending), so the book cannot settle
+    before its last page is through. Raises ValueError (see `validate_rerun`).
     """
     validate_rerun(book, stage)
     pages = list(book.pages.filter(is_excluded=False).order_by("number"))
+    for page in pages:
+        if page.status == Page.Status.ERROR:
+            page.clear_error()  # an approved page that failed a stale task falls back to `reviewed`
+    pages = [page for page in pages if page.status not in APPROVED_PAGE_STATUSES]
     if not pages:
         return 0
     book.status = Book.Status.PROCESSING if stage == "preprocess" else Book.Status.OCR
     book.error_message = ""
     book.save(update_fields=["status", "error_message", "updated_at"])
     for page in pages:
-        if page.status == Page.Status.ERROR:
-            page.clear_error()
         _reset_to_stage_input(page, stage)
     for page in pages:
         run_stage(page, stage, refresh_book=False)
@@ -1175,10 +1198,12 @@ def provisional_lines(
     Targets are the page's OCR-able regions in `order` (non-footnote kinds first, footnotes last, as in
     `ocr.services.join_region_texts`), or the page-level run without regions; one entry per
     `params["lines"]` item. A first / last line that is only a page number is dropped (as
-    `provisional_text` does). Without any Tesseract lines, the non-blank lines of `provisional_text`
-    are used with `bbox: None`. Empty while the page has no text.
+    `provisional_text` does: with a page-number region only when it repeats `printed_number`).
+    Without any Tesseract lines, the non-blank lines of `provisional_text` are used with
+    `bbox: None`. Empty while the page has no text.
     """
     from ocr.services import FOOTNOTE_KINDS, SKIPPED_KINDS, page_number_edges
+    from processing.models import Region
 
     if page.text_state == Page.TextState.NONE:
         return []
@@ -1199,7 +1224,10 @@ def provisional_lines(
             for text in (page.provisional_text or "").split("\n")
             if text.strip()
         ]
-    drop, _digits = page_number_edges([" ".join(entry["words"]) for entry in out])
+    has_region = any(r.kind == Region.Kind.PAGE_NUMBER for r in regions)
+    drop, _digits = page_number_edges(
+        [" ".join(entry["words"]) for entry in out], has_region=has_region, known=page.printed_number
+    )
     return [entry for i, entry in enumerate(out) if i not in drop]
 
 

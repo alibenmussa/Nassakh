@@ -19,6 +19,7 @@ from django.contrib.auth.models import Group, User
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
+from django.utils import timezone
 
 import numpy as np
 import pymupdf
@@ -475,6 +476,71 @@ def test_toggle_exclude_flips_status_and_restores_completed_stage():
     services.toggle_exclude(page)
     page.refresh_from_db()
     assert page.is_excluded is False and page.status == Page.Status.PREPROCESSED
+
+
+def _approve(page: Page) -> Page:
+    Page.objects.filter(pk=page.pk).update(
+        status=Page.Status.REVIEWED, text_state=Page.TextState.FINAL, reviewed_at=timezone.now()
+    )
+    page.refresh_from_db()
+    return page
+
+
+def test_toggle_exclude_brings_an_approved_page_back_as_reviewed():
+    # backend-6: excluding and re-including an approved page keeps its approval
+    book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    book.status = Book.Status.REVIEWING
+    book.save()
+    approved, pending = _approve(pages[0]), pages[1]
+    for page in (approved, pending):
+        services.toggle_exclude(page)
+        services.toggle_exclude(page)
+    approved.refresh_from_db()
+    pending.refresh_from_db()
+    assert approved.status == Page.Status.REVIEWED and approved.reviewed_at is not None
+    assert pending.status == Page.Status.OCR_DONE
+    # a stale failure on an approved page clears back to `reviewed` as well
+    approved.set_error("ocr_fast", "فشل")
+    approved.clear_error()
+    assert approved.status == Page.Status.REVIEWED
+
+
+def test_run_stage_refuses_an_approved_page_until_it_is_reopened():
+    # backend-1: a new pass would renumber, misplace or drop the reviewed lines
+    _, pages = _book_with_pages(2)
+    approved = _approve(pages[0])
+    failed = _approve(pages[1])
+    failed.set_error("ocr_fast", "فشل")  # a stale task failed after the approval
+    patches = _mock_pipeline_tasks()
+    with patches[0], patches[1], patches[2], patches[3], patches[4] as chain:
+        for stage in services.STAGES:
+            with pytest.raises(ValueError, match="أعد فتحها"):
+                services.run_stage(approved, stage)
+        with pytest.raises(ValueError, match="أعد فتحها"):
+            services.run_stage(failed, "ocr")
+    chain.assert_not_called()
+    for page in (approved, failed):
+        page.refresh_from_db()
+        assert page.status == Page.Status.REVIEWED and page.text_state == Page.TextState.FINAL
+
+
+def test_rerun_book_skips_approved_pages_and_refuses_a_fully_approved_book():
+    book, pages = _book_with_pages(3, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    approved = _approve(pages[1])
+    with patch("books.services.run_stage") as run_stage:
+        assert services.rerun_book(book, "ocr") == 2
+    assert [call.args for call in run_stage.call_args_list] == [(pages[0], "ocr"), (pages[2], "ocr")]
+    approved.refresh_from_db()
+    assert approved.status == Page.Status.REVIEWED and approved.text_state == Page.TextState.FINAL
+    assert services.approved_page_count(book) == 1
+
+    for page in (pages[0], pages[2]):
+        _approve(page)
+    with pytest.raises(ValueError, match="كل صفحات الكتاب معتمدة"):
+        services.validate_rerun(book, "layout")
+    with patch("books.services.run_stage") as run_stage, pytest.raises(ValueError):
+        services.rerun_book(book, "layout")
+    run_stage.assert_not_called()
 
 
 # ====================================================================== tasks
@@ -1009,6 +1075,24 @@ def test_rerun_view_for_the_book_and_for_one_page(editor_client):
     assert "اختر مرحلة صحيحة" in response.content.decode()
 
 
+def test_rerun_view_reports_approved_pages_and_refuses_a_fully_approved_book(editor_client):
+    book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    _approve(pages[0])
+    url = reverse("books:rerun", args=[book.pk])
+    with patch("books.tasks.rerun_book_from.delay") as delay:
+        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
+    delay.assert_called_once_with(book.pk, "ocr")
+    assert "تُركت 1 صفحة معتمدة كما هي." in response.content.decode()
+
+    _approve(pages[1])
+    with patch("books.tasks.rerun_book_from.delay") as delay:
+        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
+    delay.assert_not_called()
+    assert "كل صفحات الكتاب معتمدة" in response.content.decode()
+    response = editor_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"}, follow=True)
+    assert "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة" in response.content.decode()
+
+
 def test_dashboard_attention_list_offers_a_retry_for_a_failed_page(editor_client):
     # D22: a failed page shows its Arabic headline and a retry from the failed stage on the dashboard
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
@@ -1277,19 +1361,32 @@ def test_sheets_provisional_lines_follow_region_order_with_footnotes_last():
     _fast_run(page, [([80, 380, 120, 400], ["12"])], region=number)
     _fast_run(page, [([0, 0, 1, 1], ["خطأ"])], region=body, status=OcrRun.Status.ERROR)
     _fast_run(page, [([0, 0, 1, 1], ["قارئ"])], region=body, engine_name="qari")
+    Page.objects.filter(pk=page.pk).update(printed_number="12")  # what the fast pass read in the region
 
     sheet = services.book_sheets(book, 1, 1)["pages"][0]
     assert sheet["provisional_lines"] == [
         {"region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.15], "words": ["قال", "الشيخ"]},
         {"region_kind": "body", "bbox": [0.05, 0.25, 1.0, 0.3], "words": ["رحمه", "الله"]},
         {"region_kind": "footnote", "bbox": [0.0, 0.8, 1.0, 0.85], "words": ["(١)", "انظر"]},
-    ]  # the trailing page-number line is dropped; header and page number are not text
+    ]  # the trailing line repeating the page number is dropped; header and page number are not text
     for entry in sheet["provisional_lines"]:
         assert all(0 <= v <= 1 for v in entry["bbox"])
     assert sheet["regions"] == [
         {"kind": "footnote", "bbox": [0.0, 0.75, 1.0, 1.0]},
         {"kind": "body", "bbox": [0.0, 0.05, 1.0, 0.75]},
     ]
+
+
+def test_sheets_provisional_lines_keep_a_number_line_that_is_not_the_page_number():
+    # the page has a page-number region reading «21»: a footnote that ends on a wrapped page
+    # reference «٣٤» keeps that line (it is text, not the page number)
+    book, page = _sheet_page()
+    foot = Region.objects.create(page=page, kind="footnote", bbox=[0, 300, 200, 380], order=0)
+    Region.objects.create(page=page, kind="page_number", bbox=[80, 380, 120, 400], order=1)
+    _fast_run(page, [([0, 320, 200, 340], ["(١)", "انظر", "ص"]), ([180, 350, 200, 366], ["٣٤"])], region=foot)
+    Page.objects.filter(pk=page.pk).update(printed_number="21")
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert [entry["words"] for entry in sheet["provisional_lines"]] == [["(١)", "انظر", "ص"], ["٣٤"]]
 
 
 def test_sheets_provisional_lines_page_level_run_fallback_and_empty():

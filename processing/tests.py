@@ -1133,6 +1133,78 @@ def test_guides_override_on_an_excluded_page_is_refused_and_keeps_the_status(cli
 
 
 @pytest.mark.django_db
+def test_approved_pages_keep_their_regions_when_guides_or_preprocessing_change(client, book, users):
+    # backend-1: an approved page is frozen until it is reopened (no re-derive, no re-OCR, no status change)
+    approved = make_page(book, 1, rule_y=1200)
+    pending = make_page(book, 2, rule_y=1200)
+    for page in (approved, pending):
+        services.derive_regions(page)
+    Page.objects.filter(pk=approved.pk).update(
+        status=Page.Status.REVIEWED, text_state=Page.TextState.FINAL, reviewed_at="2026-09-24T10:00:00Z"
+    )
+    before = _kinds_and_boxes_stored(approved)
+    data = {
+        "header_cut": "0.05",
+        "footnote_line": "",
+        "page_number_zone": "none",
+        "page_number_height": "0.06",
+    }
+    with patch("books.services.run_stage") as run_stage:
+        services.apply_guides(book, data, users.editor)
+    assert [call.args[0].pk for call in run_stage.call_args_list] == [pending.pk]
+    approved.refresh_from_db()
+    assert approved.status == Page.Status.REVIEWED and _kinds_and_boxes_stored(approved) == before
+
+    with pytest.raises(services.ProcessingError, match="الصفحة معتمدة"):
+        services.set_page_guides_override(approved, {"footnote_line": None})
+    with pytest.raises(services.ProcessingError, match="الصفحة معتمدة"):
+        services.rerun_preprocess(approved, None)
+    client.force_login(users.editor)
+    url = reverse("api:page_guides_override", kwargs={"page_id": approved.pk})
+    response = client.post(url, json.dumps({"footnote_line": 0.7}), content_type="application/json")
+    assert response.status_code == 422 and "أعد فتحها" in response.json()["errors"][0]
+    response = client.post(
+        reverse("api:page_preprocess", kwargs={"page_id": approved.pk}),
+        json.dumps({"reset": True}),
+        content_type="application/json",
+    )
+    assert response.status_code == 422
+    approved.refresh_from_db()
+    assert approved.status == Page.Status.REVIEWED and approved.guides_override is None
+    assert _kinds_and_boxes_stored(approved) == before
+
+
+@pytest.mark.django_db
+def test_drop_detected_page_number_only_forgets_a_detected_box(book):
+    # backend-2: a detected "page number" that OCR read as words joins the body
+    page = make_page(book, 1)
+    Preprocess.objects.filter(page=page).update(
+        page_number_box={"bbox": [900, 1440, 950, 1470], "position": "bottom"}
+    )
+    services.derive_regions(page)
+    assert [r.kind for r in page.regions.order_by("order")] == ["body", "page_number"]
+    assert services.drop_detected_page_number(page) is True
+    assert Preprocess.objects.get(page=page).page_number_box is None
+    assert _kinds_and_boxes_stored(page) == [("body", [0, 0, 1000, 1500])]
+    assert services.drop_detected_page_number(page) is False  # nothing left to drop
+
+    # a zone the owner set (page override) is their decision: never dropped
+    other = make_page(book, 2)
+    Preprocess.objects.filter(page=other).update(
+        page_number_box={"bbox": [900, 1440, 950, 1470], "position": "bottom"}
+    )
+    other.guides_override = {"page_number_zone": "bottom"}
+    other.save()
+    services.derive_regions(other)
+    assert services.drop_detected_page_number(other) is False
+    assert Preprocess.objects.get(page=other).page_number_box is not None
+
+
+def _kinds_and_boxes_stored(page: Page) -> list[tuple[str, list[int]]]:
+    return [(r.kind, [int(v) for v in r.bbox]) for r in page.regions.order_by("order", "pk")]
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("name", ["api:page_preprocess", "api:page_guides_override"])
 def test_mutating_json_routes_require_the_editor_role(client, book, users, name):
     # F56: anonymous and non-editor users are refused before anything runs

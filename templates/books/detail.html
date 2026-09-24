@@ -106,7 +106,7 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
 {% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}
-<div class="bk-dashboard{% if tiles %} has-pages{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0 }"
+<div class="bk-dashboard{% if tiles %} has-pages{% endif %}{% if progress.active %} is-active{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0, 'is-active': active }"
      x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
      @keydown.window="onKey($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
@@ -249,21 +249,10 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           </ul>
         </details>
       </div>
-      {# the filmstrip (= review screen): the pages the filter keeps, the current one kept in view #}
+      {# the filmstrip (= review screen): one static thumb per page, cloned from the thumb-shell template and patched from the poll like the shells (no per-thumb Alpine bindings, §11); the filter hides thumbs #}
       <nav class="bk-film" aria-label="شريط الصفحات" x-show="view === 'sheets'">
-        <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="film.length"></bdi></div>
-        <div class="bk-film-track" x-ref="film">
-          <template x-for="f in film" :key="f.id">
-            <button type="button" class="bk-thumb" :class="{ 'is-current': f.number === current, 'is-pending': f.pending, 'is-excluded': f.excluded, 'is-error': f.error }"
-                    :aria-current="f.number === current ? 'page' : null" :data-number="f.number" :title="f.title" @click="showPage(f.number, { manual: true })">
-              <span class="bk-thumb-img" :style="f.ar ? '--thumb-ar:' + f.ar : ''"><img x-show="f.thumb" :src="f.thumb || ''" alt="" loading="lazy" decoding="async"></span>
-              <span class="bk-thumb-num num" x-text="f.number"></span>
-              <span class="bk-thumb-mark is-check" x-show="f.reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
-              <span class="bk-thumb-mark is-count num" x-show="!f.reviewed && f.unresolved > 0" x-text="f.unresolved"></span>
-              <span class="bk-thumb-mark is-live" x-show="f.live" aria-hidden="true"></span>
-            </button>
-          </template>
-        </div>
+        <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="filmCount"></bdi></div>
+        <div class="bk-film-track" x-ref="film" data-film-track></div>
       </nav>
     </aside>
   </div>
@@ -271,6 +260,15 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
   <template id="sheet-shell">{% include "books/_page_sheet.html" with t=None %}</template>
   <template id="tile-shell">{% include "books/_page_tile.html" with t=None %}</template>
   <template id="sheet-body">{% include "books/_sheet_body.html" %}</template>
+  <template id="thumb-shell">
+    <button type="button" class="bk-thumb" data-number="" title="">
+      <span class="bk-thumb-img"><img alt="" loading="lazy" decoding="async" hidden></span>
+      <span class="bk-thumb-num num"></span>
+      <span class="bk-thumb-mark is-check" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
+      <span class="bk-thumb-mark is-count num" hidden></span>
+      <span class="bk-thumb-mark is-live" hidden aria-hidden="true"></span>
+    </button>
+  </template>
 
   {# the end-of-processing toast (§6) #}
   <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>

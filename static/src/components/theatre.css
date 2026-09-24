@@ -217,7 +217,9 @@
   /* The pages take the room; the summary and the filmstrip sit in a narrow panel on the end side (RTL: the
      left), sticky under the toolbar in «شبكة». The toolbar hangs from the top bar. */
   .main:has(> .bk-dashboard.has-pages) { padding-top: 0; }
-  .main:has(> .bk-dashboard.is-viewer) { padding-bottom: 16px; }
+  /* the viewer takes the room left in `.main` (Django messages and the column gap included), so the page
+     never runs below the fold after a redirect with a message */
+  .main:has(> .bk-dashboard.is-viewer) { height: calc(100dvh - var(--topbar-height)); padding-bottom: 16px; }
   .bk-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--bk-side-w); gap: 24px; align-items: start; }
   .bk-main { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
   .bk-side {
@@ -237,7 +239,7 @@
   /* ------------------------------------------------------------ the page viewer (D33) */
   /* «صفحات» is a book viewer, not a scroll: one sheet at a time, fitted to the window, turned like a page
      (review-screen motion, = rv-split is-out / is-in), with the filmstrip in the side panel (= rv-film). */
-  .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 16px); min-height: 460px; gap: 12px; }
+  .bk-dashboard.is-viewer { flex: 1 1 auto; height: auto; min-height: 460px; gap: 12px; }
   .bk-dashboard.is-viewer .bk-banners { margin-top: -4px; }
   .bk-dashboard.is-viewer .bk-layout { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
   .bk-dashboard.is-viewer .bk-main { min-height: 0; }
@@ -344,6 +346,8 @@
   .bk-thumb-mark.is-check .icon { width: 10px; height: 10px; stroke-width: 2.4; }
   .bk-thumb-mark.is-count { min-width: 16px; height: 16px; padding: 0 4px; border-radius: var(--radius-pill); background: var(--color-warning); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
   .bk-thumb-mark.is-live { width: 8px; height: 8px; top: 4px; inset-inline-end: 4px; border-radius: var(--radius-pill); background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-surface); }
+  /* thumbs are static shells patched from the poll (§11): `hidden` must beat the display rules above */
+  .bk-thumb[hidden], .bk-thumb-mark[hidden], .bk-thumb-img img[hidden] { display: none; }
 
   /* ------------------------------------------------------------ stacked sheets (§2.5, §3) */
   .sheet-stack { display: flex; flex-direction: column; gap: var(--bk-sheet-gap); max-width: 1180px; width: 100%; margin-inline: auto; }
@@ -488,9 +492,12 @@
     border-radius: 3px;
     animation: bk-line-in 320ms ease-out both;
     animation-delay: calc(var(--i, 0) * 16ms);
-    transition: background-color 150ms ease, margin-left 260ms cubic-bezier(0.2, 0.7, 0.2, 1), width 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+    transition: background-color 150ms ease, margin-inline-start 260ms cubic-bezier(0.2, 0.7, 0.2, 1), width 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
-  .fac-line[data-boxed] { margin-left: calc((var(--lx0) - var(--x0)) * 100cqw); width: calc((var(--lx1) - var(--lx0)) * 100cqw); }
+  /* a boxed line sits at its printed edges: the block is an RTL column flexbox, so a line with a width of
+     its own is placed from the cross-start (right) edge; the start margin is the inset from the block's
+     right edge (negative when the line runs past it), never a left margin, which would only widen the box */
+  .fac-line[data-boxed] { margin-inline-start: calc((var(--x1) - var(--lx1)) * 100cqw); width: calc((var(--lx1) - var(--lx0)) * 100cqw); }
   .fac-line.is-hot { background: var(--color-hover); }
   .fac-line:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
   .fac-text {
@@ -540,7 +547,8 @@
     animation: bk-sheen 700ms cubic-bezier(0.2, 0.7, 0.2, 1) 1 both;
   }
   .fac-line.is-lit .tok { opacity: 1; }
-  /* skeleton: one shimmering bar per detected line, paused unless the sheet is near the viewport */
+  /* skeleton: one shimmering bar per detected line, running only while the book is active and the sheet is
+     near the viewport (a book that stopped shows still bars, §6 / D24) */
   .fac-bar {
     display: block;
     width: var(--w, 100%);
@@ -553,7 +561,7 @@
     animation-play-state: paused;
     transition: background-color 150ms ease;
   }
-  .page-sheet.is-near .fac-bar { animation-play-state: running; }
+  .bk-dashboard.is-active .page-sheet.is-near .fac-bar { animation-play-state: running; }
   .fac-line.is-lit .fac-bar { background: var(--color-border-strong); animation: none; }
   /* final: the wave lands words in ink; unresolved words keep their amber underline */
   .fac-layer[data-phase="final"] { color: var(--color-text); }
@@ -675,7 +683,6 @@
     .bk-toolbar-start, .bk-toolbar-end { height: 40px; }
     .bk-chips { order: 3; flex: 1 0 100%; height: 40px; }
     .sheet-body { grid-template-columns: minmax(0, 1fr); }
-    .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 16px); }
     .bk-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
     .bk-dashboard.is-viewer .bk-layout { grid-template-rows: minmax(0, 1fr) auto; }
     .bk-side { position: static; gap: 10px; padding-inline-start: 0; border-inline-start: 0; }

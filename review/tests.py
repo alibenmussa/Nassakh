@@ -835,3 +835,86 @@ def test_api_line_role_and_payload(reviewer_client, page):
     payload = services.review_payload(reload(page), None)
     assert payload["lines"][0]["role"] == "heading" and payload["lines"][1]["role"] == "body"
     assert payload["urls"]["role"] == "/api/lines/__id__/role/"
+
+
+# ---------------------------------------------------------------- stale lines (two tabs, failed actions)
+
+
+def test_a_stale_word_index_is_refused_instead_of_changing_the_next_word(page):
+    line = lines_of(page)[0]  # قال · الكتب · ١٩٦٦
+    services.merge_tokens(line, 0, expected="قال", expected_next="الكتب")  # tab B merges the first two words
+    # tab A still shows the old words: index 1 is now «١٩٦٦», not «الكتب»
+    with pytest.raises(services.ReviewConflict) as exc:
+        services.resolve_token(line, 1, "primary", expected="الكتب")
+    assert exc.value.line.pk == line.pk and str(exc.value) == "تغيّر هذا السطر في نافذة أخرى؛ أُعيد تحميله."
+    with pytest.raises(services.ReviewConflict):
+        services.delete_token(line, 1, expected="الكتب")
+    with pytest.raises(services.ReviewConflict):
+        services.merge_tokens(line, 0, expected="قال", expected_next="الكتب")
+    line.refresh_from_db()
+    assert [t["t"] for t in line.tokens] == ["قالالكتب", "١٩٦٦"] and line.tokens[1].get("res") is None
+    # the word the client saw is still there: the action applies
+    line = services.resolve_token(line, 1, "primary", expected="١٩٦٦")
+    assert line.tokens[1]["res"] == "primary"
+
+
+def test_whole_line_actions_refuse_a_stale_version(page):
+    line = lines_of(page)[1]
+    seen = services.line_item(line)["v"]
+    assert seen == line.updated_at.isoformat()
+    services.resolve_token(line, 2, "secondary")  # changed elsewhere after the client read it
+    with pytest.raises(services.ReviewConflict):
+        services.edit_line(line, "نص قديم", version=seen)
+    with pytest.raises(services.ReviewConflict):
+        services.set_line_role(line, "heading", version=seen)
+    with pytest.raises(services.ReviewConflict):
+        services.delete_line(line, version=seen)
+    line.refresh_from_db()
+    assert line.text == "وهذا سطرٌ ثانٍ" and line.role == Line.Role.BODY
+    fresh = services.line_item(line)["v"]
+    line = services.edit_line(line, "وهذا سطرٌ ثانٍ جديد", version=fresh)
+    assert line.text.endswith("جديد")
+
+
+def test_api_answers_409_with_the_current_line_on_a_conflict(reviewer_client, page):
+    line = lines_of(page)[0]
+    response = post(reviewer_client, "line_resolve", line.pk, {"index": 1, "choice": "secondary", "t": "قال"})
+    assert response.status_code == 409
+    body = response.json()
+    assert body["message"] == "تغيّر هذا السطر في نافذة أخرى؛ أُعيد تحميله."
+    assert body["line"]["id"] == line.pk and [t["t"] for t in body["line"]["tokens"]] == [
+        "قال",
+        "الكتب",
+        "١٩٦٦",
+    ]
+    seen = body["line"]["v"]
+    response = post(reviewer_client, "line_edit", line.pk, {"text": "قال الكتاب ١٩٦٦", "v": seen})
+    assert response.status_code == 200 and response.json()["line"]["v"] != seen
+    assert post(reviewer_client, "line_edit", line.pk, {"text": "قال", "v": seen}).status_code == 409
+    assert post(reviewer_client, "line_role", line.pk, {"role": "heading", "v": seen}).status_code == 409
+    assert post(reviewer_client, "line_delete", line.pk, {"v": seen}).status_code == 409
+    data = {"index": 0, "t": "قال", "t_next": "الكتب"}
+    assert post(reviewer_client, "line_merge", line.pk, data).status_code == 409
+    assert post(reviewer_client, "line_delete_word", line.pk, {"index": 0, "t": "الكتب"}).status_code == 409
+    assert [t["t"] for t in lines_of(page)[0].tokens] == ["قال", "الكتاب", "١٩٦٦"]
+    # without what the client saw, nothing is checked (older clients keep working)
+    assert post(reviewer_client, "line_delete_word", line.pk, {"index": 0}).status_code == 200
+
+
+@pytest.mark.parametrize("force", [[True], {}, {"force": True}])
+def test_api_approve_with_a_non_scalar_force_is_refused_not_a_500(reviewer_client, page, force):
+    response = post(reviewer_client, "page_approve", page.pk, {"force": force})
+    assert response.status_code == 409 and response.json()["unresolved"] == 4
+    assert reload(page).status == Page.Status.OCR_DONE
+
+
+def test_review_next_on_the_last_pending_page_stays_on_it(reviewer_client, page, book):
+    make_page(book, 2, status=Page.Status.REVIEWED, with_lines=False)
+    url = f"{reverse('review:next', args=[book.pk])}?after=1"
+    response = reviewer_client.get(url, follow=True)
+    assert response.redirect_chain[-1][0] == reverse("review:page", args=[book.pk, 1])
+    assert "هذه آخر صفحة بانتظار المراجعة" in [str(m) for m in response.context["messages"]]
+    Page.objects.filter(pk=page.pk).update(status=Page.Status.REVIEWED)  # nothing waits any more
+    response = reviewer_client.get(url, follow=True)
+    assert response.redirect_chain[-1][0] == reverse("books:detail", args=[book.pk])
+    assert "لا صفحات بانتظار المراجعة" in [str(m) for m in response.context["messages"]]

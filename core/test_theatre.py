@@ -173,9 +173,24 @@ def test_dashboard_toolbar_static_shells_and_grid_cards(editor_client):
     assert "'has-pages': nPages > 0" in body
     assert 'class="bk-turn bk-turn-prev"' in body and 'class="bk-turn bk-turn-next"' in body
     assert 'aria-label="الصفحة السابقة"' in body and 'aria-label="الصفحة التالية"' in body
-    assert "showPage(f.number, { manual: true })" in body and 'class="bk-counter"' in body
+    assert 'class="bk-counter"' in body
     assert "'is-viewer': view === 'sheets' && nPages > 0" in body and "filmstripUrl: '" in body
     assert 'class="bk-pos"' not in body  # the scroll position chip went with the long scroll
+    # the filmstrip is static like the shells: one thumb template cloned per page and patched from the poll,
+    # no x-for over 800 items (§11); the header count is a plain number
+    assert 'class="bk-film-track" x-ref="film" data-film-track></div>' in body
+    assert '<template id="thumb-shell">' in body and 'x-text="filmCount"' in body
+    thumb = body[
+        body.index('<template id="thumb-shell">') : body.index(
+            "</template>", body.index('<template id="thumb-shell">')
+        )
+    ]
+    assert 'class="bk-thumb" data-number="" title=""' in thumb and "x-" not in thumb and ":class" not in thumb
+    for needle in ("bk-thumb-img", "bk-thumb-num", "is-check", "is-count", "is-live"):
+        assert needle in thumb, needle
+    assert 'x-for="f in film"' not in body and "film.length" not in body
+    # the skeleton shimmer is gated on the book being active (D24, §6): the root carries `is-active`
+    assert "'is-active': active" in body
 
 
 def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
@@ -283,10 +298,25 @@ def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
         css,
     )
     assert re.search(r"\.fac-text\{[^}]*text-align:justify;text-align-last:start", css)
-    assert re.search(
-        r"\.fac-line\[data-boxed\]\{margin-left:calc\(\(var\(--lx0\) - var\(--x0\)\) \* 100cqw\)", css
-    )
+    # a boxed line is placed from the block's right edge (the cross-start of an RTL column flexbox): the
+    # start margin is the inset from the block's right edge, so a centred heading or an indented first line
+    # lands at its printed x, never flush right
+    boxed = re.search(r"\.fac-line\[data-boxed\]\{([^}]*)\}", css)
+    assert boxed, "no .fac-line[data-boxed] rule"
+    assert "margin-inline-start:calc((var(--x1) - var(--lx1)) * 100cqw)" in boxed.group(1)
+    assert "width:calc((var(--lx1) - var(--lx0)) * 100cqw)" in boxed.group(1)
+    assert re.search(r"\.fac-line\{[^}]*transition:[^}]*margin-inline-start \.26s", css)
+    assert "margin-left:calc((var(--lx0)" not in css
     assert re.search(r"\.sheet-body\{[^}]*grid-template-columns:minmax\(0,1fr\) minmax\(0,1fr\)", css)
+    # the viewer takes the room left in `.main` (messages and the column gap included) instead of a
+    # viewport calc that overflowed by the gap after a redirect with a message
+    assert re.search(
+        r"\.main:has\(>\.bk-dashboard\.is-viewer\)\{[^}]*height:calc\(100dvh - var\(--topbar-height\)\)", css
+    )
+    assert re.search(r"\.bk-dashboard\.is-viewer\{[^}]*height:auto", css)
+    assert "calc(100dvh - var(--topbar-height) - 16px)" not in css
+    # static thumbs: `hidden` beats their display rules
+    assert ".bk-thumb[hidden],.bk-thumb-mark[hidden],.bk-thumb-img img[hidden]{display:none}" in css
     # the generation: gray provisional layer, veil as opacity, the lit line's sheen, the scan band (§5)
     assert re.search(r"\.fac-layer\[data-phase=\"?provisional\"?\][^{]*\{color:var\(--color-text-3\)\}", css)
     assert re.search(r"\.fac-text \.tok\.is-veiled\{opacity:\.45", css)
@@ -307,6 +337,9 @@ def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
     assert "@" not in re.search(r"\.fac-bar\{[^}]*\}", css).group(0)[:0] and "bk-shimmer" in re.search(
         r"\.fac-bar\{[^}]*\}", css
     ).group(0)
+    # skeleton bars shimmer only while the book is active (D24, §6): a book that stopped shows still bars
+    assert ".bk-dashboard.is-active .page-sheet.is-near .fac-bar{animation-play-state:running}" in css
+    assert "}.page-sheet.is-near .fac-bar{" not in css
     # no rv- class is referenced by the dashboard styles (review.css stays untouched)
     theatre = (ROOT / "static" / "src" / "components" / "theatre.css").read_text(encoding="utf-8")
     assert not re.search(r"\.rv-", theatre)
@@ -333,7 +366,7 @@ class Text extends Node { constructor(d){ super(); this.nodeValue = d; } get tex
 class Element extends Node {
   constructor(tag){ super(); this.tagName = tag; this.classList = new ClassList(); this.attrs = {}; this.style = { setProperty: (k, v) => { this.style[k] = v; }, getPropertyValue: (k) => this.style[k] || '' }; this.dataset = {}; this.hidden = false; }
   set className(v){ this.classList = new ClassList(); v.split(/\s+/).filter(Boolean).forEach(c => this.classList.add(c)); } get className(){ return this.classList.toString(); }
-  setAttribute(k, v){ this.attrs[k] = String(v); } getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; }
+  setAttribute(k, v){ this.attrs[k] = String(v); } getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; } removeAttribute(k){ delete this.attrs[k]; }
   set textContent(v){ this.childNodes.forEach(n => { n.parentNode = null; }); this.childNodes = v ? [new Text(String(v))] : []; }
   get textContent(){ return this.childNodes.map(n => n.textContent).join(''); }
   get children(){ return this.childNodes.filter(n => n instanceof Element); }
@@ -698,21 +731,54 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
   tp2.afterUpdate();
   out.tpStatic = [tp2.decodeMode, host2.classList.contains('is-static'), host2.textContent];
 
-  // --- D33 the page viewer: one sheet at a time, turned with a timed transition, filter-aware sequence
+  // --- D33 the page viewer: one sheet at a time, turned with a timed transition, filter-aware sequence.
+  // The stub DOM: shells (each with a body) in a stack, a film track whose thumbs books.js clones from the
+  // thumb template and patches (static like the shells, §11), the templates by id.
+  const mkThumb = () => {
+    const btn = new Element('button'); btn.classList.add('bk-thumb');
+    const parts = { '.bk-thumb-img': new Element('span'), img: new Element('img'), '.bk-thumb-num': new Element('span'), '.bk-thumb-mark.is-check': new Element('span'), '.bk-thumb-mark.is-count': new Element('span'), '.bk-thumb-mark.is-live': new Element('span') };
+    parts['.bk-thumb-img'].appendChild(parts.img); parts.img.hidden = true;
+    ['.bk-thumb-img', '.bk-thumb-num', '.bk-thumb-mark.is-check', '.bk-thumb-mark.is-count', '.bk-thumb-mark.is-live'].forEach((k) => btn.appendChild(parts[k]));
+    ['.bk-thumb-mark.is-check', '.bk-thumb-mark.is-count', '.bk-thumb-mark.is-live'].forEach((k) => { parts[k].hidden = true; });
+    btn.querySelector = (sel) => parts[sel] || null;
+    btn.closest = (sel) => (sel === '.bk-thumb' ? btn : null);
+    return btn;
+  };
+  const tpls = { 'thumb-shell': { content: { cloneNode: () => { const frag = new Element('frag'); const btn = mkThumb(); frag.appendChild(btn); frag.querySelector = (sel) => (sel === '.bk-thumb' ? btn : null); return frag; } } } };
+  document.getElementById = (id) => tpls[id] || null;
+  const viewerDom = (list, withGrid = false) => {
+    const shellsDom = list.map((pg) => {
+      const el = new Element('article'); el.dataset.pageId = String(pg.id); el.classList.add('page-sheet');
+      const body = new Element('div'); const parts = { '.sheet-fac': new Element('div'), '.sheet-lines': new Element('div'), '.sheet-scan': new Element('figure') };
+      body.querySelector = (sel) => parts[sel] || null; el.querySelector = (sel) => (sel === '.sheet-body' ? body : null); el.fac = parts['.sheet-fac'];
+      return el;
+    });
+    const stack = new Element('div'); stack.querySelectorAll = () => shellsDom; stack.addEventListener = () => {}; stack.clientWidth = 1000;
+    const film = new Element('div'); const filmHandlers = {}; film.addEventListener = (ev, fn) => { filmHandlers[ev] = fn; };
+    film.querySelector = (sel) => { const m = /^\[data-number="(\d+)"\]$/.exec(sel); return m ? film.children.find((c) => c.dataset.number === m[1]) || null : null; };
+    const tilesDom = withGrid ? list.map((pg) => { const el = new Element('div'); el.dataset.pageId = String(pg.id); el.classList.add('page-tile'); return el; }) : [];
+    const grid = new Element('div'); grid.querySelectorAll = () => tilesDom; grid.addEventListener = () => {};
+    const root = new Element('div'); root.querySelector = (sel) => (sel === '[data-sheet-stack]' ? stack : sel === '[data-film-track]' ? film : sel === '[data-page-grid]' && withGrid ? grid : null);
+    return { root, stack, shellsDom, film, filmHandlers, tilesDom };
+  };
+  const filmOf = (film) => film.children.filter((t) => !t.hidden).map((t) => [Number(t.dataset.number), t.querySelector('img').getAttribute('src') || '', !t.querySelector('.bk-thumb-mark.is-check').hidden,
+    t.querySelector('.bk-thumb-mark.is-count').hidden ? 0 : Number(t.querySelector('.bk-thumb-mark.is-count').textContent), !t.querySelector('.bk-thumb-mark.is-live').hidden]);
+  const currentThumbs = (film) => film.children.filter((t) => t.classList.contains('is-current')).map((t) => [Number(t.dataset.number), t.getAttribute('aria-current')]);
+  const fire = async (ms) => { const t = timers.filter((x) => x.ms === ms).pop(); timers.length = 0; if (t) await t.fn(); return Boolean(t); };
   const viewerPages = [
     { id: 11, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', n_unresolved: 2, width: 700, height: 1000, thumb_url: '/t/1.webp' },
     { id: 12, number: 2, status: 'reviewed', status_label: 'مُراجَعة', text_state: 'final', is_reviewed: true, width: 800, height: 1000 },
     { id: 13, number: 3, status: 'layout_done', status_label: 'تم التخطيط', text_state: 'provisional' },
     { id: 14, number: 4, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', n_unresolved: 1 },
   ];
-  const shellsDom = viewerPages.map((pg) => { const el = new Element('article'); el.dataset.pageId = String(pg.id); el.classList.add('page-sheet'); return el; });
-  const stack = new Element('div'); stack.querySelectorAll = () => shellsDom; stack.addEventListener = () => {}; stack.clientWidth = 1000;
-  const root = new Element('div'); root.querySelector = (sel) => (sel === '[data-sheet-stack]' ? stack : null);
+  const vd = viewerDom(viewerPages); const shellsDom = vd.shellsDom;
+  const winListeners = {}; globalThis.addEventListener = (ev, fn) => { winListeners[ev] = fn; };
   const v = reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '/api/books/2/sheets/', filmstripUrl: '/api/books/2/filmstrip/', bookUrl: '/books/2/', canEdit: true, bookId: 2,
     active: true, status: 'ocr', stages: [], byStatus: {}, pages: viewerPages });
-  v.$el = root; v.$watch = () => {}; v.init();
+  v.$el = vd.root; v.$watch = () => {}; v.init();
   const cur = () => shellsDom.filter((el) => el.classList.contains('is-current')).map((el) => Number(el.dataset.pageId));
-  out.vInit = { current: v.current, shown: cur(), film: v.film.map((f) => [f.number, f.thumb, f.reviewed, f.unresolved, f.live]), ar: shellsDom[0].style['--ar-n'] };
+  out.vInit = { current: v.current, shown: cur(), film: filmOf(vd.film), ar: shellsDom[0].style['--ar-n'], marked: currentThumbs(vd.film), count: v.filmCount, thumbs: vd.film.children.length, noFilmState: v.film === undefined };
+  out.vWindowListeners = Object.keys(winListeners).sort(); // no window wheel / touch / key listeners that would end the follow mode
   // a turn: out (200 ms), then the new sheet lands; pressing again during the turn only moves the target
   const realRaf = globalThis.requestAnimationFrame; globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
   timers.length = 0;
@@ -720,15 +786,18 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
   const midTurn = { turning: v.turning, current: v.current, timer: timers.filter((t) => t.ms === 200).length };
   v.turn(1); // pressed again: lands on page 3, not 2
   timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
-  out.vTurn = { midTurn, after: { turning: v.turning, current: v.current, shown: cur(), hiddenOld: shellsDom[0].classList.contains('is-current') } };
+  out.vTurn = { midTurn, after: { turning: v.turning, current: v.current, shown: cur(), hiddenOld: shellsDom[0].classList.contains('is-current'), marked: currentThumbs(vd.film) } };
+  // a click on a thumb (delegated on the track) turns to that page and moves the mark
+  vd.filmHandlers.click({ target: vd.film.children[3] }); timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
+  out.vThumbClick = { current: v.current, marked: currentThumbs(vd.film) };
   out.vEnds = { canPrev: v.canTurn(-1), canNextFrom4: (v.showPage(4, { instant: true }), v.canTurn(1)), turnAtEnd: v.turn(1) };
   // the filter decides the sequence; the page on screen is never hidden, and moves when filtered out
   v.showPage(1, { instant: true });
   v.setFilter('review'); // ocr_done, not reviewed: pages 1 and 4
-  out.vFilter = { current: v.current, film: v.film.map((f) => f.number), next: v.neighbour(1), prev: v.neighbour(-1) };
+  out.vFilter = { current: v.current, film: filmOf(vd.film).map((f) => f[0]), count: v.filmCount, next: v.neighbour(1), prev: v.neighbour(-1) };
   v.apply({ total: 4, percent: 80, flags: 0, status: 'ocr', status_label: 'قيد التعرّف', dot: 'dot-accent', by_status: {}, active: true,
     pages: [{ id: 11, number: 1, status: 'reviewed', text_state: 'final', is_reviewed: true, n_unresolved: 0 }] });
-  out.vKeptOnScreen = { current: v.current, hidden: shellsDom[0].hidden, inFilm: v.film.map((f) => f.number) };
+  out.vKeptOnScreen = { current: v.current, hidden: shellsDom[0].hidden, inFilm: filmOf(vd.film).map((f) => f[0]) };
   v.setFilter('reviewed');
   out.vMoved = v.current; // page 1 (now reviewed) still matches «reviewed»: stays
   v.setFilter('processing');
@@ -754,7 +823,94 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
   D.reducedMotion = true; v.turn(1); out.vReduced = { current: v.current, turning: v.turning }; D.reducedMotion = false;
   // a thumbnail arriving with the sheets data reaches the filmstrip
   v.applySheets({ pages: [{ id: 13, number: 3, width: 700, height: 1000, thumb_url: '/t/3.webp', text_state: 'provisional', status: 'layout_done' }] });
-  out.vFilmThumb = v.film.find((f) => f.number === 3).thumb;
+  out.vFilmThumb = vd.film.children.find((t) => t.dataset.number === '3').querySelector('img').getAttribute('src');
+  // the follow mode (§8.3) ends only with a page the reader chooses: the hot-line keys keep it, a turn ends it
+  v.follow = true;
+  v.onKey({ key: 'ArrowDown', target: {}, preventDefault: () => {} });
+  const followAfterKey = v.follow;
+  v.turn(1); timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
+  out.vFollow = { afterKey: followAfterKey, afterTurn: v.follow, toast: toasts.slice(-1)[0] };
+  globalThis.requestAnimationFrame = realRaf;
+
+  // --- C and ↑/↓ act on the page on screen: after «شبكة» (where the far observer unmounted the sheet and
+  // cleared the focused page) a switch to «صفحات» remounts without a turn, and the keys must still work
+  const observers = [];
+  globalThis.IntersectionObserver = class { constructor(cb, opts) { this.cb = cb; this.opts = opts || {}; observers.push(this); } observe() {} unobserve() {} disconnect() {} };
+  store['nassakh.bookView'] = 'grid';
+  const copied = []; window.Nassakh.copyText = (text) => { copied.push(text); return Promise.resolve(true); };
+  const gPages = [{ id: 21, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', width: 700, height: 1000 }];
+  const gd = viewerDom(gPages, true); // grid tiles present: the viewer opens on page 1 at init, as in the browser
+  const g = reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '/api/books/3/sheets/', bookUrl: '/books/3/', canEdit: true, bookId: 3, active: false, status: 'ready_for_review', stages: [], byStatus: {}, pages: gPages });
+  g.$el = gd.root; g.$watch = () => {}; g.init();
+  const gAtInit = { view: g.view, current: g.current, mounted: g.isMounted(21) };
+  g.applySheets({ pages: [{ id: 21, number: 1, width: 700, height: 1000, text_state: 'final', status: 'ocr_done', lines: [{ region_kind: 'body', tokens: [{ t: 'نص' }, { t: 'الصفحة' }] }] }] });
+  observers.find((o) => o.opts.rootMargin === '4000px').cb([{ target: gd.shellsDom[0], isIntersecting: false }]); // «شبكة»: the viewer is display:none
+  const gUnmounted = !g.isMounted(21);
+  g.setView('sheets'); g.onViewChange(); // the page is already current: no turn, the near observer remounts it in the browser
+  const hotCalls = []; g.moveHot = (dir, pid) => { hotCalls.push([dir, pid]); return true; };
+  g.onKey({ key: 'c', code: 'KeyC', target: {} });
+  g.onKey({ key: 'ArrowDown', target: {}, preventDefault: () => {} });
+  out.gKeys = { atInit: gAtInit, unmounted: gUnmounted, view: g.view, current: g.current, copied, hotCalls };
+  store['nassakh.bookView'] = 'sheets';
+
+  // --- the turn buttons' `:disabled` (Alpine's reactivity = @vue/reactivity) re-evaluates when a poll moves
+  // a page into the filter without adding pages
+  const { reactive, effect } = require(require('path').resolve(process.argv[2], '../../../../node_modules/@vue/reactivity'));
+  store['nassakh.bookFilter.4'] = 'review';
+  const rPages = [{ id: 31, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final' }, { id: 32, number: 2, status: 'layout_done', status_label: 'تم التخطيط', text_state: 'provisional' }];
+  const rd = viewerDom(rPages);
+  const r = reactive(reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '', bookUrl: '/books/4/', canEdit: true, bookId: 4, active: true, status: 'ocr', stages: [], byStatus: {}, pages: rPages }));
+  r.$el = rd.root; r.$watch = () => {}; r.init();
+  let runs = 0; let canNext = null;
+  effect(() => { runs += 1; canNext = r.canTurn(1); });
+  const rBefore = { runs, canNext };
+  r.apply({ total: 2, percent: 100, flags: 0, status: 'ocr', status_label: 'قيد التعرّف', dot: 'dot-accent', by_status: {}, active: true, pages: [{ id: 32, number: 2, status: 'ocr_done', text_state: 'final' }] });
+  out.rTurn = { before: rBefore, after: { runs, canNext, fresh: r.canTurn(1) } };
+
+  // --- a failed sheets request is retried with a backoff, also for an inactive book (which never polls);
+  // the banner stays until the range arrives
+  const fPages = [{ id: 41, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', width: 700, height: 1000 }];
+  const fd = viewerDom(fPages);
+  const f = reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '/api/books/5/sheets/', bookUrl: '/books/5/', canEdit: true, bookId: 5, active: false, status: 'ready_for_review', stages: [], byStatus: {}, pages: fPages });
+  f.$el = fd.root; f.$watch = () => {}; timers.length = 0; f.init();
+  let sheetCalls = 0; let sheetsOk = false;
+  globalThis.fetch = () => { sheetCalls += 1; return sheetsOk ? Promise.resolve({ ok: true, json: async () => ({ pages: [{ id: 41, number: 1, width: 700, height: 1000, text_state: 'final', status: 'ocr_done', lines: [{ region_kind: 'body', tokens: [{ t: 'نص' }] }] }] }) }) : Promise.reject(new Error('down')); };
+  const fired = await fire(60); // the mount's request fails
+  const afterFail = { fired, calls: sheetCalls, failed: f.sheetsFailed, retry: timers.map((t) => t.ms) };
+  await fire(2000); // still down: the backoff doubles
+  const afterSecond = { calls: sheetCalls, failed: f.sheetsFailed, retry: timers.map((t) => t.ms) };
+  sheetsOk = true;
+  await fire(4000); // the server is back: the data arrives, the banner goes
+  out.fRetry = { afterFail, afterSecond, afterOk: { calls: sheetCalls, failed: f.sheetsFailed, loaded: Boolean(f.sheet(41)), retry: timers.map((t) => t.ms) } };
+
+  // --- a turn onto a page whose cached data went stale renders that data (the refetch then plays the
+  // provisional → final wave) instead of a skeleton; a poll that changes the viewer's neighbours queues
+  // their refetch ahead of the turn
+  const rafQueue = []; globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return 1; };
+  const flushRaf = () => rafQueue.splice(0).forEach((fn) => fn(NOW));
+  tpls['sheet-body'] = { content: { cloneNode: () => new Element('frag') } };
+  const provLines = Array.from({ length: 6 }, (_, k) => ({ region_kind: 'body', bbox: [0.15, 0.1 + 0.05 * k, 0.85, 0.13 + 0.05 * k], words: ['كلمة', 'أخرى', 'ثالثة'] }));
+  const finalLines2 = provLines.map((l) => ({ region_kind: 'body', bbox: l.bbox, tokens: l.words.map((t) => ({ t, conf: 'high' })) }));
+  const payloads = { 1: { id: 51, number: 1, width: 700, height: 1000, text_state: 'final', status: 'ocr_done', lines: finalLines2 },
+    2: { id: 52, number: 2, width: 700, height: 1000, text_state: 'provisional', status: 'layout_done', provisional_lines: provLines } };
+  const sheetUrls = [];
+  globalThis.fetch = (url) => { sheetUrls.push(url); const m = /from=(\d+)&to=(\d+)/.exec(url); const items = []; for (let n = Number(m[1]); n <= Number(m[2]); n += 1) items.push(payloads[n]); return Promise.resolve({ ok: true, json: async () => ({ pages: items }) }); };
+  const sPages = [{ id: 51, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', width: 700, height: 1000 }, { id: 52, number: 2, status: 'layout_done', status_label: 'تم التخطيط', text_state: 'provisional', width: 700, height: 1000 }];
+  const sd = viewerDom(sPages);
+  const s = reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '/api/books/6/sheets/', bookUrl: '/books/6/', canEdit: true, bookId: 6, active: true, status: 'ocr', stages: [], byStatus: {}, pages: sPages });
+  s.$el = sd.root; s.$watch = () => {}; timers.length = 0; s.init();
+  await fire(60); // the mount's request: the current page and its prefetched neighbour
+  const prefetched = sheetUrls.slice();
+  const modeBefore = sd.shellsDom[0].fac.getAttribute('data-mode');
+  s.apply({ total: 2, percent: 60, flags: 0, status: 'ocr', status_label: 'قيد التعرّف', dot: 'dot-accent', by_status: {}, active: true,
+    pages: [{ id: 52, number: 2, status: 'layout_done', text_state: 'provisional', n_unresolved: 3 }] }); // the neighbour changed: stale, not mounted
+  const queuedAfterPoll = timers.filter((t) => t.ms === 60).length;
+  s.turn(1); timers.filter((t) => t.ms === 200).forEach((t) => t.fn()); flushRaf(); flushRaf();
+  const modeAtLanding = sd.shellsDom[1].fac.getAttribute('data-mode');
+  payloads[2] = { ...payloads[2], text_state: 'final', status: 'ocr_done', provisional_lines: [], lines: finalLines2 };
+  await fire(60); // the refetch of the stale page lands its final text
+  out.sStale = { prefetched, modeBefore, queuedAfterPoll, modeAtLanding, current: s.current, refetched: sheetUrls.slice(prefetched.length), modeAfter: sd.shellsDom[1].fac.getAttribute('data-mode') };
+  s.destroy(); delete tpls['sheet-body']; delete globalThis.IntersectionObserver;
   globalThis.requestAnimationFrame = realRaf;
   console.log(JSON.stringify(out));
 })();
@@ -771,6 +927,8 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     out = json.loads(run.stdout.strip().splitlines()[-1])
 
     # --- D33 the page viewer
+    # static thumbs, one per page, patched from the records (thumbnail, reviewed check, uncertain count,
+    # live dot); the current one is marked; no reactive `film` array
     assert out["vInit"] == {
         "current": 1,
         "shown": [11],
@@ -781,13 +939,26 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
             [4, "", False, 1, False],
         ],
         "ar": "0.7",
+        "marked": [[1, "page"]],
+        "count": 4,
+        "thumbs": 4,
+        "noFilmState": True,
     }
+    # the only window listeners are resize and scroll: no wheel / touch / key listener ends the follow mode
+    assert out["vWindowListeners"] == ["resize", "scroll"]
     # a turn slides out for 200 ms; a second press mid-turn moves the target, the sheet lands once
     assert out["vTurn"]["midTurn"] == {"turning": "out-next", "current": 1, "timer": 1}
-    assert out["vTurn"]["after"] == {"turning": "", "current": 3, "shown": [13], "hiddenOld": False}
+    assert out["vTurn"]["after"] == {
+        "turning": "",
+        "current": 3,
+        "shown": [13],
+        "hiddenOld": False,
+        "marked": [[3, "page"]],
+    }
+    assert out["vThumbClick"] == {"current": 4, "marked": [[4, "page"]]}
     assert out["vEnds"] == {"canPrev": True, "canNextFrom4": False, "turnAtEnd": False}
     # the filter decides the viewer's sequence and the filmstrip
-    assert out["vFilter"] == {"current": 1, "film": [1, 4], "next": 4, "prev": None}
+    assert out["vFilter"] == {"current": 1, "film": [1, 4], "count": 2, "next": 4, "prev": None}
     # the page on screen stays visible when the poll takes it out of the filter
     assert out["vKeptOnScreen"] == {"current": 1, "hidden": False, "inFilm": [4]}
     assert out["vMoved"] == 1 and out["vMovedToProcessing"] == 3
@@ -799,6 +970,38 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert out["vWheelDown"] == 3 and out["vTouchBack"] == 2 and out["vMouseDragIgnored"] == 2
     assert out["vReduced"] == {"current": 3, "turning": ""}
     assert out["vFilmThumb"] == "/t/3.webp"
+    # follow (§8.3) survives the hot-line keys and ends with a page the reader chose
+    assert out["vFollow"] == {"afterKey": True, "afterTurn": False, "toast": "أُوقف التتبّع"}
+    # C and ↑/↓ act on the page on screen after «شبكة» → «صفحات» (no turn in between)
+    assert out["gKeys"] == {
+        "atInit": {"view": "grid", "current": 1, "mounted": True},
+        "unmounted": True,
+        "view": "sheets",
+        "current": 1,
+        "copied": ["نص الصفحة"],
+        "hotCalls": [[1, "21"]],
+    }
+    # the turn buttons re-evaluate when a poll moves a page into the filter (nPages unchanged)
+    assert out["rTurn"]["before"] == {"runs": 1, "canNext": False}
+    assert out["rTurn"]["after"]["runs"] > 1 and out["rTurn"]["after"]["canNext"] is True
+    assert out["rTurn"]["after"]["fresh"] is True
+    # a failed sheets request is retried after 2 s, then 4 s; the banner stays until the range arrives
+    assert out["fRetry"] == {
+        "afterFail": {"fired": True, "calls": 1, "failed": True, "retry": [2000]},
+        "afterSecond": {"calls": 2, "failed": True, "retry": [4000]},
+        "afterOk": {"calls": 3, "failed": False, "loaded": True, "retry": []},
+    }
+    # a stale cached payload is rendered on mount (provisional, not a skeleton); the changed neighbour was
+    # queued by the poll; the refetch lands the final text
+    assert out["sStale"] == {
+        "prefetched": ["/api/books/6/sheets/?from=1&to=2"],
+        "modeBefore": "final",
+        "queuedAfterPoll": 1,
+        "modeAtLanding": "provisional",
+        "current": 2,
+        "refetched": ["/api/books/6/sheets/?from=2&to=2"],
+        "modeAfter": "final",
+    }
 
     # --- decode (D28): words and lines from the Tesseract text, one text node per word, real spaces between
     # words

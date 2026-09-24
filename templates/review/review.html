@@ -33,7 +33,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
       <button type="button" class="rv-save" :class="'is-' + b.save" :disabled="b.save !== 'error'" :aria-hidden="b.save === 'idle'" @click="act('retrySave')" role="status" aria-live="polite">
         <span class="rv-save-dot" aria-hidden="true"></span>
-        <span x-text="b.save === 'saving' ? 'يحفظ…' : b.save === 'saved' ? 'محفوظ' : b.save === 'error' ? 'تعذّر الحفظ · إعادة المحاولة' : ''"></span>
+        <span x-text="b.save === 'saving' ? 'يحفظ…' : b.save === 'saved' ? 'محفوظ' : b.save === 'error' ? (b.failed > 1 ? 'تعذّر حفظ ' + b.failed + ' من الإجراءات · إعادة المحاولة' : 'تعذّر الحفظ · إعادة المحاولة') : ''"></span>
       </button>
 
       <button type="button" class="btn-icon rv-help" title="اختصارات لوحة المفاتيح (?)" aria-label="اختصارات لوحة المفاتيح" @click="act('openSheet')"><span aria-hidden="true">?</span></button>
@@ -65,7 +65,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
     <div class="rv-skeleton"><span style="width:88%"></span><span style="width:76%"></span><span style="width:92%"></span><span style="width:64%"></span><span style="width:81%"></span><span style="width:70%"></span></div>
   </div>
 
-  <div class="rv-split" :class="{ 'is-out': slide === 'out', 'is-in': slide === 'in' }">
+  <div class="rv-split" :class="slide ? 'is-' + slide : ''">
 
     {# ------------------------------------------------------------ scan #}
     <section class="rv-pane rv-scan-pane" aria-label="صورة الصفحة">
@@ -189,7 +189,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                 <div class="rv-pop-sep" aria-hidden="true" x-show="options().length"></div>
                 <label class="sr-only" for="rv-typed-input">تصحيح</label>
                 <input id="rv-typed-input" class="input" x-ref="typed" x-model="pop.typed" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto"
-                       @focus="pop.typing = true" @keydown.escape.stop.prevent="closeTop()" @keydown.tab.prevent="move($event.shiftKey ? -1 : 1)">
+                       @focus="pop.typing = true" @keydown.escape.stop.prevent="closeTop()" @keydown.tab.prevent="onTypedTab($event.shiftKey)">
                 <button type="submit" class="btn btn-sm" :disabled="!pop.typed.trim()">حفظ</button>
               </form>
             </template>
@@ -238,7 +238,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                 </template>
                 <template x-if="edit && edit.lineId === line.id">
                   <div class="rv-editor-wrap">
-                    <textarea class="rv-editor" x-ref="editor" rows="1" x-model="edit.text" dir="rtl" aria-label="تعديل السطر" spellcheck="false"
+                    <textarea class="rv-editor" rows="1" x-model="edit.text" dir="rtl" aria-label="تعديل السطر" spellcheck="false"
                               @keydown.enter.prevent="saveEdit()" @keydown.escape.stop.prevent="cancelEdit()" @keydown.tab.stop @input="autosize($event.target)"></textarea>
                     <span class="rv-editor-hint meta"><kbd class="kbd">Enter</kbd> حفظ · <kbd class="kbd">Esc</kbd> إلغاء</span>
                   </div>
@@ -279,7 +279,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
                 <template x-if="insert && insert.afterId === line.id">
                   <div class="rv-insert">
-                    <textarea class="rv-editor" x-ref="editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر المفقود…" spellcheck="false"
+                    <textarea class="rv-editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر المفقود…" spellcheck="false"
                               @keydown.enter.prevent="saveInsert()" @keydown.escape.stop.prevent="cancelEdit()" @keydown.tab.stop @input="autosize($event.target)"></textarea>
                     <span class="rv-editor-hint meta"><kbd class="kbd">Enter</kbd> إدراج · <kbd class="kbd">Esc</kbd> إلغاء</span>
                   </div>
@@ -290,7 +290,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
           <template x-if="insert && insert.afterId === null">
             <div class="rv-insert rv-insert-first">
-              <textarea class="rv-editor" x-ref="editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر…" spellcheck="false"
+              <textarea class="rv-editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر…" spellcheck="false"
                         @keydown.enter.prevent="saveInsert()" @keydown.escape.stop.prevent="cancelEdit()" @input="autosize($event.target)"></textarea>
             </div>
           </template>
@@ -365,7 +365,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
         <dt><span class="meta">نقرة على كلمة</span></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
         <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي</dd>
-        <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة</dd>
+        <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة، ثم <kbd class="kbd">Enter</kbd> أو <kbd class="kbd">Tab</kbd> لحفظه والانتقال</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو إلغاء التحرير</dd>
         <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd> / <kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>
         <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة</dd>
@@ -375,7 +375,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">A</kbd></dt><dd>اعتماد الصفحة</dd>
         <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية بانتظار المراجعة</dd>
         <dt><kbd class="kbd">←</kbd> / <kbd class="kbd">→</kbd></dt><dd>الصفحة التالية / السابقة</dd>
-        <dt><kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd> <kbd class="kbd">0</kbd></dt><dd>تكبير الصورة، تصغيرها، ملاءمة العرض</dd>
+        <dt><kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd> <kbd class="kbd">0</kbd></dt><dd>تكبير الصورة، تصغيرها، العودة إلى <span x-text="fitLabel"></span></dd>
         <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
       </dl>
     </div>

@@ -29,12 +29,19 @@ def review_page(request: HttpRequest, book_id: int, number: int) -> HttpResponse
 
 @login_required
 def review_next(request: HttpRequest, book_id: int) -> HttpResponse:
-    """Redirect to the next page waiting for review (after `?after=<n>`), or back to the dashboard."""
+    """Redirect to the next page waiting for review (after `?after=<n>`), or back to the dashboard.
+
+    When the page the reviewer came from is the only one still waiting, they stay on it.
+    """
     book = get_object_or_404(Book, pk=book_id)
     raw = request.GET.get("after", "")
     after = int(raw) if raw.isascii() and raw.isdigit() else None
     page = services.next_page_to_review(book, after_number=after)
     if page is None:
+        current = services.pending_page(book, after)
+        if current is not None:
+            messages.info(request, "هذه آخر صفحة بانتظار المراجعة")
+            return redirect("review:page", book.pk, current.number)
         messages.info(request, "لا صفحات بانتظار المراجعة")
         return redirect("books:detail", book.pk)
     return redirect("review:page", book.pk, page.number)
