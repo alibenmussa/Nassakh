@@ -118,19 +118,39 @@ One row, `font-size: 12.5px`, `padding: 10px 0`, `border-block: 1px solid var(--
 ### 2.5 Pages
 
 - **Empty state** (nothing ingested): unchanged.
-- **«صفحات»**: `.sheet-stack` (`max-width: 1180px; margin-inline: auto; display: flex;
-  flex-direction: column; gap: 32px`). One `article.page-sheet` shell per page, server-rendered for the
-  first paint, cloned from `<template id="sheet-shell">` for pages ingested later (§13).
-- **«شبكة»**: `.page-grid` with the existing tiles, restyled (§7).
-- **Position chip** `.bk-pos`: toast styling (dark `#1c1c1f`, white, radius 10, 12.5 px, tabular), fixed
-  bottom 20 px centre, «صفحة <bdi>N</bdi> من <bdi>M</bdi>», appears 150 ms after a scroll starts, hides
-  1.2 s after it stops; click focuses the jump field. Only in «صفحات» view with ≥ 20 pages.
+- **«صفحات» is a page viewer (D33)**, not a long scroll. `.bk-dashboard.is-viewer` is as tall as the
+  window below the top bar (`100dvh − topbar − 64px`, min 460 px); `section.bk-viewer` fills what the
+  header, strip and toolbar leave: the stage `.bk-stage` (flex 1) above the filmstrip `.bk-film` (80 px).
+  The stage holds `.sheet-stack` with one `article.page-sheet` shell per page (server-rendered for the
+  first paint, cloned from `<template id="sheet-shell">` for pages ingested later, §13), but only the
+  shell with `.is-current` is displayed. Its body is a size container: scan and text pane each take
+  `min(100cqh × aspect, (100cqw − 16px) / 2)`, so the pair fits the stage in both directions.
+  - **Turning.** The sheet slides 3 % and fades out in 200 ms (ease-in), the next one is swapped in and
+    slides in from the other side in 260 ms (the review screen's curve). Going forward, the page leaves
+    toward the right and the next one enters from the left, as an Arabic book turns (RTL). A press during a turn moves the target instead of queueing turns. Reduced motion: instant.
+  - **Controls.** Round 40 px buttons on the stage's two sides (hidden at the ends), the toolbar counter
+    «صفحة <bdi>N</bdi> من <bdi>M</bdi>» (live region), keys (§8.8), a trackpad swipe or wheel on the
+    stage (one page per gesture: 50 px sideways or 90 px down/up, then locked until the gesture pauses
+    260 ms, so inertia never flips a second page), a touch swipe of 50 px (mouse drags do nothing).
+  - **Filmstrip.** One 58 px thumbnail per page the filter keeps (`aspect-ratio` of the page), its
+    number, and marks: reviewed ✓, uncertain-word count, a pulsing dot while live; pending pages are
+    dimmed, failed ones outlined in danger. The current thumbnail is outlined and kept centred. Missing
+    thumbnails are refreshed from `api:book_filmstrip` at most every 4 s while pages leave `uploaded`.
+  - **Sequence.** The filter decides it: turns, Home/End and the filmstrip skip hidden pages. The page on
+    screen is exempt from `hidden` (Tailwind's `[hidden] { display: none !important }` cannot be
+    overridden) and stays when a poll takes it out of the filter; a filter change that excludes it moves
+    to the first page the filter keeps.
+  - **Memory.** The page is written to the address (`#sheet-N`, `history.replaceState`) and to
+    `sessionStorage` (`nassakh.bookPage.<id>`). On load: `#sheet-N`, else the session, else the first page.
+- **«شبكة»**: `.page-grid` with the existing tiles, restyled (§7). A plain click on a tile opens the viewer
+  on that page; ⌘/Ctrl-click keeps the link (the page's detail).
 
 ### 2.6 Responsive
 
 ≥ 1180: as above. 900–1180: the summary strip wraps; the progress bar hides; the jump field keeps its
-width. < 900: the sheet body stacks (scan above the text pane, both full width, same aspect box), the
-toolbar wraps, page padding 16. < 560: the position chip hides; grid min 104 px.
+width. < 900: the viewer's sheet body stacks (scan above the text pane, each at most half the stage
+height, same aspect box), the dashboard is `100dvh − topbar − 32px`, the toolbar wraps, page padding 16.
+< 560: grid min 104 px.
 
 ## 3. The sheet and its correspondence
 
@@ -498,17 +518,17 @@ tiles too (`hidden`). Density: 132 px min (104 px below 560 px).
 
 ## 8. Ease of use
 
-1. **Jump to page.** Enter (or blur with a number) in the jump field scrolls to `#sheet-N`
-   (`scrollIntoView({ block: 'start', behavior: 'smooth' })`; `scroll-margin-top` clears the sticky
-   toolbar), pulses the sheet (`bk-pulse-bg` 500 ms) and focuses its title link. Out of range → toast
-   «لا صفحة بهذا الرقم». `G` focuses the field from anywhere. `#sheet-N` in the URL on load jumps there.
-   In «شبكة» the jump scrolls to the tile.
+1. **Jump to page.** Enter (or blur with a number) in the jump field turns the viewer to page N (one
+   turn, however far) and focuses its title link. Out of range → toast «لا صفحة بهذا الرقم». `G`
+   focuses the field from anywhere. `#sheet-N` in the URL on load opens the viewer there. In «شبكة» the
+   jump scrolls to the tile and pulses it.
 2. **Filters** (§2.2) set `hidden` on non-matching shells/tiles in one loop; the empty result shows the
    review-style line «لا صفحات تطابق هذا المرشّح»; counts update from every poll without layout shifts
    (`tabular-nums`, chips have `min-width`).
-3. **Follow processing** («تتبّع المعالجة», default off, persisted `nassakh.bookFollow`): when on, after a poll the stack scrolls smoothly (≤ 600 ms, at most once per 2 s)
-   to the highest-numbered page that just entered `provisional` or `ocr_done`; any user wheel, touch or
-   keyboard scroll turns it off with a quiet toast «أُوقف التتبّع». Only in «صفحات» view while `active`.
+3. **Follow processing** («تتبّع المعالجة», default off, persisted `nassakh.bookFollow`): when on, after a
+   poll the viewer turns (at most once per 2 s) to the highest-numbered page that just entered
+   `provisional` or `ocr_done`; any page the reader chooses (turn, key, wheel, swipe, filmstrip, jump)
+   turns it off with a quiet toast «أُوقف التتبّع». Only in «صفحات» view while `active`.
 4. **Attention where the page is.** Flags, sequence issue and the error headline sit in the sheet head with
    the inline «إعادة <stage>» retry; the strip's `<details>` and the «تحتاج انتباهًا» chip give the overview.
 5. **Hover linking** both ways with the line-number badge on the scan; click a final line → the review page.
@@ -517,12 +537,14 @@ tiles too (`hidden`). Density: 132 px min (104 px below 560 px).
 7. **Copy.** Per sheet «نسخ» (final only; `C` while a sheet is focused) and «نسخ نص الكتاب» in the menu (or
    as the primary when all is reviewed), both through `window.Nassakh.copyText` and the «تم النسخ» toast.
 8. **Keyboard** (only when no field is focused, RTL-aware, mirrors the review screen): `G` jump field,
-   `N` next page to review, `1` / `2` switch «صفحات» / «شبكة», `ArrowLeft` next sheet / `ArrowRight` previous
-   sheet (scroll + focus title), `↑` / `↓` move the hot line inside the focused sheet (band follows on the
-   scan), `Enter` on a focused title opens the page, `C` copies the focused sheet, `Esc` clears the filter.
+   `N` next page to review, `1` / `2` switch «صفحات» / «شبكة», `ArrowLeft` or `PageDown` next page /
+   `ArrowRight` or `PageUp` previous page (a turn in the viewer), `Home` / `End` first / last page the
+   filter keeps, `↑` / `↓` move the hot line inside the page on screen (band follows on the scan),
+   `Enter` on a focused title opens the page, `C` copies the page on screen, `Esc` clears the filter.
    No shortcut sheet on the dashboard (the review has one; here `title` hints carry the keys).
-9. **Position chip** while scrolling (§2.5); **scroll memory** per book in `sessionStorage`
-   (`nassakh.bookScroll.<id>`) so returning from a review page lands on the same sheet.
+9. **Position** is the toolbar counter and the filmstrip (§2.5); **memory** per book in `sessionStorage`
+   (`nassakh.bookPage.<id>` for the viewer, `nassakh.bookScroll.<id>` for the grid) so returning from a
+   review page lands on the same page.
 10. **Quiet chrome.** Rerun and exclude are in menus (top-bar «⋯», the tile's hover toggle); successful polls
     are silent; the live region announces once per poll; all copy is factual counts.
 
@@ -537,7 +559,7 @@ unification:
   --bk-sheet-gap: 32px; --ink-shine: #3f3f46; --ink-wash: rgba(24,24,27,.06)`.
 - Surfaces: text pane `--color-surface` + 1 px `--color-border` + `--radius-sm`; scan `--color-bg-muted`
   + `--shadow-md` + inset hairline; toolbar and strip `--color-bg` with hairlines only (no cards); badges on
-  images and the position chip `rgba(20,20,24,.74)` / toast `#1c1c1f`.
+  images `rgba(20,20,24,.74)` / toast `#1c1c1f`; viewer turn buttons `--color-surface` + hairline.
 - Typography: IBM Plex Sans Arabic; text-pane size from the page (9–28 px, `line-height: 1.2`); chrome at
   DESIGN sizes (section title 14/600, meta 12 `--color-text-3`, status 12.5, sheet title 13/600, chips 12.5/500);
   `tabular-nums` on every count; `<bdi>` around numbers inside Arabic strings.
@@ -545,7 +567,7 @@ unification:
   attention, danger = error, neutral = pending; status always dot + label. The text pane is gray during
   processing; the accent appears on the text only in `decode-land`.
 - Motion: chrome 120 ms (hover, opacity), 150 ms (hot states), 200 ms (crossfades, chips, banners), 260 ms
-  `cubic-bezier(.2,.7,.2,1)` for glides (bars, position chip, jump), 320 ms progress fill, resolution ≤ 400 ms
+  `cubic-bezier(.2,.7,.2,1)` for glides (bars, the viewer's page turn, jump), 320 ms progress fill, resolution ≤ 400 ms
   (`decode-land`, `bk-stamp-in` 300 ms); loops only on processing content (D24): `bk-shimmer` 1.4 s,
   sweep 2.4 s, cursor 420 ms/line, sheen 700 ms, status-dot `bk-pulse` 1.2 s.
 - Keyframes in theatre.css: `bk-shimmer` (= `rv-shimmer`), `bk-pulse` (= `rv-pulse`), `bk-line-in`
@@ -572,8 +594,9 @@ already zeroes durations globally under the media query).
   `<template id="sheet-shell">` and patched the same way. Target: a poll `apply()` for 800 pages < 8 ms on an
   M-series Mac (today ~12 k Alpine effects re-evaluate per poll).
 - **Bodies mount near the viewport** (existing near/far observers, 1500 / 4000 px) from
-  `<template id="sheet-body">`; a mounted sheet is one `NassakhDecode.sheet()` handle. ≤ 6 mounted sheets,
-  ≤ 400 `.tok` spans each → ≤ 2.4 k live spans.
+  `<template id="sheet-body">`; a mounted sheet is one `NassakhDecode.sheet()` handle. In the viewer only
+  the page on screen is displayed, so it is the one mounted sheet (≤ 400 live `.tok` spans); the data of
+  its two neighbours is prefetched so a turn lands on laid-out text.
 - **`content-visibility: auto` + `contain-intrinsic-size: auto var(--sheet-h)`** with `--sheet-h` from the
   measured pane width (§3), so 800 shells cost nothing off-screen and the scrollbar does not jump.
 - **Geometry is CSS.** All placement uses `cqw` and percentages; resizes need no JS; `measureText` runs
@@ -671,8 +694,8 @@ NassakhDecode.measure = (text) => width_at_100px     // injectable (tests stub i
 ### 13.2 `books.js` (Alpine `bookDashboard`)
 
 Owns: the poll (compact mode, backoff, health pill, no reload), the changed-set diff and `patchSheet` /
-`patchTile`, the primary-button and banner state, filters, the jump field, the follow toggle, the position
-chip, the keyboard map, `--sheet-h`, the near/far observers, mounting bodies from `<template id="sheet-body">`
+`patchTile`, the primary-button and banner state, filters, the jump field, the follow toggle, the viewer
+(`showPage` / `turn` / `canTurn`, wheel and swipe, the filmstrip, D33), the keyboard map, `--sheet-h`, the near/far observers, mounting bodies from `<template id="sheet-body">`
 and creating `NassakhDecode.sheet` handles, the sheets fetch queue (unchanged), copy actions, the live
 region. It no longer uses `x-effect` per sheet or `x-for` over pages in the sheets view; the grid keeps a
 light `x-for` only for pages ingested after load (or the same clone-and-patch approach — the agent's choice,
@@ -717,7 +740,7 @@ query counts (sheets ≤ 5, progress compact ≤ 4); `book_dashboard` config `st
 
 Per-line deep link from a sheet into the review screen (`review.js` must honour `?line=<order>`); a
 timestamp delta poll (`Page.updated_at` + migration); the bottom minimap scrubber (a second bar competes
-with the toolbar and the position chip; revisit when the owner asks for it); the sheet-size control ص/م/ك;
+with the toolbar and the viewer's filmstrip; revisit when the owner asks for it); the sheet-size control ص/م/ك;
 moving `rv-` keyframes and marks into a shared file; a shortcut sheet on the dashboard.
 
 ## 17. Acceptance checklist
@@ -729,7 +752,8 @@ Layout and chrome
       follow toggle (active only); wraps below 900 px.
 - [ ] Summary strip replaces the two cards: five counters, review summary, `<details>` attention list.
 - [ ] Banners follow the poll (`status`, `error_headline`, `error_detail`) without a reload.
-- [ ] Position chip while scrolling; jump lands below the toolbar; `#sheet-N` on load works.
+- [ ] «صفحات» is a viewer (D33): one page fits the stage, turns slide out and in, buttons / keys / wheel /
+      swipe / filmstrip / jump turn one page, the counter and `#sheet-N` follow; `#sheet-N` on load works.
 
 Sheet and correspondence
 - [ ] Scan and text pane are the same aspect box; the text pane is white with a hairline, never scrolls.

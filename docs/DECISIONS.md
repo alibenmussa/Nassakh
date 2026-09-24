@@ -138,7 +138,8 @@ state ends, runs only near the viewport from one shared rAF loop, and is replace
 ## D25 — Two book views: stacked sheets (default) and a grid of processing cards (2026-09-24)
 Owner decision. The default dashboard view stacks pages like a PDF viewer, each sheet showing the scan and its
 text generating; the grid shows small animated processing cards without text. Sheets are lazily mounted and
-fetched in batches (`/api/books/<id>/sheets/`) so an 800-page book stays smooth.
+fetched in batches (`/api/books/<id>/sheets/`) so an 800-page book stays smooth. Amended by D33: «صفحات» shows one
+page at a time instead of a stack.
 
 ## D26 — Word-chooser hook for uncertain words (2026-09-24)
 Owner decision. A future small classifier may pick the best candidate (primary / secondary / Tesseract) for
@@ -197,3 +198,17 @@ opens on the side with room, or folds into the menu in a narrow column. Keys on 
 menu: body «محتوى», main heading «عنوان رئيسي», subheading «عنوان فرعي» (`ocr.Line.role`; footnote lines stay
 body; `LineRevision` action `role`, undoable). Assembly (Phase 4) uses the roles for chapters and the table of
 contents. Also added: a test that fails on multi-line `{# #}` template comments, which Django renders as text.
+
+## D33 — «صفحات» is a page viewer: one page fitted to the window, turned like the review screen (2026-09-24)
+Owner feedback: the side-by-side preview is right, the long scroll is not (a book has 100 pages or more).
+The «صفحات» view now shows one page at a time, scan beside its text, fitted to a stage so the whole
+dashboard fits the window below the top bar. Pages turn with the review screen's movement: the page slides
+and fades out in 200 ms and the next slides in from the other side; a press during a turn moves the target
+instead of queueing turns. Turn with the side buttons, the arrow keys (RTL: left is forward), PageDown /
+PageUp, Home / End, a trackpad swipe or the wheel (one page per gesture, inertia ignored), a touch swipe,
+the jump field, or the filmstrip of thumbnails under the stage (reviewed mark, uncertain-word count, live
+dot). The filter decides the sequence; the page on screen is never given `hidden`, because Tailwind's
+`[hidden]` rule is `!important`, and it stays when a poll takes it out of the filter. The page is kept in
+the address (`#sheet-N`) and the session; a plain click on a grid tile opens the viewer on that page. The
+follow mode turns to the page that advanced. Only the page on screen is mounted and its neighbours' data is
+prefetched. Replaces the scroll position chip; the grid view is unchanged.

@@ -105,9 +105,9 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
 
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
-{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}
-<div class="bk-dashboard" data-book-dashboard
-     x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
+{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}
+<div class="bk-dashboard" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0 }"
+     x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
      @keydown.window="onKey($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
@@ -133,13 +133,14 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
       <button type="button" class="bk-chip" :aria-pressed="filter === 'reviewed'" :disabled="counts.reviewed === 0" @click="setFilter('reviewed')">مُراجَعة <bdi class="num" x-text="counts.reviewed"></bdi></button>
     </div>
     <div class="bk-toolbar-end">
+      <span class="bk-counter" x-show="view === 'sheets' && current" x-cloak aria-live="polite">صفحة <bdi class="num" x-text="current"></bdi> من <bdi class="num" x-text="nPages"></bdi></span>
       <label class="bk-jump">
         <span class="sr-only">الانتقال إلى صفحة</span>
         <input type="text" inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة" x-ref="jump" autocomplete="off"
                @keydown.enter.prevent="jump($el.value); $el.value = ''" @blur="if ($el.value.trim()) { jump($el.value); $el.value = ''; }" @keydown.escape.stop="$el.value = ''; $el.blur()">
         <kbd class="kbd" aria-hidden="true">G</kbd>
       </label>
-      <button type="button" class="btn-icon bk-follow" x-show="active" x-cloak :aria-pressed="follow" @click="toggleFollow()" title="تتبّع المعالجة: يمرّر إلى آخر صفحة تقدّمت" aria-label="تتبّع المعالجة">
+      <button type="button" class="btn-icon bk-follow" x-show="active" x-cloak :aria-pressed="follow" @click="toggleFollow()" title="تتبّع المعالجة: ينتقل إلى آخر صفحة تقدّمت" aria-label="تتبّع المعالجة">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-eye"/></svg>
         <span>تتبّع المعالجة</span>
       </button>
@@ -224,10 +225,34 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
     </details>
   </div>
 
-  {# ------------------------------------------------------------ pages: «صفحات» (static shells) | «شبكة» (static tiles) #}
-  <div class="sheet-stack" data-sheet-stack x-show="view === 'sheets' && nPages > 0"{% if not tiles %} x-cloak{% endif %}>
-    {% for t in tiles %}{% include "books/_page_sheet.html" with t=t %}{% endfor %}
-  </div>
+  {# ------------------------------------------------------------ pages: «صفحات» (a book viewer, D33) | «شبكة» (static tiles) #}
+  <section class="bk-viewer" data-viewer aria-label="عارض الصفحات" x-show="view === 'sheets' && nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+    <div class="bk-stage" x-ref="stage" :class="turnClass" @wheel="onStageWheel($event)" @pointerdown="onStagePointerDown($event)" @pointerup="onStagePointerUp($event)" @pointercancel="swipeCancel()">
+      <div class="sheet-stack" data-sheet-stack>
+        {% for t in tiles %}{% include "books/_page_sheet.html" with t=t %}{% endfor %}
+      </div>
+      <button type="button" class="bk-turn bk-turn-prev" @click="turn(-1)" :disabled="!canTurn(-1)" aria-label="الصفحة السابقة" title="الصفحة السابقة (→)">
+        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+      </button>
+      <button type="button" class="bk-turn bk-turn-next" @click="turn(1)" :disabled="!canTurn(1)" aria-label="الصفحة التالية" title="الصفحة التالية (←)">
+        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+      </button>
+    </div>
+    <nav class="bk-film" x-ref="film" aria-label="شريط الصفحات">
+      <div class="bk-film-track">
+        <template x-for="f in film" :key="f.id">
+          <button type="button" class="bk-thumb" :class="{ 'is-current': f.number === current, 'is-pending': f.pending, 'is-excluded': f.excluded, 'is-error': f.error }"
+                  :aria-current="f.number === current ? 'page' : null" :data-number="f.number" :title="f.title" @click="showPage(f.number, { manual: true })">
+            <span class="bk-thumb-img" :style="f.ar ? '--thumb-ar:' + f.ar : ''"><img x-show="f.thumb" :src="f.thumb || ''" alt="" loading="lazy" decoding="async"></span>
+            <span class="bk-thumb-num num" x-text="f.number"></span>
+            <span class="bk-thumb-mark is-check" x-show="f.reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
+            <span class="bk-thumb-mark is-count num" x-show="!f.reviewed && f.unresolved > 0" x-text="f.unresolved"></span>
+            <span class="bk-thumb-mark is-live" x-show="f.live" aria-hidden="true"></span>
+          </button>
+        </template>
+      </div>
+    </nav>
+  </section>
   <div class="page-grid" data-page-grid :class="{ 'is-active': active }" x-show="view === 'grid' && nPages > 0" x-cloak>
     {% for t in tiles %}{% include "books/_page_tile.html" with t=t %}{% endfor %}
   </div>
@@ -237,8 +262,7 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
   <template id="tile-shell">{% include "books/_page_tile.html" with t=None %}</template>
   <template id="sheet-body">{% include "books/_sheet_body.html" %}</template>
 
-  {# position chip while scrolling (§2.5) and the end-of-processing toast (§6) #}
-  <button type="button" class="bk-pos" x-show="pos.visible" x-cloak @click="focusJump()" title="الانتقال إلى صفحة (G)">صفحة <bdi x-text="pos.n"></bdi> من <bdi x-text="nPages"></bdi></button>
+  {# the end-of-processing toast (§6) #}
   <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>
     <span class="grow">اكتملت المعالجة · <bdi class="num" x-text="doneToast.count"></bdi> صفحة</span>
     <a class="btn" x-show="doneToast.url" :href="doneToast.url">ابدأ المراجعة</a>

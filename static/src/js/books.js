@@ -29,14 +29,21 @@ document.addEventListener('alpine:init', () => {
   const FILTER_KEY = 'nassakh.bookFilter.';
   const FOLLOW_KEY = 'nassakh.bookFollow';
   const SCROLL_KEY = 'nassakh.bookScroll.';
+  const PAGE_KEY = 'nassakh.bookPage.'; // the page the viewer shows, per book (session)
+  // D33 page viewer: a turn is 200 ms out + a two-frame entrance (= review screen); input thresholds
+  const TURN_OUT_MS = 200;
+  const WHEEL_TURN_X = 50; // px of horizontal trackpad travel for one page
+  const WHEEL_TURN_Y = 90; // px of vertical wheel travel for one page
+  const WHEEL_IDLE_MS = 260; // a wheel gesture ends after this pause (inertia never turns two pages)
+  const SWIPE_PX = 50; // touch swipe distance for one page
+  const FILM_REFRESH_MS = 4000; // new thumbnails during processing: at most one filmstrip request per 4 s
   const SHEET_BATCH = 40; // api:book_sheets serves at most 40 pages per call
   const NEAR_MARGIN = '1500px'; // a sheet this close to the viewport mounts and fetches its data
   const FAR_MARGIN = '4000px'; // and unmounts again once it is this far away (800-page books stay light)
   const TILE_MARGIN = '600px'; // grid tiles animate only this close to the viewport
   const SHEET_FLUSH_MS = 60;
   const FOLLOW_MIN_MS = 2000;
-  const POS_SHOW_MS = 150;
-  const POS_HIDE_MS = 1200;
+  const SCROLL_SAVE_MS = 1200; // the grid saves its scroll this long after it stops
   const DONE_TOAST_MS = 8000;
   const PULSE_MS = 500;
   const STAGE_PERCENT = { uploaded: 12, preprocessed: 46, layout_done: 72, ocr_done: 100, reviewed: 100, assembled: 100 };
@@ -123,6 +130,14 @@ document.addEventListener('alpine:init', () => {
     const byNumber = new Map(); // page number -> page id
     const pending = new Set(); // page numbers waiting for a sheets request
     let bookLineH = 0; // the book's typical printed line height in px (api:book_sheets), shared by every sheet (D30)
+    let turnTimer = null; // D33 viewer: the running turn and the page it will land on
+    let pendingTarget = 0;
+    let pendingFocus = false;
+    let wheelAcc = 0;
+    let wheelLock = false;
+    let wheelTimer = null;
+    let swipeStart = null;
+    let filmTimer = null;
     let flushTimer = null;
     let nearObserver = null;
     let farObserver = null;
@@ -134,10 +149,7 @@ document.addEventListener('alpine:init', () => {
     let bodyTpl = null;
     let focusedId = null;
     let lastFollowAt = 0;
-    let posTimer = null;
-    let posHideTimer = null;
-    let scrolling = false;
-    let scrollRaf = 0;
+    let scrollSaveTimer = null;
     let resizeTimer = null;
     let doneTimer = null;
     let pulseTimer = null;
@@ -184,15 +196,19 @@ document.addEventListener('alpine:init', () => {
     stopped: false,
     copying: false,
     sheetsFailed: false,
-    pos: { visible: false, n: 0 },
     doneToast: { visible: false, count: 0, url: '' },
     lastJump: null,
+    filmstripUrl: cfg.filmstripUrl || '',
+    current: 0, // D33: the page number the viewer shows
+    turning: '', // '' | out-next | out-prev | in-next | in-prev
+    film: [], // filmstrip items (the pages the filter keeps)
 
     init() {
       (cfg.pages || []).forEach((raw) => { const p = this.completePage(raw, null); pages.set(id(p), p); byNumber.set(p.number, id(p)); });
       const savedFilter = readLocal(FILTER_KEY + (cfg.bookId || ''), 'all');
       this.filter = FILTERS[savedFilter] ? savedFilter : 'all';
       this.recount();
+      this.buildFilm();
       this.bindDom();
       if (typeof Alpine.store === 'function' && Alpine.store('book')) Alpine.store('book').dash = this;
       if (this.active) this.schedule(POLL_INTERVAL);
@@ -202,6 +218,10 @@ document.addEventListener('alpine:init', () => {
       clearTimeout(this.timer);
       clearTimeout(flushTimer);
       clearTimeout(doneTimer);
+      clearTimeout(turnTimer);
+      clearTimeout(filmTimer);
+      clearTimeout(wheelTimer);
+      clearTimeout(scrollSaveTimer);
       handles.forEach((h) => h.destroy());
       handles.clear();
       if (nearObserver) { nearObserver.disconnect(); farObserver.disconnect(); }
@@ -318,7 +338,10 @@ document.addEventListener('alpine:init', () => {
       });
       added.sort(byNumberAsc).forEach((p) => this.addPage(p));
       changed.forEach(({ after }) => { after.stale = true; this.patchPage(after); });
-      if (added.length || changed.length) this.recount();
+      if (added.length || changed.length) { this.recount(); this.buildFilm(); }
+      if (!this.current && added.length) { const first = this.visibleNumbers()[0]; if (first) this.showPage(first, { instant: true }); }
+      // a page that left `uploaded` has a thumbnail now; the compact poll carries none
+      if (changed.some(({ before, after }) => before.status === 'uploaded' && after.status !== 'uploaded' && !after.thumb_url)) this.refreshFilmSoon();
       if (changed.length) {
         const last = changed[changed.length - 1].after;
         this.liveMessage = `الصفحة ${last.number}: ${last.status_label}`;
@@ -330,6 +353,7 @@ document.addEventListener('alpine:init', () => {
     // The first poll with active false after an active one: effects stop, chrome follows, one toast, no reload.
     onProcessingEnd() {
       this.stopEffects();
+      this.refreshFilmSoon(0);
       this.doneToast = { visible: true, count: this.nPages, url: this.nextReviewUrl };
       clearTimeout(doneTimer);
       doneTimer = setTimeout(() => { this.doneToast.visible = false; }, DONE_TOAST_MS);
@@ -463,18 +487,29 @@ document.addEventListener('alpine:init', () => {
     },
     onViewChange() {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this.updateSheetHeight());
+      if (this.view !== 'sheets') return;
+      const nums = this.visibleNumbers();
+      if (!this.current && nums.length) this.showPage(nums[0], { instant: true });
+      else this.centerFilm();
     },
     setFilter(name) {
       this.filter = FILTERS[name] ? name : 'all';
       writeLocal(FILTER_KEY + (cfg.bookId || ''), this.filter);
       this.applyFilter();
       this.filteredOut = this.nPages > 0 && this.filter !== 'all' && this.counts[this.filter] === 0;
+      this.buildFilm();
+      // the viewer moves to the first page the filter keeps when the shown one is filtered out
+      const shown = this.current ? pages.get(byNumber.get(this.current)) : null;
+      if (shown && !this.matches(shown)) { const first = this.visibleNumbers()[0]; if (first) this.showPage(first, { instant: true }); }
     },
     matches(p) {
       return FILTERS[this.filter](p);
     },
+    isShown(pid) {
+      return Boolean(this.current) && byNumber.get(this.current) === String(pid);
+    },
     applyFilter() {
-      shells.forEach((el, pid) => setHidden(el, !this.matches(pages.get(pid))));
+      shells.forEach((el, pid) => setHidden(el, !this.matches(pages.get(pid)) && !this.isShown(pid)));
       tiles.forEach((el, pid) => setHidden(el, !this.matches(pages.get(pid))));
     },
     toggleFollow() {
@@ -498,7 +533,7 @@ document.addEventListener('alpine:init', () => {
       return best;
     },
     followChanged(changed) {
-      if (this.view !== 'sheets') return;
+      if (this.view !== 'sheets') return; // in the viewer, following turns to the page that advanced
       const n = this.followTarget(changed);
       if (n === null) return;
       const now = Date.now();
@@ -521,6 +556,7 @@ document.addEventListener('alpine:init', () => {
       return n;
     },
     goTo(n, focus) {
+      if (this.view === 'sheets') { this.showPage(n, { focus, manual: Boolean(focus) }); return; }
       const pid = byNumber.get(n);
       const el = this.view === 'grid' ? tiles.get(pid) : shells.get(pid);
       if (!el || typeof el.scrollIntoView !== 'function') return;
@@ -550,8 +586,10 @@ document.addEventListener('alpine:init', () => {
       if (code === 'KeyC' || k === 'c' || k === 'C') return 'copy';
       if (k === '1') return 'sheets';
       if (k === '2') return 'grid';
-      if (k === 'ArrowLeft') return 'nextSheet';
-      if (k === 'ArrowRight') return 'prevSheet';
+      if (k === 'ArrowLeft' || k === 'PageDown') return 'nextSheet'; // RTL: the next page is on the left
+      if (k === 'ArrowRight' || k === 'PageUp') return 'prevSheet';
+      if (k === 'Home') return 'firstSheet';
+      if (k === 'End') return 'lastSheet';
       if (k === 'ArrowDown') return 'hotDown';
       if (k === 'ArrowUp') return 'hotUp';
       return null;
@@ -568,16 +606,23 @@ document.addEventListener('alpine:init', () => {
       if (action === 'sheets') { this.setView('sheets'); return; }
       if (action === 'grid') { this.setView('grid'); return; }
       if (action === 'nextSheet' || action === 'prevSheet') { e.preventDefault(); this.stepSheet(action === 'nextSheet' ? 1 : -1); return; }
+      if (action === 'firstSheet' || action === 'lastSheet') {
+        if (this.view !== 'sheets') return;
+        const nums = this.visibleNumbers();
+        const n = action === 'firstSheet' ? nums[0] : nums[nums.length - 1];
+        if (n) { e.preventDefault(); this.showPage(n, { manual: true }); }
+        return;
+      }
       if (action === 'hotDown' || action === 'hotUp') { if (focusedId !== null && this.moveHot(action === 'hotDown' ? 1 : -1)) e.preventDefault(); return; }
       if (action === 'copy' && focusedId !== null) this.copySheet(focusedId);
     },
     visibleNumbers() {
-      return [...byNumber.keys()].sort((a, b) => a - b).filter((n) => {
-        const el = this.view === 'grid' ? tiles.get(byNumber.get(n)) : shells.get(byNumber.get(n));
-        return el && !el.hidden;
-      });
+      const all = [...byNumber.keys()].sort((a, b) => a - b);
+      if (this.view === 'grid') return all.filter((n) => { const el = tiles.get(byNumber.get(n)); return el && !el.hidden; });
+      return all.filter((n) => this.matches(pages.get(byNumber.get(n)) || {})); // the viewer's sequence follows the filter
     },
     stepSheet(dir) {
+      if (this.view === 'sheets') { this.turn(dir); return; }
       const numbers = this.visibleNumbers();
       if (!numbers.length) return;
       const current = focusedId !== null ? (pages.get(focusedId) || {}).number : this.currentNumber();
@@ -612,27 +657,218 @@ document.addEventListener('alpine:init', () => {
       return numbers[lo];
     },
     onScroll() {
-      if (!scrolling) {
-        scrolling = true;
-        clearTimeout(posTimer);
-        posTimer = setTimeout(() => {
-          if (scrolling && this.view === 'sheets' && this.nPages >= 20) this.pos = { visible: true, n: this.currentNumber() };
-        }, POS_SHOW_MS);
-      } else if (this.pos.visible && !scrollRaf && typeof requestAnimationFrame === 'function') {
-        scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; this.pos.n = this.currentNumber(); });
-      }
-      clearTimeout(posHideTimer);
-      posHideTimer = setTimeout(() => {
-        scrolling = false;
-        this.pos.visible = false;
-        writeSession(SCROLL_KEY + (cfg.bookId || ''), Math.round(window.scrollY || 0));
-      }, POS_HIDE_MS);
+      if (this.view !== 'grid') return; // the viewer does not scroll (D33)
+      clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = setTimeout(() => writeSession(SCROLL_KEY + (cfg.bookId || ''), Math.round(window.scrollY || 0)), SCROLL_SAVE_MS);
     },
+    // The viewer opens on the page in the address (#sheet-N), else the one shown last in this session, else
+    // the first page the filter keeps; the grid restores its scroll.
     restorePosition() {
-      const m = /^#sheet-(\d+)$/.exec(window.location.hash || '');
-      if (m) { requestAnimationFrame(() => this.jump(m[1])); return; }
-      const y = Number(readSession(SCROLL_KEY + (cfg.bookId || '')));
-      if (y > 0) requestAnimationFrame(() => window.scrollTo(0, y));
+      const hash = typeof window !== 'undefined' && window.location ? window.location.hash || '' : '';
+      const m = /^#sheet-(\d+)$/.exec(hash);
+      const saved = Number(readSession(PAGE_KEY + (cfg.bookId || '')));
+      const nums = this.visibleNumbers();
+      let n = m ? Number(m[1]) : saved;
+      if (!byNumber.has(n)) { if (m) toast('لا صفحة بهذا الرقم'); n = nums[0]; }
+      if (n) this.showPage(n, { instant: true });
+      if (this.view === 'grid') {
+        const y = Number(readSession(SCROLL_KEY + (cfg.bookId || '')));
+        if (y > 0 && typeof requestAnimationFrame === 'function') requestAnimationFrame(() => window.scrollTo(0, y));
+      }
+    },
+
+    // ------------------------------------------------------------ the page viewer (D33)
+    get turnClass() {
+      return this.turning ? `is-${this.turning}` : '';
+    },
+    // Show page `n`. With a page already on screen it turns: the old one slides out in the reading direction,
+    // the new one mounts and slides in (review-screen motion); pressing again mid-turn only moves the target.
+    showPage(n, opts = {}) {
+      const pid = byNumber.get(n);
+      const el = pid ? shells.get(pid) : null;
+      if (!el) return false;
+      if (opts.manual) this.userScrolled(); // a page the reader chose stops the follow mode
+      if (this.current === n && !this.turning && el.classList && el.classList.contains('is-current')) {
+        if (opts.focus) this.focusTitle(el);
+        return true;
+      }
+      const base = this.turning ? pendingTarget : this.current;
+      const dir = opts.dir || (base && n < base ? -1 : 1);
+      pendingTarget = n;
+      pendingFocus = pendingFocus || Boolean(opts.focus);
+      if (!this.current || opts.instant || reduced() || this.view !== 'sheets') {
+        clearTimeout(turnTimer);
+        this.turning = '';
+        this.swapTo(n);
+        if (pendingFocus) { this.focusTitle(el); pendingFocus = false; }
+        return true;
+      }
+      if (this.turning) return true; // the running turn lands on the latest target
+      this.turning = dir > 0 ? 'out-next' : 'out-prev';
+      clearTimeout(turnTimer);
+      turnTimer = setTimeout(() => this.landTurn(dir), TURN_OUT_MS);
+      return true;
+    },
+    landTurn(dir) {
+      const n = pendingTarget;
+      this.swapTo(n);
+      this.turning = dir > 0 ? 'in-next' : 'in-prev';
+      const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => setTimeout(fn, 16);
+      frame(() => frame(() => {
+        this.turning = '';
+        if (pendingFocus) { this.focusTitle(shells.get(byNumber.get(n))); pendingFocus = false; }
+        if (pendingTarget && pendingTarget !== this.current) this.showPage(pendingTarget); // pressed again during the entrance
+      }));
+    },
+    swapTo(n) {
+      const prev = this.current ? shells.get(byNumber.get(this.current)) : null;
+      const pid = byNumber.get(n);
+      const el = pid ? shells.get(pid) : null;
+      if (!el) return;
+      if (prev && prev !== el && prev.classList) {
+        prev.classList.remove('is-current');
+        const before = pages.get(byNumber.get(this.current));
+        if (before && !this.matches(before)) setHidden(prev, true);
+      }
+      const p = pages.get(pid) || {};
+      if (el.style && el.style.setProperty) el.style.setProperty('--ar-n', String(this.aspectNumber(p)));
+      setHidden(el, false);
+      if (el.classList) el.classList.add('is-current');
+      this.current = n;
+      focusedId = pid; // C copies and ↑/↓ move through the lines of the page on screen
+      this.mountSheet(el);
+      this.prefetchAround(n);
+      writeSession(PAGE_KEY + (cfg.bookId || ''), String(n));
+      if (typeof history !== 'undefined' && history.replaceState && typeof window !== 'undefined' && window.location) {
+        try { history.replaceState(null, '', `${window.location.pathname}${window.location.search}#sheet-${n}`); } catch (e) { /* sandboxed */ }
+      }
+      this.centerFilm();
+    },
+    // The neighbours' data is fetched ahead, so the next turn lands on a laid-out page.
+    prefetchAround(n) {
+      const nums = this.visibleNumbers();
+      const i = nums.indexOf(n);
+      [nums[i - 1], nums[i + 1]].forEach((m) => {
+        const q2 = m ? pages.get(byNumber.get(m)) : null;
+        if (q2 && (!sheets.has(id(q2)) || q2.stale)) this.queueSheet(m);
+      });
+    },
+    // The page `dir` steps away in the viewer's sequence (the filter's pages), also when the shown page no
+    // longer matches the filter; null at either end.
+    neighbour(dir, from) {
+      const nums = this.visibleNumbers();
+      const base = from || (this.turning ? pendingTarget : this.current);
+      if (!nums.length) return null;
+      if (!base) return dir > 0 ? nums[0] : nums[nums.length - 1];
+      if (dir > 0) { const next = nums.find((m) => m > base); return next === undefined ? null : next; }
+      for (let i = nums.length - 1; i >= 0; i -= 1) if (nums[i] < base) return nums[i];
+      return null;
+    },
+    canTurn(dir) {
+      void this.current; void this.filter; void this.nPages; // reactive dependencies of the turn buttons
+      return this.neighbour(dir) !== null;
+    },
+    turn(dir) {
+      const n = this.neighbour(dir);
+      if (n === null) return false;
+      return this.showPage(n, { dir, manual: true });
+    },
+    focusTitle(el) {
+      const target = q(el, '.sheet-title');
+      if (target && target.focus) target.focus({ preventScroll: true });
+    },
+    aspectNumber(p) {
+      const s = sheets.get(id(p));
+      const w = (s && s.width) || p.width;
+      const h = (s && s.height) || p.height;
+      return w > 0 && h > 0 ? Math.round((w / h) * 10000) / 10000 : Math.round(this.medianAspect * 10000) / 10000;
+    },
+    // A trackpad or wheel gesture turns one page (RTL: a swipe to the right and scrolling down go forward);
+    // the gesture must pause before the next one counts, so inertia never flips two pages.
+    onStageWheel(e) {
+      if (this.view !== 'sheets' || !e || e.ctrlKey || e.metaKey) return;
+      const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const delta = horizontal ? -e.deltaX : e.deltaY;
+      if (e.cancelable && e.preventDefault) e.preventDefault();
+      clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(() => { wheelAcc = 0; wheelLock = false; }, WHEEL_IDLE_MS);
+      if (wheelLock) return;
+      wheelAcc += delta;
+      if (Math.abs(wheelAcc) >= (horizontal ? WHEEL_TURN_X : WHEEL_TURN_Y)) {
+        const dir = wheelAcc > 0 ? 1 : -1;
+        wheelAcc = 0;
+        wheelLock = true;
+        this.turn(dir);
+      }
+    },
+    onStagePointerDown(e) {
+      if (!e || e.pointerType === 'mouse') return;
+      swipeStart = { x: e.clientX, y: e.clientY };
+    },
+    onStagePointerUp(e) {
+      if (!swipeStart || !e || e.pointerType === 'mouse') return;
+      const dx = e.clientX - swipeStart.x;
+      const dy = e.clientY - swipeStart.y;
+      swipeStart = null;
+      if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > 1.5 * Math.abs(dy)) this.turn(dx > 0 ? 1 : -1); // RTL: finger to the right → next
+    },
+    swipeCancel() {
+      swipeStart = null;
+    },
+    // ---- filmstrip (= review screen): the pages the filter keeps, marks from the poll, thumbnails from
+    // the tiles, the sheets and api:book_filmstrip
+    buildFilm() {
+      const out = [];
+      [...byNumber.keys()].sort((a, b) => a - b).forEach((n) => {
+        const p = pages.get(byNumber.get(n));
+        if (!p || !this.matches(p)) return;
+        const s = sheets.get(id(p));
+        const w = (s && s.width) || p.width;
+        const h = (s && s.height) || p.height;
+        out.push({
+          id: id(p),
+          number: n,
+          thumb: p.thumb_url || (s && s.thumb_url) || p.scan_thumb_url || '',
+          ar: w > 0 && h > 0 ? `${w} / ${h}` : '',
+          reviewed: Boolean(p.is_reviewed),
+          unresolved: p.is_reviewed ? 0 : p.n_unresolved || 0,
+          pending: !p.is_reviewed && !DONE_STATUSES.includes(p.status),
+          live: this.active && PROCESSING_STATUSES.includes(p.status) && !p.error && !p.is_excluded,
+          excluded: Boolean(p.is_excluded),
+          error: Boolean(p.error),
+          title: `صفحة ${n} — ${p.status_label || ''}`,
+        });
+      });
+      this.film = out;
+    },
+    refreshFilmSoon(ms = FILM_REFRESH_MS) {
+      if (!this.filmstripUrl) return;
+      clearTimeout(filmTimer);
+      filmTimer = setTimeout(() => this.loadFilm(), ms);
+    },
+    async loadFilm() {
+      if (!this.filmstripUrl) return;
+      try {
+        const res = await fetch(this.filmstripUrl, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        (Array.isArray(data) ? data : (data && data.pages) || []).forEach((item) => {
+          const p = item && item.id != null ? pages.get(String(item.id)) : null;
+          if (p && item.thumb_url) p.thumb_url = item.thumb_url;
+        });
+        this.buildFilm();
+      } catch (e) {
+        // thumbnails only: the next refresh retries
+      }
+    },
+    centerFilm() {
+      const film = this.$refs && this.$refs.film;
+      if (!film || typeof film.querySelector !== 'function') return;
+      const run = () => {
+        const item = film.querySelector(`[data-number="${this.current}"]`);
+        if (item && item.scrollIntoView) item.scrollIntoView({ inline: 'center', block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' });
+      };
+      if (this.$nextTick) this.$nextTick(run); else run();
     },
 
     // ------------------------------------------------------------ DOM binding: shells, observers, listeners
@@ -655,6 +891,18 @@ document.addEventListener('alpine:init', () => {
         stackEl.addEventListener('focusin', (e) => { const art = e.target && e.target.closest ? e.target.closest('.page-sheet') : null; focusedId = art ? art.dataset.pageId : null; });
         stackEl.addEventListener('focusout', (e) => { const to = e.relatedTarget; if (!to || !to.closest || !to.closest('.page-sheet')) focusedId = null; });
         stackEl.addEventListener('click', (e) => this.onStackClick(e));
+      }
+      if (gridEl) {
+        gridEl.addEventListener('click', (e) => {
+          const link = e.target && e.target.closest ? e.target.closest('.page-tile-link') : null;
+          if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          const tileEl = link.closest('.page-tile');
+          const p = tileEl ? pages.get(tileEl.dataset.pageId) : null;
+          if (!p) return;
+          e.preventDefault();
+          this.setView('sheets');
+          this.showPage(p.number, { instant: true, manual: true });
+        });
       }
       this.applyFilter();
       this.updateSheetHeight();
@@ -829,7 +1077,7 @@ document.addEventListener('alpine:init', () => {
         setText(q(retry, '.sheet-retry-label'), p.retry_label || '');
         setHidden(retry, !(p.error && p.retry_stage));
       }
-      setHidden(el, !this.matches(p));
+      setHidden(el, !this.matches(p) && !this.isShown(id(p)));
       if (mounted.has(id(p))) this.wireBody(el, p);
     },
     patchTile(el, p) {
@@ -952,6 +1200,7 @@ document.addEventListener('alpine:init', () => {
     applySheets(data) {
       const items = Array.isArray(data) ? data : (data && (data.pages || data.sheets || data.results)) || [];
       if (data && Number(data.book_line_h_px) > 0) bookLineH = Number(data.book_line_h_px);
+      let filmChanged = false;
       items.forEach((s) => {
         if (!s || s.id == null) return;
         const pid = String(s.id);
@@ -961,12 +1210,15 @@ document.addEventListener('alpine:init', () => {
           p.stale = false;
           if (s.width > 0) p.width = s.width;
           if (s.height > 0) p.height = s.height;
+          if (s.thumb_url && s.thumb_url !== p.thumb_url) { p.thumb_url = s.thumb_url; filmChanged = true; }
           this.patchSheet(shells.get(pid), p);
           this.patchTile(tiles.get(pid), p);
         }
         const h = handles.get(pid);
         if (h) h.update({ page: this.sheetFor(pid), active: this.active });
+        if (pid === byNumber.get(this.current)) { const el = shells.get(pid); if (el && el.style && el.style.setProperty) el.style.setProperty('--ar-n', String(this.aspectNumber(pages.get(pid) || {}))); }
       });
+      if (filmChanged) this.buildFilm();
     },
     lineBoxes(pid) {
       const s = sheets.get(String(pid));

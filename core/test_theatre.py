@@ -160,7 +160,15 @@ def test_dashboard_toolbar_static_shells_and_grid_cards(editor_client):
     assert 'class="tile-number num">1</span>' in tile and "page-tile-status" not in tile
     assert f"sheetsUrl: '{_optional('api:book_sheets', book.pk)}'" in body and "reviewNextUrl: '" in body
     assert '<p class="sr-only" aria-live="polite" x-text="liveMessage"></p>' in body
-    assert 'class="bk-pos"' in body and 'class="toast bk-toast"' in body and "ابدأ المراجعة" in body
+    assert 'class="toast bk-toast"' in body and "ابدأ المراجعة" in body
+    # D33: «صفحات» is a book viewer: one stage with turn buttons and a filmstrip, no long scroll
+    assert 'class="bk-viewer" data-viewer' in body and 'class="bk-stage" x-ref="stage"' in body
+    assert '@wheel="onStageWheel($event)"' in body and 'class="bk-film" x-ref="film"' in body
+    assert 'class="bk-turn bk-turn-prev"' in body and 'class="bk-turn bk-turn-next"' in body
+    assert 'aria-label="الصفحة السابقة"' in body and 'aria-label="الصفحة التالية"' in body
+    assert "showPage(f.number, { manual: true })" in body and 'class="bk-counter"' in body
+    assert "'is-viewer': view === 'sheets' && nPages > 0" in body and "filmstripUrl: '" in body
+    assert 'class="bk-pos"' not in body  # the scroll position chip went with the long scroll
 
 
 def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
@@ -664,6 +672,65 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
   tp2.apply({ status: 'error', active: false, text_state: 'provisional', provisional_text: 'نص مبدئي' });
   tp2.afterUpdate();
   out.tpStatic = [tp2.decodeMode, host2.classList.contains('is-static'), host2.textContent];
+
+  // --- D33 the page viewer: one sheet at a time, turned with a timed transition, filter-aware sequence
+  const viewerPages = [
+    { id: 11, number: 1, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', n_unresolved: 2, width: 700, height: 1000, thumb_url: '/t/1.webp' },
+    { id: 12, number: 2, status: 'reviewed', status_label: 'مُراجَعة', text_state: 'final', is_reviewed: true, width: 800, height: 1000 },
+    { id: 13, number: 3, status: 'layout_done', status_label: 'تم التخطيط', text_state: 'provisional' },
+    { id: 14, number: 4, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', n_unresolved: 1 },
+  ];
+  const shellsDom = viewerPages.map((pg) => { const el = new Element('article'); el.dataset.pageId = String(pg.id); el.classList.add('page-sheet'); return el; });
+  const stack = new Element('div'); stack.querySelectorAll = () => shellsDom; stack.addEventListener = () => {}; stack.clientWidth = 1000;
+  const root = new Element('div'); root.querySelector = (sel) => (sel === '[data-sheet-stack]' ? stack : null);
+  const v = reg.bookDashboard({ progressUrl: '/p', sheetsUrl: '/api/books/2/sheets/', filmstripUrl: '/api/books/2/filmstrip/', bookUrl: '/books/2/', canEdit: true, bookId: 2,
+    active: true, status: 'ocr', stages: [], byStatus: {}, pages: viewerPages });
+  v.$el = root; v.$watch = () => {}; v.init();
+  const cur = () => shellsDom.filter((el) => el.classList.contains('is-current')).map((el) => Number(el.dataset.pageId));
+  out.vInit = { current: v.current, shown: cur(), film: v.film.map((f) => [f.number, f.thumb, f.reviewed, f.unresolved, f.live]), ar: shellsDom[0].style['--ar-n'] };
+  // a turn: out (200 ms), then the new sheet lands; pressing again during the turn only moves the target
+  const realRaf = globalThis.requestAnimationFrame; globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+  timers.length = 0;
+  v.turn(1);
+  const midTurn = { turning: v.turning, current: v.current, timer: timers.filter((t) => t.ms === 200).length };
+  v.turn(1); // pressed again: lands on page 3, not 2
+  timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
+  out.vTurn = { midTurn, after: { turning: v.turning, current: v.current, shown: cur(), hiddenOld: shellsDom[0].classList.contains('is-current') } };
+  out.vEnds = { canPrev: v.canTurn(-1), canNextFrom4: (v.showPage(4, { instant: true }), v.canTurn(1)), turnAtEnd: v.turn(1) };
+  // the filter decides the sequence; the page on screen is never hidden, and moves when filtered out
+  v.showPage(1, { instant: true });
+  v.setFilter('review'); // ocr_done, not reviewed: pages 1 and 4
+  out.vFilter = { current: v.current, film: v.film.map((f) => f.number), next: v.neighbour(1), prev: v.neighbour(-1) };
+  v.apply({ total: 4, percent: 80, flags: 0, status: 'ocr', status_label: 'قيد التعرّف', dot: 'dot-accent', by_status: {}, active: true,
+    pages: [{ id: 11, number: 1, status: 'reviewed', text_state: 'final', is_reviewed: true, n_unresolved: 0 }] });
+  out.vKeptOnScreen = { current: v.current, hidden: shellsDom[0].hidden, inFilm: v.film.map((f) => f.number) };
+  v.setFilter('reviewed');
+  out.vMoved = v.current; // page 1 (now reviewed) still matches «reviewed»: stays
+  v.setFilter('processing');
+  out.vMovedToProcessing = v.current;
+  v.setFilter('all');
+  // input: keys (RTL), a trackpad swipe, a wheel gesture that must pause before the next one counts, a touch swipe
+  out.vKeys = ['PageDown', 'PageUp', 'Home', 'End', 'ArrowLeft', 'ArrowRight'].map((key) => v.keyAction({ key }, false));
+  v.showPage(1, { instant: true }); timers.length = 0;
+  const wheel = (dx, dy) => v.onStageWheel({ deltaX: dx, deltaY: dy, cancelable: true, preventDefault: () => {} });
+  wheel(-30, 0); const afterOne = v.current; wheel(-30, 0); // 60 px to the right in total: one page forward
+  timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
+  const afterSwipe = v.current; wheel(-80, 0); // inertia of the same gesture: ignored
+  out.vWheel = { afterOne, afterSwipe, inertia: v.current, idle: timers.some((t) => t.ms === 260) };
+  timers.filter((t) => t.ms === 260).forEach((t) => t.fn()); // the gesture ended
+  wheel(0, 100); timers.filter((t) => t.ms === 200).forEach((t) => t.fn()); // scrolling down: forward
+  out.vWheelDown = v.current;
+  v.onStagePointerDown({ pointerType: 'touch', clientX: 100, clientY: 100 }); v.onStagePointerUp({ pointerType: 'touch', clientX: 30, clientY: 104 }); // finger to the left: back
+  timers.filter((t) => t.ms === 200).forEach((t) => t.fn());
+  out.vTouchBack = v.current;
+  v.onStagePointerDown({ pointerType: 'mouse', clientX: 100, clientY: 100 }); v.onStagePointerUp({ pointerType: 'mouse', clientX: 300, clientY: 100 });
+  out.vMouseDragIgnored = v.current;
+  // reduced motion: turns are instant
+  D.reducedMotion = true; v.turn(1); out.vReduced = { current: v.current, turning: v.turning }; D.reducedMotion = false;
+  // a thumbnail arriving with the sheets data reaches the filmstrip
+  v.applySheets({ pages: [{ id: 13, number: 3, width: 700, height: 1000, thumb_url: '/t/3.webp', text_state: 'provisional', status: 'layout_done' }] });
+  out.vFilmThumb = v.film.find((f) => f.number === 3).thumb;
+  globalThis.requestAnimationFrame = realRaf;
   console.log(JSON.stringify(out));
 })();
 """  # noqa: E501
@@ -677,6 +744,36 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     run = subprocess.run(["node", str(harness), *files], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout.strip().splitlines()[-1])
+
+    # --- D33 the page viewer
+    assert out["vInit"] == {
+        "current": 1,
+        "shown": [11],
+        "film": [
+            [1, "/t/1.webp", False, 2, False],
+            [2, "", True, 0, False],
+            [3, "", False, 0, True],
+            [4, "", False, 1, False],
+        ],
+        "ar": "0.7",
+    }
+    # a turn slides out for 200 ms; a second press mid-turn moves the target, the sheet lands once
+    assert out["vTurn"]["midTurn"] == {"turning": "out-next", "current": 1, "timer": 1}
+    assert out["vTurn"]["after"] == {"turning": "", "current": 3, "shown": [13], "hiddenOld": False}
+    assert out["vEnds"] == {"canPrev": True, "canNextFrom4": False, "turnAtEnd": False}
+    # the filter decides the viewer's sequence and the filmstrip
+    assert out["vFilter"] == {"current": 1, "film": [1, 4], "next": 4, "prev": None}
+    # the page on screen stays visible when the poll takes it out of the filter
+    assert out["vKeptOnScreen"] == {"current": 1, "hidden": False, "inFilm": [4]}
+    assert out["vMoved"] == 1 and out["vMovedToProcessing"] == 3
+    assert out["vKeys"] == ["nextSheet", "prevSheet", "firstSheet", "lastSheet", "nextSheet", "prevSheet"]
+    # trackpad: a 60 px swipe to the right is one page forward (RTL), its inertia does not flip another page;
+    # after the gesture pauses, scrolling down goes forward; a touch swipe to the left goes back; mouse drags
+    # don't turn
+    assert out["vWheel"] == {"afterOne": 1, "afterSwipe": 2, "inertia": 2, "idle": True}
+    assert out["vWheelDown"] == 3 and out["vTouchBack"] == 2 and out["vMouseDragIgnored"] == 2
+    assert out["vReduced"] == {"current": 3, "turning": ""}
+    assert out["vFilmThumb"] == "/t/3.webp"
 
     # --- decode (D28): words and lines from the Tesseract text, one text node per word, real spaces between
     # words

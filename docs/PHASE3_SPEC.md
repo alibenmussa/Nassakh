@@ -64,7 +64,8 @@ Tesseract's text is inaccurate; shown plainly it gives a bad first impression. W
 The pages section of `templates/books/detail.html` gets a segmented control **«صفحات | شبكة»** (persisted in
 `localStorage`, default «صفحات»):
 
-- **صفحات (default): stacked sheets like a PDF viewer.** Pages one under another, each a "sheet": the scan on the
+- **صفحات (default): a page viewer like a PDF reader (one page at a time since D33, `docs/DASHBOARD_SPEC.md`
+  §2.5).** Each page is a "sheet": the scan on the
   start side, a paper-like text column on the end side (stacked vertically below 900 px). While a page is being
   processed the scan shows a soft **scan sweep** (a light band moving down) until it is cleaned, then crossfades
   (existing 200 ms) from the scan preview to the cleaned image; while OCR runs, the detected line boxes light up
