@@ -1055,6 +1055,7 @@ def test_page_text_and_runs_api_require_login_and_return_lines(client, page, use
         "conf": "low",
         "digit": True,
         "bbox": line["tokens"][4]["bbox"],
+        "tess": None,
     }
 
     runs = client.get(runs_url).json()["runs"]
