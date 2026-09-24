@@ -228,6 +228,14 @@ uncovered the prefork failure fixed in `nassakh/celery.py` (see §10).
 Throughput estimate from these numbers: about 30–40 s per page on the gpu worker with the `torch` backend,
 so a 400-page scanned book takes 3–4 hours unattended; `OCR_BACKEND=mlx` was about 1.8× faster in the PoC.
 
+### Printed page numbers
+
+The page-number region is excluded from the text. Its digits are read by a vote of three readers (Tesseract on
+the fast pass, then both Qari models on a padded 4× crop with a 16-token cap during the full pass); a value two
+readers agree on is stored in `Page.printed_number`, otherwise the number stays unknown. The dashboard's
+sequence check reports a gap or a duplicate only when the following numbered page confirms it; a single odd
+number is reported as an uncertain read instead. Nothing is reported for books with fewer than three numbered pages.
+
 ## 9. Known limitations of Phase 2
 
 - No review screen yet (Phase 3); pages stop at `ocr_done` and books at `ready_for_review`.

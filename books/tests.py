@@ -1067,21 +1067,30 @@ def _numbered(numbers: list[str], excluded: tuple[int, ...] = ()) -> tuple[Book,
     return book, pages
 
 
-def test_page_sequence_issues_flags_a_gap_and_a_duplicate():
-    book, pages = _numbered(["40", "41", "43", "43", "44"])
+def test_page_sequence_issues_flags_a_confirmed_gap_and_a_confirmed_duplicate():
+    book, pages = _numbered(["40", "41", "43", "44", "44", "45"])
     issues = services.page_sequence_issues(book)
     assert issues == {
-        pages[2].pk: "ترقيم غير متسلسل: بعد 41 جاءت 43",
-        pages[3].pk: "ترقيم مكرّر: بعد 43 جاءت 43 مرة أخرى",
+        pages[2].pk: "ترقيم غير متسلسل: بعد 41 جاءت 43",  # 44 confirms the new numbering
+        pages[4].pk: "ترقيم مكرّر: بعد 44 جاءت 44 مرة أخرى",  # 45 confirms the duplicate scan
     }
     items = services.attention_pages(book)
     assert [(i["page"].number, i["sequence_issue"]) for i in items] == [
         (3, "ترقيم غير متسلسل: بعد 41 جاءت 43"),
-        (4, "ترقيم مكرّر: بعد 43 جاءت 43 مرة أخرى"),
+        (5, "ترقيم مكرّر: بعد 44 جاءت 44 مرة أخرى"),
     ]
     tiles = {t["number"]: t for t in services.page_tiles(book)}
-    assert tiles[3]["sequence_issue"].startswith("ترقيم غير متسلسل") and tiles[5]["sequence_issue"] == ""
+    assert tiles[3]["sequence_issue"].startswith("ترقيم غير متسلسل") and tiles[6]["sequence_issue"] == ""
     assert tiles[1]["printed_number"] == "40"
+
+
+def test_page_sequence_issues_treats_a_single_odd_number_as_an_uncertain_read():
+    # 47 breaks the sequence but 43 continues from 41: a misread digit, not a missing scan
+    book, pages = _numbered(["40", "41", "47", "43", "44"])
+    assert services.page_sequence_issues(book) == {pages[2].pk: "رقم مطبوع غير مؤكد: قُرئ 47 والمتوقع 42"}
+    # fewer than three numbered pages: nothing is reported
+    book_2, _ = _numbered(["10", "", "30"])
+    assert services.page_sequence_issues(book_2) == {}
 
 
 def test_page_sequence_issues_tolerates_unread_numbers_and_ignores_excluded_pages():

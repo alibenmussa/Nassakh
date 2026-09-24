@@ -585,7 +585,7 @@ def run_full_ocr(page: Page) -> None:
             n_model_runs += 2
             model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
         if not (n_model_runs and len(model_errors) == n_model_runs):
-            _read_printed_number(page, gray, tmpdir, primary)
+            _read_printed_number(page, gray, tmpdir, (primary, secondary))
     if n_model_runs and len(model_errors) == n_model_runs:
         # Every model call crashed (out of memory, broken weights...): this is an engine failure,
         # not a page to finalise from Tesseract; the page goes to `error` and can be retried.
@@ -599,12 +599,14 @@ def run_full_ocr(page: Page) -> None:
 PAGE_NUMBER_VLM_TOKENS = 16
 
 
-def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engine_name: str) -> None:
-    """Read the page-number region with the primary model and store its digits in `printed_number`.
+def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engines: tuple[str, ...]) -> None:
+    """Read the page-number region with the given models and keep only an agreed number.
 
-    Tesseract misreads isolated Arabic-Indic digits ("٦" as "+"), while a vision-language model
-    reads a single large digit reliably. The crop is padded, enlarged like in `run_fast_ocr`, and
-    the call is capped at a few tokens; the result replaces Tesseract's guess when it has digits.
+    Tesseract misreads isolated Arabic-Indic digits ("٦" as "+") and the models misread them too
+    now and then, so the number is decided by vote: the digits from each model call plus
+    Tesseract's guess from the fast pass. A value carried by at least two voters is stored; with no
+    agreement `printed_number` is cleared, because an unknown number is better than a wrong one
+    (the dashboard's sequence check would otherwise raise false alarms).
     """
     region = page.regions.filter(kind=Region.Kind.PAGE_NUMBER).order_by("order").first()
     if region is None:
@@ -613,20 +615,24 @@ def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engine_name
     path = _save_temp(
         _crop_image(gray, target.bbox, upscale=PAGE_NUMBER_UPSCALE), tmpdir, f"gray-number-{target.kind}"
     )
-    run = run_engine(
-        page,
-        engine_name,
-        target,
-        path,
-        f"gray_{PAGE_NUMBER_UPSCALE}x",
-        PAGE_NUMBER_VLM_TOKENS,
-        scale=PAGE_NUMBER_UPSCALE,
-    )
-    if run.status != OcrRun.Status.OK:
-        return
-    digits = printed_number_of(run.parsed_text)
-    if digits and digits != page.printed_number:
-        page.printed_number = digits
+    votes: list[str] = [page.printed_number] if page.printed_number else []
+    for name in engines:
+        run = run_engine(
+            page,
+            name,
+            target,
+            path,
+            f"gray_{PAGE_NUMBER_UPSCALE}x",
+            PAGE_NUMBER_VLM_TOKENS,
+            scale=PAGE_NUMBER_UPSCALE,
+        )
+        if run.status == OcrRun.Status.OK:
+            digits = printed_number_of(run.parsed_text)
+            if digits:
+                votes.append(digits)
+    agreed = next((v for v in votes if votes.count(v) >= 2), "")
+    if agreed != page.printed_number:
+        page.printed_number = agreed
         page.save(update_fields=["printed_number"])
 
 

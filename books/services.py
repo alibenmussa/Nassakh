@@ -708,30 +708,56 @@ def _preprocess_of(page: Page):
         return None
 
 
+MIN_NUMBERED_PAGES = 3
+
+
+def _in_sequence(prev: tuple[int, int], cur: tuple[int, int]) -> bool:
+    """Is `cur` (position, number) a plausible successor of `prev`: larger, by at most the scan distance?"""
+    return prev[1] < cur[1] <= prev[1] + (cur[0] - prev[0])
+
+
 def page_sequence_issues(book: Book) -> dict[int, str]:
     """Printed page numbers that do not follow the scan order: `{page_id: Arabic label}`.
 
-    Only non-excluded pages with a `printed_number` take part. Of two consecutive numbered pages
-    (in scan order) the later number must be larger by at least 1 and at most the number of
-    scan positions between them, so pages whose number was not read (or unnumbered plates) do
-    not raise a false gap. A repeated number is a duplicate scan, any other difference a missing
-    (or misplaced) scan; the later page of the pair carries the label. Digits in the labels are
-    Western (D6).
+    Only non-excluded pages with a `printed_number` take part, and nothing is reported for a book
+    with fewer than `MIN_NUMBERED_PAGES` numbered pages. Walking the numbered pages in scan order,
+    a number is in sequence when it is larger than the previous one by at least 1 and at most the
+    number of scan positions between them (unread numbers and unnumbered plates do not raise gaps).
+    Because a single digit is misread now and then, a break is only reported as a gap or duplicate
+    when the *next* numbered page confirms the new numbering; when the next page instead continues
+    from the page before the break, the odd page is reported as an uncertain read and skipped. A break
+    on the last numbered page cannot be confirmed and is reported as a gap. Digits are Western (D6).
     """
     rows = book.pages.filter(is_excluded=False).order_by("number").values_list("pk", "printed_number")
+    numbered: list[tuple[int, int, int]] = [  # (position, page_id, number)
+        (pos, page_id, int(printed))
+        for pos, (page_id, printed) in enumerate(rows)
+        if printed and printed.isdigit()
+    ]
+    if len(numbered) < MIN_NUMBERED_PAGES:
+        return {}
     issues: dict[int, str] = {}
-    previous: tuple[int, int] | None = None  # (position, printed number)
-    for position, (page_id, printed) in enumerate(rows):
-        if not printed or not printed.isdigit():
+    prev: tuple[int, int] | None = None
+    i = 0
+    while i < len(numbered):
+        pos, page_id, num = numbered[i]
+        cur = (pos, num)
+        if prev is None or _in_sequence(prev, cur):
+            prev = cur
+            i += 1
             continue
-        current = int(printed)
-        if previous is not None:
-            prev_pos, prev_num = previous
-            if current == prev_num:
-                issues[page_id] = f"ترقيم مكرّر: بعد {prev_num} جاءت {current} مرة أخرى"
-            elif not prev_num < current <= prev_num + (position - prev_pos):
-                issues[page_id] = f"ترقيم غير متسلسل: بعد {prev_num} جاءت {current}"
-        previous = (position, current)
+        nxt = (numbered[i + 1][0], numbered[i + 1][2]) if i + 1 < len(numbered) else None
+        if nxt is not None and not _in_sequence(cur, nxt) and _in_sequence(prev, nxt):
+            expected = prev[1] + (pos - prev[0])
+            issues[page_id] = f"رقم مطبوع غير مؤكد: قُرئ {num} والمتوقع {expected}"
+            i += 1  # keep `prev`: the odd page is treated as a misread
+            continue
+        if num == prev[1]:
+            issues[page_id] = f"ترقيم مكرّر: بعد {prev[1]} جاءت {num} مرة أخرى"
+        else:
+            issues[page_id] = f"ترقيم غير متسلسل: بعد {prev[1]} جاءت {num}"
+        prev = cur
+        i += 1
     return issues
 
 

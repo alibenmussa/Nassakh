@@ -1057,7 +1057,7 @@ def test_page_text_and_runs_api_require_login_and_return_lines(client, page, use
     }
 
     runs = client.get(runs_url).json()["runs"]
-    assert len(runs) == 9  # 4 tesseract + 2x2 model runs + the primary page-number read
+    assert len(runs) == 10  # 4 tesseract + 2x2 model runs + 2 page-number reads
     assert runs[0]["created_at"] >= runs[-1]["created_at"]  # newest first
     sample = next(r for r in runs if r["engine"] == "qari_v03" and r["region_kind"] == "footnote")
     assert sample["variant"] == "gray_2x" and sample["variant_label"] == "رمادية ×2"
@@ -1130,7 +1130,7 @@ def test_run_fast_ocr_reads_the_page_number_padded_upscaled_single_line(page):
 
 
 def test_run_full_ocr_reads_the_printed_number_with_the_primary_model(page):
-    """The primary model reads the padded 4x page-number crop with a tiny cap; its digits win over Tesseract."""
+    """Both models read the padded 4x page-number crop with a tiny cap; agreeing digits win over Tesseract."""
     regions = add_regions(page)
     fakes = engines()
     fakes["qari_v03"] = FakeEngine(
@@ -1140,16 +1140,41 @@ def test_run_full_ocr_reads_the_printed_number_with_the_primary_model(page):
         ),
     )
     fakes["qari_v03"].kind = "vlm"
+    fakes["qari_v02"] = FakeEngine(
+        name="qari_v02",
+        responder=by_kind(
+            {"body": SECONDARY_BODY, "footnote": FOOT, "page": SECONDARY_BODY, "page_number": "22"}
+        ),
+    )
+    fakes["qari_v02"].kind = "vlm"
     with registry.override(fakes):
         services.run_fast_ocr(page)
         page.refresh_from_db()
         assert page.printed_number == "8"  # Tesseract's guess from the fast pass
         services.run_full_ocr(page)
     page.refresh_from_db()
-    assert page.printed_number == "22"
+    assert page.printed_number == "22"  # both models agree; Tesseract is outvoted
     run = page.ocr_runs.get(region=regions["page_number"], engine_name="qari_v03")
     assert run.input_variant == f"gray_{services.PAGE_NUMBER_UPSCALE}x"
     assert run.params["max_new_tokens"] == services.PAGE_NUMBER_VLM_TOKENS
     assert (
         "22" not in page.final_text.splitlines()[-1] or "٢٢" not in page.final_text
     )  # number is metadata only
+
+
+def test_printed_number_is_cleared_when_the_three_readers_disagree(page):
+    add_regions(page)
+    fakes = engines()
+    for name, digit in (("qari_v03", "٧"), ("qari_v02", "٦")):
+        fakes[name] = FakeEngine(
+            name=name,
+            responder=by_kind(
+                {"body": PRIMARY_BODY, "footnote": FOOT, "page": PRIMARY_BODY, "page_number": digit}
+            ),
+        )
+        fakes[name].kind = "vlm"
+    with registry.override(fakes):
+        services.run_fast_ocr(page)  # Tesseract says ٨
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == ""  # 8 / 7 / 6: no two voters agree -> unknown, not wrong
