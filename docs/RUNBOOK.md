@@ -236,6 +236,10 @@ readers agree on is stored in `Page.printed_number`, otherwise the number stays 
 sequence check reports a gap or a duplicate only when the following numbered page confirms it; a single odd
 number is reported as an uncertain read instead. Nothing is reported for books with fewer than three numbered pages.
 
+Known weakness: an isolated Arabic-Indic digit is read by its shape, so ٦ is often returned as «7» and ٧ as «Y»
+by all three readers; the vote catches disagreement but not a shared misread. Treat `printed_number` as
+best-effort metadata. A template-matching digit reader is the planned improvement if reliable numbers become important.
+
 ## 9. Known limitations of Phase 2
 
 - No review screen yet (Phase 3); pages stop at `ocr_done` and books at `ready_for_review`.

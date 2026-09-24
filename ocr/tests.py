@@ -667,7 +667,7 @@ def test_run_full_ocr_builds_lines_final_text_and_statuses(page):
         by_engine.setdefault(run.engine_name, []).append(run)
     assert len(by_engine["tesseract"]) == 4
     assert {r.region.kind for r in by_engine["qari_v03"]} == {"body", "footnote", "page_number"}
-    assert {r.region.kind for r in by_engine["qari_v02"]} == {"body", "footnote"}
+    assert {r.region.kind for r in by_engine["qari_v02"]} == {"body", "footnote", "page_number"}
     foot_run = next(r for r in by_engine["qari_v03"] if r.region.kind == "footnote")
     body_run = next(r for r in by_engine["qari_v03"] if r.region.kind == "body")
     assert foot_run.input_variant == "gray_2x" and body_run.input_variant == "gray"
