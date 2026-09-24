@@ -316,6 +316,9 @@ def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
     assert re.search(r"\.bk-dashboard\.is-viewer\{[^}]*height:auto", css)
     # the viewer never grows the page: `.main` keeps its height (no flex basis override)
     assert re.search(r"\.main:has\(>\.bk-dashboard\.is-viewer\)\{[^}]*flex:none", css)
+    # the whole side panel scrolls in the viewer (the thumbnails are too small a box to scroll alone)
+    assert re.search(r"\.bk-dashboard\.is-viewer \.bk-side\{[^}]*overflow-y:auto", css)
+    assert re.search(r"\.bk-dashboard\.is-viewer \.bk-attention-list\{[^}]*position:static", css)
     assert "calc(100dvh - var(--topbar-height) - 16px)" not in css
     # static thumbs: `hidden` beats their display rules
     assert ".bk-thumb[hidden],.bk-thumb-mark[hidden],.bk-thumb-img img[hidden]{display:none}" in css

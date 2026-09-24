@@ -1022,14 +1022,17 @@ document.addEventListener('alpine:init', () => {
       if (!film || typeof film.querySelector !== 'function') return;
       const run = () => {
         const item = film.querySelector(`[data-number="${this.current}"]`);
-        if (!item || !item.getBoundingClientRect || !film.getBoundingClientRect || !film.scrollBy) return;
-        const f = film.getBoundingClientRect();
+        // the strip scrolls itself when it overflows (horizontal on a narrow screen), else the side panel does
+        const own = film.scrollHeight > film.clientHeight + 1 || film.scrollWidth > film.clientWidth + 1;
+        const scroller = own || typeof film.closest !== 'function' ? film : film.closest('.bk-side') || film;
+        if (!item || !item.getBoundingClientRect || !scroller.getBoundingClientRect || !scroller.scrollBy) return;
+        const f = scroller.getBoundingClientRect();
         const r = item.getBoundingClientRect();
         if (!f.height || !r.height) return; // hidden (grid view)
         const outY = r.top < f.top + FILM_EDGE_PX || r.bottom > f.bottom - FILM_EDGE_PX;
         const outX = r.left < f.left + FILM_EDGE_PX || r.right > f.right - FILM_EDGE_PX;
         if (!outY && !outX) return;
-        film.scrollBy({
+        scroller.scrollBy({
           top: outY ? r.top + r.height / 2 - (f.top + f.height / 2) : 0,
           left: outX ? r.left + r.width / 2 - (f.left + f.width / 2) : 0,
           behavior: reduced() ? 'auto' : 'smooth',

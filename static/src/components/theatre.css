@@ -689,6 +689,25 @@
   @media (max-width: 1180px) {
     .bk-progress { display: none; }
   }
+  /* D34 amended: in the viewer the whole side panel scrolls (summary, manuscript, thumbnails as one column); the
+     attention list opens inline there, since a scrolling panel would clip a popover */
+  @media (min-width: 901px) {
+    .bk-dashboard.is-viewer .bk-side { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-inline-end: 6px; }
+    .bk-dashboard.is-viewer .bk-film { flex: none; }
+    .bk-dashboard.is-viewer .bk-film-track { flex: none; overflow: visible; }
+    .bk-dashboard.is-viewer .bk-attention-list {
+      position: static;
+      width: auto;
+      max-height: none;
+      margin-top: 6px;
+      padding: 0;
+      background: none;
+      border-radius: 0;
+      box-shadow: none;
+      animation: none;
+    }
+    .bk-dashboard.is-viewer .bk-attention-row { padding-inline: 0; flex-wrap: wrap; }
+  }
   @media (max-width: 900px) {
     .bk-toolbar { flex-wrap: wrap; height: auto; min-height: var(--bk-toolbar-h); padding: 0 16px; margin-inline: -16px; }
     .bk-toolbar-start, .bk-toolbar-end { height: 40px; }
