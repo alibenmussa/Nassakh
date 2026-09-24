@@ -130,24 +130,33 @@ def test_text_panel_states_crossfade_underline_and_copy():
 def test_dashboard_adds_live_tiles_counts_pages_plainly_and_offers_book_copy(editor_client):
     book, _ = _book(status=Book.Status.PROCESSING)
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
-    assert body.count('<div class="page-tile') == 3  # server first paint
-    assert 'x-for="p in laterPages"' in body and "data-live-tile" in body  # tiles added by the poll
-    assert "page-tile-clean" in body and "is-ready" in body  # crossfade layer
+    assert (
+        body.count('<div class="page-tile') == 4
+    )  # server first paint: three static tiles + the clone template
+    assert (
+        '<template id="tile-shell">' in body and '<template id="sheet-shell">' in body
+    )  # pages added by the poll
+    assert "page-tile-clean" in body and "sheet-img-clean" in body  # crossfade layers
     assert "تُحدَّث اللوحة كل ثانيتين" not in body and "spinner" not in body
-    assert '<bdi x-text="count(\'ocr_done\')">0</bdi> من <bdi x-text="total">3</bdi>' in body
-    assert "قيد المعالجة · " in body and 'x-show="fetchFailed"' in body
+    assert (
+        '<bdi class="num" x-text="count(\'ocr_done\')">0</bdi>' in body
+        and 'x-text="counts.all">3</bdi>' in body
+    )
+    assert "قيد المعالجة" in body and "d.pollState === 'error'" in body
     try:
         url = reverse("api:book_text", args=[book.pk])
     except NoReverseMatch:
         pytest.skip("api:book_text is not wired yet (backend); the copy action hides itself until it is")
-    assert "نسخ نص الكتاب" in body and f'data-url="{url}"' in body
+    assert "نسخ نص الكتاب" in body and f"bookTextUrl: '{url}'" in body
 
 
 def test_dashboard_before_ingest_keeps_the_grid_ready_for_the_first_pages(editor_client):
     book = Book.objects.create(title="كتاب", status=Book.Status.PROCESSING)
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
-    assert "لم تُستخرج الصفحات بعد" in body and 'x-show="!hasPages"' in body
-    assert 'x-for="p in laterPages"' in body  # the grid exists (cloaked) so ingested pages appear live
+    assert "لم تُستخرج الصفحات بعد" in body and 'x-show="nPages === 0"' in body
+    assert (
+        '<template id="tile-shell">' in body and '<template id="sheet-shell">' in body
+    )  # the shells exist so ingested pages appear live
 
 
 def test_empty_books_list_has_a_single_primary_button(editor_client):

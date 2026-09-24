@@ -1,59 +1,36 @@
-{% comment %}One stacked sheet of the dashboard's «صفحات» view (PHASE3_SPEC §3), used twice like the tile:
-server first paint (`t` = the tile dict) and the live x-for for pages ingested after load.
-Context: js = Alpine expression of the live tile ("tile(12)" or "p"), t = server tile (optional), book, role.
-The shell (header + aspect-ratio placeholder) is always in the DOM and costs almost nothing off-screen
-(content-visibility: auto); the body — scan, line boxes, text column with the decode effect — mounts only
-while the sheet is near the viewport (IntersectionObserver in books.js) and its data comes from
-api:book_sheets in batches. Image-space overlays use physical left/top on purpose.{% endcomment %}
-<article{% if not t %} data-live-sheet{% endif %} class="page-sheet{% if t.is_excluded %} is-excluded{% endif %}"
-         :class="{ 'is-excluded': {{ js }}.is_excluded, 'is-error': {{ js }}.error }"
-         x-init="observeSheet($el, {{ js }}.id)" :id="'sheet-' + {{ js }}.number"
-         :style="`--sheet-ar:${aspectOf({{ js }})}`" style="--sheet-ar: 7 / 10">
+{% comment %}One stacked sheet of the dashboard's «صفحات» view (docs/DASHBOARD_SPEC.md §3): a static shell —
+server-rendered for every page at first paint, and once more with `t` = None inside <template id="sheet-shell">
+for pages ingested after load (books.js clones and patches it). No per-shell Alpine bindings: books.js patches
+the head (`patchSheet`) from the poll's changed set; the body mounts from <template id="sheet-body"> only while
+the sheet is near the viewport. Context: t (tile dict or None), book, role, request.{% endcomment %}
+<article class="page-sheet{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"{% if t %} id="sheet-{{ t.number }}" data-page-id="{{ t.id }}" data-number="{{ t.number }}" data-status="{{ t.status }}" data-text="{{ t.text_state }}"{% else %} data-page-id="" data-number="" data-status="" data-text=""{% endif %} style="--sheet-ar: {% if t.width and t.height %}{{ t.width }} / {{ t.height }}{% else %}7 / 10{% endif %}">
   <header class="sheet-head">
-    <a class="sheet-title num"{% if t %} href="{{ t.url }}"{% endif %} :href="{{ js }}.url">صفحة <bdi x-text="{{ js }}.number">{{ t.number }}</bdi></a>
-    <span class="status"><span class="dot{% if t %} {{ t.dot }}{% endif %}" :class="{{ js }}.dot" aria-hidden="true"></span><span x-text="{{ js }}.status_label">{{ t.status_label }}</span></span>
-    <span class="meta num" x-show="{{ js }}.printed_number"{% if not t.printed_number %} x-cloak{% endif %}>الرقم المطبوع <bdi x-text="{{ js }}.printed_number">{{ t.printed_number }}</bdi></span>
-    <span class="badge badge-warning num" x-show="!{{ js }}.is_reviewed && {{ js }}.n_unresolved > 0"{% if not t.n_unresolved %} x-cloak{% endif %} title="كلمات غير مؤكَّدة تنتظر المراجعة"><bdi x-text="{{ js }}.n_unresolved">{{ t.n_unresolved }}</bdi> غير مؤكَّدة</span>
-    <span class="badge badge-success" x-show="{{ js }}.is_reviewed"{% if not t.is_reviewed %} x-cloak{% endif %}><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>مُراجَعة</span></span>
-    <span class="badge badge-dark" x-show="{{ js }}.is_excluded"{% if not t.is_excluded %} x-cloak{% endif %}>مستثناة</span>
+    <a class="sheet-title num" href="{{ t.url }}">صفحة <bdi>{{ t.number }}</bdi></a>
+    <span class="status"><span class="dot {{ t.dot|default:'dot-neutral' }}" aria-hidden="true"></span><span class="sheet-status">{{ t.status_label }}</span></span>
+    <span class="badge bk-provisional"{% if t.text_state != 'provisional' %} hidden{% endif %}>نص مبدئي</span>
+    <span class="meta num sheet-printed"{% if not t.printed_number %} hidden{% endif %}>الرقم المطبوع <bdi>{{ t.printed_number }}</bdi></span>
+    <span class="badge badge-warning num sheet-unresolved"{% if t.is_reviewed or not t.n_unresolved %} hidden{% endif %} title="كلمات غير مؤكَّدة تنتظر المراجعة"><bdi>{{ t.n_unresolved|default:0 }}</bdi> غير مؤكَّدة</span>
+    <span class="bk-reviewed"{% if not t.is_reviewed %} hidden{% endif %}><span class="bk-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span><span>مُراجَعة</span></span>
+    <span class="badge badge-dark sheet-excluded"{% if not t.is_excluded %} hidden{% endif %}>مستثناة</span>
+    <span class="sheet-flags">{% for label in t.flag_labels %}<span class="badge badge-warning">{{ label }}</span>{% endfor %}{% if t.sequence_issue %}<span class="badge badge-warning num">{{ t.sequence_issue }}</span>{% endif %}</span>
     <span class="sheet-actions">
-      <a class="btn btn-ghost btn-sm" x-show="{{ js }}.review_url"{% if not t.review_url %} x-cloak{% endif %} :href="{{ js }}.review_url"{% if t.review_url %} href="{{ t.review_url }}"{% endif %}>مراجعة</a>
-      <button type="button" class="btn btn-ghost btn-sm" x-show="canCopy({{ js }})" x-cloak @click="copySheet({{ js }}.id)" :aria-label="`نسخ نص الصفحة ${ {{ js }}.number }`">
+      <a class="btn btn-ghost btn-sm sheet-review" href="{{ t.review_url }}"{% if t.text_state != 'final' or t.is_excluded %} hidden{% endif %}>مراجعة</a>
+      <button type="button" class="btn btn-ghost btn-sm sheet-copy" hidden aria-label="نسخ نص الصفحة {{ t.number }}" title="نسخ نص الصفحة (C)">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
         <span>نسخ</span>
       </button>
+      {% if role == 'admin' or role == 'editor' %}
+      <form method="post" class="sheet-retry" action="{{ t.rerun_url }}"{% if not t.error or not t.retry_stage %} hidden{% endif %}>
+        {% csrf_token %}
+        <input type="hidden" name="stage" value="{{ t.retry_stage }}">
+        <input type="hidden" name="next" value="{% url 'books:detail' book.pk %}">
+        <button type="submit" class="btn btn-sm">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+          <span>إعادة <span class="sheet-retry-label">{{ t.retry_label }}</span></span>
+        </button>
+      </form>
+      {% endif %}
     </span>
   </header>
-
-  <div class="sheet-body">
-    {# scan column: the aspect-ratio box is the placeholder; images and overlays mount when near #}
-    <figure class="sheet-scan" :class="{ 'is-empty': !{{ js }}.scan_thumb_url && !(sheet({{ js }}.id) && sheet({{ js }}.id).display_url) }" x-effect="syncScanFx($el, {{ js }}, Boolean(near[{{ js }}.id]))">
-      <template x-if="near[{{ js }}.id]">
-        <div class="sheet-scan-inner">
-          {# the scan preview (small, soft) shows first; the cleaned page crossfades over it (200 ms) #}
-          <template x-if="{{ js }}.scan_thumb_url"><img class="sheet-img sheet-img-scan" :src="{{ js }}.scan_thumb_url" alt="" decoding="async" loading="lazy"></template>
-          <template x-if="sheet({{ js }}.id) && sheet({{ js }}.id).display_url">
-            <img class="sheet-img sheet-img-clean" :src="sheet({{ js }}.id).display_url" :alt="`الصفحة ${ {{ js }}.number } بعد المعالجة`" decoding="async" loading="lazy"
-                 x-init="$el.complete && $el.naturalWidth && $el.classList.add('is-ready')" @load="$el.classList.add('is-ready')">
-          </template>
-          <div class="sheet-lines" aria-hidden="true">
-            <template x-for="(b, i) in lineBoxes({{ js }}.id)" :key="i"><span class="sheet-line" :style="boxStyle(b)"></span></template>
-          </div>
-        </div>
-      </template>
-    </figure>
-
-    {# text column: noise → scrambled Tesseract text → resolve wave → final lines (decode.js) #}
-    <div class="sheet-paper">
-      <div class="sheet-paper-inner">
-        <template x-if="near[{{ js }}.id]">
-          <div>
-            <div class="sheet-text decode-host" dir="rtl" x-effect="syncSheetText($el, {{ js }})" aria-hidden="true"></div>
-            <p class="sheet-empty-text" x-show="!active && {{ js }}.text_state === 'none' && !{{ js }}.error">لم يُستخرج نص لهذه الصفحة بعد.</p>
-            <p class="sheet-empty-text" x-show="{{ js }}.error" x-text="{{ js }}.error_headline || 'فشلت معالجة هذه الصفحة.'"></p>
-          </div>
-        </template>
-      </div>
-    </div>
-  </div>
+  <div class="sheet-body"></div>
 </article>

@@ -1,5 +1,5 @@
 # Phase 1 OCR report
-_generated 2026-09-24 01:47_
+_generated 2026-09-24 15:07_
 
 Runs: 218 total, 218 ok, 0 error. Pages with ground truth: 17/17. Scored runs: 218.
 

@@ -1,0 +1,39 @@
+{% comment %}The body of a stacked sheet (docs/DASHBOARD_SPEC.md §3), rendered once inside
+<template id="sheet-body"> and cloned by books.js into `.sheet-body` when the sheet comes near the viewport.
+Left: the scan (scan thumbnail, cleaned image crossfading over it, line boxes in image space). Right: the
+text pane, a box of the same aspect ratio that NassakhDecode.sheet() fills with the page's lines at their
+printed positions; the designed states (empty, excluded, error) are static blocks toggled by `data-mode`.
+Context: book, role, request.{% endcomment %}
+<figure class="sheet-scan">
+  <img class="sheet-img sheet-img-scan" alt="" decoding="async" loading="lazy" hidden>
+  <img class="sheet-img sheet-img-clean" alt="" decoding="async" loading="lazy" hidden>
+  <div class="sheet-lines" dir="ltr" aria-hidden="true"></div>
+</figure>
+<div class="sheet-fac" dir="rtl" data-mode="">
+  <div class="fac-state fac-state-empty"><span class="meta">لا نص في هذه الصفحة.</span></div>
+  <div class="fac-state fac-state-excluded">
+    <span class="meta">مستثناة</span>
+    {% if role == 'admin' or role == 'editor' %}
+    <form method="post" class="fac-restore" action="">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <button type="submit" class="btn btn-sm">إعادة الصفحة إلى الكتاب</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="fac-state fac-state-error">
+    <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+    <span class="fac-error-text">فشلت معالجة هذه الصفحة.</span>
+    {% if role == 'admin' or role == 'editor' %}
+    <form method="post" class="fac-retry" action="" hidden>
+      {% csrf_token %}
+      <input type="hidden" name="stage" value="">
+      <input type="hidden" name="next" value="{% url 'books:detail' book.pk %}">
+      <button type="submit" class="btn btn-sm">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة <span class="fac-retry-label"></span></span>
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>

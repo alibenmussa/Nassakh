@@ -1,80 +1,87 @@
 {% extends "base.html" %}
 {% load nassakh %}
+{% comment %}Book dashboard (docs/DASHBOARD_SPEC.md): the page as a mirror of its scans. The top-bar controls live in
+header_actions (outside the component root) and read the dashboard through Alpine.store('book').dash; everything
+else is the `bookDashboard` component in static/src/js/books.js; styles in static/src/components/theatre.css.
+Sheets and tiles are static shells patched from the poll (no per-page Alpine bindings), so an 800-page book
+stays light. Western digits everywhere; numbers inside Arabic strings sit in <bdi>.{% endcomment %}
 {% block head_title %}{{ book.title }} · نسّاخ{% endblock %}
 {% block title %}{{ book.title }}{% endblock %}
 
 {% block header_actions %}
+{% optional_url 'api:book_text' book.pk as book_text_url %}
+<div class="bk-bar" x-data>
   <a class="btn btn-ghost btn-sm" href="{% url 'books:list' %}">
     <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
     <span>كل الكتب</span>
   </a>
-{% endblock %}
-
-{% block content %}
-{{ config|json_script:"dashboard-config" }}
-{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}
-<div class="stack-lg" x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}' }))">
-
-  {# ------------------------------------------------------------ header: meta + actions #}
-  <header class="book-header">
-    <div class="book-meta">
-      <span class="status book-status">
-        <span class="dot" :class="dot" aria-hidden="true"></span>
-        <span x-text="statusLabel">{{ progress.status_label }}</span>
+  <template x-if="$store.book && $store.book.dash">
+    <div class="bk-bar" x-data="{ get d() { return $store.book.dash; } }">
+      <span class="bk-status" :class="{ 'is-active': d.active }">
+        <span class="dot" :class="d.active ? 'dot-accent' : d.dot" aria-hidden="true"></span>
+        <span x-text="d.statusText"></span>
       </span>
-      {% if book.author %}<span class="book-meta-item">{{ book.author }}</span>{% endif %}
-      {% if book.original_year %}<span class="book-meta-item num">{{ book.original_year }}</span>{% endif %}
-      <span class="book-meta-item num">
-        <span x-text="total">{{ progress.total }}</span> صفحة{% if book.source_page_count %} · {{ book.source_page_count }} في الملف{% endif %}
-      </span>
-      {% if book.has_text_layer %}<span class="badge badge-accent">طبقة نصية</span>{% elif book.has_text_layer == False %}<span class="badge">مسح ضوئي</span>{% endif %}
-      {% if book.pages_per_sheet == 2 %}<span class="badge">صفحتان في كل ورقة</span>{% endif %}
-      {% if book.skip_first or book.skip_last %}<span class="badge num">تجاوز {{ book.skip_first }} + {{ book.skip_last }}</span>{% endif %}
-    </div>
+      <div class="progress bk-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="d.percent" aria-label="نسبة إتمام المعالجة" x-show="d.nPages > 0">
+        <div class="progress-fill" :class="d.barClass" :style="`width:${d.percent}%`"></div>
+      </div>
+      <button type="button" class="bk-poll" x-show="d.pollState === 'error'" x-cloak @click="d.pollNow()" title="إعادة محاولة التحديث الآن">
+        <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
+      </button>
+      <a class="bk-poll" x-show="d.pollState === 'auth'" x-cloak href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
+        <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
+      </a>
 
-    {% optional_url 'api:book_text' book.pk as book_text_url %}
-    <div class="action-row">
-      {% if can_start and role == 'admin' or can_start and role == 'editor' %}
-      <form method="post" action="{% url 'books:start' book.pk %}">
+      {# the one primary button: chosen client-side from the poll (§2.1), candidates rendered role-gated #}
+      {% if role == 'admin' or role == 'editor' %}
+      <form method="post" action="{% url 'books:start' book.pk %}" x-show="d.primary === 'start'">
         {% csrf_token %}
         <button type="submit" class="btn btn-primary">
           <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
-          <span>{% if book.status == 'error' %}إعادة بدء المعالجة{% else %}بدء المعالجة{% endif %}</span>
+          <span x-text="d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'">بدء المعالجة</span>
         </button>
       </form>
-      {% endif %}
-      <span class="status meta" x-show="active" x-cloak>
-        <span class="dot dot-accent" aria-hidden="true"></span>
-        <span>قيد المعالجة · <bdi class="num" x-text="done">{{ stages.3.count }}</bdi> من <bdi class="num" x-text="total">{{ progress.total }}</bdi> صفحة</span>
-      </span>
-      {# the review entry point: primary unless a processing action already is (one primary per view) #}
-      <a class="btn{% if book.status != 'needs_guides' %}{% if not can_start or role == 'proofreader' %} btn-primary{% endif %}{% endif %}" x-show="nextReviewUrl" x-cloak :href="nextReviewUrl" data-review-next>
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
-        <span>الصفحة التالية للمراجعة</span>
-      </a>
-      {% if book_text_url %}
-      <button type="button" class="btn" x-show="done > 0"{% if not stages.3.count %} x-cloak{% endif %} data-url="{{ book_text_url }}" @click="copyBook($el.dataset.url)" :disabled="copying"
-              :title="active ? 'ينسخ نص الصفحات التي اكتملت حتى الآن' : 'ينسخ النص النهائي لكل صفحات الكتاب'">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
-        <span>نسخ نص الكتاب</span>
-      </button>
-      {% endif %}
-      {% if role == 'admin' or role == 'editor' %}
       {% if guides_url and tiles %}
-      <a class="btn{% if book.status == 'needs_guides' %} btn-primary{% endif %}" href="{{ guides_url }}">
+      <a class="btn btn-primary" href="{{ guides_url }}" x-show="d.primary === 'guides'">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
         <span>ضبط الأدلة</span>
       </a>
       {% endif %}
-      {% if tiles %}
+      {% endif %}
+      <a class="btn btn-primary" x-show="d.primary === 'review'" :href="d.nextReviewUrl" data-review-next title="الصفحة التالية للمراجعة (N)">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+        <span>الصفحة التالية للمراجعة</span>
+      </a>
+      {% if book_text_url %}
+      <button type="button" class="btn btn-primary" x-show="d.primary === 'copy'" @click="d.copyBook()" :disabled="d.copying" title="ينسخ النص النهائي لكل صفحات الكتاب">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+        <span>نسخ نص الكتاب</span>
+      </button>
+      {% endif %}
+
+      {# «⋯» menu: everything else (§2.1.6); an item that is currently the primary is hidden here #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
-        <button type="button" class="btn" @click="open = !open" :aria-expanded="open" aria-haspopup="menu">
-          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-          <span>إعادة التشغيل</span>
-          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
+          <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
         </button>
-        <div class="menu menu-popover" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
-          <div class="menu-label">كل الصفحات من مرحلة</div>
+        <div class="menu menu-popover bk-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+          {% if book_text_url %}
+          <button type="button" class="menu-item" role="menuitem" x-show="d.primary !== 'copy'" @click="open = false; d.copyBook()" :disabled="d.copying"
+                  :title="d.active ? 'ينسخ نص الصفحات التي اكتملت حتى الآن' : 'ينسخ النص النهائي لكل صفحات الكتاب'">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>نسخ نص الكتاب</span>
+          </button>
+          <div class="menu-sep" role="separator" x-show="d.primary !== 'copy'"></div>
+          {% endif %}
+          {% if role == 'admin' or role == 'editor' %}
+          {% if guides_url and tiles %}
+          <a class="menu-item" role="menuitem" href="{{ guides_url }}" x-show="d.primary !== 'guides'">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+            <span>ضبط الأدلة</span>
+          </a>
+          <div class="menu-sep" role="separator" x-show="d.primary !== 'guides'"></div>
+          {% endif %}
+          {% if tiles %}
+          <div class="menu-label">إعادة التشغيل من مرحلة</div>
           {% for stage in rerun_stages %}
           <form method="post" action="{% url 'books:rerun' book.pk %}">
             {% csrf_token %}
@@ -82,35 +89,84 @@
             <button type="submit" class="menu-item" role="menuitem">{{ stage.label }}</button>
           </form>
           {% endfor %}
+          <div class="menu-sep" role="separator"></div>
+          {% endif %}
+          {% endif %}
+          <a class="menu-item" role="menuitem" href="{% url 'books:list' %}">
+            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+            <span>كل الكتب</span>
+          </a>
         </div>
       </div>
-      {% endif %}
-      {% endif %}
     </div>
-  </header>
+  </template>
+</div>
+{% endblock %}
 
-  {# ------------------------------------------------------------ banners #}
-  {% if book.status == 'error' %}
-  <div class="banner banner-danger" role="alert">
-    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
-    <div class="grow stack-sm">
-      <span>{{ error_headline|default:"حدث خطأ أثناء المعالجة." }}</span>
-      {% if error_detail %}<details class="error-details"><summary class="meta">التفاصيل التقنية</summary><pre dir="ltr">{{ error_detail }}</pre></details>{% endif %}
+{% block content %}
+{{ config|json_script:"dashboard-config" }}
+{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}
+<div class="bk-dashboard" data-book-dashboard
+     x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
+     @keydown.window="onKey($event)">
+  <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
+
+  {# ------------------------------------------------------------ sticky toolbar (§2.2) #}
+  <div class="bk-toolbar" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+    <div class="bk-toolbar-start">
+      <div class="segmented" role="group" aria-label="طريقة عرض الصفحات" data-view-toggle>
+        <button type="button" :aria-pressed="view === 'sheets'" aria-pressed="true" @click="setView('sheets')" title="صفحات (1)">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+          <span>صفحات</span>
+        </button>
+        <button type="button" :aria-pressed="view === 'grid'" aria-pressed="false" @click="setView('grid')" title="شبكة (2)">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
+          <span>شبكة</span>
+        </button>
+      </div>
+    </div>
+    <div class="bk-chips" role="group" aria-label="تصفية الصفحات" data-filter-chips>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'all'" @click="setFilter('all')">الكل <bdi class="num" x-text="counts.all">{{ tiles|length }}</bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'processing'" :disabled="counts.processing === 0" @click="setFilter('processing')">قيد المعالجة <bdi class="num" x-text="counts.processing"></bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'review'" :disabled="counts.review === 0" @click="setFilter('review')">بانتظار المراجعة <bdi class="num" x-text="counts.review"></bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'attention'" :disabled="counts.attention === 0" @click="setFilter('attention')">تحتاج انتباهًا <bdi class="num" x-text="counts.attention"></bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'reviewed'" :disabled="counts.reviewed === 0" @click="setFilter('reviewed')">مُراجَعة <bdi class="num" x-text="counts.reviewed"></bdi></button>
+    </div>
+    <div class="bk-toolbar-end">
+      <label class="bk-jump">
+        <span class="sr-only">الانتقال إلى صفحة</span>
+        <input type="text" inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة" x-ref="jump" autocomplete="off"
+               @keydown.enter.prevent="jump($el.value); $el.value = ''" @blur="if ($el.value.trim()) { jump($el.value); $el.value = ''; }" @keydown.escape.stop="$el.value = ''; $el.blur()">
+        <kbd class="kbd" aria-hidden="true">G</kbd>
+      </label>
+      <button type="button" class="btn-icon bk-follow" x-show="active" x-cloak :aria-pressed="follow" @click="toggleFollow()" title="تتبّع المعالجة: يمرّر إلى آخر صفحة تقدّمت" aria-label="تتبّع المعالجة">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-eye"/></svg>
+        <span>تتبّع المعالجة</span>
+      </button>
     </div>
   </div>
-  {% elif book.status == 'needs_guides' %}
-  <div class="banner">
-    <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-    <span class="grow">لم يُكتشف خط الحاشية في عدد كافٍ من الصفحات. افتح «ضبط الأدلة»، حدّد خط الحاشية وحدّ الترويسة على صفحة مرجعية، ثم طبّقهما على كل الصفحات لتستكمل المعالجة.</span>
-  </div>
-  {% endif %}
-  <div class="banner banner-info" x-show="fetchFailed" x-cloak>
-    <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-    <span class="grow" x-text="authLost ? 'انتهت الجلسة. سجّل الدخول من جديد لمتابعة التقدّم.' : 'تعذّر تحديث الحالة من الخادم. أعد تحميل الصفحة إن استمرّت المشكلة.'"></span>
+
+  {# ------------------------------------------------------------ banners (§2.3): bound to the poll, no reload #}
+  <div class="bk-banners">
+    <div class="banner banner-danger" role="alert" x-show="status === 'error'"{% if book.status != 'error' %} x-cloak{% endif %}>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <div class="grow stack-sm">
+        <span x-text="errorHeadline || 'حدث خطأ أثناء المعالجة.'">{{ error_headline|default:"حدث خطأ أثناء المعالجة." }}</span>
+        <details class="error-details" x-show="errorDetail"><summary class="meta">التفاصيل التقنية</summary><pre dir="ltr" x-text="errorDetail">{{ error_detail }}</pre></details>
+      </div>
+    </div>
+    <div class="banner" x-show="status === 'needs_guides'"{% if book.status != 'needs_guides' %} x-cloak{% endif %}>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">لم يُكتشف خط الحاشية في عدد كافٍ من الصفحات. افتح «ضبط الأدلة»، حدّد خط الحاشية وحدّ الترويسة على صفحة مرجعية، ثم طبّقهما على كل الصفحات لتستكمل المعالجة.</span>
+    </div>
+    <div class="banner banner-info" x-show="sheetsFailed" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">تعذّر تحميل بيانات بعض الصفحات. تُعاد المحاولة عند تحديث الحالة التالي.</span>
+    </div>
   </div>
 
   {# ------------------------------------------------------------ empty state: nothing ingested yet #}
-  <div class="empty-state" x-show="!hasPages"{% if tiles %} x-cloak{% endif %}>
+  <div class="empty-state" x-show="nPages === 0"{% if tiles %} x-cloak{% endif %}>
     <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-image"/></svg>
     <h2 class="empty-title">لم تُستخرج الصفحات بعد</h2>
     <p class="empty-text">
@@ -119,52 +175,32 @@
     </p>
     <span class="status meta" x-show="active"{% if not progress.active %} x-cloak{% endif %}><span class="dot dot-accent" aria-hidden="true"></span><span>تُستخرج الصفحات الآن</span></span>
   </div>
-  <div class="dashboard-grid" x-show="hasPages"{% if not tiles %} x-cloak{% endif %}>
-    {# ------------------------------------------------------------ stage progress #}
-    <section class="card stage-card" aria-labelledby="stage-title">
-      <div class="card-header">
-        <h2 class="section-title" id="stage-title">التقدّم</h2>
-        <span class="meta num"><bdi x-text="done">{{ stages.3.count }}</bdi> من <bdi x-text="total">{{ progress.total }}</bdi> صفحة</span>
-      </div>
-      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent" aria-valuenow="{{ progress.percent }}" aria-label="نسبة إتمام المعالجة">
-        <div class="progress-fill{% if progress.bar_state %} is-{{ progress.bar_state }}{% endif %}" :style="`width:${percent}%`" style="width: {{ progress.percent }}%"></div>
-      </div>
-      <ul class="stage-list">
-        {% for stage in stages %}
-        <li class="stage-row">
-          <span class="status"><span class="dot {{ stage.dot }}" aria-hidden="true"></span><span>{{ stage.label }}</span></span>
-          <div class="progress progress-thin" aria-hidden="true">
-            <div class="progress-fill{% if stage.state %} is-{{ stage.state }}{% endif %}" :style="barWidth('{{ stage.key }}')" style="width: {{ stage.percent }}%"></div>
-          </div>
-          <span class="meta num"><bdi x-text="count('{{ stage.key }}')">{{ stage.count }}</bdi> من <bdi x-text="total">{{ progress.total }}</bdi></span>
-        </li>
-        {% endfor %}
-      </ul>
-      {# review summary (§3): plain counts, no persona #}
-      <div class="review-summary" x-show="anyOcrDone" x-cloak>
-        <span class="status"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
-        <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
-        <span class="meta" x-show="reviewSummary.total > 0 && reviewSummary.reviewed >= reviewSummary.total">رُوجعت كل الصفحات</span>
-      </div>
-    </section>
 
-    {# ------------------------------------------------------------ attention list (live) #}
-    <section class="card attention-card" aria-labelledby="attention-title" x-show="attention.length > 0" x-cloak>
-      <div class="card-header">
-        <h2 class="section-title" id="attention-title">تحتاج انتباهًا</h2>
-        <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span>
-      </div>
-      <ul class="attention-list">
+  {# ------------------------------------------------------------ summary strip (§2.4) #}
+  <div class="bk-summary" role="group" aria-label="التقدّم" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+    {% for stage in stages %}
+    <span class="status{% if not stage.count %} is-zero{% endif %}" :class="{ 'is-zero': count('{{ stage.key }}') === 0 }">
+      <span class="dot {{ stage.dot }}" aria-hidden="true"></span><span>{{ stage.label }}</span> <bdi class="num" x-text="count('{{ stage.key }}')">{{ stage.count }}</bdi>
+    </span>
+    {% endfor %}
+    <span class="bk-summary-review" x-show="anyOcrDone"{% if not stages.3.count %} x-cloak{% endif %}>
+      <span class="status" x-show="!allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
+      <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
+      <span class="status" x-show="allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>رُوجعت كل الصفحات</span></span>
+    </span>
+    <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
+      <summary>تحتاج انتباهًا <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span></summary>
+      <ul class="bk-attention-list">
         <template x-for="item in attention" :key="item.id">
-          <li class="attention-row">
+          <li class="bk-attention-row">
             <a class="link num" :href="item.url">صفحة <span x-text="item.number"></span></a>
-            <span class="attention-flags">
+            <span class="bk-attention-flags">
               <template x-if="item.error">
                 <span class="status"><span class="dot dot-danger" aria-hidden="true"></span><span x-text="item.error_headline || 'خطأ في المعالجة'"></span></span>
               </template>
               {% if role == 'admin' or role == 'editor' %}
               <template x-if="item.error && item.retry_stage">
-                <form method="post" :action="item.rerun_url" class="attention-retry">
+                <form method="post" :action="item.rerun_url">
                   {% csrf_token %}
                   <input type="hidden" name="stage" :value="item.retry_stage">
                   <input type="hidden" name="next" value="{% url 'books:detail' book.pk %}">
@@ -178,60 +214,37 @@
               <template x-if="item.sequence_issue">
                 <span class="badge badge-warning num" x-text="item.sequence_issue"></span>
               </template>
-              <template x-for="label in item.flag_labels" :key="label">
+              <template x-for="label in (item.flag_labels || [])" :key="label">
                 <span class="badge badge-warning" x-text="label"></span>
               </template>
             </span>
           </li>
         </template>
       </ul>
-    </section>
+    </details>
   </div>
 
-  {# ------------------------------------------------------------ pages: «صفحات» (stacked sheets) | «شبكة» (cards) #}
-  <section aria-labelledby="pages-title" class="stack" x-show="hasPages"{% if not tiles %} x-cloak{% endif %}>
-    <div class="pages-toolbar">
-      <div class="pages-toolbar-start">
-        <h2 class="section-title" id="pages-title">الصفحات</h2>
-        <span class="meta" x-text="view === 'grid' ? 'مرّر على صفحة لاستثنائها أو إعادتها · انقر لفتحها' : 'كل صفحة مع نصّها وهو يتولّد · انقر رقم الصفحة لفتحها'">كل صفحة مع نصّها وهو يتولّد · انقر رقم الصفحة لفتحها</span>
-      </div>
-      <div class="segmented" role="group" aria-label="طريقة عرض الصفحات" data-view-toggle>
-        <button type="button" :aria-pressed="view === 'sheets'" aria-pressed="true" :class="{ 'is-selected': view === 'sheets' }" class="is-selected" @click="setView('sheets')">
-          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
-          <span>صفحات</span>
-        </button>
-        <button type="button" :aria-pressed="view === 'grid'" aria-pressed="false" :class="{ 'is-selected': view === 'grid' }" @click="setView('grid')">
-          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
-          <span>شبكة</span>
-        </button>
-      </div>
-    </div>
-    <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
-    <div class="banner banner-info" x-show="sheetsFailed" x-cloak>
-      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-      <span class="grow">تعذّر تحميل بيانات بعض الصفحات. تُعاد المحاولة عند تحديث الحالة التالي.</span>
-    </div>
+  {# ------------------------------------------------------------ pages: «صفحات» (static shells) | «شبكة» (static tiles) #}
+  <div class="sheet-stack" data-sheet-stack x-show="view === 'sheets' && nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+    {% for t in tiles %}{% include "books/_page_sheet.html" with t=t %}{% endfor %}
+  </div>
+  <div class="page-grid" data-page-grid :class="{ 'is-active': active }" x-show="view === 'grid' && nPages > 0" x-cloak>
+    {% for t in tiles %}{% include "books/_page_tile.html" with t=t %}{% endfor %}
+  </div>
+  <p class="bk-empty-filter meta" x-show="filteredOut" x-cloak>لا صفحات تطابق هذا المرشّح</p>
 
-    {# stacked sheets (default): shells for every page, bodies mount near the viewport (books.js) #}
-    <template x-if="view === 'sheets'">
-      <div class="sheet-stack" data-sheet-stack>
-        {% for t in tiles %}{% with tid=t.id|stringformat:"s" %}{% with js="tile("|add:tid|add:")" %}{% include "books/_page_sheet.html" with t=t js=js %}{% endwith %}{% endwith %}{% endfor %}
-        <template x-for="p in laterPages" :key="p.id">
-          {% include "books/_page_sheet.html" with t=None js="p" %}
-        </template>
-      </div>
-    </template>
+  <template id="sheet-shell">{% include "books/_page_sheet.html" with t=None %}</template>
+  <template id="tile-shell">{% include "books/_page_tile.html" with t=None %}</template>
+  <template id="sheet-body">{% include "books/_sheet_body.html" %}</template>
 
-    {# grid of processing cards: no text, animated tiles #}
-    <template x-if="view === 'grid'">
-      <div class="page-grid" data-page-grid>
-        {# First paint from the server; pages ingested after load are added by the poll (the reveal). #}
-        {% for t in tiles %}{% with tid=t.id|stringformat:"s" %}{% with js="tile("|add:tid|add:")" %}{% include "books/_page_tile.html" with t=t js=js %}{% endwith %}{% endwith %}{% endfor %}
-        <template x-for="p in laterPages" :key="p.id">
-          {% include "books/_page_tile.html" with t=None js="p" %}
-        </template>
-      </div>
-    </template>
-  </section>
+  {# position chip while scrolling (§2.5) and the end-of-processing toast (§6) #}
+  <button type="button" class="bk-pos" x-show="pos.visible" x-cloak @click="focusJump()" title="الانتقال إلى صفحة (G)">صفحة <bdi x-text="pos.n"></bdi> من <bdi x-text="nPages"></bdi></button>
+  <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>
+    <span class="grow">اكتملت المعالجة · <bdi class="num" x-text="doneToast.count"></bdi> صفحة</span>
+    <a class="btn" x-show="doneToast.url" :href="doneToast.url">ابدأ المراجعة</a>
+    <button type="button" class="toast-close" aria-label="إغلاق" @click="doneToast.visible = false">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
 </div>
 {% endblock %}

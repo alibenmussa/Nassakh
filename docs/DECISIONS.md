@@ -149,3 +149,18 @@ called from `finalize_page`; a chosen word keeps `conf = "low"` so it stays revi
 Reviewers may edit a whole line and insert a missing line (models sometimes drop a phrase). A page is approved
 only when every uncertain word is resolved, or with an explicit confirmation. Every review action is stored as a
 `LineRevision`, which powers server-side undo.
+
+## D28 — Provisional text: dwell-and-veil, not noise (2026-09-24, supersedes the "never settles" part of D23)
+After testing, the owner found the first decode effect too noisy and objected that it never returned to
+Tesseract's words. New behaviour: provisional words show Tesseract's reading in full, in muted gray with a slow
+opacity fade; every few seconds a word is briefly "veiled" (one to three letters swapped for same-skeleton Arabic
+letters, never the first letter, never digits, no ASCII, no length change) and then returns exactly to Tesseract's
+reading. A reading cursor lights one scan line and one text line at a time (shimmer sheen, words forced exact
+while lit). At most ~40 veiled words per sheet. The resolve into final text stays a right-to-left wave.
+
+## D29 — Dashboard text mirrors its page (2026-09-24)
+Owner decision. Each text group (body, footnotes) is a flex column with space-between placed on the page's own
+geometry (final line boxes, else Tesseract line boxes, else detected boxes, else the region), font size derived
+from the median line height of the page, justified with `text-align-last: start`, shrink-to-fit so the column
+never scrolls. Both panes share one line index, so hovering a text line lights its box on the scan and back.
+Spec: `docs/DASHBOARD_SPEC.md`.

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from celery import chain
 from django.conf import settings
@@ -33,6 +34,12 @@ from core.images import fit_width
 from core.serializers import flag_items, region_items
 from core.storage import book_source_path, save_array
 from core.templatetags.nassakh import status_dot
+
+if TYPE_CHECKING:
+    from ocr.models import Line, OcrRun
+    from processing.models import Region
+
+    RunsByTarget = dict[tuple[int, int | None], OcrRun]  # latest fast run per (page_id, region_id)
 
 log = logging.getLogger(__name__)
 
@@ -641,17 +648,26 @@ def _pipeline_percent(by_status: dict[str, int], total: int) -> int:
 def book_progress(book: Book) -> dict:
     """Dashboard numbers: `total`, `by_status`, `percent`, `active`, `flags` (+ status and its label).
 
+    `error_headline` / `error_detail` split the book's error message ('' unless the book is in error).
     `percent` weights each non-excluded page by how far it is through the Phase 2 pipeline
     (preprocessed 1/3, layout done 2/3, OCR done 3/3). `flags` counts pages that carry attention
     flags or are in error. `active` is true while the book is processing or in OCR. `review` is
     `review.services.book_review_summary` (reviewed / total pages, unresolved words, next URL).
     """
-    by_status = book.progress()
-    rows = book.pages.filter(is_excluded=False).values_list("attention_flags", "status")
-    flags = sum(1 for page_flags, status in rows if page_flags or status == Page.Status.ERROR)
+    by_status: dict[str, int] = {status: 0 for status in Page.Status.values}
+    flags = 0
+    for status, page_flags in book.pages.filter(is_excluded=False).values_list("status", "attention_flags"):
+        by_status[status] = by_status.get(status, 0) + 1
+        flags += 1 if page_flags or status == Page.Status.ERROR else 0
     from review.services import book_review_summary  # other app: lazy import
 
-    return {**_progress_payload(book, by_status, flags), "review": book_review_summary(book)}
+    failed = book.status == Book.Status.ERROR
+    return {
+        **_progress_payload(book, by_status, flags),
+        "review": book_review_summary(book),
+        "error_headline": _headline(book.error_message) if failed else "",
+        "error_detail": _detail(book.error_message) if failed else "",
+    }
 
 
 def _progress_payload(book: Book, by_status: dict[str, int], flags: int) -> dict:
@@ -732,6 +748,11 @@ def page_sequence_issues(book: Book) -> dict[int, str]:
     on the last numbered page cannot be confirmed and is reported as a gap. Digits are Western (D6).
     """
     rows = book.pages.filter(is_excluded=False).order_by("number").values_list("pk", "printed_number")
+    return sequence_issues_of(list(rows))
+
+
+def sequence_issues_of(rows: Sequence[tuple[int, str]]) -> dict[int, str]:
+    """`page_sequence_issues` over `(page_id, printed_number)` of the non-excluded pages in scan order."""
     numbered: list[tuple[int, int, int]] = [  # (position, page_id, number)
         (pos, page_id, int(printed))
         for pos, (page_id, printed) in enumerate(rows)
@@ -764,14 +785,18 @@ def page_sequence_issues(book: Book) -> dict[int, str]:
     return issues
 
 
-def page_tile(page: Page, sequence_issue: str = "") -> dict:
+def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> dict:
     """One thumbnail tile of the dashboard grid (also the per-page item of the progress API).
 
     `sequence_issue` is the page's label from `page_sequence_issues` ('' when in order).
+    `compact` keeps only what changes while processing (the progress poll, ≤ 150 B per page): no
+    URLs, labels, dots, thumbnails or sizes; `flag_labels` only when flagged, the error fields only on error.
     """
-    preprocess = _preprocess_of(page)
     failed = page.status == Page.Status.ERROR
     retry_stage = page.error_from if failed and page.error_from in STAGES else ""
+    if compact:
+        return _compact_tile(page, sequence_issue, failed, retry_stage)
+    preprocess = _preprocess_of(page)
     return {
         "id": page.pk,
         "number": page.number,
@@ -803,6 +828,31 @@ def page_tile(page: Page, sequence_issue: str = "") -> dict:
     }
 
 
+def _compact_tile(page: Page, sequence_issue: str, failed: bool, retry_stage: str) -> dict:
+    """The `compact` form of `page_tile`."""
+    n_flags = len(page.attention_flags or [])
+    tile = {
+        "id": page.pk,
+        "number": page.number,
+        "status": page.status,
+        "text_state": page.text_state,
+        "n_unresolved": page.n_unresolved,
+        "n_flags": n_flags,
+        "sequence_issue": sequence_issue,
+        "is_excluded": page.is_excluded,
+        "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
+        "error": failed,
+        "printed_number": page.printed_number,
+    }
+    if n_flags:
+        tile["flag_labels"] = [item["label"] for item in flag_items(page.attention_flags)]
+    if failed:
+        tile["error_headline"] = _headline(page.error_message)
+        tile["retry_stage"] = retry_stage
+        tile["retry_label"] = STAGE_LABELS[retry_stage] if retry_stage else ""
+    return tile
+
+
 # Large columns the tiles never read (the progress API polls every two seconds).
 _TILE_DEFERRED: tuple[str, ...] = (
     "text_layer_text",
@@ -815,11 +865,17 @@ _TILE_DEFERRED: tuple[str, ...] = (
 )
 
 
-def page_tiles(book: Book) -> list[dict]:
-    """Tiles for every page of the book in order (excluded pages included, marked)."""
-    pages = book.pages.select_related("preprocess").defer(*_TILE_DEFERRED).order_by("number")
-    issues = page_sequence_issues(book)
-    return [page_tile(page, issues.get(page.pk, "")) for page in pages]
+def page_tiles(book: Book, compact: bool = False) -> list[dict]:
+    """Tiles for every page of the book in order (excluded pages included, marked); one query.
+
+    `compact` gives the small poll form of `page_tile` (and skips the Preprocess join).
+    """
+    if compact:
+        pages = list(book.pages.defer(*_TILE_DEFERRED[:4]).order_by("number"))
+    else:
+        pages = list(book.pages.select_related("preprocess").defer(*_TILE_DEFERRED).order_by("number"))
+    issues = sequence_issues_of([(page.pk, page.printed_number) for page in pages if not page.is_excluded])
+    return [page_tile(page, issues.get(page.pk, ""), compact=compact) for page in pages]
 
 
 def attention_pages(book: Book) -> list[dict]:
@@ -856,6 +912,26 @@ def has_guides(book: Book) -> bool:
         return False
 
 
+PAGE_NUMBER_SLOT = "__n__"
+
+
+def _url_template(name: str, book_id: int) -> str:
+    """`reverse(name, [book_id, 0])` with the page number replaced by `PAGE_NUMBER_SLOT`."""
+    url = reverse(name, args=[book_id, 0])
+    head, sep, tail = url.rpartition("/0/")
+    return f"{head}/{PAGE_NUMBER_SLOT}/{tail}" if sep else url
+
+
+def page_url_templates(book: Book) -> dict[str, str]:
+    """Per-page URLs of the dashboard with `__n__` for the page number (pages ingested after load)."""
+    return {
+        "page": _url_template("books:page_detail", book.pk),
+        "review": _url_template("review:page", book.pk),
+        "rerun": _url_template("books:rerun", book.pk),
+        "exclude": _url_template("books:toggle_exclude", book.pk),
+    }
+
+
 def book_dashboard(book: Book) -> dict:
     """Everything the dashboard template needs, including the Alpine component's initial state."""
     progress = book_progress(book)
@@ -886,12 +962,18 @@ def book_dashboard(book: Book) -> dict:
         "status": progress["status"],
         "statusLabel": progress["status_label"],
         "dot": progress["dot"],
+        "barState": progress["bar_state"],
+        "errorHeadline": progress["error_headline"],
+        "errorDetail": progress["error_detail"],
         "byStatus": by_status,
         "stages": [{"key": stage["key"], "statuses": stage["statuses"]} for stage in stages],
         "pages": tiles,
         "review": progress["review"],
         "sheetsUrl": reverse("api:book_sheets", args=[book.pk]),
         "sheetsMax": SHEETS_MAX,
+        "statusLabels": {status: str(label) for status, label in Page.Status.choices},
+        "statusDots": {status: status_dot(status) for status in Page.Status.values},
+        "urls": page_url_templates(book),
     }
     return {
         "book": book,
@@ -1043,14 +1125,94 @@ def _ratio_boxes(line_boxes: list | None, width: int, height: int) -> list[list[
     return out
 
 
-def book_sheets(book: Book, first: int, last: int) -> dict:
-    """Pages `first..last` of the book for the stacked-sheets view (three queries in all).
+def _ratio_box(box, width: int, height: int) -> list[float] | None:
+    """A `[x0, y0, x1, y1]` box in gray pixels as ratios of the page (4 decimals); None when unusable."""
+    if not width or not height or not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    return [round(x0 / width, 4), round(y0 / height, 4), round(x1 / width, 4), round(y1 / height, 4)]
 
-    Per page: status, provisional text, final lines with their tokens (`t`, `conf`, `res`),
-    image URLs and size (gray-image pixels, or the original's before preprocessing), detected
-    line boxes as 0..1 ratios in reading order, review state and URLs.
+
+def _ratio(value: float | None, size: int) -> float | None:
+    """`value / size` to 4 decimals, None when either is missing."""
+    if value is None or not size:
+        return None
+    return round(float(value) / size, 4)
+
+
+def _fast_runs_by_target(page_ids: list[int]) -> RunsByTarget:
+    """Latest OK fast-engine (Tesseract) run per `(page_id, region_id)`; page-level runs under region None.
+
+    One query for the whole range; a region run whose region was deleted (region None, scope region)
+    is ignored.
     """
-    from ocr.models import Line  # other app: lazy import
+    from ocr.models import OcrRun  # other app: lazy import
+    from ocr.services import PAGE_SCOPE, engine_names
+
+    runs = (
+        OcrRun.objects.filter(page_id__in=page_ids, engine_name=engine_names()[2], status=OcrRun.Status.OK)
+        .only("id", "page_id", "region_id", "params", "created_at")
+        .order_by("-created_at", "-id")
+    )
+    latest: RunsByTarget = {}
+    for run in runs:
+        params = run.params or {}
+        if run.region_id is None and params.get("scope") != PAGE_SCOPE:
+            continue
+        latest.setdefault((run.page_id, run.region_id), run)
+    return latest
+
+
+def provisional_lines(
+    page: Page, regions: list[Region], runs: RunsByTarget, width: int, height: int
+) -> list[dict]:
+    """Tesseract lines of the provisional text: `[{"region_kind", "bbox" (ratios | None), "words"}]`.
+
+    Targets are the page's OCR-able regions in `order` (non-footnote kinds first, footnotes last, as in
+    `ocr.services.join_region_texts`), or the page-level run without regions; one entry per
+    `params["lines"]` item. A first / last line that is only a page number is dropped (as
+    `provisional_text` does). Without any Tesseract lines, the non-blank lines of `provisional_text`
+    are used with `bbox: None`. Empty while the page has no text.
+    """
+    from ocr.services import FOOTNOTE_KINDS, SKIPPED_KINDS, page_number_edges
+
+    if page.text_state == Page.TextState.NONE:
+        return []
+    if regions:
+        targets = [(r.kind, runs.get((page.pk, r.pk))) for r in regions if r.kind not in SKIPPED_KINDS]
+        targets.sort(key=lambda item: item[0] in FOOTNOTE_KINDS)  # stable: region order kept
+    else:
+        targets = [("body", runs.get((page.pk, None)))]
+    out: list[dict] = []
+    for kind, run in targets:
+        for line in ((run.params or {}).get("lines") or []) if run is not None else []:
+            words = [str(w.get("text", "")) for w in line.get("words") or [] if isinstance(w, dict)]
+            box = _ratio_box(line.get("bbox"), width, height)
+            out.append({"region_kind": kind, "bbox": box, "words": words})
+    if not out:
+        return [
+            {"region_kind": "body", "bbox": None, "words": text.split()}
+            for text in (page.provisional_text or "").split("\n")
+            if text.strip()
+        ]
+    drop, _digits = page_number_edges([" ".join(entry["words"]) for entry in out])
+    return [entry for i, entry in enumerate(out) if i not in drop]
+
+
+def book_sheets(book: Book, first: int, last: int) -> dict:
+    """Pages `first..last` of the book for the stacked-sheets view (five queries in all).
+
+    Per page: status, provisional text and its Tesseract lines (`provisional_lines`), final lines
+    with their id, box and tokens (`t`, `conf`, `res`), image URLs and size (gray-image pixels, or
+    the original's before preprocessing), detected line boxes, regions (without running header and
+    page number), footnote start and median line height, all boxes and heights as 0..1 ratios of the
+    page, review state and URLs.
+    """
+    from ocr.models import Line  # other apps: lazy imports
+    from processing.models import Region
 
     pages = list(
         book.pages.filter(number__gte=first, number__lte=last)
@@ -1058,60 +1220,82 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
         .defer("text_layer_text", "final_text", "guides_override", "preprocess__auto_params")
         .order_by("number")
     )
-    lines_of: dict[int, list[dict]] = {page.pk: [] for page in pages}
+    page_ids = [page.pk for page in pages]
+    lines_of: dict[int, list] = {pk: [] for pk in page_ids}
     rows = (
-        Line.objects.filter(page_id__in=list(lines_of))
+        Line.objects.filter(page_id__in=page_ids)
         .select_related("region")
-        .only("page_id", "order", "tokens", "region__kind")
+        .only("page_id", "order", "bbox", "tokens", "region__kind")
         .order_by("page_id", "order", "id")
     )
     for line in rows:
-        lines_of[line.page_id].append(
+        lines_of[line.page_id].append(line)
+    regions_of: dict[int, list] = {pk: [] for pk in page_ids}
+    for region in Region.objects.filter(page_id__in=page_ids).order_by("page_id", "order", "id"):
+        regions_of[region.page_id].append(region)
+    runs = _fast_runs_by_target(page_ids) if page_ids else {}
+    out = [_sheet(book, page, lines_of[page.pk], regions_of[page.pk], runs) for page in pages]
+    return {"book_id": book.pk, "from": first, "to": last, "total": book.pages.count(), "pages": out}
+
+
+def _sheet(book: Book, page: Page, lines: list[Line], regions: list[Region], runs: RunsByTarget) -> dict:
+    """One page of `book_sheets` from its already loaded lines, regions and fast runs."""
+    from ocr.services import SKIPPED_KINDS
+
+    pre = _preprocess_of(page)
+    width = (pre.output_width if pre is not None else 0) or page.width
+    height = (pre.output_height if pre is not None else 0) or page.height
+    display = (_file_url(pre.display_image) or _file_url(pre.gray_image)) if pre is not None else None
+    footnote_y = None
+    if pre is not None:
+        start = pre.footnote_rule_y if pre.footnote_rule_y is not None else pre.footnote_block_y
+        footnote_y = _ratio(start, height)
+    region_boxes = []
+    for region in regions:
+        box = _ratio_box(region.bbox, width, height)
+        if region.kind not in SKIPPED_KINDS and box is not None:
+            region_boxes.append({"kind": region.kind, "bbox": box})
+    return {
+        "id": page.pk,
+        "number": page.number,
+        "status": page.status,
+        "status_label": page.get_status_display(),
+        "dot": status_dot(page.status),
+        "text_state": page.text_state,
+        "provisional_text": page.provisional_text,
+        "provisional_lines": provisional_lines(page, regions, runs, width, height),
+        "lines": [
             {
+                "id": line.pk,
                 "order": line.order,
                 "region_kind": line.region.kind if line.region_id and line.region else "body",
+                "bbox": _ratio_box(line.bbox, width, height),
                 "tokens": [
                     {"t": token.get("t", ""), "conf": token.get("conf", "high"), "res": token.get("res")}
                     for token in line.tokens or []
                 ],
             }
-        )
-    out = []
-    for page in pages:
-        pre = _preprocess_of(page)
-        width = (pre.output_width if pre is not None else 0) or page.width
-        height = (pre.output_height if pre is not None else 0) or page.height
-        display = (_file_url(pre.display_image) or _file_url(pre.gray_image)) if pre is not None else None
-        out.append(
-            {
-                "id": page.pk,
-                "number": page.number,
-                "status": page.status,
-                "status_label": page.get_status_display(),
-                "dot": status_dot(page.status),
-                "text_state": page.text_state,
-                "provisional_text": page.provisional_text,
-                "lines": lines_of[page.pk],
-                "display_url": display,
-                "scan_url": _file_url(page.original_image),
-                "thumb_url": _file_url(pre.thumbnail) if pre is not None else None,
-                "scan_thumb_url": _file_url(page.scan_thumbnail),
-                "width": width,
-                "height": height,
-                "line_boxes": _ratio_boxes(pre.line_boxes if pre is not None else [], width, height)
-                if pre is not None
-                else [],
-                "n_lines": pre.n_lines if pre is not None else 0,
-                "n_unresolved": page.n_unresolved,
-                "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
-                "is_excluded": page.is_excluded,
-                "printed_number": page.printed_number,
-                "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
-                "url": reverse("books:page_detail", args=[book.pk, page.number]),
-                "review_url": reverse("review:page", args=[book.pk, page.number]),
-            }
-        )
-    return {"book_id": book.pk, "from": first, "to": last, "total": book.pages.count(), "pages": out}
+            for line in lines
+        ],
+        "regions": region_boxes,
+        "footnote_y": footnote_y,
+        "median_line_h": (_ratio(pre.median_line_height, height) or 0) if pre is not None else 0,
+        "display_url": display,
+        "scan_url": _file_url(page.original_image),
+        "thumb_url": _file_url(pre.thumbnail) if pre is not None else None,
+        "scan_thumb_url": _file_url(page.scan_thumbnail),
+        "width": width,
+        "height": height,
+        "line_boxes": _ratio_boxes(pre.line_boxes, width, height) if pre is not None else [],
+        "n_lines": pre.n_lines if pre is not None else 0,
+        "n_unresolved": page.n_unresolved,
+        "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
+        "is_excluded": page.is_excluded,
+        "printed_number": page.printed_number,
+        "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
+        "url": reverse("books:page_detail", args=[book.pk, page.number]),
+        "review_url": reverse("review:page", args=[book.pk, page.number]),
+    }
 
 
 def _clean_text(text: str) -> str:

@@ -886,12 +886,15 @@ def test_detail_shows_the_empty_state_before_ingest_and_the_dashboard_after(edit
     assert reverse("api:book_progress", args=[book.pk]) in body
     for label in ("مرفوعة", "مُعالَجة", "تم التخطيط", "تم التعرّف", "خطأ", "التقدّم", "الصفحات"):
         assert label in body
-    assert body.count('<div class="page-tile') == 2
+    # two server-rendered tiles plus the inert <template id="tile-shell"> clone for later pages
+    assert body.count('<div class="page-tile') == 3 and 'id="tile-shell"' in body
+    assert body.count('data-page-id="') - body.count('data-page-id=""') == 4  # 2 tiles + 2 sheets
     assert reverse("books:page_detail", args=[book.pk, 1]) in body
     assert reverse("books:toggle_exclude", args=[book.pk, 1]) in body
     assert reverse("books:rerun", args=[book.pk]) in body and "إعادة التشغيل" in body
-    assert "بدء المعالجة" not in body  # not startable while in OCR
     config = _json_config(body, "dashboard-config")
+    # the start form is rendered role-gated and chosen client-side (spec §2.1.5): not startable while in OCR
+    assert config["status"] == Book.Status.OCR and "x-show=\"d.primary === 'start'\"" in body
     assert config["progressUrl"] == reverse("api:book_progress", args=[book.pk])
     assert config["active"] is True and config["total"] == 2 and config["flags"] == 2
     assert [p["number"] for p in config["pages"]] == [1, 2]
@@ -912,6 +915,11 @@ def test_detail_shows_error_banner_and_restart(editor_client):
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "banner banner-danger" in body and "تعذّر استخراج الصفحات." in body
     assert "RuntimeError: boom" in body and "إعادة بدء المعالجة" in body
+    config = _json_config(body, "dashboard-config")  # the banner's Alpine bindings start from these
+    assert (
+        config["errorHeadline"] == "تعذّر استخراج الصفحات." and "RuntimeError: boom" in config["errorDetail"]
+    )
+    assert config["barState"] == "danger"
 
 
 def test_page_detail_renders_neighbours_partials_and_viewer_config(editor_client):
@@ -1163,10 +1171,12 @@ def test_sheets_api_shape(editor_client):
     save_array(pre.thumbnail, np.full((20, 10), 200, dtype=np.uint8), "thumb.webp")
     pre.save()
     foot = Region.objects.create(page=page, kind="footnote", bbox=[0, 300, 200, 400], order=1)
-    _ocr_line(
+    first_line = _ocr_line(
         page, 0, [{"t": "قال", "conf": "high"}, {"t": "الكتب", "conf": "low", "alt": "الكتاب", "res": None}]
     )
-    _ocr_line(page, 1, [{"t": "(١)", "conf": "low", "res": "primary"}], region=foot)
+    first_line.bbox = [20, 40, 180, 60]
+    first_line.save()
+    foot_line = _ocr_line(page, 1, [{"t": "(١)", "conf": "low", "res": "primary"}], region=foot)
 
     url = reverse("api:book_sheets", args=[book.pk])
     data = editor_client.get(f"{url}?from=2&to=3").json()
@@ -1181,9 +1191,10 @@ def test_sheets_api_shape(editor_client):
     assert sheet["width"] == 200 and sheet["height"] == 400
     assert sheet["line_boxes"] == [[0.1, 0.1, 0.9, 0.15], [0.05, 0.25, 1.0, 0.3]]
     assert sheet["lines"] == [
-        {"order": 0, "region_kind": "body", "tokens": [
+        {"id": first_line.pk, "order": 0, "region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.15], "tokens": [
             {"t": "قال", "conf": "high", "res": None}, {"t": "الكتب", "conf": "low", "res": None}]},
-        {"order": 1, "region_kind": "footnote", "tokens": [{"t": "(١)", "conf": "low", "res": "primary"}]},
+        {"id": foot_line.pk, "order": 1, "region_kind": "footnote", "bbox": None,
+         "tokens": [{"t": "(١)", "conf": "low", "res": "primary"}]},
     ]  # fmt: skip
     assert sheet["display_url"].endswith("display.webp") and sheet["thumb_url"].endswith("thumb.webp")
     assert sheet["n_unresolved"] == 1 and sheet["printed_number"] == "12" and sheet["is_reviewed"] is False
@@ -1211,6 +1222,199 @@ def test_sheets_query_count_does_not_grow_with_pages(editor_client, django_asser
     book, pages = _book_with_pages(12)
     for page in pages:
         _ocr_line(page, 0, [{"t": "كلمة", "conf": "high"}])
-    with django_assert_max_num_queries(4):
+    with django_assert_max_num_queries(5):
         data = services.book_sheets(book, 1, 12)
     assert len(data["pages"]) == 12 and all(len(p["lines"]) == 1 for p in data["pages"])
+
+
+# ---------------------------------------------------------------- D28 dashboard: sheet geometry, compact poll
+
+
+def _fast_run(page: Page, lines: list[tuple[list[int] | None, list[str]]], region=None, **kwargs):
+    """A fast-engine OcrRun with Tesseract-style `params["lines"]` (bbox in gray px)."""
+    from ocr.models import OcrRun
+    from ocr.services import engine_names
+
+    params = {"scope": "region" if region else "page", "kind": region.kind if region else "page"}
+    params["lines"] = [
+        {"bbox": bbox, "words": [{"text": w, "bbox": None, "conf": 90} for w in words]}
+        for bbox, words in lines
+    ]
+    return OcrRun.objects.create(
+        page=page,
+        region=region,
+        engine_name=kwargs.pop("engine_name", engine_names()[2]),
+        params=params,
+        **kwargs,
+    )
+
+
+def _sheet_page(**pre_kwargs) -> tuple[Book, Page]:
+    book, pages = _book_with_pages(1, width=300, height=500)
+    page = pages[0]
+    Page.objects.filter(pk=page.pk).update(
+        status=Page.Status.LAYOUT_DONE, text_state=Page.TextState.PROVISIONAL, provisional_text="نص"
+    )
+    Preprocess.objects.create(page=page, output_width=200, output_height=400, **pre_kwargs)
+    page.refresh_from_db()
+    return book, page
+
+
+def test_sheets_provisional_lines_follow_region_order_with_footnotes_last():
+    from ocr.models import OcrRun
+
+    book, page = _sheet_page()
+    header = Region.objects.create(page=page, kind="running_header", bbox=[0, 0, 200, 20], order=0)
+    foot = Region.objects.create(page=page, kind="footnote", bbox=[0, 300, 200, 400], order=1)
+    body = Region.objects.create(page=page, kind="body", bbox=[0, 20, 200, 300], order=2)
+    number = Region.objects.create(page=page, kind="page_number", bbox=[80, 380, 120, 400], order=3)
+    _fast_run(page, [([0, 0, 200, 20], ["عنوان", "الكتاب"])], region=header)
+    _fast_run(page, [([0, 0, 200, 20], ["قديم"])], region=body)  # older run of the same target
+    _fast_run(
+        page, [([20, 40, 180, 60], ["قال", "الشيخ"]), ([10, 100, 200, 120], ["رحمه", "الله"])], region=body
+    )
+    _fast_run(page, [([0, 320, 200, 340], ["(١)", "انظر"]), ([90, 380, 110, 396], ["- ١٢ -"])], region=foot)
+    _fast_run(page, [([80, 380, 120, 400], ["12"])], region=number)
+    _fast_run(page, [([0, 0, 1, 1], ["خطأ"])], region=body, status=OcrRun.Status.ERROR)
+    _fast_run(page, [([0, 0, 1, 1], ["قارئ"])], region=body, engine_name="qari")
+
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert sheet["provisional_lines"] == [
+        {"region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.15], "words": ["قال", "الشيخ"]},
+        {"region_kind": "body", "bbox": [0.05, 0.25, 1.0, 0.3], "words": ["رحمه", "الله"]},
+        {"region_kind": "footnote", "bbox": [0.0, 0.8, 1.0, 0.85], "words": ["(١)", "انظر"]},
+    ]  # the trailing page-number line is dropped; header and page number are not text
+    for entry in sheet["provisional_lines"]:
+        assert all(0 <= v <= 1 for v in entry["bbox"])
+    assert sheet["regions"] == [
+        {"kind": "footnote", "bbox": [0.0, 0.75, 1.0, 1.0]},
+        {"kind": "body", "bbox": [0.0, 0.05, 1.0, 0.75]},
+    ]
+
+
+def test_sheets_provisional_lines_page_level_run_fallback_and_empty():
+    book, page = _sheet_page()
+    _fast_run(page, [([20, 40, 180, 60], ["سطر", "أول"]), (None, ["سطر", "ثان"])])
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert sheet["provisional_lines"] == [
+        {"region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.15], "words": ["سطر", "أول"]},
+        {"region_kind": "body", "bbox": None, "words": ["سطر", "ثان"]},
+    ]
+    assert sheet["regions"] == []  # before layout
+
+    # no run with lines (text layer, old runs): derived from provisional_text, bbox null
+    page.ocr_runs.all().delete()
+    Page.objects.filter(pk=page.pk).update(provisional_text="السطر الأول\n\n  \nالسطر الثاني")
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert sheet["provisional_lines"] == [
+        {"region_kind": "body", "bbox": None, "words": ["السطر", "الأول"]},
+        {"region_kind": "body", "bbox": None, "words": ["السطر", "الثاني"]},
+    ]
+
+    _fast_run(page, [([20, 40, 180, 60], ["سطر"])])
+    Page.objects.filter(pk=page.pk).update(text_state=Page.TextState.NONE, provisional_text="")
+    assert services.book_sheets(book, 1, 1)["pages"][0]["provisional_lines"] == []
+
+
+def test_sheets_footnote_y_median_line_height_and_missing_preprocess():
+    book, page = _sheet_page(footnote_rule_y=300, footnote_block_y=320, median_line_height=24)
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert sheet["footnote_y"] == 0.75 and sheet["median_line_h"] == 0.06
+    Preprocess.objects.filter(page=page).update(footnote_rule_y=None, median_line_height=0)
+    sheet = services.book_sheets(book, 1, 1)["pages"][0]
+    assert sheet["footnote_y"] == 0.8 and sheet["median_line_h"] == 0
+    Preprocess.objects.filter(page=page).update(footnote_block_y=None)
+    assert services.book_sheets(book, 1, 1)["pages"][0]["footnote_y"] is None
+
+    bare, _ = _book_with_pages(1, width=300, height=500)
+    sheet = services.book_sheets(bare, 1, 1)["pages"][0]
+    assert sheet["footnote_y"] is None and sheet["median_line_h"] == 0
+    assert sheet["regions"] == [] and sheet["provisional_lines"] == [] and sheet["lines"] == []
+
+
+def test_sheets_query_count_stays_at_five_with_regions_and_runs(django_assert_max_num_queries):
+    book, pages = _book_with_pages(10)
+    for page in pages:
+        Preprocess.objects.create(page=page, output_width=200, output_height=400, footnote_rule_y=300)
+        Page.objects.filter(pk=page.pk).update(text_state=Page.TextState.PROVISIONAL)
+        body = Region.objects.create(page=page, kind="body", bbox=[0, 0, 200, 300], order=0)
+        foot = Region.objects.create(page=page, kind="footnote", bbox=[0, 300, 200, 400], order=1)
+        _fast_run(page, [([0, 10, 200, 30], ["متن"])], region=body)
+        _fast_run(page, [([0, 310, 200, 330], ["حاشية"])], region=foot)
+        _ocr_line(page, 0, [{"t": "كلمة", "conf": "high"}], region=body)
+    with django_assert_max_num_queries(5):
+        data = services.book_sheets(book, 1, 10)
+    assert all(len(p["provisional_lines"]) == 2 and len(p["regions"]) == 2 for p in data["pages"])
+
+
+COMPACT_KEYS = {
+    "id", "number", "status", "text_state", "n_unresolved", "n_flags", "sequence_issue", "is_excluded",
+    "is_reviewed", "error", "printed_number",
+}  # fmt: skip
+
+
+def test_progress_compact_tiles_keys_size_and_book_error(editor_client, django_assert_max_num_queries):
+    book, pages = _book_with_pages(30)
+    Page.objects.filter(pk=pages[0].pk).update(attention_flags=["alignment_poor"])
+    Page.objects.filter(pk=pages[1].pk).update(
+        status=Page.Status.ERROR, error_from="ocr_full", error_message="فشل التعرّف\nTraceback"
+    )
+    url = reverse("api:book_progress", args=[book.pk])
+    data = editor_client.get(f"{url}?compact=1").json()
+    assert data["error_headline"] == "" and data["error_detail"] == ""
+    flagged, failed, plain = data["pages"][:3]
+    assert set(plain) == COMPACT_KEYS
+    assert (
+        set(flagged) == COMPACT_KEYS | {"flag_labels"} and flagged["n_flags"] == 1 and flagged["flag_labels"]
+    )
+    assert set(failed) == COMPACT_KEYS | {"error_headline", "retry_stage", "retry_label"}
+    assert failed["error_headline"] == "فشل التعرّف" and failed["retry_stage"] == "ocr_full"
+    assert failed["retry_label"] == services.STAGE_LABELS["ocr_full"]
+    # Compact JSON as rendered: the fixed key set alone is ~190 B per page, far below the full tile.
+    sizes = [
+        len(json.dumps(tile, ensure_ascii=False, separators=(",", ":")).encode())
+        for tile in data["pages"][2:]
+    ]
+    full = editor_client.get(url).json()["pages"]
+    full_sizes = [
+        len(json.dumps(tile, ensure_ascii=False, separators=(",", ":")).encode()) for tile in full[2:]
+    ]
+    assert max(sizes) <= 200 and max(sizes) * 2 < min(full_sizes)
+    assert "url" in full[2] and "thumb_url" in full[2] and "status_label" in full[2]  # the default stays full
+
+    with django_assert_max_num_queries(4):
+        services.book_progress(book)
+        services.page_tiles(book, compact=True)
+
+    Book.objects.filter(pk=book.pk).update(
+        status=Book.Status.ERROR, error_message="تعذّر فتح الملف\nPDF broken"
+    )
+    data = editor_client.get(f"{url}?compact=1").json()
+    assert data["error_headline"] == "تعذّر فتح الملف" and data["error_detail"] == "PDF broken"
+    Book.objects.filter(pk=book.pk).update(status=Book.Status.OCR)
+    assert editor_client.get(url).json()["error_headline"] == ""  # a stale message is not an error
+
+
+def test_compact_tiles_keep_the_sequence_issues():
+    book, pages = _numbered(["10", "11", "12", "20", "21"])
+    compact = services.page_tiles(book, compact=True)
+    full = services.page_tiles(book)
+    assert [t["sequence_issue"] for t in compact] == [t["sequence_issue"] for t in full]
+    assert any(t["sequence_issue"] for t in compact)
+
+
+def test_dashboard_config_carries_status_labels_dots_and_url_templates():
+    book = Book.objects.create(pk=10, title="كتاب")  # a book id with a 0 in it
+    config = services.book_dashboard(book)["config"]
+    assert set(config["statusLabels"]) == set(Page.Status.values) == set(config["statusDots"])
+    assert config["statusLabels"]["ocr_done"] == Page.Status.OCR_DONE.label
+    assert config["statusDots"]["error"] == "dot-danger"
+    assert config["urls"] == {
+        "page": "/books/10/pages/__n__/",
+        "review": "/books/10/review/__n__/",
+        "rerun": "/books/10/pages/__n__/rerun/",
+        "exclude": "/books/10/pages/__n__/exclude/",
+    }
+    n = 7
+    assert config["urls"]["page"].replace("__n__", str(n)) == reverse("books:page_detail", args=[10, n])
+    assert config["urls"]["review"].replace("__n__", str(n)) == reverse("review:page", args=[10, n])

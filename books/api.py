@@ -1,6 +1,7 @@
 """JSON endpoints of the books app (DRF function views, session auth, login required).
 
-- GET /api/books/<id>/progress/  → `services.book_progress` plus the page tiles (dashboard polling)
+- GET /api/books/<id>/progress/[?compact=1] → `services.book_progress` plus the page tiles (dashboard
+  polling; `compact` gives the small tiles of `services.page_tile(compact=True)`)
 - GET /api/pages/<id>/status/    → `services.page_status` (page detail / text panel polling)
 - GET /api/books/<id>/text/      → `services.book_text` (copy the clean text of the whole book)
 - GET /api/books/<id>/sheets/?from=<n>&to=<n> → `services.book_sheets` (stacked view, ≤ 40 pages)
@@ -18,9 +19,10 @@ from books.models import Book, Page
 
 @api_view(["GET"])
 def book_progress(request: Request, book_id: int) -> Response:
-    """Counts per status, percentage, active flag, attention count and one entry per page."""
+    """Counts per status, percentage, active flag, attention count, book error and one entry per page."""
     book = get_object_or_404(Book, pk=book_id)
-    return Response({**services.book_progress(book), "pages": services.page_tiles(book)})
+    compact = request.query_params.get("compact") in ("1", "true")
+    return Response({**services.book_progress(book), "pages": services.page_tiles(book, compact=compact)})
 
 
 @api_view(["GET"])
