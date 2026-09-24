@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -1209,7 +1210,9 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
     with their id, box and tokens (`t`, `conf`, `res`), image URLs and size (gray-image pixels, or
     the original's before preprocessing), detected line boxes, regions (without running header and
     page number), footnote start and median line height, all boxes and heights as 0..1 ratios of the
-    page, review state and URLs.
+    page, review state and URLs. The response also carries `book_line_h_px`: the book's typical
+    printed line height (median of the pages' detected line heights in gray-image pixels, excluded and
+    unprocessed pages left out; 0 when unknown), so every sheet sets its text at the same size (D30).
     """
     from ocr.models import Line  # other apps: lazy imports
     from processing.models import Region
@@ -1235,7 +1238,17 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
         regions_of[region.page_id].append(region)
     runs = _fast_runs_by_target(page_ids) if page_ids else {}
     out = [_sheet(book, page, lines_of[page.pk], regions_of[page.pk], runs) for page in pages]
-    return {"book_id": book.pk, "from": first, "to": last, "total": book.pages.count(), "pages": out}
+    # one query for both the page total and the book's typical line height (was a plain count)
+    heights = list(book.pages.values_list("is_excluded", "preprocess__median_line_height"))
+    typical = [float(h) for excluded, h in heights if not excluded and h]
+    return {
+        "book_id": book.pk,
+        "from": first,
+        "to": last,
+        "total": len(heights),
+        "book_line_h_px": round(statistics.median(typical), 2) if typical else 0,
+        "pages": out,
+    }
 
 
 def _sheet(book: Book, page: Page, lines: list[Line], regions: list[Region], runs: RunsByTarget) -> dict:

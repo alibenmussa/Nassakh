@@ -46,6 +46,14 @@
   const STAGGER_CAP = 24;
   const SKELETON_WIDTHS = [100, 100, 92, 100, 84, 100, 96, 100, 88, 100, 100, 72, 100, 48];
   const DEFAULT_BODY = [0.12, 0.10, 0.88, 0.90];
+  // §4.7 one type size per text group, paragraph edges shared, lines fitted by word spacing (D30)
+  const SNAP_TOL = 0.03; // line edges within 3 % of the text width share the paragraph edge
+  const FIT_Q = 0.1; // the group's size lets 90 % of its full lines fit their measure at natural spacing…
+  const FIT_FLOOR = 0.75; // …but never drops below 75 % of the size the printed line height gives
+  const FIT_OUTLIER = 0.8; // a line needing < 80 % of the group's median size (merged lines, extra words) does not set it
+  const WS_SHRINK = 0.5; // a line still too long tightens each word space by up to half a space…
+  const SX_MIN = 0.9; // …then condenses horizontally down to 90 %; beyond that it is clipped with a fade
+  const BOOK_TOL = 0.2; // a page whose line height is within ±20 % of the book's takes the book's size
   const NOISE_LINE_WORDS = [3, 6];
   const NOISE_WORD_LEN = [2, 7];
   const FONT = '"IBM Plex Sans Arabic"';
@@ -555,6 +563,52 @@
     return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
   }
 
+  function mid(values) { // median without dropping zeros (edges may sit at 0)
+    const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+    if (!v.length) return 0;
+    return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2;
+  }
+
+  function quantile(values, q) {
+    const v = values.filter((x) => Number.isFinite(x) && x > 0).sort((a, b) => a - b);
+    if (!v.length) return 0;
+    const pos = (v.length - 1) * q;
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    return v[lo] + (v[hi] - v[lo]) * (pos - lo);
+  }
+
+  // The edge most lines share: the densest ±tol window of `values` (ties go to the outer side), as the
+  // median of that window; null when fewer than two lines share an edge.
+  function dominantEdge(values, tol, outerIsMax) {
+    if (values.length < 2) return null;
+    let best = null;
+    values.forEach((c) => {
+      const near = values.filter((v) => Math.abs(v - c) <= tol);
+      if (!best || near.length > best.near.length || (near.length === best.near.length && (outerIsMax ? c > best.c : c < best.c))) {
+        best = { c, near };
+      }
+    });
+    return best.near.length >= 2 ? mid(best.near) : null;
+  }
+
+  // Snap a measured line to the paragraph edges (L = end edge on the left, R = start edge on the right,
+  // RTL) and classify it: full (reaches the measure: justified; an indented first line keeps its indent),
+  // center (inset on both sides about equally: a heading), short (ends early: a paragraph's last line).
+  function snapLine(r, L, R, tol) {
+    const atEnd = Math.abs(r.lx0 - L) <= tol;
+    const atStart = Math.abs(r.lx1 - R) <= tol;
+    if (atEnd) r.lx0 = L;
+    if (atStart) r.lx1 = R;
+    if (atEnd || r.lx0 < L) { r.shape = 'full'; return; }
+    if (!atStart && r.lx1 < R) {
+      const inEnd = r.lx0 - L;
+      const inStart = R - r.lx1;
+      if (Math.abs(inEnd - inStart) <= Math.max(tol, 0.25 * Math.max(inEnd, inStart))) { r.shape = 'center'; return; }
+    }
+    r.shape = 'short';
+  }
+
   function union(boxes) {
     return [
       Math.min(...boxes.map((b) => b[0])),
@@ -608,6 +662,14 @@
     const boxes = (Array.isArray(p.line_boxes) ? p.line_boxes : []).map(ratioBox).filter(Boolean).sort((a, b) => a[1] - b[1]);
     const fy = typeof p.footnote_y === 'number' && Number.isFinite(p.footnote_y) ? p.footnote_y : null;
     const mlh = Number(p.median_line_h) || 0;
+    // same type across the book: this page's measured line height is replaced by the book's typical one
+    // when they agree within BOOK_TOL (measurement noise); a page with clearly different type keeps its own
+    const bookLh = Number(p.book_line_h_px) || 0;
+    let bookNorm = 1;
+    if (bookLh > 0 && mlh > 0 && H > 0) {
+      const q = bookLh / (mlh * H);
+      if (Math.abs(q - 1) <= BOOK_TOL) bookNorm = q;
+    }
     const regions = (Array.isArray(p.regions) ? p.regions : []).map((r) => ({ kind: r.kind || 'body', box: ratioBox(r.bbox) })).filter((r) => r.box);
     let mode;
     if (T === null) mode = 'skeleton';
@@ -619,6 +681,7 @@
     const bodyB = fy === null ? boxes : boxes.filter((b) => b[1] < fy);
     const noteB = fy === null ? [] : boxes.filter((b) => b[1] >= fy);
     const measure = typeof api.measure === 'function' ? api.measure : browserMeasure;
+    const spaceW = Math.max(1, Number(measure(' ')) || 1);
     let index = 0;
 
     function group(kind, textLines, detected, bodyFs) {
@@ -652,58 +715,114 @@
         }
         if (mlh > 0) hg = kind === 'body' ? mlh : 0.85 * mlh;
       }
+      if (hg > 0) hg *= bookNorm;
+      else if (bookLh > 0 && H > 0) hg = (kind === 'body' ? 1 : 0.85) * (bookLh / H);
       if (!(hg > 0)) { // pitch-derived: the block height shared by the lines
         hg = 0.62 * ((block[3] - block[1]) / Math.max(1, count));
         K = 1;
       }
       const few = count <= FEW;
+      const titlePage = !skeleton && few && !withBox.length && !detected.length;
       let fs = K * hg * HW;
-      if (!skeleton && few && !withBox.length && !detected.length) fs = TITLE_FS * HW; // a title page
+      if (titlePage) fs = TITLE_FS * HW; // a title page
       if (kind === 'footnote' && bodyFs > 0) fs = Math.min(fs, 0.9 * bodyFs);
       let lh = LINE_H * hg * HW;
       const pad = PAD * hg;
       block = [block[0], clamp(block[1] - pad, 0, 1), block[2], clamp(block[3] + pad, 0, 1)];
+
+      // §4.7 lines: measured extents, snapped to the edges the paragraph shares
+      const rows = [];
+      for (let k = 0; k < count; k += 1) {
+        const l = skeleton ? null : tl[k];
+        const box = skeleton ? (detected[k] || null) : l.box;
+        rows.push({ l, box, lx0: box ? box[0] : block[0], lx1: box ? box[2] : block[2], shape: 'full', w100: 0, spaces: 0 });
+      }
+      const boxed = rows.filter((r) => r.box);
+      let edgeL = block[0];
+      let edgeR = block[2];
+      if (boxed.length) {
+        const bx0 = Math.min(...boxed.map((r) => r.lx0));
+        const bx1 = Math.max(...boxed.map((r) => r.lx1));
+        const tol = SNAP_TOL * Math.max(bx1 - bx0, 0.05);
+        const domL = dominantEdge(boxed.map((r) => r.lx0), tol, false);
+        const domR = dominantEdge(boxed.map((r) => r.lx1), tol, true);
+        edgeL = domL === null ? bx0 : domL;
+        edgeR = domR === null ? bx1 : domR;
+        boxed.forEach((r) => snapLine(r, edgeL, edgeR, tol));
+      }
+
+      // one size for the group: lowered only as far as its full lines need to fit their measure
+      if (!skeleton) {
+        rows.forEach((r) => {
+          if (!r.l) return;
+          r.w100 = Math.max(1, Number(measure(r.l.words.join(' '))) || 1);
+          r.spaces = Math.max(0, r.l.words.length - 1);
+        });
+        if (!titlePage) {
+          const caps = rows.filter((r) => r.l && r.shape === 'full').map((r) => ((r.lx1 - r.lx0) * 100) / r.w100);
+          const typical = mid(caps);
+          // lines far longer than their neighbours do not shrink the page: they are tightened instead
+          const fitFs = quantile(caps.filter((c) => c >= FIT_OUTLIER * typical), FIT_Q);
+          if (fitFs > 0 && fitFs < fs) fs = Math.max(fitFs, FIT_FLOOR * fs);
+        }
+      }
       const blockH = (block[3] - block[1]) * HW;
       if (blockH > 0 && count * lh > blockH) { // shrink to fit: never overflow, never scroll
         const f = blockH / (count * lh);
         fs *= f;
         lh *= f;
       }
-      const lines = [];
-      for (let k = 0; k < count; k += 1) {
-        const l = skeleton ? null : tl[k];
-        const box = skeleton ? (detected[k] || null) : l.box;
-        const lx0 = box ? box[0] : block[0];
-        const lx1 = box ? box[2] : block[2];
-        let r = 0;
+
+      // each line at that size: justify / start / center, or tightened word spaces, then a slight condense
+      const space = (spaceW * fs) / 100;
+      const lines = rows.map((r, k) => {
         let fit = 'justify';
-        let scale = 1;
-        if (l) {
-          const w100 = Math.max(1, Number(measure(l.words.join(' '))) || 1);
-          r = fs > 0 ? ((lx1 - lx0) * 100) / (w100 * fs) : 1;
-          if (r >= 1.4) {
-            fit = 'start';
-            const centred = box && Math.abs((lx0 + lx1) / 2 - (block[0] + block[2]) / 2) < 0.04 && (lx1 - lx0) < 0.7 * (block[2] - block[0]);
-            if (centred) fit = 'center';
-          } else if (r >= 1.0) fit = 'justify';
-          else if (r >= 0.85) { fit = 'justify'; scale = r; }
-          else { fit = 'over'; scale = 0.85; }
+        let ws = 0;
+        let sx = 1;
+        let ratio = 0;
+        if (r.l) {
+          const textW = (r.w100 * fs) / 100;
+          if (r.shape === 'short' && textW > r.lx1 - r.lx0) r.lx0 = Math.max(edgeL, r.lx1 - textW); // a last line may run on to the measure
+          if (r.shape === 'center' && textW > r.lx1 - r.lx0) {
+            const c = (r.lx0 + r.lx1) / 2;
+            const w = Math.min(textW, edgeR - edgeL);
+            r.lx0 = clamp(c - w / 2, edgeL, edgeR - w);
+            r.lx1 = r.lx0 + w;
+          }
+          const boxW = r.lx1 - r.lx0;
+          ratio = textW > 0 ? boxW / textW : 1;
+          if (ratio >= 1) {
+            if (r.shape === 'short') fit = 'start';
+            else if (r.shape === 'center') fit = 'center';
+            else fit = ratio >= 1.4 ? 'start' : 'justify';
+          } else {
+            const over = textW - boxW;
+            const per = r.spaces > 0 ? Math.min(over / r.spaces, WS_SHRINK * space) : 0;
+            ws = -per;
+            const rest = textW - per * r.spaces;
+            sx = rest > boxW ? boxW / rest : 1;
+            fit = 'tight';
+            if (sx < SX_MIN) { sx = SX_MIN; fit = 'over'; }
+          }
         }
-        lines.push({
+        const line = {
           i: index,
           kind,
-          words: l ? l.words : [],
-          tokens: l ? l.tokens : null,
-          box,
-          lx0,
-          lx1,
-          r: Math.round(r * 1000) / 1000,
+          words: r.l ? r.l.words : [],
+          tokens: r.l ? r.l.tokens : null,
+          box: r.box,
+          lx0: r.lx0,
+          lx1: r.lx1,
+          shape: r.shape,
+          r: Math.round(ratio * 1000) / 1000,
           fit,
-          scale: Math.round(scale * 1000) / 1000,
+          ws: Math.round(ws * 1e6) / 1e6,
+          sx: Math.round(sx * 1000) / 1000,
           bar: skeleton && !detected.length ? SKELETON_WIDTHS[k % SKELETON_WIDTHS.length] : 100,
-        });
+        };
         index += 1;
-      }
+        return line;
+      });
       return { kind, block, fsCw: fs, lhCw: lh, few, source, lines };
     }
 
@@ -776,7 +895,8 @@
           line.appendChild(bar);
         } else {
           line.setAttribute('data-fit', ln.fit);
-          if (ln.scale !== 1) line.style.setProperty('--fit', String(ln.scale));
+          if (ln.ws) line.style.setProperty('--ws', fix(ln.ws));
+          if (ln.sx !== 1) line.style.setProperty('--sx', String(ln.sx));
           if (ln.fit === 'over') line.setAttribute('title', ln.words.join(' '));
           if (phase === 'final') line.setAttribute('tabindex', '-1');
           const text = el('span', 'fac-text');

@@ -370,14 +370,22 @@
     direction: rtl;
     white-space: nowrap;
     overflow: hidden;
-    font-size: calc(var(--fit, 1) * 1em);
     line-height: 1.2;
+    word-spacing: calc(var(--ws, 0) * 100cqw); /* D30: lines fit by word spacing, never by a smaller size */
     text-align: justify;
     text-align-last: start;
     text-justify: inter-word;
     overflow-wrap: normal;
   }
-  [data-fit="justify"] .fac-text, [data-fit="over"] .fac-text { text-align-last: justify; }
+  [data-fit="justify"] .fac-text, [data-fit="tight"] .fac-text, [data-fit="over"] .fac-text { text-align-last: justify; }
+  /* a line still too long after tightening its word spaces is condensed slightly from its start edge (RTL:
+     the right), at the group's one type size; `over` lines are condensed to the limit and clipped with a fade */
+  [data-fit="tight"] .fac-text, [data-fit="over"] .fac-text {
+    flex: none;
+    width: calc(100% / var(--sx, 1));
+    transform: scaleX(var(--sx, 1));
+    transform-origin: 100% 50%;
+  }
   [data-fit="center"] .fac-text { text-align-last: center; }
   [data-fit="over"] .fac-text { mask-image: linear-gradient(to right, transparent, #000 14px); -webkit-mask-image: linear-gradient(to right, transparent, #000 14px); }
   .fac-text .tok { unicode-bidi: isolate; opacity: 0.85; transition: opacity 400ms ease; }

@@ -159,7 +159,7 @@ toolbar wraps, page padding 16. < 560: the position chip hides; grid min 104 px.
     <div class="sheet-fac" dir="rtl">
       <div class="fac-layer" data-phase="provisional">
         <div class="fac-block" data-region="body" style="--x0:.12;--y0:.10;--x1:.88;--y1:.78;--lh:…;--fs:…">
-          <div class="fac-line" data-line="0" data-fit="justify" style="--lx0:.12;--lx1:.88;--fit:1">
+          <div class="fac-line" data-line="0" data-fit="justify" style="--lx0:.12;--lx1:.88">
             <span class="fac-text"><span class="tok">…</span> <span class="tok">…</span></span>
           </div>
         </div>
@@ -293,23 +293,34 @@ off — accepted; correspondence is by index, not by pixel. A block with ≤ 3 l
   calc((var(--lx1) - var(--lx0)) * 100cqw) }` — physical `margin-left`, the block is `dir="rtl"` but boxes
   are image space (a right-indented last line lands on the right, as printed). Without a bbox the line
   spans the block (`width: 100%`).
-- **Width fit** (once per data arrival, one shared offscreen canvas, `ctx.font = '100px "IBM Plex Sans
-  Arabic"'`): `w100 = ctx.measureText(lineText).width` (px at 100 px). With the line's width as a fraction of
-  the container `bw_cw = lx1 − lx0` (or `X1 − X0`) and the group's `fs_cw`, the scale-invariant ratio is
-  `r = bw_cw · 100 / (w100 · fs_cw)` (box width over the natural text width at the block's font size).
-  Rules → `data-fit` and `--fit`:
-  - `r ≥ 1.4` → `start` (a short line: last line of a paragraph, a title), or `center` when the line has a
-    bbox and `|((lx0 + lx1) / 2) − ((X0 + X1) / 2)| < 0.04` and `(lx1 − lx0) < 0.7 · (X1 − X0)` (centred heading);
-  - `1.0 ≤ r < 1.4` → `justify`;
-  - `0.85 ≤ r < 1.0` → `justify`, `--fit: r`;
-  - `r < 0.85` → `over`, `--fit: 0.85` (the surplus runs into a 14 px end fade; `title` holds the line).
+- **Paragraph edges (D30).** Within a group, the boxed lines' left edges and right edges are each clustered:
+  the densest ±`SNAP_TOL` window (3 % of the text width; ties go to the outer side) gives the paragraph's end
+  edge `L` (left) and start edge `R` (right, RTL), falling back to the outermost extent. A line within the
+  tolerance snaps to that edge, so all full lines share exactly one width. Shapes: **full** (reaches `L`:
+  justified; a first line clearly indented on the right keeps its indent), **center** (inset on both sides
+  about equally: a heading), **short** (ends early: a paragraph's last line, start-aligned at its own width;
+  it may run on towards `L` if its text needs the room). The scan keeps the true boxes; only the text snaps.
+- **One type size per group (D30).** `fs` from the (book-normalised) line height as in §4.4, then lowered
+  only as far as the full lines need: `fs = min(fs, max(P10(cap_i), 0.75 · fs))` with
+  `cap_i = (lx1 − lx0) · 100 / w100_i`, where lines needing less than 80 % of the median cap (merged lines,
+  extra words) are left out so they cannot shrink the page. No line ever gets its own font size.
+- **Fit per line at that size** (`w100` from one offscreen canvas at 100 px, `r = box / text`): `r ≥ 1` →
+  `justify` (full; `start` when `r ≥ 1.4`, i.e. text missing), `start` (short) or `center`; `r < 1` → the
+  word spaces tighten by up to half a space (`--ws`, in container width), then the line condenses
+  horizontally from its start edge down to 90 % (`--sx`, `data-fit="tight"`); a line still too long stays at
+  90 % and is clipped with the end fade (`data-fit="over"`, `title` holds the line).
+- **Across pages (D30).** `api:book_sheets` carries `book_line_h_px`, the median detected line height of
+  the book's included pages; a page whose own median is within ±20 % of it uses the book's value, so every
+  sheet sets its text at the same size; a page with clearly different type keeps its own.
 - CSS:
 
 ```css
 .fac-text { display: block; width: 100%; direction: rtl; white-space: nowrap; overflow: hidden;
-            font-size: calc(var(--fit, 1) * 1em); line-height: 1.2; text-align: justify; text-align-last: start;
-            text-justify: inter-word; overflow-wrap: normal; }
-[data-fit="justify"] .fac-text, [data-fit="over"] .fac-text { text-align-last: justify; }
+            line-height: 1.2; word-spacing: calc(var(--ws, 0) * 100cqw); text-align: justify;
+            text-align-last: start; text-justify: inter-word; overflow-wrap: normal; }
+[data-fit="justify"] .fac-text, [data-fit="tight"] .fac-text, [data-fit="over"] .fac-text { text-align-last: justify; }
+[data-fit="tight"] .fac-text, [data-fit="over"] .fac-text { flex: none; width: calc(100% / var(--sx, 1));
+            transform: scaleX(var(--sx, 1)); transform-origin: 100% 50%; }
 [data-fit="center"] .fac-text { text-align-last: center; }
 [data-fit="over"] .fac-text { mask-image: linear-gradient(to right, transparent, #000 14px); }
 .tok { unicode-bidi: isolate; }

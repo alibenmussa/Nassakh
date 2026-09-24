@@ -164,3 +164,13 @@ geometry (final line boxes, else Tesseract line boxes, else detected boxes, else
 from the median line height of the page, justified with `text-align-last: start`, shrink-to-fit so the column
 never scrolls. Both panes share one line index, so hovering a text line lights its box on the scan and back.
 Spec: `docs/DASHBOARD_SPEC.md`.
+
+## D30 — One type size per text group; lines fit by word spacing; paragraph edges shared (2026-09-24)
+Owner feedback: lines of one page showed different font sizes, and full lines with nearly equal widths should
+share one width while a paragraph's short last line keeps its own. The mirrored text now uses one size per
+group (body, footnotes), lowered only as far as the full lines need (outlier lines such as merged ones excluded),
+never per line. Lines fit the way print does: justified word spacing, then up to half a space tighter, then a
+horizontal condense down to 90 %, then an end fade. Line edges within 3 % of the text width snap to the
+paragraph's shared edge; indented first lines, headings and short last lines keep their shape. The scan keeps
+the true boxes. Across pages, the book's median line height (`book_line_h_px` in `api:book_sheets`) sets the
+size when a page agrees within ±20 %. Spec: `docs/DASHBOARD_SPEC.md` §4.6.

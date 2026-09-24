@@ -1418,3 +1418,16 @@ def test_dashboard_config_carries_status_labels_dots_and_url_templates():
     n = 7
     assert config["urls"]["page"].replace("__n__", str(n)) == reverse("books:page_detail", args=[10, n])
     assert config["urls"]["review"].replace("__n__", str(n)) == reverse("review:page", args=[10, n])
+
+
+def test_sheets_carry_the_books_typical_line_height(django_assert_max_num_queries):
+    """D30: the median detected line height of the book's included, preprocessed pages, in pixels."""
+    book, pages = _book_with_pages(5)
+    for page, height in zip(pages, [40, 42, 41, 90, 0], strict=True):
+        Preprocess.objects.create(page=page, output_width=200, output_height=400, median_line_height=height)
+    Page.objects.filter(pk=pages[3].pk).update(is_excluded=True)  # an excluded cover set in large type
+    with django_assert_max_num_queries(5):
+        data = services.book_sheets(book, 1, 5)
+    assert data["book_line_h_px"] == 41 and data["total"] == 5
+    empty, _ = _book_with_pages(2)
+    assert services.book_sheets(empty, 1, 2)["book_line_h_px"] == 0

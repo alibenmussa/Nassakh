@@ -463,7 +463,7 @@ const plain = { width: W, height: H, text_state: 'provisional', provisional_text
 const L2 = D.layout(plain); const g2 = L2.groups[0];
 out.layPlain = { source: g2.source, block: g2.block.map((v) => +v.toFixed(4)), fs: +g2.fsCw.toFixed(4), few: g2.few, n: g2.lines.length, boxed: g2.lines.some((l) => l.box), lx: [g2.lines[3].lx0, g2.lines[3].lx1] };
 const pitch = 0.8 / 12, hgPitch = 0.62 * pitch;
-out.layPlainExpect = { fs: +(1 * hgPitch * HW).toFixed(4), y0: +(0.1 - 0.12 * hgPitch).toFixed(4) };
+out.layPlainExpect = { fs: +Math.max(76 / 1950, 0.75 * hgPitch * HW).toFixed(4), y0: +(0.1 - 0.12 * hgPitch).toFixed(4) };
 const title = { width: W, height: H, text_state: 'provisional', provisional_text: 'عنوان الكتاب\nاسم المؤلف' };
 const L3 = D.layout(title); const g3 = L3.groups[0];
 out.layTitle = { few: g3.few, fs: +g3.fsCw.toFixed(4), n: g3.lines.length, fits: g3.lines.map((l) => l.fit) };
@@ -485,6 +485,35 @@ const centred = { width: W, height: H, text_state: 'final', lines: [
   { region_kind: 'heading', bbox: [0.4, 0.1, 0.6, 0.13], tokens: [{ t: 'باب' }] },
   ...Array.from({ length: 4 }, (_, k) => ({ region_kind: 'body', bbox: [0.15, 0.2 + 0.05 * k, 0.85, 0.23 + 0.05 * k], tokens: long.split(' ').map((t) => ({ t })) })) ] };
 out.layCentred = D.layout(centred).groups[0].lines[0].fit;
+
+// --- §4.7 (D30): one size per group, shared paragraph edges, lines fitted by word spacing, book line height
+const toks = (text) => text.split(' ').map((t) => ({ t }));
+const jitter = [0.150, 0.152, 0.149, 0.153, 0.151, 0.150];
+const para = { width: W, height: H, text_state: 'final', median_line_h: 0.03, lines: [
+  { region_kind: 'body', bbox: [0.4, 0.06, 0.6, 0.09], tokens: toks('باب') }, // 0 centred heading
+  { region_kind: 'body', bbox: [0.151, 0.10, 0.82, 0.13], tokens: toks(long) }, // 1 indented first line
+  ...jitter.map((x0, k) => ({ region_kind: 'body', bbox: [x0, 0.15 + 0.05 * k, 0.85 - 0.002 * (k % 2), 0.18 + 0.05 * k], tokens: toks(long) })), // 2..7 full, jittered
+  { region_kind: 'body', bbox: [0.55, 0.45, 0.851, 0.48], tokens: toks('كلمة كلمة') }, // 8 the paragraph's last line
+  { region_kind: 'body', bbox: [0.15, 0.50, 0.85, 0.53], tokens: toks(long + ' ' + long) }, // 9 two lines merged: far too long
+  { region_kind: 'body', bbox: [0.15, 0.55, 0.85, 0.58], tokens: toks(long + ' كلمة') }, // 10 one word too many
+] };
+const gp = D.layout(para).groups[0];
+out.layPara = { fs: gp.fsCw, hasScale: gp.lines.some((l) => 'scale' in l),
+  lines: gp.lines.map((l) => ({ shape: l.shape, fit: l.fit, lx0: +l.lx0.toFixed(4), lx1: +l.lx1.toFixed(4), ws: l.ws, sx: l.sx, r: l.r })) };
+out.layParaHeightFs = 0.78 * 0.03 * HW;
+out.layParaSpace = (50 * gp.fsCw) / 100; // one space at the group size (the harness measures 50 per char)
+const six = 'كلمة كلمة كلمة كلمة كلمة كلمة';
+const bookBase = { width: W, height: H, text_state: 'final', median_line_h: 0.03,
+  lines: Array.from({ length: 6 }, (_, k) => ({ region_kind: 'body', bbox: [0.15, 0.1 + 0.05 * k, 0.85, 0.13 + 0.05 * k], tokens: toks(six) })) };
+out.layBook = { own: +D.layout(bookBase).groups[0].fsCw.toFixed(5), near: +D.layout({ ...bookBase, book_line_h_px: 49.5 }).groups[0].fsCw.toFixed(5),
+  far: +D.layout({ ...bookBase, book_line_h_px: 70 }).groups[0].fsCw.toFixed(5) };
+// rendered: word spacing and condense on the line element, never a per-line font size
+const findAll = (node, cls, acc = []) => { (node.children || []).forEach((c) => { if (c.classList && c.classList.contains(cls)) acc.push(c); findAll(c, cls, acc); }); return acc; };
+const hostP = new Element('div');
+D.sheet(hostP, { scan: new Element('div'), figure: new Element('figure') }).update({ page: { ...para, id: 99, number: 9, status: 'ocr_done' }, active: false });
+const facLines = findAll(hostP, 'fac-line');
+out.layParaDom = { n: facLines.length, fits: facLines.map((e) => e.getAttribute('data-fit')), anyFit: facLines.some((e) => e.style['--fit'] !== undefined),
+  tightWs: facLines[10] && facLines[10].style['--ws'], overSx: facLines[9] && facLines[9].style['--sx'], plainWs: facLines[3] && facLines[3].style['--ws'] };
 
 // --- §13.1 sheet handle: skeleton → provisional (cursor, sheen, exact under the band) → final wave; hot both sides
 const host = new Element('div'), scan = new Element('div'), figure = new Element('figure');
@@ -736,6 +765,36 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "block": [0.12, 0.096, 0.88, 0.904],
     }
     assert out["layEmpty"] == "empty" and out["layCentred"] == "center"
+
+    # --- D30: one type size per group; lines share the paragraph edges; fitted by word spacing
+    para = out["layPara"]
+    lines = para["lines"]
+    assert para["hasScale"] is False  # no per-line font size any more
+    assert [ln["fit"] for ln in lines] == ["center", "justify"] + ["justify"] * 6 + ["start", "over", "tight"]
+    assert [ln["shape"] for ln in lines] == ["center"] + ["full"] * 7 + ["short", "full", "full"]
+    # jittered full lines snap to one width: the paragraph's end edge (left) and start edge (right)
+    assert {(ln["lx0"], ln["lx1"]) for ln in lines[2:8]} == {(0.15, 0.85)}
+    assert (lines[1]["lx0"], lines[1]["lx1"]) == (0.15, 0.82)  # the indented first line keeps its indent
+    assert (lines[8]["lx0"], lines[8]["lx1"]) == (0.55, 0.85)  # the last line keeps its own width
+    assert (lines[0]["lx0"], lines[0]["lx1"]) == (0.4, 0.6)  # the heading stays centred as printed
+    # the size is lowered only as far as the regular full lines need (they fit at natural spacing)
+    assert 0.75 * out["layParaHeightFs"] <= para["fs"] < out["layParaHeightFs"]
+    assert all(ln["r"] >= 1 and ln["ws"] == 0 and ln["sx"] == 1 for ln in lines[1:8])
+    # one word too many: word spaces tighten (within half a space), no condense needed
+    assert lines[10]["ws"] < 0 and lines[10]["sx"] == 1
+    assert abs(lines[10]["ws"]) <= 0.5 * out["layParaSpace"] + 1e-9
+    # two lines merged: spaces at their limit, condensed to 90 % and clipped with a fade
+    assert lines[9]["sx"] == 0.9 and abs(abs(lines[9]["ws"]) - 0.5 * out["layParaSpace"]) < 1e-5
+    # the book's typical line height sets the size when the page agrees within 20 %, else the page's own
+    book = out["layBook"]
+    assert book["own"] == round(0.78 * 0.03 * 1.5, 5)
+    assert book["near"] == round(0.78 * 0.03 * 1.5 * 1.1, 5) and book["far"] == book["own"]
+    # rendered: fits on the line elements, word spacing / condense as properties, no --fit anywhere
+    dom = out["layParaDom"]
+    assert dom["n"] == 11 and dom["fits"] == [ln["fit"] for ln in lines] and dom["anyFit"] is False
+    assert (
+        dom["tightWs"] and float(dom["tightWs"]) < 0 and dom["overSx"] == "0.9" and dom.get("plainWs") is None
+    )
 
     # --- sheet handle: skeleton bars and scan boxes from one index space, the cursor lights both sides
     assert out["hSkel"] == {

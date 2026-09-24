@@ -122,6 +122,7 @@ document.addEventListener('alpine:init', () => {
     const mounted = new Set(); // page ids whose sheet body is in the DOM
     const byNumber = new Map(); // page number -> page id
     const pending = new Set(); // page numbers waiting for a sheets request
+    let bookLineH = 0; // the book's typical printed line height in px (api:book_sheets), shared by every sheet (D30)
     let flushTimer = null;
     let nearObserver = null;
     let farObserver = null;
@@ -247,7 +248,7 @@ document.addEventListener('alpine:init', () => {
       const p = pages.get(String(pid)) || {};
       const s = sheets.get(String(pid));
       if (!s) return p;
-      return Object.assign({}, p, s, { error: s.error || p.error || false, error_headline: s.error || p.error_headline || '' });
+      return Object.assign({}, p, s, { error: s.error || p.error || false, error_headline: s.error || p.error_headline || '', book_line_h_px: bookLineH });
     },
     isMounted(pid) {
       return mounted.has(String(pid));
@@ -950,6 +951,7 @@ document.addEventListener('alpine:init', () => {
     },
     applySheets(data) {
       const items = Array.isArray(data) ? data : (data && (data.pages || data.sheets || data.results)) || [];
+      if (data && Number(data.book_line_h_px) > 0) bookLineH = Number(data.book_line_h_px);
       items.forEach((s) => {
         if (!s || s.id == null) return;
         const pid = String(s.id);
