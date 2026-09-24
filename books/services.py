@@ -643,12 +643,15 @@ def book_progress(book: Book) -> dict:
 
     `percent` weights each non-excluded page by how far it is through the Phase 2 pipeline
     (preprocessed 1/3, layout done 2/3, OCR done 3/3). `flags` counts pages that carry attention
-    flags or are in error. `active` is true while the book is processing or in OCR.
+    flags or are in error. `active` is true while the book is processing or in OCR. `review` is
+    `review.services.book_review_summary` (reviewed / total pages, unresolved words, next URL).
     """
     by_status = book.progress()
     rows = book.pages.filter(is_excluded=False).values_list("attention_flags", "status")
     flags = sum(1 for page_flags, status in rows if page_flags or status == Page.Status.ERROR)
-    return _progress_payload(book, by_status, flags)
+    from review.services import book_review_summary  # other app: lazy import
+
+    return {**_progress_payload(book, by_status, flags), "review": book_review_summary(book)}
 
 
 def _progress_payload(book: Book, by_status: dict[str, int], flags: int) -> dict:
@@ -791,6 +794,12 @@ def page_tile(page: Page, sequence_issue: str = "") -> dict:
         "thumb_url": _file_url(preprocess.thumbnail) if preprocess else None,
         "scan_thumb_url": _file_url(page.scan_thumbnail),
         "url": reverse("books:page_detail", args=[page.book_id, page.number]),
+        "n_unresolved": page.n_unresolved,
+        "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
+        "review_url": reverse("review:page", args=[page.book_id, page.number]),
+        # Image size for the stacked view's aspect-ratio placeholders (cleaned image first, then the scan).
+        "width": (preprocess.output_width if preprocess else 0) or page.width,
+        "height": (preprocess.output_height if preprocess else 0) or page.height,
     }
 
 
@@ -880,6 +889,9 @@ def book_dashboard(book: Book) -> dict:
         "byStatus": by_status,
         "stages": [{"key": stage["key"], "statuses": stage["statuses"]} for stage in stages],
         "pages": tiles,
+        "review": progress["review"],
+        "sheetsUrl": reverse("api:book_sheets", args=[book.pk]),
+        "sheetsMax": SHEETS_MAX,
     }
     return {
         "book": book,
@@ -893,6 +905,7 @@ def book_dashboard(book: Book) -> dict:
         "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in STAGES],
         "error_headline": _headline(book.error_message),
         "error_detail": _detail(book.error_message),
+        "review": progress["review"],
         "config": config,
     }
 
@@ -989,6 +1002,116 @@ def page_detail_context(page: Page) -> dict:
             "initialTab": "gray" if images["gray"] else "original",
         },
     }
+
+
+SHEETS_MAX = 40  # pages per call of the stacked-sheets API
+
+
+class SheetsRangeError(ValueError):
+    """A bad `from` / `to` query of the sheets API (Arabic message)."""
+
+
+def sheets_range(start: str | None, end: str | None) -> tuple[int, int]:
+    """Validated `(from, to)` page numbers for `book_sheets`: defaults 1 and from + 39, capped at 40 pages."""
+
+    def number(raw: str | None, default: int) -> int:
+        if raw in (None, ""):
+            return default
+        text = str(raw).strip()
+        if not (text.isascii() and text.isdigit()) or int(text) < 1:
+            raise SheetsRangeError("رقم الصفحة في الطلب غير صالح.")
+        return int(text)
+
+    first = number(start, 1)
+    last = number(end, first + SHEETS_MAX - 1)
+    if last < first:
+        raise SheetsRangeError("نطاق الصفحات غير صالح: «إلى» قبل «من».")
+    return first, min(last, first + SHEETS_MAX - 1)
+
+
+def _ratio_boxes(line_boxes: list | None, width: int, height: int) -> list[list[float]]:
+    """Detected line boxes (`{x0, y0, x1, y1}` gray pixels) as `[x0, y0, x1, y1]` ratios of the page."""
+    if not width or not height:
+        return []
+    out = []
+    for box in line_boxes or []:
+        try:
+            x0, y0, x1, y1 = (float(box[k]) for k in ("x0", "y0", "x1", "y1"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append([round(x0 / width, 4), round(y0 / height, 4), round(x1 / width, 4), round(y1 / height, 4)])
+    return out
+
+
+def book_sheets(book: Book, first: int, last: int) -> dict:
+    """Pages `first..last` of the book for the stacked-sheets view (three queries in all).
+
+    Per page: status, provisional text, final lines with their tokens (`t`, `conf`, `res`),
+    image URLs and size (gray-image pixels, or the original's before preprocessing), detected
+    line boxes as 0..1 ratios in reading order, review state and URLs.
+    """
+    from ocr.models import Line  # other app: lazy import
+
+    pages = list(
+        book.pages.filter(number__gte=first, number__lte=last)
+        .select_related("preprocess")
+        .defer("text_layer_text", "final_text", "guides_override", "preprocess__auto_params")
+        .order_by("number")
+    )
+    lines_of: dict[int, list[dict]] = {page.pk: [] for page in pages}
+    rows = (
+        Line.objects.filter(page_id__in=list(lines_of))
+        .select_related("region")
+        .only("page_id", "order", "tokens", "region__kind")
+        .order_by("page_id", "order", "id")
+    )
+    for line in rows:
+        lines_of[line.page_id].append(
+            {
+                "order": line.order,
+                "region_kind": line.region.kind if line.region_id and line.region else "body",
+                "tokens": [
+                    {"t": token.get("t", ""), "conf": token.get("conf", "high"), "res": token.get("res")}
+                    for token in line.tokens or []
+                ],
+            }
+        )
+    out = []
+    for page in pages:
+        pre = _preprocess_of(page)
+        width = (pre.output_width if pre is not None else 0) or page.width
+        height = (pre.output_height if pre is not None else 0) or page.height
+        display = (_file_url(pre.display_image) or _file_url(pre.gray_image)) if pre is not None else None
+        out.append(
+            {
+                "id": page.pk,
+                "number": page.number,
+                "status": page.status,
+                "status_label": page.get_status_display(),
+                "dot": status_dot(page.status),
+                "text_state": page.text_state,
+                "provisional_text": page.provisional_text,
+                "lines": lines_of[page.pk],
+                "display_url": display,
+                "scan_url": _file_url(page.original_image),
+                "thumb_url": _file_url(pre.thumbnail) if pre is not None else None,
+                "scan_thumb_url": _file_url(page.scan_thumbnail),
+                "width": width,
+                "height": height,
+                "line_boxes": _ratio_boxes(pre.line_boxes if pre is not None else [], width, height)
+                if pre is not None
+                else [],
+                "n_lines": pre.n_lines if pre is not None else 0,
+                "n_unresolved": page.n_unresolved,
+                "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
+                "is_excluded": page.is_excluded,
+                "printed_number": page.printed_number,
+                "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
+                "url": reverse("books:page_detail", args=[book.pk, page.number]),
+                "review_url": reverse("review:page", args=[book.pk, page.number]),
+            }
+        )
+    return {"book_id": book.pk, "from": first, "to": last, "total": book.pages.count(), "pages": out}
 
 
 def _clean_text(text: str) -> str:

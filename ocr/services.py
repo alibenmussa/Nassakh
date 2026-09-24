@@ -37,6 +37,7 @@ from core.arabic import normalize, normalize_ws, parse_output, to_western_digits
 from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
+from . import chooser
 from .alignment import build_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
@@ -790,8 +791,23 @@ def _set_flags(flags: list, updates: dict[str, bool]) -> list:
     return out
 
 
+def is_unresolved(token: dict) -> bool:
+    """A token still waiting for the reviewer: low confidence and no resolution (`res`) yet."""
+    return token.get("conf") == "low" and not token.get("res")
+
+
+def count_unresolved(tokens: list[dict]) -> int:
+    """Number of unresolved tokens of a line (`Line.n_low`)."""
+    return sum(1 for token in tokens or [] if is_unresolved(token))
+
+
 def finalize_page(page: Page) -> None:
     """Build the Line rows and the final text of a page from its stored runs; mark it `ocr_done`.
+
+    Low-confidence tokens with several readings go through the word-chooser hook
+    (`ocr.chooser`, D26, off by default); `Line.n_low` counts the unresolved tokens and
+    `Page.n_unresolved` their sum over the page. Review revisions recorded before this pass can no
+    longer be undone (their lines are replaced).
 
     Unreviewed lines are replaced; a reviewed line (Phase 3) is kept in place of the new line at
     its `order` and its text goes into `final_text`. `final_text` gets Western
@@ -825,23 +841,28 @@ def finalize_page(page: Page) -> None:
                 order += 1
                 texts.append(kept.text)
                 continue
+            tokens = b["tokens"]
+            chooser.apply_chooser(
+                tokens, {"page_id": page.pk, "region_kind": rt.target.kind, "line_index": order}
+            )
+            text = " ".join(token["t"] for token in tokens)
             new_lines.append(
                 Line(
                     page=page,
                     order=order,
                     region=rt.target.region,
                     bbox=b["bbox"],
-                    text=b["text"],
+                    text=text,
                     ocr_text=b["text"],
-                    tokens=b["tokens"],
+                    tokens=tokens,
                     confidence=b["confidence"],
-                    n_low=b["n_low"],
+                    n_low=count_unresolved(tokens),
                 )
             )
             order += 1
-            total_tokens += len(b["tokens"])
+            total_tokens += len(tokens)
             anchored += b["n_anchored"]
-            texts.append(b["text"])
+            texts.append(text)
         (foot_parts if rt.target.kind in FOOTNOTE_KINDS else main_parts).append("\n".join(texts))
     final_text = join_region_texts(
         [(PAGE_KIND, "\n".join(p for p in main_parts if p))] + [(Region.Kind.FOOTNOTE, p) for p in foot_parts]
@@ -849,15 +870,21 @@ def finalize_page(page: Page) -> None:
     fallback = any(rt.fallback for rt in region_texts)
     poor = has_geometry and total_tokens >= 10 and anchored / total_tokens < MIN_ANCHOR_RATIO
 
+    from review.models import LineRevision  # review history of the page (other app: lazy import)
+
     with transaction.atomic():
         page.lines.filter(is_reviewed=False).delete()
         Line.objects.bulk_create(new_lines)
+        LineRevision.objects.filter(page=page, undone=False).update(undone=True)
         page.final_text = to_western_digits(final_text)
         page.text_state = Page.TextState.FINAL
         page.attention_flags = _set_flags(
             page.attention_flags, {FLAG_FALLBACK: fallback, FLAG_ALIGNMENT: poor}
         )
-        fields = ["final_text", "text_state", "attention_flags"]
+        page.n_unresolved = sum(line.n_low for line in new_lines) + sum(
+            line.n_low for line in reviewed.values()
+        )
+        fields = ["final_text", "text_state", "attention_flags", "n_unresolved"]
         if printed:
             page.printed_number = printed
             fields.append("printed_number")

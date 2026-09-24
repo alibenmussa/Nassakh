@@ -1,6 +1,8 @@
 {% load ocr_tags nassakh %}{% comment %}Text panel of the page detail screen. Context: page, book.
-   Shows the provisional Tesseract text (faded) while `text_state == provisional`, then the final lines with
-   low-confidence tokens underlined in amber, plus the list of engine runs. The Alpine component `textPanel`
+   While `text_state == provisional` the Tesseract text is shown through the decode effect (window.NassakhDecode,
+   D23: words oscillating between noise and letters, never settling); pages still waiting for text show a few
+   lines of noise. When the final lines arrive a right-to-left wave lands the words, then the final lines take
+   over with low-confidence tokens underlined in amber, plus the list of engine runs. The Alpine component `textPanel`
    (static/src/js/ocr.js) polls /api/pages/<id>/status/ (one request at a time) while the page is still processing and then
    loads /api/pages/<id>/text/ and /api/pages/<id>/runs/. The status route belongs to the books app
    (`api:page_status`); the runs list here is the live one for the page detail screen.{% endcomment %}
@@ -15,8 +17,8 @@
   <header class="card-header">
     <div class="flex items-center gap-2 min-w-0">
       <h2 class="section-title" id="text-panel-title">النص</h2>
-      <span class="badge badge-accent" x-show="textState === 'provisional'" x-cloak>نص مبدئي (Tesseract)</span>
-      <span class="badge" x-show="textState === 'final'" x-cloak>نص نهائي</span>
+      <span class="badge badge-accent" x-show="view === 'provisional'" x-cloak>نص مبدئي (Tesseract)</span>
+      <span class="badge" x-show="view === 'final'" x-cloak>نص نهائي</span>
       <span class="badge badge-warning" x-show="flags.includes('ocr_fallback')" x-cloak title="فشل نموذجا Qari في هذه الصفحة، فاستُخدم نص Tesseract">نص Tesseract الاحتياطي</span>
       <span class="badge badge-warning" x-show="flags.includes('alignment_poor')" x-cloak title="لم يُربط كثير من الكلمات بأسطر الصورة">ربط الأسطر ضعيف</span>
     </div>
@@ -25,7 +27,7 @@
         <span class="dot dot-accent" aria-hidden="true"></span>
         <span>قيد المعالجة</span>
       </span>
-      <span class="meta" x-show="textState === 'final' && lines.length" x-cloak>
+      <span class="meta" x-show="view === 'final' && lines.length" x-cloak>
         الأسطر: <bdi class="num" x-text="lines.length"></bdi> · منخفضة الثقة: <bdi class="num" x-text="nLow"></bdi>
       </span>
       <button type="button" class="btn btn-ghost btn-sm" x-show="copyable" x-cloak @click="copy()" aria-label="نسخ نص الصفحة">
@@ -72,18 +74,19 @@
       </ul>
       <p class="tok-pop-note" x-show="hover.tok && hover.tok.digit">رقم: تحقّق منه على الصورة</p>
     </div>
-    {# no text yet #}
-    <p class="text-empty meta" x-show="textState === 'none'" x-cloak x-transition.opacity.duration.200ms
-       x-text="isActive ? 'يظهر النص المبدئي هنا بعد التعرّف السريع.' : 'لم يُستخرج نص لهذه الصفحة بعد. شغّل مرحلة التعرّف على النص من قائمة إعادة التشغيل.'"></p>
-
-    {# provisional (Tesseract), faded #}
-    <div class="text-body text-text-3" dir="rtl" x-show="textState === 'provisional'" x-cloak x-transition.opacity.duration.200ms x-text="provisional"></div>
+    {# before the final text: the decode host (noise while waiting, scrambled Tesseract text while provisional) #}
+    <div class="stack-sm" x-show="view !== 'final'" x-cloak x-transition.opacity.duration.200ms>
+      <p class="text-empty meta" x-show="view === 'none'" x-cloak x-transition.opacity.duration.200ms
+         x-text="isActive ? 'يظهر النص المبدئي هنا بعد التعرّف السريع.' : 'لم يُستخرج نص لهذه الصفحة بعد. شغّل مرحلة التعرّف على النص من قائمة إعادة التشغيل.'"></p>
+      <div class="text-body decode-host text-text-3" dir="rtl" x-ref="decode" x-show="showDecode" x-cloak aria-hidden="true" data-decode-host></div>
+    </div>
+    <span class="sr-only" aria-live="polite" x-text="liveText"></span>
 
     {# final lines; low-confidence tokens get a thin amber underline. Tokens are separated by real spaces so selection copies words. #}
-    <div class="stack" x-show="textState === 'final'" x-cloak x-transition.opacity.duration.200ms>
+    <div class="stack" x-show="view === 'final'" x-cloak x-transition.opacity.duration.200ms>
       <ol class="text-lines" dir="rtl" x-show="lines.length">
         <template x-for="line in lines" :key="line.id">
-          <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span><span class="tok" :class="tok.conf === 'low' && 'tok-low'" :tabindex="tok.conf === 'low' ? 0 : null" :aria-describedby="tok.conf === 'low' ? 'tok-pop' : null" @mouseenter="tok.conf === 'low' && showTok($event, tok)" @mouseleave="hideTok()" @focus="tok.conf === 'low' && showTok($event, tok)" @blur="hideTok()" @keydown.escape="hideTok(true)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template></li>
+          <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span><span class="tok" :class="tok.conf === 'low' && !tok.res && 'tok-low'" :tabindex="tok.conf === 'low' ? 0 : null" :aria-describedby="tok.conf === 'low' ? 'tok-pop' : null" @mouseenter="tok.conf === 'low' && showTok($event, tok)" @mouseleave="hideTok()" @focus="tok.conf === 'low' && showTok($event, tok)" @blur="hideTok()" @keydown.escape="hideTok(true)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template></li>
         </template>
       </ol>
       <div class="text-body" dir="rtl" x-show="!lines.length" x-text="finalText || 'لا نص في هذه الصفحة.'"></div>

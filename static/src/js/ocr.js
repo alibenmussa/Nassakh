@@ -28,6 +28,9 @@ document.addEventListener('alpine:init', () => {
    * (same shape as the /text/ endpoint plus `runs`). Polling is a self-rescheduling timeout, so a
    * request never starts before the previous one finished; it stops for good on 401/403.
    * Every status poll is re-broadcast as `nassakh:page-state` so the page's state card stays in step.
+   * Provisional text is shown through the decode effect (window.NassakhDecode, D23): while the page is
+   * still working the words oscillate between noise and Tesseract's letters; when the final lines arrive a
+   * right-to-left wave lands them, and only then does the final-lines markup take over (`resolving`).
    */
   Alpine.data('textPanel', (config) => ({
     status: '',
@@ -48,6 +51,8 @@ document.addEventListener('alpine:init', () => {
     failures: 0,
     timer: null,
     ticks: 0,
+    resolving: false, // the resolve wave is playing: keep showing the decode host until it lands
+    decodeMode: '', // what the decode host currently shows: '' | 'noise' | 'provisional' | 'static'
 
     init() {
       const script = this.$root.querySelector('script[type="application/json"]:not([id])');
@@ -64,6 +69,7 @@ document.addEventListener('alpine:init', () => {
       }
       if (config.errorFrom) this.errorFrom = config.errorFrom;
       if (this.isActive) this.start();
+      if (this.$nextTick) this.$nextTick(() => this.afterUpdate());
     },
 
     destroy() {
@@ -73,6 +79,67 @@ document.addEventListener('alpine:init', () => {
     get isActive() {
       if (typeof this.active === 'boolean') return this.active;
       return ACTIVE_STATUSES.includes(this.status);
+    },
+
+    // What the text stage shows: the final markup waits for the resolve wave to land.
+    get view() {
+      return this.resolving ? 'provisional' : this.textState;
+    },
+    get showDecode() {
+      return this.view === 'provisional' || (this.view === 'none' && this.isActive);
+    },
+    // Polite announcement for screen readers (the scrambled text itself is aria-hidden).
+    get liveText() {
+      if (this.view === 'final') return this.lines.length ? 'وصل النص النهائي.' : '';
+      if (this.view === 'provisional') return this.isActive ? 'النص قيد التعرّف.' : 'نص Tesseract المبدئي.';
+      return this.isActive ? 'قيد المعالجة، لا نص بعد.' : '';
+    },
+
+    // Called after every state change: keep the decode host in step, or play the resolve wave.
+    afterUpdate() {
+      const el = this.$refs && this.$refs.decode;
+      const D = window.NassakhDecode;
+      if (!el || !D || this.resolving) return;
+      if (this.textState === 'final') {
+        if (this.decodeMode && this.decodeMode !== 'static' && this.lines.length) {
+          this.playResolve(el, D);
+        } else {
+          this.clearDecode(el, D);
+        }
+        return;
+      }
+      if (this.textState === 'provisional' && this.provisional) {
+        const mode = this.isActive ? 'provisional' : 'static';
+        if (this.decodeMode === mode) D.update(el, { text: this.provisional, static: mode === 'static' });
+        else D.attach(el, { text: this.provisional, mode: 'provisional', static: mode === 'static' });
+        this.decodeMode = mode;
+        return;
+      }
+      if (this.textState === 'none' && this.isActive) {
+        if (this.decodeMode !== 'noise') D.attach(el, { mode: 'noise', lines: 8 });
+        this.decodeMode = 'noise';
+        return;
+      }
+      this.clearDecode(el, D);
+    },
+    playResolve(el, D) {
+      this.resolving = true;
+      const lines = this.lines.map((line) => ({ region_kind: line.region_kind || '', tokens: line.tokens || [] }));
+      D.resolve(el, {
+        lines,
+        onDone: () => {
+          this.resolving = false;
+          this.decodeMode = '';
+          // the final-lines markup has taken over (200 ms crossfade); free the host afterwards
+          setTimeout(() => { if (!this.decodeMode) { D.detach(el); el.textContent = ''; } }, 400);
+        },
+      });
+    },
+    clearDecode(el, D) {
+      if (!this.decodeMode) return;
+      D.detach(el);
+      el.textContent = '';
+      this.decodeMode = '';
     },
 
     // Designed failure: the first line is the Arabic headline, the rest is technical detail.
@@ -193,6 +260,7 @@ document.addEventListener('alpine:init', () => {
           this.apply(statusFields);
           if (this.ticks % RUNS_EVERY === 0) await this.refreshRuns();
         }
+        this.afterUpdate();
         window.dispatchEvent(new CustomEvent('nassakh:page-state', { detail: data }));
         this.failures = 0;
         this.fetchFailed = false;
@@ -239,7 +307,7 @@ document.addEventListener('alpine:init', () => {
 
     tokenOptions(tok) {
       if (!tok) return [];
-      const rows = [{ label: config.primaryLabel || 'النموذج الأول', value: tok.t }];
+      const rows = [{ label: config.primaryLabel || 'النموذج الأول', value: tok.orig || tok.t }];
       if (tok.alt) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: tok.alt });
       else if (!tok.digit) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: '— لا مقابل' });
       if (tok.tess) rows.push({ label: 'Tesseract', value: tok.tess });

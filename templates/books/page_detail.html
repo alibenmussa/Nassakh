@@ -24,6 +24,13 @@
     {% endif %}
   </nav>
   <a class="btn btn-ghost btn-sm" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
+  {% optional_url 'review:page' book.pk page.number as review_url %}
+  {% if review_url and not page.is_excluded %}
+  <a class="btn btn-sm{% if page.status == 'ocr_done' or page.status == 'reviewed' %} btn-primary{% endif %}" href="{{ review_url }}"{% if page.status != 'ocr_done' and page.status != 'reviewed' %} title="تتوافر المراجعة بعد التعرّف على النص"{% endif %}>
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+    <span>مراجعة الصفحة</span>
+  </a>
+  {% endif %}
 {% endblock %}
 
 {% block content %}

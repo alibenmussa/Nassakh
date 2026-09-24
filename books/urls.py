@@ -26,5 +26,6 @@ urlpatterns = [
 api_urlpatterns = [
     path("books/<int:book_id>/progress/", api.book_progress, name="book_progress"),
     path("books/<int:book_id>/text/", api.book_text, name="book_text"),
+    path("books/<int:book_id>/sheets/", api.book_sheets, name="book_sheets"),
     path("pages/<int:page_id>/status/", api.page_status, name="page_status"),
 ]

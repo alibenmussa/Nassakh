@@ -1,7 +1,335 @@
 {% extends "base.html" %}
 {% comment %}
-Placeholder (Phase 3). Context: book, page, prev_url, next_url, and the JSON config rendered with
-{{ config|json_script:"review-config" }} (shape: docs/PHASE3_SPEC.md §4). The review-UI agent replaces this file.
+Review screen (Phase 3, docs/PHASE3_SPEC.md §4). Context: book, page, prev_url, next_url and `config`
+(review_payload) rendered as <script id="review-config">. The top-bar controls live in header_actions
+(outside the screen's root) and talk to the screen through Alpine.store('review'); everything else is
+the `reviewScreen` component in static/src/js/review.js; styles in static/src/components/review.css.
 {% endcomment %}
-{% block title %}مراجعة الصفحة {{ page.number }}{% endblock %}
-{% block content %}{{ config|json_script:"review-config" }}{% endblock %}
+{% block head_title %}مراجعة · صفحة {{ page.number }} · {{ book.title }} · نسّاخ{% endblock %}
+{% block title %}<span class="title-page">مراجعة</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+
+{% block header_actions %}
+<div class="rv-bar" x-data="reviewBar">
+  <template x-if="b">
+    <div class="rv-bar-inner">
+      <a class="btn btn-ghost btn-sm rv-bar-dash" :href="b.dashboardUrl" x-show="b.dashboardUrl">لوحة الكتاب</a>
+
+      <div class="rv-pager" role="group" aria-label="التنقّل بين الصفحات">
+        <button type="button" class="btn-icon btn-icon-sm" title="الصفحة السابقة (→)" aria-label="الصفحة السابقة" :disabled="!b.hasPrev" @click="act('goPrevPage')">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+        </button>
+        <span class="rv-pager-count meta">صفحة <bdi class="num" x-text="b.number"></bdi> من <bdi class="num" x-text="b.total"></bdi></span>
+        <button type="button" class="btn-icon btn-icon-sm" title="الصفحة التالية (←)" aria-label="الصفحة التالية" :disabled="!b.hasNext" @click="act('goNextPage')">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+        </button>
+      </div>
+
+      <div class="rv-progress" x-show="!b.pending && !b.error" :title="'حُسمت ' + b.resolved + ' من ' + b.lowTotal + ' كلمة'">
+        <span class="rv-progress-text meta">حُسمت <bdi class="num rv-counter" x-text="b.shown"></bdi> من <bdi class="num" x-text="b.lowTotal"></bdi> كلمة</span>
+        <div class="progress rv-progress-bar" role="progressbar" aria-label="الكلمات المحسومة" aria-valuemin="0" :aria-valuemax="b.lowTotal" :aria-valuenow="b.resolved">
+          <div class="progress-fill" :class="{ 'is-success': b.pct === 100 && b.lowTotal > 0 }" :style="'width:' + b.pct + '%'"></div>
+        </div>
+      </div>
+
+      <button type="button" class="rv-save" :class="'is-' + b.save" :disabled="b.save !== 'error'" :aria-hidden="b.save === 'idle'" @click="act('retrySave')" role="status" aria-live="polite">
+        <span class="rv-save-dot" aria-hidden="true"></span>
+        <span x-text="b.save === 'saving' ? 'يحفظ…' : b.save === 'saved' ? 'محفوظ' : b.save === 'error' ? 'تعذّر الحفظ · إعادة المحاولة' : ''"></span>
+      </button>
+
+      <button type="button" class="btn-icon rv-help" title="اختصارات لوحة المفاتيح (?)" aria-label="اختصارات لوحة المفاتيح" @click="act('openSheet')"><span aria-hidden="true">?</span></button>
+
+      <template x-if="b.reviewed">
+        <span class="rv-reviewed">
+          <span class="rv-reviewed-mark" aria-hidden="true"><svg class="icon icon-sm"><use href="#i-check"/></svg></span>
+          <span>مُراجَعة</span>
+          <button type="button" class="btn btn-sm" x-show="b.canEdit" @click="act('reopen')">إعادة فتح</button>
+        </span>
+      </template>
+      <template x-if="!b.reviewed">
+        <button type="button" class="btn btn-primary btn-sm rv-approve" :disabled="!b.canApprove" @click="act('approve', false)" title="اعتماد الصفحة (A)">اعتماد الصفحة</button>
+      </template>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block content %}
+{{ config|json_script:"review-config" }}
+<div class="review-screen" x-data="reviewScreen(JSON.parse(document.getElementById('review-config').textContent))"
+     :class="{ 'is-swapped': swapped, 'is-readonly': !canEdit, 'is-loading': loading }"
+     @keydown.window="onKey($event)">
+
+  {# before Alpine boots: a quiet skeleton, hidden the moment the component mounts #}
+  <div class="rv-boot" x-show="false" aria-hidden="true">
+    <div class="rv-boot-scan"></div>
+    <div class="rv-skeleton"><span style="width:88%"></span><span style="width:76%"></span><span style="width:92%"></span><span style="width:64%"></span><span style="width:81%"></span><span style="width:70%"></span></div>
+  </div>
+
+  <div class="rv-split" :class="{ 'is-out': slide === 'out', 'is-in': slide === 'in' }">
+
+    {# ------------------------------------------------------------ scan #}
+    <section class="rv-pane rv-scan-pane" aria-label="صورة الصفحة">
+      <div class="rv-toolbar">
+        <div class="segmented" role="tablist" aria-label="عرض الصورة">
+          <button type="button" role="tab" :aria-selected="tab === 'display'" :class="{ 'is-selected': tab === 'display' }" @click="setTab('display')">المعالَجة</button>
+          <button type="button" role="tab" :aria-selected="tab === 'scan'" :class="{ 'is-selected': tab === 'scan' }" :disabled="!hasScan" @click="setTab('scan')">الأصل</button>
+        </div>
+        <div class="rv-toolbar-end">
+          <div class="rv-zoom" role="group" aria-label="التكبير">
+            <button type="button" class="btn-icon btn-icon-sm" title="تصغير (-)" aria-label="تصغير" @click="zoomOut()"><span aria-hidden="true">−</span></button>
+            <button type="button" class="rv-zoom-label meta num" title="ملاءمة العرض (0)" @click="zoomReset()" x-text="zoomLabel" dir="ltr"></button>
+            <button type="button" class="btn-icon btn-icon-sm" title="تكبير (+)" aria-label="تكبير" @click="zoomIn()"><span aria-hidden="true">+</span></button>
+          </div>
+          <button type="button" class="btn-icon btn-icon-sm" :aria-pressed="swapped" title="تبديل جهتَي الصورة والنص" aria-label="تبديل جهتَي الصورة والنص" @click="toggleSwap()">
+            <svg class="icon" aria-hidden="true"><path d="M7 8h13M17 5l3 3-3 3"/><path d="M17 16H4M7 13l-3 3 3 3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="rv-scan" x-ref="scan" :class="{ 'is-dragging': drag && drag.moved, 'is-zoomed': zoom.scale > 1 }"
+           @wheel.prevent="onWheel($event)" @pointerdown="onPointerDown($event)" @pointermove="onPointerMove($event)"
+           @pointerup="onPointerUp($event)" @pointercancel="onPointerUp($event)" @dblclick.prevent="zoom.scale > 1 ? zoomReset() : zoomIn()">
+        <div class="rv-sheet" dir="ltr" :class="{ 'is-gliding': gliding, 'show-scan': tab === 'scan' }" :style="sheetStyle">
+          <img class="rv-img rv-img-display" :src="image.display_url" alt="" draggable="false" decoding="async">
+          <img class="rv-img rv-img-scan" :src="image.scan_url || image.display_url" alt="" draggable="false" decoding="async" loading="lazy">
+          <div class="rv-overlay" aria-hidden="true">
+            <div class="rv-band" :style="bandStyle"></div>
+            <template x-for="line in lines" :key="'b' + line.id">
+              <div class="rv-line-boxes">
+                <template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i">
+                  <div class="rv-box" x-show="tok.bbox" :class="boxClass(line, tok, i)" :style="tok.bbox ? boxStyle(tok.bbox) : ''"
+                       @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onBoxClick(line, i)"></div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+        <div class="rv-scan-empty" x-show="!image.display_url" x-cloak>
+          <span class="meta">لا صورة معالَجة لهذه الصفحة بعد.</span>
+        </div>
+      </div>
+    </section>
+
+    {# ------------------------------------------------------------ lines #}
+    <section class="rv-pane rv-lines-pane" aria-label="أسطر النص" :class="{ 'is-entering': entering, 'is-pulse': pulsing }">
+      <div class="rv-toolbar">
+        <div class="rv-toolbar-start">
+          <h2 class="section-title">النص</h2>
+          <span class="badge badge-warning" x-show="ready && counts.unresolved > 0" x-cloak><bdi class="num" x-text="counts.unresolved"></bdi> غير محسومة</span>
+          <span class="badge" x-show="ready && counts.low_total > 0 && counts.unresolved === 0" x-cloak>حُسمت كلها</span>
+          <span class="meta" x-show="page.printed_number" x-cloak>الرقم المطبوع: <bdi class="num" x-text="page.printed_number"></bdi></span>
+        </div>
+        <div class="rv-toolbar-end">
+          <button type="button" class="btn btn-ghost btn-sm" x-show="ready && lines.length" x-cloak @click="copyPage()" aria-label="نسخ نص الصفحة">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>نسخ</span>
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" x-show="editable" x-cloak @click="startInsert()" title="إدراج سطر (Alt+Enter)">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+            <span>إدراج سطر</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="rv-lines-scroll" x-ref="scroll">
+        {# read-only #}
+        <div class="banner banner-info rv-note" x-show="!canEdit && ready" x-cloak>
+          <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+          <span class="grow">عرض فقط: حسم الكلمات وتعديل الأسطر متاحان للمدقّقين والمحرّرين.</span>
+        </div>
+
+        {# error: Arabic headline, retry from the dashboard stage #}
+        <div class="rv-state rv-state-error empty-state" x-show="isError" x-cloak role="alert">
+          <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+          <h3 class="empty-title" x-text="errorHeadline"></h3>
+          <p class="empty-text">لا نصّ للمراجعة حتى تُعاد المرحلة المتعطّلة<span x-show="page.error_from"> (<span x-text="page.error_from"></span>)</span> من لوحة الكتاب.</p>
+          <a class="btn" :href="nav.dashboard_url">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>فتح لوحة الكتاب لإعادة المرحلة</span>
+          </a>
+        </div>
+
+        {# not yet OCR'd: the decode effect stands in for the text #}
+        <div class="rv-state rv-state-pending" x-show="isPending && !loading" x-cloak>
+          <div class="rv-pending-head status" role="status" aria-live="polite">
+            <span class="dot dot-accent" aria-hidden="true"></span>
+            <span>النص قيد التعرّف</span>
+            <span class="meta" x-text="page.status_label"></span>
+          </div>
+          <div class="rv-noise text-body" x-ref="noise" dir="rtl" aria-hidden="true"></div>
+          <p class="meta">تظهر الأسطر هنا تلقائيًا حين تنتهي النماذج من هذه الصفحة.</p>
+        </div>
+
+        {# loading another page #}
+        <div class="rv-skeleton" x-show="loading" x-cloak aria-hidden="true">
+          <span style="width:88%"></span><span style="width:76%"></span><span style="width:92%"></span><span style="width:64%"></span><span style="width:81%"></span><span style="width:70%"></span><span style="width:86%"></span>
+        </div>
+
+        {# the lines #}
+        <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading" x-cloak>
+
+          {# actionable readings popover: rows only for the readings that exist, key hints 1/2/3, a correction input #}
+          <div class="rv-pop" x-show="pop.open && focused" x-cloak :style="pop.style" role="dialog" aria-label="قراءات الكلمة" @mousedown.stop @keydown.escape.stop.prevent="closeTop()">
+            <div class="rv-pop-title" x-text="canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة'"></div>
+            <template x-for="opt in options()" :key="opt.choice">
+              <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
+                <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
+                <bdi class="rv-opt-value" x-text="opt.value"></bdi>
+                <span class="rv-opt-label" x-text="opt.label"></span>
+              </button>
+            </template>
+            <p class="rv-pop-note" x-show="focused && focused.digit">رقم: تحقّق منه على الصورة</p>
+            <template x-if="editable">
+              <form class="rv-typed" @submit.prevent="submitTyped()">
+                <div class="rv-pop-sep" aria-hidden="true"></div>
+                <label class="sr-only" for="rv-typed-input">تصحيح</label>
+                <input id="rv-typed-input" class="input" x-ref="typed" x-model="pop.typed" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto"
+                       @focus="pop.typing = true" @keydown.escape.stop.prevent="closeTop()" @keydown.tab.prevent="move($event.shiftKey ? -1 : 1)">
+                <button type="submit" class="btn btn-sm" :disabled="!pop.typed.trim()">حفظ</button>
+              </form>
+            </template>
+          </div>
+
+          <ol class="rv-lines" dir="rtl">
+            <template x-for="(line, li) in lines" :key="line.id">
+              <li class="rv-line" :class="lineClass(line)" :style="'--i:' + Math.min(li, 24)" :data-id="line.id"
+                  @mouseenter="hotLine = line.id" @mouseleave="hotLine = null" @dblclick.prevent="startEdit(line)">
+                <template x-if="showGroup(line, li)">
+                  <div class="rv-group group-label" aria-hidden="true">الحواشي</div>
+                </template>
+                <span class="rv-line-num num" aria-hidden="true" x-text="li + 1"></span>
+
+                <template x-if="!edit || edit.lineId !== line.id">
+                  {# tokens are separated by real spaces so selecting a line copies separate words #}
+                  <p class="rv-line-text"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span class="rv-w"><span class="rv-tok" :id="tokId(line.id, i)" :class="tokClass(line, tok, i)" :tabindex="tok.conf === 'low' ? 0 : -1" :role="tok.conf === 'low' ? 'button' : null" :aria-haspopup="tok.conf === 'low' ? 'dialog' : null" @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onTokClick(line, i)" @focus="onTokFocus(line, i)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template><span class="badge rv-manual" x-show="line.is_manual" x-cloak>مُدرَج</span></p>
+                </template>
+                <template x-if="edit && edit.lineId === line.id">
+                  <div class="rv-editor-wrap">
+                    <textarea class="rv-editor" x-ref="editor" rows="1" x-model="edit.text" dir="rtl" aria-label="تعديل السطر" spellcheck="false"
+                              @keydown.enter.prevent="saveEdit()" @keydown.escape.stop.prevent="cancelEdit()" @keydown.tab.stop @input="autosize($event.target)"></textarea>
+                    <span class="rv-editor-hint meta"><kbd class="kbd">Enter</kbd> حفظ · <kbd class="kbd">Esc</kbd> إلغاء</span>
+                  </div>
+                </template>
+
+                <div class="rv-line-tools" x-show="editable" x-cloak>
+                  <button type="button" class="btn-icon btn-icon-sm" title="تعديل السطر (E)" aria-label="تعديل السطر" @click.stop="startEdit(line)">
+                    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+                  </button>
+                  <button type="button" class="btn-icon btn-icon-sm" title="إدراج سطر بعده (Alt+Enter)" aria-label="إدراج سطر بعده" @click.stop="startInsert(line)">
+                    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+                  </button>
+                  <div class="rv-menu-host">
+                    <button type="button" class="btn-icon btn-icon-sm" title="المزيد" aria-label="قائمة السطر" aria-haspopup="menu" :aria-expanded="menuFor === line.id" @click.stop="menuFor = menuFor === line.id ? null : line.id">
+                      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
+                    </button>
+                    <div class="menu rv-menu" role="menu" x-show="menuFor === line.id" x-cloak @click.outside="menuFor = null" x-transition.opacity.duration.120ms>
+                      <div class="menu-label">السطر <bdi class="num" x-text="li + 1"></bdi><span x-show="line.is_manual"> · مُدرَج يدويًا</span></div>
+                      <button type="button" class="menu-item" role="menuitem" @click="startEdit(line)">تعديل السطر <kbd class="kbd ms-auto">E</kbd></button>
+                      <button type="button" class="menu-item" role="menuitem" @click="startInsert(line)">إدراج سطر بعده</button>
+                      <div class="menu-sep" aria-hidden="true"></div>
+                      <button type="button" class="menu-item is-danger" role="menuitem" @click="removeLine(line)">حذف السطر</button>
+                    </div>
+                  </div>
+                </div>
+
+                <template x-if="insert && insert.afterId === line.id">
+                  <div class="rv-insert">
+                    <textarea class="rv-editor" x-ref="editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر المفقود…" spellcheck="false"
+                              @keydown.enter.prevent="saveInsert()" @keydown.escape.stop.prevent="cancelEdit()" @keydown.tab.stop @input="autosize($event.target)"></textarea>
+                    <span class="rv-editor-hint meta"><kbd class="kbd">Enter</kbd> إدراج · <kbd class="kbd">Esc</kbd> إلغاء</span>
+                  </div>
+                </template>
+              </li>
+            </template>
+          </ol>
+
+          <template x-if="insert && insert.afterId === null">
+            <div class="rv-insert rv-insert-first">
+              <textarea class="rv-editor" x-ref="editor" rows="1" x-model="insert.text" dir="rtl" aria-label="سطر جديد" placeholder="نصّ السطر…" spellcheck="false"
+                        @keydown.enter.prevent="saveInsert()" @keydown.escape.stop.prevent="cancelEdit()" @input="autosize($event.target)"></textarea>
+            </div>
+          </template>
+
+          <p class="rv-empty meta" x-show="!lines.length && !insert" x-cloak>لا نص في هذه الصفحة. يمكنك إدراج سطر إن كانت الصورة تحوي نصًا.</p>
+
+          <p class="rv-legend meta" x-show="counts.low_total > 0" x-cloak>
+            <span class="rv-legend-swatch" aria-hidden="true">أ</span>
+            <span>تحتها خط: كلمة غير مؤكَّدة. <span x-show="editable"><kbd class="kbd">Tab</kbd> للانتقال بينها، <kbd class="kbd">1</kbd>–<kbd class="kbd">3</kbd> لاختيار قراءة، أو اكتب التصحيح مباشرة.</span></span>
+          </p>
+        </div>
+      </div>
+
+      {# approve stamp #}
+      <div class="rv-stamp" x-show="stamp" x-cloak aria-hidden="true">
+        <svg class="rv-stamp-mark" viewBox="0 0 48 48"><circle cx="24" cy="24" r="21"/><path d="M14.5 24.5l6.5 6.5 12.5-13.5"/></svg>
+      </div>
+    </section>
+  </div>
+
+  {# ------------------------------------------------------------ filmstrip #}
+  <nav class="rv-film" aria-label="شريط الصفحات" x-ref="film">
+    <div class="rv-film-track" x-show="film.state === 'ready'" x-cloak>
+      <template x-for="p in film.items" :key="p.number">
+        <a class="rv-thumb" :href="p.url" :class="{ 'is-current': p.number === page.number, 'is-reviewed': p.is_reviewed, 'is-pending': !p.is_reviewed && p.status !== 'ocr_done' }"
+           :aria-current="p.number === page.number ? 'page' : null" :title="thumbTitle(p)" @click.prevent="goTo(p)">
+          <span class="rv-thumb-img" :style="thumbAspect"><img :src="p.thumb_url" alt="" loading="lazy" decoding="async" x-show="p.thumb_url"></span>
+          <span class="rv-thumb-num num" x-text="p.number"></span>
+          <span class="rv-thumb-mark is-check" x-show="p.is_reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
+          <span class="rv-thumb-mark is-count" x-show="!p.is_reviewed && p.n_unresolved > 0" x-text="p.n_unresolved"></span>
+        </a>
+      </template>
+    </div>
+    <div class="rv-film-track rv-film-skeleton" x-show="film.state !== 'ready'" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+    </div>
+  </nav>
+
+  {# ------------------------------------------------------------ undo toast (delete) #}
+  <div class="toast rv-toast" x-show="undoToast" x-cloak x-transition.opacity.duration.200ms role="status" aria-live="polite">
+    <span class="grow" x-text="undoToast && undoToast.message"></span>
+    <button type="button" class="btn" @click="undo()">تراجع</button>
+    <button type="button" class="toast-close" aria-label="إغلاق" @click="undoToast = null">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+
+  {# ------------------------------------------------------------ approve with unresolved words #}
+  <div class="rv-scrim" x-show="dialog.open" x-cloak x-transition.opacity.duration.150ms @click.self="dialog.open = false">
+    <div class="rv-modal rv-dialog" role="alertdialog" aria-modal="true" aria-labelledby="rv-dialog-title" @keydown.tab="trapTab($event, $el)">
+      <h2 class="rv-modal-title" id="rv-dialog-title">بقيت <bdi class="num" x-text="dialog.count"></bdi> كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟</h2>
+      <p class="meta">تبقى الكلمات غير المحسومة بخطّها الكهرماني في النص، ويمكن إعادة فتح الصفحة لاحقًا.</p>
+      <div class="rv-modal-actions">
+        <button type="button" class="btn" x-ref="dialogCancel" @click="dialog.open = false">متابعة المراجعة</button>
+        <button type="button" class="btn rv-btn-force" @click="approve(true)">اعتماد</button>
+      </div>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------ shortcut sheet #}
+  <div class="rv-scrim" x-show="sheetOpen" x-cloak x-transition.opacity.duration.150ms @click.self="closeSheet()">
+    <div class="rv-modal rv-shortcuts" role="dialog" aria-modal="true" aria-labelledby="rv-sheet-title" @keydown.tab="trapTab($event, $el)">
+      <div class="rv-modal-head">
+        <h2 class="rv-modal-title" id="rv-sheet-title">اختصارات لوحة المفاتيح</h2>
+        <button type="button" class="btn-icon" x-ref="sheetClose" aria-label="إغلاق" @click="closeSheet()">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <dl class="rv-keys">
+        <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">Shift</kbd><kbd class="kbd">Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
+        <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
+        <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
+        <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة</dd>
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو إلغاء التحرير</dd>
+        <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
+        <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">Enter</kbd></dt><dd>إدراج سطر بعد السطر الحالي</dd>
+        <dt><kbd class="kbd">⌘</kbd><kbd class="kbd">Z</kbd></dt><dd>تراجع</dd>
+        <dt><kbd class="kbd">A</kbd></dt><dd>اعتماد الصفحة</dd>
+        <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية بانتظار المراجعة</dd>
+        <dt><kbd class="kbd">←</kbd> / <kbd class="kbd">→</kbd></dt><dd>الصفحة التالية / السابقة</dd>
+        <dt><kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd> <kbd class="kbd">0</kbd></dt><dd>تكبير الصورة، تصغيرها، ملاءمة العرض</dd>
+        <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+{% endblock %}

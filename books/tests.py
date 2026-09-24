@@ -1108,3 +1108,109 @@ def test_page_detail_shows_the_printed_number(editor_client):
     Page.objects.filter(pk=page.pk).update(printed_number="41")
     body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
     assert "الرقم المطبوع:" in body and ">41</bdi>" in body
+
+
+# ---------------------------------------------------------------- Phase 3: review state and stacked sheets
+
+
+def _ocr_line(page: Page, order: int, tokens: list[dict], region=None):
+    from ocr.models import Line
+
+    text = " ".join(t["t"] for t in tokens)
+    return Line.objects.create(page=page, order=order, region=region, text=text, ocr_text=text, tokens=tokens)
+
+
+def test_tiles_and_progress_carry_the_review_state(editor_client):
+    book, pages = _book_with_pages(3)
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.OCR_DONE, n_unresolved=5)
+    Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.REVIEWED, n_unresolved=1)
+    Page.objects.filter(pk=pages[2].pk).update(width=700, height=1000)
+    data = editor_client.get(reverse("api:book_progress", args=[book.pk])).json()
+    first, second, third = data["pages"]
+    # image size for the stacked view's placeholders (no preprocess yet: the scan's size)
+    assert (third["width"], third["height"]) == (700, 1000)
+    assert first["n_unresolved"] == 5 and first["is_reviewed"] is False
+    assert second["is_reviewed"] is True
+    assert first["review_url"] == reverse("review:page", args=[book.pk, 1])
+    assert data["review"] == {
+        "reviewed": 1,
+        "total": 3,
+        "pending": 1,
+        "unresolved_total": 6,
+        "next_review_url": reverse("review:next", args=[book.pk]),
+    }
+    dashboard = services.book_dashboard(book)
+    assert dashboard["review"]["reviewed"] == 1
+    assert dashboard["config"]["sheetsUrl"] == reverse("api:book_sheets", args=[book.pk])
+
+
+def test_sheets_api_shape(editor_client):
+    book, pages = _book_with_pages(3, width=300, height=500)
+    page = pages[1]
+    Page.objects.filter(pk=page.pk).update(
+        status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL, n_unresolved=1, printed_number="12"
+    )
+    pre = Preprocess.objects.create(
+        page=page,
+        output_width=200,
+        output_height=400,
+        n_lines=2,
+        line_boxes=[{"x0": 20, "y0": 40, "x1": 180, "y1": 60}, {"x0": 10, "y0": 100, "x1": 200, "y1": 120}],
+    )
+    from core.storage import save_array
+
+    save_array(pre.display_image, np.full((40, 20), 200, dtype=np.uint8), "display.webp")
+    save_array(pre.thumbnail, np.full((20, 10), 200, dtype=np.uint8), "thumb.webp")
+    pre.save()
+    foot = Region.objects.create(page=page, kind="footnote", bbox=[0, 300, 200, 400], order=1)
+    _ocr_line(
+        page, 0, [{"t": "قال", "conf": "high"}, {"t": "الكتب", "conf": "low", "alt": "الكتاب", "res": None}]
+    )
+    _ocr_line(page, 1, [{"t": "(١)", "conf": "low", "res": "primary"}], region=foot)
+
+    url = reverse("api:book_sheets", args=[book.pk])
+    data = editor_client.get(f"{url}?from=2&to=3").json()
+    assert data["from"] == 2 and data["to"] == 3 and data["total"] == 3
+    assert [p["number"] for p in data["pages"]] == [2, 3]
+    sheet = data["pages"][0]
+    assert set(sheet) >= {
+        "id", "number", "status", "status_label", "text_state", "provisional_text", "lines", "display_url",
+        "scan_url", "thumb_url", "width", "height", "line_boxes", "n_unresolved", "is_reviewed",
+        "printed_number", "url", "review_url",
+    }  # fmt: skip
+    assert sheet["width"] == 200 and sheet["height"] == 400
+    assert sheet["line_boxes"] == [[0.1, 0.1, 0.9, 0.15], [0.05, 0.25, 1.0, 0.3]]
+    assert sheet["lines"] == [
+        {"order": 0, "region_kind": "body", "tokens": [
+            {"t": "قال", "conf": "high", "res": None}, {"t": "الكتب", "conf": "low", "res": None}]},
+        {"order": 1, "region_kind": "footnote", "tokens": [{"t": "(١)", "conf": "low", "res": "primary"}]},
+    ]  # fmt: skip
+    assert sheet["display_url"].endswith("display.webp") and sheet["thumb_url"].endswith("thumb.webp")
+    assert sheet["n_unresolved"] == 1 and sheet["printed_number"] == "12" and sheet["is_reviewed"] is False
+    assert sheet["review_url"] == reverse("review:page", args=[book.pk, 2])
+    blank = data["pages"][1]
+    assert blank["width"] == 300 and blank["height"] == 500  # original size before preprocessing
+    assert blank["lines"] == [] and blank["line_boxes"] == [] and blank["display_url"] is None
+
+
+def test_sheets_api_caps_the_range_and_rejects_bad_numbers(editor_client, client):
+    book, _ = _book_with_pages(45)
+    url = reverse("api:book_sheets", args=[book.pk])
+    data = editor_client.get(url).json()
+    assert data["from"] == 1 and data["to"] == 40 and len(data["pages"]) == 40
+    data = editor_client.get(f"{url}?from=10&to=200").json()
+    assert data["to"] == 49 and [p["number"] for p in data["pages"]] == list(range(10, 46))
+    for query in ("from=abc", "from=0", "from=5&to=2", "to=-1", "from=٣"):
+        response = editor_client.get(f"{url}?{query}")
+        assert response.status_code == 400 and response.json()["message"]
+    client.logout()
+    assert client.get(url).status_code == 403
+
+
+def test_sheets_query_count_does_not_grow_with_pages(editor_client, django_assert_max_num_queries):
+    book, pages = _book_with_pages(12)
+    for page in pages:
+        _ocr_line(page, 0, [{"t": "كلمة", "conf": "high"}])
+    with django_assert_max_num_queries(4):
+        data = services.book_sheets(book, 1, 12)
+    assert len(data["pages"]) == 12 and all(len(p["lines"]) == 1 for p in data["pages"])

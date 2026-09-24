@@ -1203,3 +1203,54 @@ def test_build_lines_keeps_tesseract_reading_only_when_it_differs():
     assert toks["قال"]["tess"] is None  # same reading: nothing to show
     assert toks["الأمير"]["tess"] == "الأمبر"  # Tesseract's differing word travels with the token
     assert toks["١٩٦٦"]["tess"] is None  # digits compare equal after lenient normalisation
+
+
+# ---------------------------------------------------------------- word chooser hook (D26) and n_unresolved
+
+
+def _full_run(page):
+    add_regions(page)
+    with registry.override(engines()):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    return page
+
+
+def test_finalize_page_counts_unresolved_words_on_the_page(page):
+    page = _full_run(page)
+    assert page.n_unresolved == 3 == sum(line.n_low for line in page.lines.all())
+
+
+def test_word_chooser_is_off_by_default_and_the_placeholder_chooses_nothing(page, settings):
+    from ocr import chooser
+
+    assert settings.NASSAKH["WORD_CHOOSER"] == "none" and not chooser.enabled()
+    assert chooser.choose_word({"t": "a", "alt": "b", "conf": "low"}, {}) is None
+    with mock.patch("ocr.chooser.choose_word") as choose:
+        page = _full_run(page)
+    choose.assert_not_called()
+    settings.NASSAKH = {**settings.NASSAKH, "WORD_CHOOSER": "placeholder"}
+    services.finalize_page(page)  # enabled, but the placeholder returns None
+    page.refresh_from_db()
+    assert page.n_unresolved == 3
+    assert all(not t.get("res") for line in page.lines.all() for t in line.tokens)
+
+
+def test_a_patched_word_chooser_resolves_a_word_but_keeps_it_low(page, settings):
+    settings.NASSAKH = {**settings.NASSAKH, "WORD_CHOOSER": "test"}
+    seen = []
+
+    def pick(token, context):
+        seen.append((token["t"], context["candidates"], context["region_kind"]))
+        return token["alt"] if token.get("alt") else "not-a-candidate"
+
+    with mock.patch("ocr.chooser.choose_word", side_effect=pick):
+        page = _full_run(page)
+    assert ("الكتاب", ["الكتاب", "الكتب"], "body") in seen
+    line = page.lines.order_by("order").first()
+    token = next(t for t in line.tokens if t.get("res"))
+    assert token == {**token, "t": "الكتب", "res": "chooser", "conf": "low", "orig": "الكتاب"}
+    assert line.text == "قال الأمير في سنة ١٩٦٦ إن الكتب مفيد" and line.ocr_text.endswith("الكتاب مفيد")
+    assert line.n_low == 1  # only the number is left
+    assert page.n_unresolved == 2 and "إن الكتب مفيد" in page.final_text

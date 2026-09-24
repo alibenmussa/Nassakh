@@ -41,7 +41,7 @@ packages = []
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "nassakh.settings_test"
 python_files = ["tests.py", "test_*.py"]
-testpaths = ["core", "accounts", "books", "processing", "ocr"]
+testpaths = ["core", "accounts", "books", "processing", "ocr", "review"]
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]
 
@@ -55,7 +55,7 @@ select = ["E", "F", "I", "B", "UP", "DJ"]
 ignore = ["B008"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["nassakh", "core", "accounts", "books", "processing", "ocr"]
+known-first-party = ["nassakh", "core", "accounts", "books", "processing", "ocr", "review"]
 section-order = ["future", "standard-library", "django", "third-party", "first-party", "local-folder"]
 
 [tool.ruff.lint.isort.sections]

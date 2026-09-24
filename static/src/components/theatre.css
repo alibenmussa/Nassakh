@@ -1,1 +1,174 @@
-/* Processing theatre (Phase 3): stacked page sheets, grid cards, scan and decode effects. */
+/* Processing theatre (Phase 3, D23–D25): the decode effect, stacked page sheets, animated grid cards,
+   scan sweep and line-reading shimmer. Continuous motion lives only on content in a processing state and is
+   driven by static/src/js/decode.js (one rAF loop, paused off-screen). Everything here degrades to a static
+   state under prefers-reduced-motion. Image-space overlays use physical left/top on purpose. */
+@layer components {
+  /* ------------------------------------------------------------ decode effect (§2) */
+  .decode { font-size: 15px; line-height: 1.85; text-align: start; overflow-wrap: anywhere; }
+  .decode-line { min-height: 1.85em; }
+  .decode-line[data-region="footnote"] { font-size: 0.92em; color: var(--color-text-2); }
+  .decode-line.is-first-footnote { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+  .decode-w { display: inline; }
+  /* scrambling: Tesseract's text drifting in and out of noise; quiet colour so it never reads as the result */
+  .decode.is-decoding, .decode.is-resolving .decode-w:not(.is-landed) { color: var(--color-text-3); }
+  .decode.is-decoding .decode-w, .decode.is-resolving .decode-w:not(.is-landed) { letter-spacing: 0.01em; }
+  .decode.is-noise { opacity: 0.55; }
+  .decode.is-noise .decode-line { max-width: 92%; }
+  .decode.is-noise .decode-line:nth-child(3n) { max-width: 74%; }
+  .decode.is-noise .decode-line:nth-child(5n) { max-width: 60%; }
+  .decode.is-noise .decode-line:last-child { max-width: 48%; }
+  /* static fallback (reduced motion, or a page that stopped): Tesseract's text plainly, faded */
+  .decode.is-static { color: var(--color-text-3); }
+  /* a word landing on its final text: brief accent wash that fades (≤ 400 ms, D24) */
+  .decode-w.is-landed {
+    color: var(--color-text);
+    border-radius: 3px;
+    animation: decode-land 400ms ease-out both;
+  }
+  .decode-w.is-landed.tok-low { border-bottom: 1.5px solid var(--color-warning); }
+  .decode.is-resolved { color: var(--color-text); }
+  @keyframes decode-land {
+    from { background-color: var(--color-accent-soft); color: var(--color-accent-text); }
+    to { background-color: transparent; color: var(--color-text); }
+  }
+
+  /* ------------------------------------------------------------ view toggle + review summary */
+  .pages-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .pages-toolbar-start { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .review-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--color-border);
+    font-size: 12.5px;
+  }
+  .review-summary .status { color: var(--color-text); font-weight: 500; }
+  .badge-success { background: rgba(22, 163, 74, 0.1); color: #15803d; }
+  .badge-success .icon { width: 12px; height: 12px; }
+
+  /* ------------------------------------------------------------ stacked sheets (§3, صفحات) */
+  .sheet-stack { display: flex; flex-direction: column; gap: 28px; }
+  .page-sheet {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 640px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    scroll-margin-top: calc(var(--topbar-height) + 16px);
+  }
+  .page-sheet.is-excluded { opacity: 0.5; }
+  .sheet-head { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; min-height: 28px; font-size: 12.5px; }
+  .sheet-title { font-weight: 600; font-size: 13px; color: var(--color-text); border-radius: var(--radius-xs); }
+  .sheet-title:hover { color: var(--color-accent-text); }
+  .sheet-title:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+  .sheet-head .status { font-size: 12.5px; }
+  .sheet-actions { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; }
+  .sheet-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: stretch;
+  }
+  /* The scan column carries the page's aspect ratio from the first paint (no layout shift when data lands);
+     the text column fills the same height and scrolls inside, like a sheet of paper next to the scan. */
+  .sheet-scan {
+    position: relative;
+    margin: 0;
+    aspect-ratio: var(--sheet-ar, 7 / 10);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-muted);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.06);
+    overflow: hidden;
+  }
+  .sheet-scan.is-empty { background: repeating-linear-gradient(to bottom, var(--color-bg-muted) 0 22px, var(--color-bg-subtle) 22px 30px); }
+  .sheet-scan-inner { position: absolute; inset: 0; }
+  .sheet-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .sheet-img-scan { filter: saturate(0.85); }
+  .sheet-img-clean { opacity: 0; transition: opacity 200ms ease; }
+  .sheet-img-clean.is-ready { opacity: 1; }
+  .sheet-paper { position: relative; min-height: 0; }
+  .sheet-paper-inner {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    padding: 18px 20px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--paper, #fcfbf8);
+    scrollbar-width: thin;
+  }
+  .sheet-paper-inner::after {
+    content: "";
+    position: sticky;
+    bottom: -18px;
+    display: block;
+    height: 28px;
+    margin: -10px -20px -18px;
+    background: linear-gradient(to bottom, transparent, var(--paper, #fcfbf8));
+    pointer-events: none;
+  }
+  .sheet-paper .decode { font-size: 14.5px; }
+  .sheet-empty-text { color: var(--color-text-3); font-size: 12.5px; padding-top: 4px; }
+
+  /* scan sweep: a soft band of light moving down the scan while the page is being cleaned (D24) */
+  .scan-sweep::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 20%;
+    background: linear-gradient(to bottom, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55) 50%, rgba(255, 255, 255, 0));
+    border-bottom: 1.5px solid rgba(37, 99, 235, 0.35); /* the reading edge of the band */
+    transform: translateY(calc(var(--sweep, 0) * 600% - 100%));
+    pointer-events: none;
+    will-change: transform;
+  }
+  /* line-reading shimmer: detected line boxes light up one after another in reading order while OCR runs */
+  .sheet-lines { position: absolute; inset: 0; pointer-events: none; }
+  .sheet-line {
+    position: absolute;
+    border-radius: 2px;
+    background: var(--color-accent);
+    opacity: 0;
+    transition: opacity 260ms ease-out;
+  }
+  .sheet-line.is-lit { opacity: 0.22; }
+  .sheet-line.is-lit-2 { opacity: 0.11; }
+  .sheet-line.is-lit-3 { opacity: 0.05; }
+
+  /* ------------------------------------------------------------ grid cards (§3, شبكة) */
+  .tile-stage {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(16, 16, 20, 0.08);
+    opacity: 1;
+    transition: opacity 200ms ease;
+  }
+  .tile-stage-fill { display: block; height: 100%; background: var(--color-accent); transition: width 300ms ease-out; }
+  .tile-stage.is-done { opacity: 0; }
+  .tile-stage.is-error .tile-stage-fill { background: var(--color-danger); }
+  .tile-mark { position: absolute; bottom: 8px; inset-inline-end: 6px; height: 20px; display: inline-flex; align-items: center; gap: 3px; }
+  .tile-mark .icon { width: 12px; height: 12px; }
+  .tile-mark.is-reviewed { background: rgba(21, 128, 61, 0.86); }
+  .tile-mark.is-uncertain { background: rgba(217, 119, 6, 0.9); }
+
+  /* ------------------------------------------------------------ responsive + reduced motion */
+  @media (max-width: 900px) {
+    .sheet-body { grid-template-columns: minmax(0, 1fr); }
+    .sheet-paper-inner { position: static; max-height: 420px; }
+    .sheet-actions { margin-inline-start: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scan-sweep::after { display: none; }
+    .sheet-line { transition: none; }
+    .decode-w.is-landed { animation: none; }
+    .sheet-img-clean { transition: none; }
+  }
+}

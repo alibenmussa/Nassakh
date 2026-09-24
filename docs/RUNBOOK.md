@@ -223,7 +223,7 @@ The same sheet was then run with **real workers** (`make worker` with the prefor
 Redis broker and result backend): `ingest_book_task` → chord of two `preprocess_page` → `after_preprocess` →
 `layout_page` → `ocr_page_fast` on the default worker in 1.5 s, then `ocr_page_full` on the gpu worker (models
 loaded once, 37 s for the first page, 28 s for the second); book `ready_for_review` after 69 s. This run is what
-uncovered the prefork failure fixed in `nassakh/celery.py` (see §10).
+uncovered the prefork failure fixed in `nassakh/celery.py` (see §11).
 
 Throughput estimate from these numbers: about 30–40 s per page on the gpu worker with the `torch` backend,
 so a 400-page scanned book takes 3–4 hours unattended; `OCR_BACKEND=mlx` was about 1.8× faster in the PoC.
@@ -261,7 +261,88 @@ best-effort metadata. A template-matching digit reader is the planned improvemen
 - Born-digital books with `use_text_layer` are finalised from the repaired text layer during fast OCR; the Qari
   models are not run on them.
 
-## 10. Troubleshooting
+## 10. Phase 3 — processing theatre and review screen
+
+Upgrading an existing database: run `make migrate` once (new migrations `books.0004_page_n_unresolved`,
+`books.0005_backfill_n_unresolved` — fills the uncertain-word count of pages OCR'd before Phase 3 from their lines —
+`ocr.0002_line_is_manual` and `review.0001_initial`).
+
+### Watching a book (dashboard)
+
+The pages section has two views, «صفحات» (default, stacked sheets like a PDF viewer: scan beside its text, which
+"generates" while the page is provisional and resolves into the final lines) and «شبكة» (small animated processing
+cards, no text). Sheets are fetched in batches from `/api/books/<id>/sheets/?from=<n>&to=<n>` (at most 40 pages per
+call, line boxes as 0..1 ratios of the page). The review summary «مُراجَعة X من Y صفحة» and the button
+«الصفحة التالية للمراجعة» come from `book_progress["review"]` (`review.services.book_review_summary`).
+Sheet placeholders take their aspect ratio from each tile's `width`/`height` (cleaned image, else the scan), so the
+scroll height is right before any sheet is fetched. Only sheets near the viewport animate; the grid runs the scan
+sweep only (tiles have no line boxes). With `prefers-reduced-motion` every effect is replaced by a static state.
+
+### Reviewing a page
+
+`/books/<id>/review/<n>/` (`review:page`) shows the scan on one side and the lines on the other; hovering or focusing
+a word lights its box on the scan and the reverse. Uncertain words (amber) are resolved by choosing a reading
+(النموذج الأول / النموذج الثاني / Tesseract) or typing a correction; whole lines can be edited, a missing line
+inserted, a garbage line deleted. Every action is saved at once. «اعتماد الصفحة» approves the page; with uncertain
+words left it asks for confirmation first. `/books/<id>/review/next/?after=<n>` (`review:next`) opens the next page
+waiting for review (status `ocr_done`, after page n, wrapping to the start) or returns to the dashboard with
+«لا صفحات بانتظار المراجعة». GET endpoints need a login; every change needs the `proofreader`, `editor` or `admin`
+role (superusers pass). Users without a role see the screen read-only.
+
+Shortcuts: `Tab` / `Shift+Tab` next / previous uncertain word · `1` `2` `3` choose a reading · `Enter` accept the
+current reading · typing starts a correction · `Esc` close · `E` edit the line · `Alt+Enter` insert a line below ·
+`Ctrl/Cmd+Z` undo · `A` approve · `N` next page to review · `ArrowLeft` / `ArrowRight` next / previous page ·
+`+` `-` `0` zoom. The «?» button shows the full sheet.
+
+### What a review action changes
+
+- A word is **unresolved** while `conf == "low"` and `res` is null; `Line.n_low` counts them per line and
+  `Page.n_unresolved` per page (kept by `finalize_page` and every review action). Resolving sets `res`
+  (`primary | secondary | tess | typed`) but keeps `conf`, so the word stays marked as once uncertain; the primary
+  reading is kept in the token's `orig` when another one replaced it, so the readings popovers (review screen and
+  page detail) still offer «النموذج الأول» after a resolution; a resolved word loses its amber underline everywhere.
+- Every action rebuilds `Page.final_text` from the lines: body lines, a blank line, footnote lines, Western digits.
+  `Line.ocr_text` never changes; diacritics are kept exactly as typed or read.
+- Editing a line re-tokenises it on whitespace and aligns the new words to the old ones: unchanged words keep their
+  boxes and resolutions, a replaced word keeps the old box, an added word has none. Inserted lines are `is_manual`.
+- Approving marks the page `reviewed` (book → `reviewing`) and every line `is_reviewed`, which also protects them
+  from a later OCR re-run; «إعادة فتح» takes the page back to `ocr_done`.
+
+### Undo
+
+Each action is stored as a `review.LineRevision` (snapshots before / after; visible in Django admin under
+«سجل المراجعة»). `POST /api/pages/<id>/undo/` reverts the newest revision of the page that is not undone yet,
+whatever its type (a resolved word, an edit, an insert, a delete — the line comes back with its old id and place —
+an approval or a reopen), marks it undone and answers the fresh review payload. Undo walks back one action per call;
+there is no redo. A new OCR pass of the page (re-run from «ocr» or «ocr_full») makes the older revisions final: their
+lines were replaced, so they can no longer be undone.
+
+### Endpoints (all under `/api/`, names in the `api` namespace)
+
+| Method | URL | Name | Body → answer |
+|---|---|---|---|
+| GET | `pages/<id>/review/` | `page_review` | review payload (PHASE3_SPEC §4) |
+| POST | `lines/<id>/resolve/` | `line_resolve` | `{index, choice, text?}` → `{line, counts, page}` |
+| POST | `lines/<id>/edit/` | `line_edit` | `{text}` → `{line, counts}` |
+| POST | `lines/<id>/delete/` | `line_delete` | → `{deleted_id, counts}` |
+| POST | `pages/<id>/lines/` | `page_lines` | `{after: line id or null, text}` → 201 `{line, lines, counts}` |
+| POST | `pages/<id>/undo/` | `page_undo` | → review payload |
+| POST | `pages/<id>/approve/` | `page_approve` | `{force}` → `{status, next_review_url, next_payload_url, next_number, dashboard_url}`, or 409 `{unresolved, message}` |
+| POST | `pages/<id>/reopen/` | `page_reopen` | → review payload |
+| GET | `books/<id>/filmstrip/` | `book_filmstrip` | `{book_id, pages: [{id, number, thumb_url, is_reviewed, n_unresolved, status, url}]}` |
+| GET | `books/<id>/sheets/?from&to` | `book_sheets` | `{book_id, from, to, total, pages: [...]}` (≤ 40 pages) |
+
+`counts` = `{line_n_low, page_unresolved, page_low_total, book_unresolved_total}`. Refused actions answer 400
+`{"message": <Arabic>}`; POSTs need the CSRF token (`X-CSRFToken`, read from `<meta name="csrf-token">`).
+
+### Word-chooser hook (D26)
+
+`ocr/chooser.py:choose_word(token, context)` is called by `finalize_page` for every unresolved low-confidence word
+with at least two distinct readings (`t`, `alt`, `tess`) when `NASSAKH["WORD_CHOOSER"]` (env `WORD_CHOOSER`) is not
+`none` (the default). It returns None today (placeholder for a future small classifier). A returned string that is
+one of the readings becomes the word with `res = "chooser"`; `conf` stays `low`. No UI.
+
+## 11. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -272,4 +353,5 @@ best-effort metadata. A template-matching digit reader is the planned improvemen
 | page error «تعذّر تحميل محرّك التعرّف …» / `… is not prepared` | weights missing under `OCR_MODELS_DIR`: run `playground/poc/prepare_models.py` (`--mlx` for the MLX backend) or fix `OCR_MODELS_DIR` |
 | gpu worker very slow or swapping | both models need about 9 GB; close other GPU-heavy apps, or set `OCR_BACKEND=mlx` (about 1.8× faster in the PoC) |
 | dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
-| `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`) |
+| `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `book_text`, `book_sheets`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`, and the review names in §10) |
+| review screen read-only | the user has no `proofreader` / `editor` / `admin` group (Django admin → Users), or the page has no final text yet |

@@ -209,6 +209,9 @@ class Page(models.Model):
         "حالة النص", max_length=20, choices=TextState.choices, default=TextState.NONE
     )
 
+    # Uncertain words not yet resolved (sum of `ocr.Line.n_low`), kept by finalize_page and review.
+    n_unresolved = models.PositiveIntegerField("كلمات غير محسومة", default=0)
+
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="راجعها",

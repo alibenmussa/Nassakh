@@ -12,7 +12,8 @@
 
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
-<div class="stack-lg" x-data="bookDashboard(JSON.parse(document.getElementById('dashboard-config').textContent))">
+{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}
+<div class="stack-lg" x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}' }))">
 
   {# ------------------------------------------------------------ header: meta + actions #}
   <header class="book-header">
@@ -46,6 +47,11 @@
         <span class="dot dot-accent" aria-hidden="true"></span>
         <span>قيد المعالجة · <bdi class="num" x-text="done">{{ stages.3.count }}</bdi> من <bdi class="num" x-text="total">{{ progress.total }}</bdi> صفحة</span>
       </span>
+      {# the review entry point: primary unless a processing action already is (one primary per view) #}
+      <a class="btn{% if book.status != 'needs_guides' %}{% if not can_start or role == 'proofreader' %} btn-primary{% endif %}{% endif %}" x-show="nextReviewUrl" x-cloak :href="nextReviewUrl" data-review-next>
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+        <span>الصفحة التالية للمراجعة</span>
+      </a>
       {% if book_text_url %}
       <button type="button" class="btn" x-show="done > 0"{% if not stages.3.count %} x-cloak{% endif %} data-url="{{ book_text_url }}" @click="copyBook($el.dataset.url)" :disabled="copying"
               :title="active ? 'ينسخ نص الصفحات التي اكتملت حتى الآن' : 'ينسخ النص النهائي لكل صفحات الكتاب'">
@@ -134,6 +140,12 @@
         </li>
         {% endfor %}
       </ul>
+      {# review summary (§3): plain counts, no persona #}
+      <div class="review-summary" x-show="anyOcrDone" x-cloak>
+        <span class="status"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
+        <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
+        <span class="meta" x-show="reviewSummary.total > 0 && reviewSummary.reviewed >= reviewSummary.total">رُوجعت كل الصفحات</span>
+      </div>
     </section>
 
     {# ------------------------------------------------------------ attention list (live) #}
@@ -176,19 +188,50 @@
     </section>
   </div>
 
-  {# ------------------------------------------------------------ pages grid #}
+  {# ------------------------------------------------------------ pages: «صفحات» (stacked sheets) | «شبكة» (cards) #}
   <section aria-labelledby="pages-title" class="stack" x-show="hasPages"{% if not tiles %} x-cloak{% endif %}>
-    <div class="card-header">
-      <h2 class="section-title" id="pages-title">الصفحات</h2>
-      <span class="meta">مرّر على صفحة لاستثنائها أو إعادتها · انقر لفتحها</span>
+    <div class="pages-toolbar">
+      <div class="pages-toolbar-start">
+        <h2 class="section-title" id="pages-title">الصفحات</h2>
+        <span class="meta" x-text="view === 'grid' ? 'مرّر على صفحة لاستثنائها أو إعادتها · انقر لفتحها' : 'كل صفحة مع نصّها وهو يتولّد · انقر رقم الصفحة لفتحها'">كل صفحة مع نصّها وهو يتولّد · انقر رقم الصفحة لفتحها</span>
+      </div>
+      <div class="segmented" role="group" aria-label="طريقة عرض الصفحات" data-view-toggle>
+        <button type="button" :aria-pressed="view === 'sheets'" aria-pressed="true" :class="{ 'is-selected': view === 'sheets' }" class="is-selected" @click="setView('sheets')">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+          <span>صفحات</span>
+        </button>
+        <button type="button" :aria-pressed="view === 'grid'" aria-pressed="false" :class="{ 'is-selected': view === 'grid' }" @click="setView('grid')">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
+          <span>شبكة</span>
+        </button>
+      </div>
     </div>
-    <div class="page-grid">
-      {# First paint from the server; pages ingested after load are added by the poll (the reveal). #}
-      {% for t in tiles %}{% with tid=t.id|stringformat:"s" %}{% with js="tile("|add:tid|add:")" %}{% include "books/_page_tile.html" with t=t js=js %}{% endwith %}{% endwith %}{% endfor %}
-      <template x-for="p in laterPages" :key="p.id">
-        {% include "books/_page_tile.html" with t=None js="p" %}
-      </template>
+    <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
+    <div class="banner banner-info" x-show="sheetsFailed" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">تعذّر تحميل بيانات بعض الصفحات. تُعاد المحاولة عند تحديث الحالة التالي.</span>
     </div>
+
+    {# stacked sheets (default): shells for every page, bodies mount near the viewport (books.js) #}
+    <template x-if="view === 'sheets'">
+      <div class="sheet-stack" data-sheet-stack>
+        {% for t in tiles %}{% with tid=t.id|stringformat:"s" %}{% with js="tile("|add:tid|add:")" %}{% include "books/_page_sheet.html" with t=t js=js %}{% endwith %}{% endwith %}{% endfor %}
+        <template x-for="p in laterPages" :key="p.id">
+          {% include "books/_page_sheet.html" with t=None js="p" %}
+        </template>
+      </div>
+    </template>
+
+    {# grid of processing cards: no text, animated tiles #}
+    <template x-if="view === 'grid'">
+      <div class="page-grid" data-page-grid>
+        {# First paint from the server; pages ingested after load are added by the poll (the reveal). #}
+        {% for t in tiles %}{% with tid=t.id|stringformat:"s" %}{% with js="tile("|add:tid|add:")" %}{% include "books/_page_tile.html" with t=t js=js %}{% endwith %}{% endwith %}{% endfor %}
+        <template x-for="p in laterPages" :key="p.id">
+          {% include "books/_page_tile.html" with t=None js="p" %}
+        </template>
+      </div>
+    </template>
   </section>
 </div>
 {% endblock %}

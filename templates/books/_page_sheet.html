@@ -1,0 +1,59 @@
+{% comment %}One stacked sheet of the dashboard's «صفحات» view (PHASE3_SPEC §3), used twice like the tile:
+server first paint (`t` = the tile dict) and the live x-for for pages ingested after load.
+Context: js = Alpine expression of the live tile ("tile(12)" or "p"), t = server tile (optional), book, role.
+The shell (header + aspect-ratio placeholder) is always in the DOM and costs almost nothing off-screen
+(content-visibility: auto); the body — scan, line boxes, text column with the decode effect — mounts only
+while the sheet is near the viewport (IntersectionObserver in books.js) and its data comes from
+api:book_sheets in batches. Image-space overlays use physical left/top on purpose.{% endcomment %}
+<article{% if not t %} data-live-sheet{% endif %} class="page-sheet{% if t.is_excluded %} is-excluded{% endif %}"
+         :class="{ 'is-excluded': {{ js }}.is_excluded, 'is-error': {{ js }}.error }"
+         x-init="observeSheet($el, {{ js }}.id)" :id="'sheet-' + {{ js }}.number"
+         :style="`--sheet-ar:${aspectOf({{ js }})}`" style="--sheet-ar: 7 / 10">
+  <header class="sheet-head">
+    <a class="sheet-title num"{% if t %} href="{{ t.url }}"{% endif %} :href="{{ js }}.url">صفحة <bdi x-text="{{ js }}.number">{{ t.number }}</bdi></a>
+    <span class="status"><span class="dot{% if t %} {{ t.dot }}{% endif %}" :class="{{ js }}.dot" aria-hidden="true"></span><span x-text="{{ js }}.status_label">{{ t.status_label }}</span></span>
+    <span class="meta num" x-show="{{ js }}.printed_number"{% if not t.printed_number %} x-cloak{% endif %}>الرقم المطبوع <bdi x-text="{{ js }}.printed_number">{{ t.printed_number }}</bdi></span>
+    <span class="badge badge-warning num" x-show="!{{ js }}.is_reviewed && {{ js }}.n_unresolved > 0"{% if not t.n_unresolved %} x-cloak{% endif %} title="كلمات غير مؤكَّدة تنتظر المراجعة"><bdi x-text="{{ js }}.n_unresolved">{{ t.n_unresolved }}</bdi> غير مؤكَّدة</span>
+    <span class="badge badge-success" x-show="{{ js }}.is_reviewed"{% if not t.is_reviewed %} x-cloak{% endif %}><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>مُراجَعة</span></span>
+    <span class="badge badge-dark" x-show="{{ js }}.is_excluded"{% if not t.is_excluded %} x-cloak{% endif %}>مستثناة</span>
+    <span class="sheet-actions">
+      <a class="btn btn-ghost btn-sm" x-show="{{ js }}.review_url"{% if not t.review_url %} x-cloak{% endif %} :href="{{ js }}.review_url"{% if t.review_url %} href="{{ t.review_url }}"{% endif %}>مراجعة</a>
+      <button type="button" class="btn btn-ghost btn-sm" x-show="canCopy({{ js }})" x-cloak @click="copySheet({{ js }}.id)" :aria-label="`نسخ نص الصفحة ${ {{ js }}.number }`">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+        <span>نسخ</span>
+      </button>
+    </span>
+  </header>
+
+  <div class="sheet-body">
+    {# scan column: the aspect-ratio box is the placeholder; images and overlays mount when near #}
+    <figure class="sheet-scan" :class="{ 'is-empty': !{{ js }}.scan_thumb_url && !(sheet({{ js }}.id) && sheet({{ js }}.id).display_url) }" x-effect="syncScanFx($el, {{ js }}, Boolean(near[{{ js }}.id]))">
+      <template x-if="near[{{ js }}.id]">
+        <div class="sheet-scan-inner">
+          {# the scan preview (small, soft) shows first; the cleaned page crossfades over it (200 ms) #}
+          <template x-if="{{ js }}.scan_thumb_url"><img class="sheet-img sheet-img-scan" :src="{{ js }}.scan_thumb_url" alt="" decoding="async" loading="lazy"></template>
+          <template x-if="sheet({{ js }}.id) && sheet({{ js }}.id).display_url">
+            <img class="sheet-img sheet-img-clean" :src="sheet({{ js }}.id).display_url" :alt="`الصفحة ${ {{ js }}.number } بعد المعالجة`" decoding="async" loading="lazy"
+                 x-init="$el.complete && $el.naturalWidth && $el.classList.add('is-ready')" @load="$el.classList.add('is-ready')">
+          </template>
+          <div class="sheet-lines" aria-hidden="true">
+            <template x-for="(b, i) in lineBoxes({{ js }}.id)" :key="i"><span class="sheet-line" :style="boxStyle(b)"></span></template>
+          </div>
+        </div>
+      </template>
+    </figure>
+
+    {# text column: noise → scrambled Tesseract text → resolve wave → final lines (decode.js) #}
+    <div class="sheet-paper">
+      <div class="sheet-paper-inner">
+        <template x-if="near[{{ js }}.id]">
+          <div>
+            <div class="sheet-text decode-host" dir="rtl" x-effect="syncSheetText($el, {{ js }})" aria-hidden="true"></div>
+            <p class="sheet-empty-text" x-show="!active && {{ js }}.text_state === 'none' && !{{ js }}.error">لم يُستخرج نص لهذه الصفحة بعد.</p>
+            <p class="sheet-empty-text" x-show="{{ js }}.error" x-text="{{ js }}.error_headline || 'فشلت معالجة هذه الصفحة.'"></p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</article>

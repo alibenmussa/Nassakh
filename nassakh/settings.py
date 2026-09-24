@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "books",
     "processing",
     "ocr",
+    "review",
 ]
 
 MIDDLEWARE = [
@@ -143,6 +144,8 @@ NASSAKH = {
     "MAX_PIXELS": 2048 * 28 * 28,
     "MIN_PIXELS": 256 * 28 * 28,
     "MAX_NEW_TOKENS": {"page": 3000, "body": 2500, "footnote": 1000, "other": 600},
+    # Word chooser for uncertain words during finalisation (D26): "none" disables the hook.
+    "WORD_CHOOSER": env("WORD_CHOOSER", default="none"),
 }
 
 # ---------------------------------------------------------------- rest framework
@@ -178,7 +181,7 @@ LOGGING = {
         # Project apps log at INFO; the root handler prints them.
         **{
             name: {"level": "INFO", "propagate": True}
-            for name in ("core", "accounts", "books", "processing", "ocr")
+            for name in ("core", "accounts", "books", "processing", "ocr", "review")
         },
     },
 }

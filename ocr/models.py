@@ -66,6 +66,8 @@ class Line(models.Model):
     confidence = models.FloatField("الثقة", default=1.0)
     n_low = models.PositiveIntegerField("عدد الكلمات منخفضة الثقة", default=0)
     is_reviewed = models.BooleanField("مُراجَع", default=False)
+    # Inserted by a reviewer (Phase 3) for text a model skipped; never produced by OCR.
+    is_manual = models.BooleanField("أُدرج يدويًا", default=False)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="عدّله",

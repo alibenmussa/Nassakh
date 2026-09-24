@@ -6,8 +6,9 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 - `/accounts/`              login / logout                       namespace `accounts`
 - `/books/`                 books app HTML routes                namespace `books`
 - `/books/`                 processing HTML routes (guides)      namespace `processing`
+- `/books/`                 review screens (Phase 3)             namespace `review`
 - `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
-- `/api/`                   JSON routes from books/processing/ocr `api_urlpatterns`, all in
+- `/api/`                   JSON routes from books/processing/ocr/review `api_urlpatterns`, all in
                             the single namespace `api` (reverse as `api:<name>`)
 - `/media/<path>`           uploaded and derived files through the login-protected view
 """
@@ -19,8 +20,14 @@ from books import urls as books_urls
 from core import views as core_views
 from ocr import urls as ocr_urls
 from processing import urls as processing_urls
+from review import urls as review_urls
 
-api_urlpatterns = books_urls.api_urlpatterns + processing_urls.api_urlpatterns + ocr_urls.api_urlpatterns
+api_urlpatterns = (
+    books_urls.api_urlpatterns
+    + processing_urls.api_urlpatterns
+    + ocr_urls.api_urlpatterns
+    + review_urls.api_urlpatterns
+)
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -28,6 +35,7 @@ urlpatterns = [
     path("accounts/", include("accounts.urls")),
     path("books/", include("books.urls")),
     path("books/", include("processing.urls")),
+    path("books/", include("review.urls")),
     path("ocr/", include("ocr.urls")),
     path("api/", include((api_urlpatterns, "api"))),
     # Media always goes through the login-protected view. With DEBUG on this is what serves

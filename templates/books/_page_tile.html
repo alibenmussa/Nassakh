@@ -1,11 +1,13 @@
 {% comment %}One dashboard tile, used twice: server first paint (`t` = the tile dict) and the live
 x-for for pages ingested after load. Context: js = Alpine expression of the live tile ("tile(12)" or "p"),
-t = server tile (optional), book, role, request. The cleaned thumbnail fades in over the scan (no spinner).{% endcomment %}
+t = server tile (optional), book, role, request. The cleaned thumbnail fades in over the scan (no spinner).
+Phase 3 (§3 «شبكة»): a scan sweep while the page is being cleaned (x-effect → NassakhDecode), a thin stage
+bar, a reviewed check and an uncertain-word badge. No text in this view.{% endcomment %}
 <div{% if not t %} data-live-tile{% endif %} class="page-tile{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"
      :class="{ 'is-excluded': {{ js }}.is_excluded, 'is-error': {{ js }}.error }">
   <a class="page-tile-link"{% if t %} href="{{ t.url }}" aria-label="الصفحة {{ t.number }} — {{ t.status_label }}"{% endif %}
      :href="{{ js }}.url" :aria-label="`الصفحة ${ {{ js }}.number } — ${ {{ js }}.status_label }`">
-    <span class="page-tile-thumb">
+    <span class="page-tile-thumb" x-effect="syncScanFx($el, {{ js }}, true, false)">
       <span class="page-tile-placeholder" x-show="!{{ js }}.scan_thumb_url && !{{ js }}.thumb_url"{% if t.thumb_url or t.scan_thumb_url %} x-cloak{% endif %} aria-hidden="true">
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-image"/></svg>
       </span>
@@ -16,6 +18,10 @@ t = server tile (optional), book, role, request. The cleaned thumbnail fades in 
         <span x-text="{{ js }}.n_flags">{{ t.n_flags }}</span>
       </span>
       <span class="page-tile-excluded badge badge-dark" x-show="{{ js }}.is_excluded"{% if not t.is_excluded %} x-cloak{% endif %}>مستثناة</span>
+      <span class="tile-mark badge badge-dark is-reviewed" x-show="{{ js }}.is_reviewed"{% if not t.is_reviewed %} x-cloak{% endif %} title="صفحة مُراجَعة"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span class="sr-only">مُراجَعة</span></span>
+      <span class="tile-mark badge badge-dark is-uncertain num" x-show="!{{ js }}.is_reviewed && {{ js }}.n_unresolved > 0"{% if not t.n_unresolved %} x-cloak{% endif %} :title="`${ {{ js }}.n_unresolved } كلمة غير مؤكَّدة`"><span x-text="{{ js }}.n_unresolved">{{ t.n_unresolved }}</span></span>
+      {# thin stage progress: fills as the page moves through the pipeline, fades out when done #}
+      <span class="tile-stage" :class="{ 'is-done': isDone({{ js }}) || {{ js }}.is_excluded, 'is-error': {{ js }}.error }" aria-hidden="true"><span class="tile-stage-fill" :style="stageStyle({{ js }})"></span></span>
     </span>
     <span class="page-tile-footer">
       <span class="status"><span class="dot{% if t %} {{ t.dot }}{% endif %}" :class="{{ js }}.dot" aria-hidden="true"></span><span class="num" x-text="{{ js }}.number">{{ t.number }}</span></span>
