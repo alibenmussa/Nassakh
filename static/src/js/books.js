@@ -37,6 +37,7 @@ document.addEventListener('alpine:init', () => {
   const WHEEL_IDLE_MS = 260; // a wheel gesture ends after this pause (inertia never turns two pages)
   const SWIPE_PX = 50; // touch swipe distance for one page
   const FILM_REFRESH_MS = 4000; // new thumbnails during processing: at most one filmstrip request per 4 s
+  const FILM_EDGE_PX = 6; // a thumbnail closer than this to the strip's edge counts as out of view
   const SHEET_BATCH = 40; // api:book_sheets serves at most 40 pages per call
   const NEAR_MARGIN = '1500px'; // a sheet this close to the viewport mounts and fetches its data
   const FAR_MARGIN = '4000px'; // and unmounts again once it is this far away (800-page books stay light)
@@ -861,12 +862,25 @@ document.addEventListener('alpine:init', () => {
         // thumbnails only: the next refresh retries
       }
     },
+    // The current thumbnail stays in view: when it is not fully visible the strip scrolls it to the middle
+    // (vertical in the side panel, horizontal on a narrow screen). Only the strip scrolls, never the page.
     centerFilm() {
       const film = this.$refs && this.$refs.film;
       if (!film || typeof film.querySelector !== 'function') return;
       const run = () => {
         const item = film.querySelector(`[data-number="${this.current}"]`);
-        if (item && item.scrollIntoView) item.scrollIntoView({ inline: 'center', block: 'nearest', behavior: reduced() ? 'auto' : 'smooth' });
+        if (!item || !item.getBoundingClientRect || !film.getBoundingClientRect || !film.scrollBy) return;
+        const f = film.getBoundingClientRect();
+        const r = item.getBoundingClientRect();
+        if (!f.height || !r.height) return; // hidden (grid view)
+        const outY = r.top < f.top + FILM_EDGE_PX || r.bottom > f.bottom - FILM_EDGE_PX;
+        const outX = r.left < f.left + FILM_EDGE_PX || r.right > f.right - FILM_EDGE_PX;
+        if (!outY && !outX) return;
+        film.scrollBy({
+          top: outY ? r.top + r.height / 2 - (f.top + f.height / 2) : 0,
+          left: outX ? r.left + r.width / 2 - (f.left + f.width / 2) : 0,
+          behavior: reduced() ? 'auto' : 'smooth',
+        });
       };
       if (this.$nextTick) this.$nextTick(run); else run();
     },

@@ -101,26 +101,30 @@ the retry primary lives in the top bar), `needs_guides` (existing copy), `sheets
 («تعذّر تحميل بيانات بعض الصفحات. تُعاد المحاولة عند تحديث الحالة التالي.»). Bound with `x-show` to the
 poll's `status`, `error_headline`, `error_detail` (§12.2) so they appear and disappear without a reload.
 
-### 2.4 Summary strip `.bk-summary` (replaces the two cards)
+### 2.4 Summary `.bk-summary` in the side panel (D34; it was a strip above the pages)
 
-One row, `font-size: 12.5px`, `padding: 10px 0`, `border-block: 1px solid var(--color-border)`,
-`display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center`:
+The pages sit beside a side panel `aside.bk-side` on the end side (RTL: the left), width
+`clamp(176px, 15vw, 244px)`, a hairline on its inner edge, no card. It holds the summary, and in «صفحات»
+the filmstrip under it (§2.5). In «شبكة» the panel is sticky under the toolbar. The toolbar hangs from the
+top bar (`.main` has no top padding on this page). The summary is a column, `font-size: 12.5px`:
 
-- the five stage counters as `.status` items: `<span class="dot {dot}">` + label + `<bdi class="num">`
-  count: «مرفوعة N» · «مُعالَجة N» · «تم التخطيط N» · «تم التعرّف N» · «خطأ N» (counts from `by_status`,
-  the `stages` config; a counter with 0 is `--color-text-3`);
+- the five stage counters as a list `ul.bk-counts`, one 24 px row each: `<span class="dot {dot}">`, the
+  label, the count at the row's end (`<bdi class="num">`, tabular): «مرفوعة» · «مُعالَجة» · «تم التخطيط» ·
+  «تم التعرّف» · «خطأ» (counts from `by_status`, the `stages` config; a counter with 0 is `--color-text-3`);
 - the review summary (`x-show="anyOcrDone"`): «مُراجَعة <bdi>X</bdi> من <bdi>Y</bdi> صفحة» and
   «<bdi>N</bdi> كلمة غير مؤكَّدة» (when N > 0), or «رُوجعت كل الصفحات» when X ≥ Y > 0;
-- at the end: `<details class="bk-attention">` with `<summary>` «تحتاج انتباهًا <bdi>n</bdi>»
+  stacked under a hairline;
+- last: `<details class="bk-attention">` with `<summary>` «تحتاج انتباهًا <bdi>n</bdi>»
   (`badge badge-warning num`), open list = the current attention rows (page link, error headline with the
-  inline retry form, sequence issue, flag badges). Hidden when n = 0.
+  inline retry form, sequence issue, flag badges), opening over the pages. Hidden when n = 0.
 
 ### 2.5 Pages
 
 - **Empty state** (nothing ingested): unchanged.
 - **«صفحات» is a page viewer (D33)**, not a long scroll. `.bk-dashboard.is-viewer` is as tall as the
-  window below the top bar (`100dvh − topbar − 64px`, min 460 px); `section.bk-viewer` fills what the
-  header, strip and toolbar leave: the stage `.bk-stage` (flex 1) above the filmstrip `.bk-film` (80 px).
+  window below the top bar (`100dvh − topbar − 16px`, min 460 px); under the toolbar, `.bk-layout` puts
+  the stage `.bk-stage` (the whole height) beside the side panel (D34: summary, then the filmstrip filling
+  the rest of the panel's height).
   The stage holds `.sheet-stack` with one `article.page-sheet` shell per page (server-rendered for the
   first paint, cloned from `<template id="sheet-shell">` for pages ingested later, §13), but only the
   shell with `.is-current` is displayed. Its body is a size container: scan and text pane each take
@@ -132,9 +136,12 @@ One row, `font-size: 12.5px`, `padding: 10px 0`, `border-block: 1px solid var(--
     «صفحة <bdi>N</bdi> من <bdi>M</bdi>» (live region), keys (§8.8), a trackpad swipe or wheel on the
     stage (one page per gesture: 50 px sideways or 90 px down/up, then locked until the gesture pauses
     260 ms, so inertia never flips a second page), a touch swipe of 50 px (mouse drags do nothing).
-  - **Filmstrip.** One 58 px thumbnail per page the filter keeps (`aspect-ratio` of the page), its
-    number, and marks: reviewed ✓, uncertain-word count, a pulsing dot while live; pending pages are
-    dimmed, failed ones outlined in danger. The current thumbnail is outlined and kept centred. Missing
+  - **Filmstrip.** A grid of thumbnails in the side panel, two or three columns (`minmax(60px, 1fr)`),
+    scrolling on its own, headed «الصفحات» with the count the filter keeps. One thumbnail per page the
+    filter keeps (`aspect-ratio` of the page), its number, and marks: reviewed ✓, uncertain-word count, a
+    pulsing dot while live; pending pages are dimmed, failed ones outlined in danger. The current
+    thumbnail is outlined; when it is not fully visible the strip (never the page) scrolls it to the
+    middle. Missing
     thumbnails are refreshed from `api:book_filmstrip` at most every 4 s while pages leave `uploaded`.
   - **Sequence.** The filter decides it: turns, Home/End and the filmstrip skip hidden pages. The page on
     screen is exempt from `hidden` (Tailwind's `[hidden] { display: none !important }` cannot be
@@ -147,10 +154,11 @@ One row, `font-size: 12.5px`, `padding: 10px 0`, `border-block: 1px solid var(--
 
 ### 2.6 Responsive
 
-≥ 1180: as above. 900–1180: the summary strip wraps; the progress bar hides; the jump field keeps its
-width. < 900: the viewer's sheet body stacks (scan above the text pane, each at most half the stage
-height, same aspect box), the dashboard is `100dvh − topbar − 32px`, the toolbar wraps, page padding 16.
-< 560: grid min 104 px.
+≥ 1180: as above. 900–1180: the progress bar hides; the side panel narrows to 176 px (two thumbnail
+columns). < 900: one column; the side panel moves under the page in «صفحات» (the review line, the
+attention list and a horizontal filmstrip, no stage counters) and above the grid in «شبكة» (a wrapping
+row); the viewer's sheet body stacks (scan above the text pane, each at most half the stage height, same
+aspect box); the toolbar wraps, page padding 16. < 560: grid min 104 px.
 
 ## 3. The sheet and its correspondence
 
@@ -277,6 +285,9 @@ Pad the block vertically by `0.12 · h_g` on both sides (Tesseract boxes clip di
 
 - `h_g = median(y1 − y0)` over the group's text-line bboxes, else over its detected boxes, else
   `median_line_h` (for `body`; footnote = `0.85 · median_line_h`), else pitch-derived (below).
+  Footnotes (D34) use their own text-line bboxes whenever any exist (not only from 60 %); without any,
+  they take `0.85 · h_g(body)` when the body has text-line bboxes. Detected boxes and `median_line_h`
+  measure the letters' core band, about a quarter of a printed line, so they give tiny footnote type.
 - **Font size as a fraction of the container width** (`1cqw` = 1 % of the pane width, and because the pane
   keeps the page's aspect ratio, a ratio of H maps to `ratio · H/W` of the width):
   `fs_cw = K · h_g · (H / W)`, `K = 0.78` (`--fac-k`; the ink of a running Arabic line spans ascender to
@@ -306,6 +317,13 @@ block's top and the last at its bottom, which for a regularly set page lands eve
 position (the block box was taken from the boxes themselves). Headings with larger gaps may sit a few pixels
 off — accepted; correspondence is by index, not by pixel. A block with ≤ 3 lines is centred with a gap
 (`data-few`), not flung to the corners.
+
+**Footnotes are set solid (D34).** Their type is smaller than the scan's (the 0.9 · body cap and the fit
+of §4.7), so spreading them over their printed block left wide gaps. The footnote group packs its lines
+from its first line down: `lh_cw = min(1.24 · h_g · H/W, 1.5 · fs_cw)`, the block's bottom becomes
+`Y0 + n · lh_cw · W/H` (`data-solid`, `justify-content: flex-start`, never `data-few`). The block may run
+on below its printed lines down to 97 % of the page before §4.4's shrink-to-fit lowers the type; notes
+printed side by side on one row therefore stack at a readable size.
 
 ### 4.6 Horizontal extents and fit per line
 
@@ -530,9 +548,9 @@ tiles too (`hidden`). Density: 132 px min (104 px below 560 px).
    `provisional` or `ocr_done`; any page the reader chooses (turn, key, wheel, swipe, filmstrip, jump)
    turns it off with a quiet toast «أُوقف التتبّع». Only in «صفحات» view while `active`.
 4. **Attention where the page is.** Flags, sequence issue and the error headline sit in the sheet head with
-   the inline «إعادة <stage>» retry; the strip's `<details>` and the «تحتاج انتباهًا» chip give the overview.
+   the inline «إعادة <stage>» retry; the side panel's `<details>` and the «تحتاج انتباهًا» chip give the overview.
 5. **Hover linking** both ways with the line-number badge on the scan; click a final line → the review page.
-6. **Review entry** is one obvious path: the primary «الصفحة التالية للمراجعة», the strip's summary, the
+6. **Review entry** is one obvious path: the primary «الصفحة التالية للمراجعة», the side panel's summary, the
    ghost «مراجعة» on every final sheet. `N` opens `next_review_url`.
 7. **Copy.** Per sheet «نسخ» (final only; `C` while a sheet is focused) and «نسخ نص الكتاب» in the menu (or
    as the primary when all is reviewed), both through `window.Nassakh.copyText` and the «تم النسخ» toast.
@@ -684,7 +702,7 @@ h.update({ page, active })                          // page = api:book_sheets it
 h.lit(i)                                            // set the cursor index by hand (tests); -1 clears
 h.hot(i)                                            // set the hot line by hand (tests / keyboard); -1 clears
 h.destroy()                                         // stop, forget, leave the DOM as is
-NassakhDecode.layout(page) -> { ar, groups: [{ kind, block: [X0,Y0,X1,Y1], fsCw, lhCw, few, lines: [{ i, kind, words, box, lx0, lx1, r, fit, scale }] }], rule: footnote_y|null, mode }
+NassakhDecode.layout(page) -> { ar, groups: [{ kind, block: [X0,Y0,X1,Y1], fsCw, lhCw, hg, few, solid, lines: [{ i, kind, words, box, lx0, lx1, r, fit, scale }] }], rule: footnote_y|null, mode }
 NassakhDecode.measure = (text) => width_at_100px     // injectable (tests stub it; the browser uses the canvas)
 ```
 
@@ -750,7 +768,8 @@ Layout and chrome
       primary button per state (§2.1), «⋯» menu with copy / guides / rerun / all books.
 - [ ] Sticky toolbar under the topbar: view toggle, five filter chips with live counts, jump field with `G`,
       follow toggle (active only); wraps below 900 px.
-- [ ] Summary strip replaces the two cards: five counters, review summary, `<details>` attention list.
+- [ ] The side panel (D34) holds the summary: five counters, review summary, `<details>` attention list;
+      in «صفحات» the filmstrip under it; the page takes the full height beside it.
 - [ ] Banners follow the poll (`status`, `error_headline`, `error_detail`) without a reload.
 - [ ] «صفحات» is a viewer (D33): one page fits the stage, turns slide out and in, buttons / keys / wheel /
       swipe / filmstrip / jump turn one page, the counter and `#sheet-N` follow; `#sheet-N` on load works.

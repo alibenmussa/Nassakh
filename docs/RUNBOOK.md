@@ -273,7 +273,8 @@ The pages section has two views, «صفحات» (default, a page viewer like a P
 its text, which "generates" while the page is provisional and resolves into the final lines) and «شبكة» (small
 animated processing cards, no text). In the viewer, turn pages with the side buttons, ← / → (← is forward),
 PageDown / PageUp, Home / End, a trackpad swipe or the wheel over the page (one page per gesture), a touch swipe, the
-jump field (`G`), or the thumbnails under the page. The filter chips decide which pages the viewer walks through.
+jump field (`G`), or the thumbnails in the side panel. The side panel also holds the summary (stage counts, review
+state, «تحتاج انتباهًا»). The filter chips decide which pages the viewer walks through.
 The page on screen is kept in the address (`#sheet-N`, shareable, survives a reload); a click on a grid card opens
 it in the viewer (⌘-click opens the page detail). Sheets are fetched in batches from `/api/books/<id>/sheets/?from=<n>&to=<n>` (at most 40 pages per
 call, line boxes as 0..1 ratios of the page). The review summary «مُراجَعة X من Y صفحة» and the button

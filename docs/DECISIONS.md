@@ -212,3 +212,17 @@ dot). The filter decides the sequence; the page on screen is never given `hidden
 the address (`#sheet-N`) and the session; a plain click on a grid tile opens the viewer on that page. The
 follow mode turns to the page that advanced. Only the page on screen is mounted and its neighbours' data is
 prefetched. Replaces the scroll position chip; the grid view is unchanged.
+
+## D34 — The pages beside a side panel; footnotes set solid (2026-09-24)
+Owner feedback on the viewer: the page should be larger, and the filmstrip under it and the summary strip
+above it took too much height. The dashboard now puts the pages beside a narrow side panel on the end side
+(RTL: the left). The panel holds the summary as a column (stage counters, review state, the attention
+list) and, in «صفحات», the filmstrip as a scrolling grid of thumbnails, two or three columns. The toolbar
+hangs from the top bar, so the viewer's page gets almost the whole window height: about 630 px instead of
+430 px on a 800 px tall window. In «شبكة» the panel is sticky under the toolbar. Under 900 px the panel
+moves under the page, or above the grid. Also from the same feedback: footnotes had wide gaps between
+their lines. Their type is smaller than the scan's, but their lines were spread over the printed block.
+Footnotes are now set solid: packed from the first note down with a line box of 1.5 × their type size,
+free to run on below their printed lines to 97 % of the page before the type shrinks. A footnote whose
+lines have only some text boxes uses them; one with none is sized from the body's lines, because the
+detected boxes measure the letters' core band (about a quarter of a line) and gave tiny type.

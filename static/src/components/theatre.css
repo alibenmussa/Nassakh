@@ -42,6 +42,7 @@
     --fac-k: 0.78;
     --bk-toolbar-h: 44px;
     --bk-sheet-gap: 32px;
+    --bk-side-w: clamp(176px, 15vw, 244px); /* the side panel (D34): two or three thumbnail columns */
     --ink-shine: #3f3f46;
     --ink-wash: rgba(24, 24, 27, 0.06);
     display: flex;
@@ -154,21 +155,16 @@
   /* ------------------------------------------------------------ banners and summary strip (§2.3, §2.4) */
   .bk-banners { display: flex; flex-direction: column; gap: 8px; margin-top: -16px; }
   .bk-banners:empty { display: none; }
-  .bk-summary {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 20px;
-    padding: 10px 0;
-    border-block: 1px solid var(--color-border);
-    font-size: 12.5px;
-  }
-  .bk-summary .status { color: var(--color-text); font-weight: 500; }
-  .bk-summary .status.is-zero { color: var(--color-text-3); font-weight: 400; }
-  .bk-summary .status.is-zero .dot { opacity: 0.5; }
-  .bk-summary .num { font-variant-numeric: tabular-nums; }
-  .bk-summary-review { display: inline-flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; }
-  .bk-attention { position: relative; margin-inline-start: auto; }
+  .bk-summary { display: flex; flex-direction: column; gap: 14px; font-size: 12.5px; }
+  .bk-counts { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+  .bk-count { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--color-text); font-weight: 500; }
+  .bk-count .num { font-variant-numeric: tabular-nums; }
+  .bk-count.is-zero { color: var(--color-text-3); font-weight: 400; }
+  .bk-count.is-zero .dot { opacity: 0.5; }
+  .bk-summary-review { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .bk-summary-review .status { color: var(--color-text); font-weight: 500; }
+  .bk-summary-review .num { font-variant-numeric: tabular-nums; }
+  .bk-attention { position: relative; }
   .bk-attention > summary {
     display: inline-flex;
     align-items: center;
@@ -189,7 +185,7 @@
   .bk-attention-list {
     position: absolute;
     top: calc(100% + 6px);
-    inset-inline-end: 0;
+    inset-inline-end: 0; /* RTL: the panel's left edge, so the list opens over the pages */
     z-index: 30;
     width: min(440px, calc(100vw - 32px));
     max-height: 320px;
@@ -217,11 +213,36 @@
   .bk-attention-flags form { display: inline-flex; margin: 0; }
   .bk-empty-filter { padding: 24px 0; text-align: center; }
 
+  /* ------------------------------------------------------------ pages beside a side panel (D34) */
+  /* The pages take the room; the summary and the filmstrip sit in a narrow panel on the end side (RTL: the
+     left), sticky under the toolbar in «شبكة». The toolbar hangs from the top bar. */
+  .main:has(> .bk-dashboard.has-pages) { padding-top: 0; }
+  .main:has(> .bk-dashboard.is-viewer) { padding-bottom: 16px; }
+  .bk-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--bk-side-w); gap: 24px; align-items: start; }
+  .bk-main { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+  .bk-side {
+    position: sticky;
+    top: calc(var(--topbar-height) + var(--bk-toolbar-h) + 20px);
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    min-width: 0;
+    min-height: 0;
+    padding-inline-start: 20px;
+    border-inline-start: 1px solid var(--color-border);
+  }
+  .bk-side-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--color-text-2); }
+  .bk-side-head .num { font-weight: 400; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+
   /* ------------------------------------------------------------ the page viewer (D33) */
-  /* «صفحات» is a book viewer, not a scroll: one sheet at a time, fitted to the screen, turned like a page
-     (review-screen motion, = rv-split is-out / is-in), with a filmstrip under it (= rv-film). */
-  .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 64px); min-height: 460px; gap: 12px; }
-  .bk-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  /* «صفحات» is a book viewer, not a scroll: one sheet at a time, fitted to the window, turned like a page
+     (review-screen motion, = rv-split is-out / is-in), with the filmstrip in the side panel (= rv-film). */
+  .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 16px); min-height: 460px; gap: 12px; }
+  .bk-dashboard.is-viewer .bk-banners { margin-top: -4px; }
+  .bk-dashboard.is-viewer .bk-layout { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
+  .bk-dashboard.is-viewer .bk-main { min-height: 0; }
+  .bk-dashboard.is-viewer .bk-side { position: static; }
+  .bk-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .bk-stage { position: relative; flex: 1; min-height: 0; display: flex; touch-action: pan-y pinch-zoom; } /* a sideways touch swipe reaches onStagePointerUp */
   .bk-stage > .sheet-stack {
     flex: 1;
@@ -264,21 +285,25 @@
   .bk-turn-prev { inset-inline-start: 0; } /* RTL: the right edge */
   .bk-turn-next { inset-inline-end: 0; }
   .bk-counter { font-size: 12.5px; color: var(--color-text-2); white-space: nowrap; }
-  /* filmstrip (= rv-film / rv-thumb) */
-  .bk-film {
-    flex: none;
-    height: 80px;
-    border-top: 1px solid var(--color-border);
-    overflow-x: auto;
-    overflow-y: hidden;
+  /* filmstrip (= rv-film / rv-thumb), a column of thumbnails in the side panel that scrolls on its own */
+  .bk-film { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  .bk-film-track {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    align-content: start;
+    gap: 12px 8px;
+    padding: 5px 5px 12px; /* room for the marks and the focus ring */
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     scrollbar-width: thin;
   }
-  .bk-film-track { display: flex; align-items: center; gap: 10px; height: 100%; width: max-content; min-width: 100%; padding: 0 4px; }
   .bk-thumb {
     position: relative;
     display: block;
-    flex: none;
-    height: 58px;
+    width: 100%;
     padding: 0;
     border: 0;
     border-radius: var(--radius-xs);
@@ -288,7 +313,7 @@
   }
   .bk-thumb-img {
     display: block;
-    height: 58px;
+    width: 100%;
     aspect-ratio: var(--thumb-ar, 7 / 10);
     border-radius: var(--radius-xs);
     overflow: hidden;
@@ -451,6 +476,7 @@
     transition: top 260ms cubic-bezier(0.2, 0.7, 0.2, 1), left 260ms cubic-bezier(0.2, 0.7, 0.2, 1), width 260ms cubic-bezier(0.2, 0.7, 0.2, 1), height 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
   .fac-block[data-few] { justify-content: center; gap: calc(0.6 * var(--lh) * 100cqw); }
+  .fac-block[data-solid] { justify-content: flex-start; } /* footnotes: packed from the first note down (D34) */
   .fac-block[data-region="footnote"] { color: var(--color-text-2); }
   .fac-line {
     position: relative;
@@ -649,12 +675,22 @@
     .bk-toolbar-start, .bk-toolbar-end { height: 40px; }
     .bk-chips { order: 3; flex: 1 0 100%; height: 40px; }
     .sheet-body { grid-template-columns: minmax(0, 1fr); }
-    .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 32px); }
+    .bk-dashboard.is-viewer { height: calc(100dvh - var(--topbar-height) - 16px); }
+    .bk-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .bk-dashboard.is-viewer .bk-layout { grid-template-rows: minmax(0, 1fr) auto; }
+    .bk-side { position: static; gap: 10px; padding-inline-start: 0; border-inline-start: 0; }
+    .bk-dashboard:not(.is-viewer) .bk-side { order: -1; }
+    .bk-dashboard.is-viewer .bk-counts { display: none; }
+    .bk-summary, .bk-counts, .bk-summary-review { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+    .bk-summary-review { padding-top: 0; border-top: 0; }
+    .bk-film .bk-side-head { display: none; }
+    .bk-film-track { display: flex; align-items: center; gap: 10px; height: 76px; padding: 6px 4px; overflow-x: auto; overflow-y: hidden; }
+    .bk-thumb { width: auto; flex: none; }
+    .bk-thumb-img { width: auto; height: 58px; }
     .bk-viewer .sheet-body { flex-direction: column; gap: 10px; }
     .bk-viewer .sheet-scan, .bk-viewer .sheet-fac { width: min(calc((100cqh - 10px) / 2 * var(--ar-n, 0.7)), 100cqw); }
     .sheet-body:empty { aspect-ratio: calc(var(--sheet-ar, 7 / 10) / 2); }
     .sheet-actions { margin-inline-start: 0; }
-    .bk-attention { margin-inline-start: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     .scan-sweep::after { display: none; }

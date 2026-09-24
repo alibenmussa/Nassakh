@@ -106,7 +106,7 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
 {% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}
-<div class="bk-dashboard" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0 }"
+<div class="bk-dashboard{% if tiles %} has-pages{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0 }"
      x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
      @keydown.window="onKey($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
@@ -177,86 +177,96 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
     <span class="status meta" x-show="active"{% if not progress.active %} x-cloak{% endif %}><span class="dot dot-accent" aria-hidden="true"></span><span>تُستخرج الصفحات الآن</span></span>
   </div>
 
-  {# ------------------------------------------------------------ summary strip (§2.4) #}
-  <div class="bk-summary" role="group" aria-label="التقدّم" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
-    {% for stage in stages %}
-    <span class="status{% if not stage.count %} is-zero{% endif %}" :class="{ 'is-zero': count('{{ stage.key }}') === 0 }">
-      <span class="dot {{ stage.dot }}" aria-hidden="true"></span><span>{{ stage.label }}</span> <bdi class="num" x-text="count('{{ stage.key }}')">{{ stage.count }}</bdi>
-    </span>
-    {% endfor %}
-    <span class="bk-summary-review" x-show="anyOcrDone"{% if not stages.3.count %} x-cloak{% endif %}>
-      <span class="status" x-show="!allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
-      <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
-      <span class="status" x-show="allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>رُوجعت كل الصفحات</span></span>
-    </span>
-    <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
-      <summary>تحتاج انتباهًا <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span></summary>
-      <ul class="bk-attention-list">
-        <template x-for="item in attention" :key="item.id">
-          <li class="bk-attention-row">
-            <a class="link num" :href="item.url">صفحة <span x-text="item.number"></span></a>
-            <span class="bk-attention-flags">
-              <template x-if="item.error">
-                <span class="status"><span class="dot dot-danger" aria-hidden="true"></span><span x-text="item.error_headline || 'خطأ في المعالجة'"></span></span>
-              </template>
-              {% if role == 'admin' or role == 'editor' %}
-              <template x-if="item.error && item.retry_stage">
-                <form method="post" :action="item.rerun_url">
-                  {% csrf_token %}
-                  <input type="hidden" name="stage" :value="item.retry_stage">
-                  <input type="hidden" name="next" value="{% url 'books:detail' book.pk %}">
-                  <button type="submit" class="btn btn-sm">
-                    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-                    <span>إعادة <span x-text="item.retry_label"></span></span>
-                  </button>
-                </form>
-              </template>
-              {% endif %}
-              <template x-if="item.sequence_issue">
-                <span class="badge badge-warning num" x-text="item.sequence_issue"></span>
-              </template>
-              <template x-for="label in (item.flag_labels || [])" :key="label">
-                <span class="badge badge-warning" x-text="label"></span>
-              </template>
-            </span>
-          </li>
-        </template>
-      </ul>
-    </details>
-  </div>
-
-  {# ------------------------------------------------------------ pages: «صفحات» (a book viewer, D33) | «شبكة» (static tiles) #}
-  <section class="bk-viewer" data-viewer aria-label="عارض الصفحات" x-show="view === 'sheets' && nPages > 0"{% if not tiles %} x-cloak{% endif %}>
-    <div class="bk-stage" x-ref="stage" :class="turnClass" @wheel="onStageWheel($event)" @pointerdown="onStagePointerDown($event)" @pointerup="onStagePointerUp($event)" @pointercancel="swipeCancel()">
-      <div class="sheet-stack" data-sheet-stack>
-        {% for t in tiles %}{% include "books/_page_sheet.html" with t=t %}{% endfor %}
-      </div>
-      <button type="button" class="bk-turn bk-turn-prev" @click="turn(-1)" :disabled="!canTurn(-1)" aria-label="الصفحة السابقة" title="الصفحة السابقة (→)">
-        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-      </button>
-      <button type="button" class="bk-turn bk-turn-next" @click="turn(1)" :disabled="!canTurn(1)" aria-label="الصفحة التالية" title="الصفحة التالية (←)">
-        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
-      </button>
-    </div>
-    <nav class="bk-film" x-ref="film" aria-label="شريط الصفحات">
-      <div class="bk-film-track">
-        <template x-for="f in film" :key="f.id">
-          <button type="button" class="bk-thumb" :class="{ 'is-current': f.number === current, 'is-pending': f.pending, 'is-excluded': f.excluded, 'is-error': f.error }"
-                  :aria-current="f.number === current ? 'page' : null" :data-number="f.number" :title="f.title" @click="showPage(f.number, { manual: true })">
-            <span class="bk-thumb-img" :style="f.ar ? '--thumb-ar:' + f.ar : ''"><img x-show="f.thumb" :src="f.thumb || ''" alt="" loading="lazy" decoding="async"></span>
-            <span class="bk-thumb-num num" x-text="f.number"></span>
-            <span class="bk-thumb-mark is-check" x-show="f.reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
-            <span class="bk-thumb-mark is-count num" x-show="!f.reviewed && f.unresolved > 0" x-text="f.unresolved"></span>
-            <span class="bk-thumb-mark is-live" x-show="f.live" aria-hidden="true"></span>
+  {# ------------------------------------------------------------ pages beside a side panel (D34): «صفحات» (the viewer, D33) or «شبكة» (static tiles), then the summary and the filmstrip #}
+  <div class="bk-layout" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+    <div class="bk-main">
+      <section class="bk-viewer" data-viewer aria-label="عارض الصفحات" x-show="view === 'sheets'">
+        <div class="bk-stage" x-ref="stage" :class="turnClass" @wheel="onStageWheel($event)" @pointerdown="onStagePointerDown($event)" @pointerup="onStagePointerUp($event)" @pointercancel="swipeCancel()">
+          <div class="sheet-stack" data-sheet-stack>
+            {% for t in tiles %}{% include "books/_page_sheet.html" with t=t %}{% endfor %}
+          </div>
+          <button type="button" class="bk-turn bk-turn-prev" @click="turn(-1)" :disabled="!canTurn(-1)" aria-label="الصفحة السابقة" title="الصفحة السابقة (→)">
+            <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
           </button>
-        </template>
+          <button type="button" class="bk-turn bk-turn-next" @click="turn(1)" :disabled="!canTurn(1)" aria-label="الصفحة التالية" title="الصفحة التالية (←)">
+            <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+          </button>
+        </div>
+      </section>
+      <div class="page-grid" data-page-grid :class="{ 'is-active': active }" x-show="view === 'grid' && nPages > 0" x-cloak>
+        {% for t in tiles %}{% include "books/_page_tile.html" with t=t %}{% endfor %}
       </div>
-    </nav>
-  </section>
-  <div class="page-grid" data-page-grid :class="{ 'is-active': active }" x-show="view === 'grid' && nPages > 0" x-cloak>
-    {% for t in tiles %}{% include "books/_page_tile.html" with t=t %}{% endfor %}
+      <p class="bk-empty-filter meta" x-show="filteredOut" x-cloak>لا صفحات تطابق هذا المرشّح</p>
+    </div>
+
+    <aside class="bk-side" aria-label="ملخّص الكتاب">
+      {# summary (§2.4): stage counters, review state, the attention list #}
+      <div class="bk-summary" role="group" aria-label="التقدّم">
+        <ul class="bk-counts">
+          {% for stage in stages %}
+          <li class="bk-count{% if not stage.count %} is-zero{% endif %}" :class="{ 'is-zero': count('{{ stage.key }}') === 0 }">
+            <span class="dot {{ stage.dot }}" aria-hidden="true"></span><span class="grow">{{ stage.label }}</span><bdi class="num" x-text="count('{{ stage.key }}')">{{ stage.count }}</bdi>
+          </li>
+          {% endfor %}
+        </ul>
+        <div class="bk-summary-review" x-show="anyOcrDone"{% if not stages.3.count %} x-cloak{% endif %}>
+          <span class="status" x-show="!allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
+          <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
+          <span class="status" x-show="allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>رُوجعت كل الصفحات</span></span>
+        </div>
+        <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
+          <summary>تحتاج انتباهًا <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span></summary>
+          <ul class="bk-attention-list">
+            <template x-for="item in attention" :key="item.id">
+              <li class="bk-attention-row">
+                <a class="link num" :href="item.url">صفحة <span x-text="item.number"></span></a>
+                <span class="bk-attention-flags">
+                  <template x-if="item.error">
+                    <span class="status"><span class="dot dot-danger" aria-hidden="true"></span><span x-text="item.error_headline || 'خطأ في المعالجة'"></span></span>
+                  </template>
+                  {% if role == 'admin' or role == 'editor' %}
+                  <template x-if="item.error && item.retry_stage">
+                    <form method="post" :action="item.rerun_url">
+                      {% csrf_token %}
+                      <input type="hidden" name="stage" :value="item.retry_stage">
+                      <input type="hidden" name="next" value="{% url 'books:detail' book.pk %}">
+                      <button type="submit" class="btn btn-sm">
+                        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+                        <span>إعادة <span x-text="item.retry_label"></span></span>
+                      </button>
+                    </form>
+                  </template>
+                  {% endif %}
+                  <template x-if="item.sequence_issue">
+                    <span class="badge badge-warning num" x-text="item.sequence_issue"></span>
+                  </template>
+                  <template x-for="label in (item.flag_labels || [])" :key="label">
+                    <span class="badge badge-warning" x-text="label"></span>
+                  </template>
+                </span>
+              </li>
+            </template>
+          </ul>
+        </details>
+      </div>
+      {# the filmstrip (= review screen): the pages the filter keeps, the current one kept in view #}
+      <nav class="bk-film" aria-label="شريط الصفحات" x-show="view === 'sheets'">
+        <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="film.length"></bdi></div>
+        <div class="bk-film-track" x-ref="film">
+          <template x-for="f in film" :key="f.id">
+            <button type="button" class="bk-thumb" :class="{ 'is-current': f.number === current, 'is-pending': f.pending, 'is-excluded': f.excluded, 'is-error': f.error }"
+                    :aria-current="f.number === current ? 'page' : null" :data-number="f.number" :title="f.title" @click="showPage(f.number, { manual: true })">
+              <span class="bk-thumb-img" :style="f.ar ? '--thumb-ar:' + f.ar : ''"><img x-show="f.thumb" :src="f.thumb || ''" alt="" loading="lazy" decoding="async"></span>
+              <span class="bk-thumb-num num" x-text="f.number"></span>
+              <span class="bk-thumb-mark is-check" x-show="f.reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
+              <span class="bk-thumb-mark is-count num" x-show="!f.reviewed && f.unresolved > 0" x-text="f.unresolved"></span>
+              <span class="bk-thumb-mark is-live" x-show="f.live" aria-hidden="true"></span>
+            </button>
+          </template>
+        </div>
+      </nav>
+    </aside>
   </div>
-  <p class="bk-empty-filter meta" x-show="filteredOut" x-cloak>لا صفحات تطابق هذا المرشّح</p>
 
   <template id="sheet-shell">{% include "books/_page_sheet.html" with t=None %}</template>
   <template id="tile-shell">{% include "books/_page_tile.html" with t=None %}</template>

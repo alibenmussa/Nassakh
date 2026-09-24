@@ -163,7 +163,14 @@ def test_dashboard_toolbar_static_shells_and_grid_cards(editor_client):
     assert 'class="toast bk-toast"' in body and "ابدأ المراجعة" in body
     # D33: «صفحات» is a book viewer: one stage with turn buttons and a filmstrip, no long scroll
     assert 'class="bk-viewer" data-viewer' in body and 'class="bk-stage" x-ref="stage"' in body
-    assert '@wheel="onStageWheel($event)"' in body and 'class="bk-film" x-ref="film"' in body
+    assert '@wheel="onStageWheel($event)"' in body and 'class="bk-film-track" x-ref="film"' in body
+    # D34: the pages beside a side panel holding the summary and the filmstrip
+    assert 'class="bk-layout"' in body and 'class="bk-main"' in body and '<aside class="bk-side"' in body
+    side = body[body.index('<aside class="bk-side"') :]
+    assert side.index('class="bk-summary"') < side.index('class="bk-film"') < side.index("</aside>")
+    assert body.index('class="bk-viewer"') < body.index('<aside class="bk-side"')
+    assert 'class="bk-counts"' in body and body.count('class="bk-count') >= 5
+    assert "'has-pages': nPages > 0" in body
     assert 'class="bk-turn bk-turn-prev"' in body and 'class="bk-turn bk-turn-next"' in body
     assert 'aria-label="الصفحة السابقة"' in body and 'aria-label="الصفحة التالية"' in body
     assert "showPage(f.number, { manual: true })" in body and 'class="bk-counter"' in body
@@ -480,6 +487,24 @@ const withNotes = { width: W, height: H, text_state: 'provisional', footnote_y: 
   provisional_lines: [boxLine(0, long), boxLine(1, long), { region_kind: 'footnote', bbox: [0.15, 0.82, 0.85, 0.845], words: long.split(' ') }, { region_kind: 'footnote', bbox: [0.15, 0.86, 0.85, 0.885], words: ['حاشية', 'ثانية'] }] };
 const L4 = D.layout(withNotes);
 out.layNotes = { groups: L4.groups.map((g) => g.kind), rule: L4.rule, noteY0: +L4.groups[1].block[1].toFixed(3), noteFsCapped: L4.groups[1].fsCw <= 0.9 * L4.groups[0].fsCw + 1e-9, ids: L4.groups.flatMap((g) => g.lines.map((l) => l.i)), noteKinds: L4.groups[1].lines.map((l) => l.kind) };
+// D34 footnotes set solid: line box = 1.5 × type size, block = the lines' height, never spread, never "few"-centred
+const solidNotes = (lines) => D.layout({ width: W, height: H, text_state: 'final', footnote_y: 0.7, median_line_h: 0.03, lines });
+const noteLine = (y0, y1, words) => ({ region_kind: 'footnote', bbox: [0.15, y0, 0.85, y1], tokens: words.split(' ').map((t) => ({ t, conf: 'high' })) });
+const bodyLine = (y0) => ({ region_kind: 'body', bbox: [0.12, y0, 0.88, y0 + 0.03], tokens: long.split(' ').map((t) => ({ t, conf: 'high' })) });
+const spread = solidNotes([bodyLine(0.1), bodyLine(0.15), noteLine(0.72, 0.745, long), noteLine(0.80, 0.825, long), noteLine(0.88, 0.905, 'حاشية قصيرة')]);
+const gN = spread.groups[1]; const HWn = H / W;
+out.laySolid = { solid: gN.solid, few: gN.few, bodySolid: spread.groups[0].solid, lead: +(gN.lhCw / gN.fsCw).toFixed(3) <= 1.5,
+  packed: Math.abs((gN.block[3] - gN.block[1]) * HWn - gN.lines.length * gN.lhCw) < 1e-6, top: +gN.block[1].toFixed(4), topExpect: +(0.72 - 0.12 * 0.025).toFixed(4),
+  shorter: gN.block[3] < 0.905 };
+// three notes printed side by side on one row: stacked at their size, running on below the row instead of shrinking to fit it
+const row = solidNotes([bodyLine(0.1), noteLine(0.90, 0.925, 'أولى قصيرة'), noteLine(0.90, 0.925, 'ثانية قصيرة'), noteLine(0.90, 0.925, 'ثالثة قصيرة')]);
+const gR = row.groups[1];
+out.laySolidRow = { fsKept: gR.fsCw > 0.8 * Math.min(0.78 * 0.025 * HWn, 0.9 * row.groups[0].fsCw), bottom: +gR.block[3].toFixed(4), within: gR.block[3] <= 0.97 + 1e-9 };
+// footnotes without text boxes: the detected boxes are the letters' core band (a quarter of a line), so the
+// notes take their size from the body's lines instead of shrinking to a few pixels
+const core = D.layout({ width: W, height: H, text_state: 'final', footnote_y: 0.7, median_line_h: 0.008, line_boxes: [[0.15, 0.80, 0.85, 0.804]],
+  lines: [bodyLine(0.1), bodyLine(0.15), bodyLine(0.2), { ...noteLine(0, 0, 'حاشية بلا صندوق'), bbox: null }, { ...noteLine(0, 0, 'سطر ثان'), bbox: null }] });
+out.layNoteFromBody = { source: core.groups[1].source, ratio: +(core.groups[1].fsCw / core.groups[0].fsCw).toFixed(2) };
 const finalNoBox = { width: W, height: H, text_state: 'final', line_boxes: [], lines: Array.from({ length: 6 }, () => ({ region_kind: 'body', bbox: null, tokens: long.split(' ').map((t) => ({ t, conf: 'high' })) })) };
 const L5 = D.layout(finalNoBox); const g5 = L5.groups[0];
 out.layFinalNoBox = { mode: L5.mode, source: g5.source, boxed: g5.lines.some((l) => l.box), spans: g5.lines.every((l) => l.lx0 === g5.block[0] && l.lx1 === g5.block[2]), ids: g5.lines.map((l) => l.i), tokens: g5.lines[0].tokens.length };
@@ -851,6 +876,20 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         and notes["ids"] == [0, 1, 2, 3]
         and notes["noteKinds"] == ["footnote", "footnote"]
     )
+    # D34 footnotes are set solid, packed from the first note: no spread, no centring, a tighter lead
+    assert out["laySolid"] == {
+        "solid": True,
+        "few": False,
+        "bodySolid": False,
+        "lead": True,
+        "packed": True,
+        "top": out["laySolid"]["topExpect"],
+        "topExpect": out["laySolid"]["topExpect"],
+        "shorter": True,
+    }
+    assert out["laySolidRow"]["fsKept"] is True and out["laySolidRow"]["within"] is True
+    assert out["laySolidRow"]["bottom"] > 0.925
+    assert out["layNoteFromBody"]["source"] == "boxes" and out["layNoteFromBody"]["ratio"] >= 0.8
     # final lines with bbox null → distributed inside the default block
     fnb = out["layFinalNoBox"]
     assert (

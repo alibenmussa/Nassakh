@@ -55,6 +55,11 @@
   const WS_SHRINK = 0.5; // a line still too long tightens each word space by up to half a space…
   const SX_MIN = 0.9; // …then condenses horizontally down to 90 %; beyond that it is clipped with a fade
   const BOOK_TOL = 0.2; // a page whose line height is within ±20 % of the book's takes the book's size
+  // D34 footnotes are set solid: packed from the first note down, each line box 1.5 × the group's type size,
+  // not spread over the printed block (their type is smaller than the scan's, so spreading left wide gaps)
+  const NOTE_LEAD = 1.5;
+  const NOTE_FLOOR = 0.97; // the block may run on below its printed lines down to 97 % of the page before it shrinks
+  const NOTE_OF_BODY = 0.85; // a footnote without boxes of its own is sized from the body's lines
   const NOISE_LINE_WORDS = [3, 6];
   const NOISE_WORD_LEN = [2, 7];
   const FONT = '"IBM Plex Sans Arabic"';
@@ -687,7 +692,8 @@
     const spaceW = Math.max(1, Number(measure(' ')) || 1);
     let index = 0;
 
-    function group(kind, textLines, detected, bodyFs) {
+    function group(kind, textLines, detected, bodyG) {
+      const bodyFs = bodyG ? bodyG.fsCw : 0;
       let tl = textLines;
       const skeleton = mode === 'skeleton';
       // text lines without geometry borrow the detected boxes when the counts match (older payloads)
@@ -701,7 +707,8 @@
       let hg = 0;
       let K = FAC_K;
       let source;
-      if (!skeleton && withBox.length && withBox.length >= 0.6 * tl.length) {
+      // footnotes are packed from their first line, so any of their own text boxes places them better than none
+      if (!skeleton && withBox.length && (withBox.length >= 0.6 * tl.length || kind === 'footnote')) {
         block = union(withBox.map((l) => l.box));
         hg = median(withBox.map((l) => l.box[3] - l.box[1]));
         source = 'text';
@@ -724,7 +731,14 @@
         hg = 0.62 * ((block[3] - block[1]) / Math.max(1, count));
         K = 1;
       }
-      const few = count <= FEW;
+      // detected boxes and the page's median line height measure the letters' core band, a fraction of a
+      // printed line: footnotes without text boxes of their own take their size from the body's lines
+      if (kind === 'footnote' && source !== 'text' && bodyG && bodyG.source === 'text' && bodyG.hg > 0) {
+        hg = NOTE_OF_BODY * bodyG.hg;
+        K = FAC_K;
+      }
+      const solid = kind === 'footnote';
+      const few = !solid && count <= FEW;
       const titlePage = !skeleton && few && !withBox.length && !detected.length;
       let fs = K * hg * HW;
       if (titlePage) fs = TITLE_FS * HW; // a title page
@@ -770,8 +784,12 @@
           if (fitFs > 0 && fitFs < fs) fs = Math.max(fitFs, FIT_FLOOR * fs);
         }
       }
+      if (solid) {
+        lh = Math.min(lh, NOTE_LEAD * fs);
+        block = [block[0], block[1], block[2], Math.min(block[1] + (count * lh) / HW, Math.max(block[3], NOTE_FLOOR))];
+      }
       const blockH = (block[3] - block[1]) * HW;
-      if (blockH > 0 && count * lh > blockH) { // shrink to fit: never overflow, never scroll
+      if (blockH > 0 && count * lh > blockH + 1e-9) { // shrink to fit: never overflow, never scroll
         const f = blockH / (count * lh);
         fs *= f;
         lh *= f;
@@ -829,13 +847,13 @@
         index += 1;
         return line;
       });
-      return { kind, block, fsCw: fs, lhCw: lh, few, source, lines };
+      return { kind, block, fsCw: fs, lhCw: lh, hg, few, solid, source, lines };
     }
 
     const groups = [];
     const body = group('body', bodyT, bodyB, 0);
     if (body) groups.push(body);
-    const note = group('footnote', noteT, noteB, body ? body.fsCw : 0);
+    const note = group('footnote', noteT, noteB, body);
     if (note) groups.push(note);
     return { ar, groups, rule: fy, mode };
   }
@@ -887,6 +905,7 @@
       if (g.kind === 'body') bodyX0 = g.block[0];
       setProps(block, { '--x0': fix(g.block[0]), '--y0': fix(g.block[1]), '--x1': fix(g.block[2]), '--y1': fix(g.block[3]), '--fs': fix(g.fsCw), '--lh': fix(g.lhCw) });
       if (g.few) block.setAttribute('data-few', '');
+      if (g.solid) block.setAttribute('data-solid', '');
       g.lines.forEach((ln) => {
         const line = el('div', 'fac-line');
         line.setAttribute('data-line', String(ln.i));
