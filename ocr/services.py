@@ -584,6 +584,8 @@ def run_full_ocr(page: Page) -> None:
             _record_check(secondary_run, reference)
             n_model_runs += 2
             model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
+        if not (n_model_runs and len(model_errors) == n_model_runs):
+            _read_printed_number(page, gray, tmpdir, primary)
     if n_model_runs and len(model_errors) == n_model_runs:
         # Every model call crashed (out of memory, broken weights...): this is an engine failure,
         # not a page to finalise from Tesseract; the page goes to `error` and can be retried.
@@ -592,6 +594,40 @@ def run_full_ocr(page: Page) -> None:
             f"{model_errors[0]}"
         )
     finalize_page(page)
+
+
+PAGE_NUMBER_VLM_TOKENS = 16
+
+
+def _read_printed_number(page: Page, gray: np.ndarray, tmpdir: Path, engine_name: str) -> None:
+    """Read the page-number region with the primary model and store its digits in `printed_number`.
+
+    Tesseract misreads isolated Arabic-Indic digits ("٦" as "+"), while a vision-language model
+    reads a single large digit reliably. The crop is padded, enlarged like in `run_fast_ocr`, and
+    the call is capped at a few tokens; the result replaces Tesseract's guess when it has digits.
+    """
+    region = page.regions.filter(kind=Region.Kind.PAGE_NUMBER).order_by("order").first()
+    if region is None:
+        return
+    target = Target(region, _pad_bbox(region.bbox, PAGE_NUMBER_PAD, gray.shape))
+    path = _save_temp(
+        _crop_image(gray, target.bbox, upscale=PAGE_NUMBER_UPSCALE), tmpdir, f"gray-number-{target.kind}"
+    )
+    run = run_engine(
+        page,
+        engine_name,
+        target,
+        path,
+        f"gray_{PAGE_NUMBER_UPSCALE}x",
+        PAGE_NUMBER_VLM_TOKENS,
+        scale=PAGE_NUMBER_UPSCALE,
+    )
+    if run.status != OcrRun.Status.OK:
+        return
+    digits = printed_number_of(run.parsed_text)
+    if digits and digits != page.printed_number:
+        page.printed_number = digits
+        page.save(update_fields=["printed_number"])
 
 
 # ---------------------------------------------------------------- selection and finalisation

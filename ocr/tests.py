@@ -666,7 +666,7 @@ def test_run_full_ocr_builds_lines_final_text_and_statuses(page):
     for run in page.ocr_runs.all():
         by_engine.setdefault(run.engine_name, []).append(run)
     assert len(by_engine["tesseract"]) == 4
-    assert {r.region.kind for r in by_engine["qari_v03"]} == {"body", "footnote"}
+    assert {r.region.kind for r in by_engine["qari_v03"]} == {"body", "footnote", "page_number"}
     assert {r.region.kind for r in by_engine["qari_v02"]} == {"body", "footnote"}
     foot_run = next(r for r in by_engine["qari_v03"] if r.region.kind == "footnote")
     body_run = next(r for r in by_engine["qari_v03"] if r.region.kind == "body")
@@ -1057,7 +1057,7 @@ def test_page_text_and_runs_api_require_login_and_return_lines(client, page, use
     }
 
     runs = client.get(runs_url).json()["runs"]
-    assert len(runs) == 8
+    assert len(runs) == 9  # 4 tesseract + 2x2 model runs + the primary page-number read
     assert runs[0]["created_at"] >= runs[-1]["created_at"]  # newest first
     sample = next(r for r in runs if r["engine"] == "qari_v03" and r["region_kind"] == "footnote")
     assert sample["variant"] == "gray_2x" and sample["variant_label"] == "رمادية ×2"
@@ -1127,3 +1127,29 @@ def test_run_fast_ocr_reads_the_page_number_padded_upscaled_single_line(page):
     assert call["image_size"] == expected
     # every other region is still read at 1x with the engine's default mode
     assert all(c["hints"] is None for c in fakes["tesseract"].calls if c is not call)
+
+
+def test_run_full_ocr_reads_the_printed_number_with_the_primary_model(page):
+    """The primary model reads the padded 4x page-number crop with a tiny cap; its digits win over Tesseract."""
+    regions = add_regions(page)
+    fakes = engines()
+    fakes["qari_v03"] = FakeEngine(
+        name="qari_v03",
+        responder=by_kind(
+            {"body": PRIMARY_BODY, "footnote": FOOT, "page": PRIMARY_BODY, "page_number": "— ٢٢ —"}
+        ),
+    )
+    fakes["qari_v03"].kind = "vlm"
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        page.refresh_from_db()
+        assert page.printed_number == "8"  # Tesseract's guess from the fast pass
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == "22"
+    run = page.ocr_runs.get(region=regions["page_number"], engine_name="qari_v03")
+    assert run.input_variant == f"gray_{services.PAGE_NUMBER_UPSCALE}x"
+    assert run.params["max_new_tokens"] == services.PAGE_NUMBER_VLM_TOKENS
+    assert (
+        "22" not in page.final_text.splitlines()[-1] or "٢٢" not in page.final_text
+    )  # number is metadata only
