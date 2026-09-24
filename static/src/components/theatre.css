@@ -228,7 +228,9 @@
   .main:has(> .bk-dashboard.has-pages) { padding-top: 0; }
   /* the viewer takes the room left in `.main` (Django messages and the column gap included), so the page
      never runs below the fold after a redirect with a message */
-  .main:has(> .bk-dashboard.is-viewer) { height: calc(100dvh - var(--topbar-height)); padding-bottom: 16px; }
+  /* `flex: none`: with `.main`'s flex: 1 (a 0 % basis) the height would be ignored and a long filmstrip would
+     stretch the page into a scroll */
+  .main:has(> .bk-dashboard.is-viewer) { flex: none; height: calc(100dvh - var(--topbar-height)); min-height: 0; padding-bottom: 16px; }
   .bk-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--bk-side-w); gap: 24px; align-items: start; }
   .bk-main { min-width: 0; display: flex; flex-direction: column; gap: 24px; }
   .bk-side {
@@ -248,11 +250,11 @@
   /* ------------------------------------------------------------ the page viewer (D33) */
   /* «صفحات» is a book viewer, not a scroll: one sheet at a time, fitted to the window, turned like a page
      (review-screen motion, = rv-split is-out / is-in), with the filmstrip in the side panel (= rv-film). */
-  .bk-dashboard.is-viewer { flex: 1 1 auto; height: auto; min-height: 460px; gap: 12px; }
+  .bk-dashboard.is-viewer { flex: 1 1 0; height: auto; min-height: 460px; gap: 12px; }
   .bk-dashboard.is-viewer .bk-banners { margin-top: -4px; }
   .bk-dashboard.is-viewer .bk-layout { flex: 1; min-height: 0; grid-template-rows: minmax(0, 1fr); align-items: stretch; }
   .bk-dashboard.is-viewer .bk-main { min-height: 0; }
-  .bk-dashboard.is-viewer .bk-side { position: static; }
+  .bk-dashboard.is-viewer .bk-side { position: static; } /* bounded by the row; the filmstrip scrolls inside it */
   .bk-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .bk-stage { position: relative; flex: 1; min-height: 0; display: flex; touch-action: pan-y pinch-zoom; } /* a sideways touch swipe reaches onStagePointerUp */
   .bk-stage > .sheet-stack {
