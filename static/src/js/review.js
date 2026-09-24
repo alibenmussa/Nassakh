@@ -31,6 +31,18 @@
   const FLASH_MS = 700;
   const POLL_MS = 3000;
   const UNDO_TOAST_MS = 8000;
+  // word popover placement (DESIGN.md: open below, flip above when needed, keep 8 px from the edges)
+  const POP_EDGE = 8;
+  const POP_GAP = 8;
+  const POP_W = 272;
+  const POP_H_GUESS = 220;
+  const MORE_W = 248; // the «إجراءات أخرى» submenu
+  const MORE_CLOSE_MS = 180; // hover intent: the submenu survives the gap between the two panels
+  const ROLES = [
+    { value: 'body', label: 'محتوى' },
+    { value: 'heading', label: 'عنوان رئيسي' },
+    { value: 'subheading', label: 'عنوان فرعي' },
+  ];
   const isDigits = (word) => /^[0-9٠-٩۰-۹]+$/.test(word);
 
   // fetch wrapper: never throws; `{ ok, status, data, message }` with an Arabic message on failure.
@@ -136,7 +148,8 @@
       hot: null,          // { lineId, index } hovered word, from either side
       hotLine: null,      // hovered line id
       flashing: {},       // "lineId-index" → true while the resolve animation plays
-      pop: { open: false, style: '', typed: '', typing: false },
+      pop: { open: false, style: '', typed: '', typing: false, above: false, more: false, moreSide: 'left', moreStyle: '' },
+      roles: ROLES,
       // ---- lines
       edit: null,         // { lineId, text }
       insert: null,       // { afterId, text }
@@ -352,6 +365,10 @@
         const tok = this.focused;
         // any word opens the popover on an editable page (merge / delete, D31); read-only: uncertain words only
         this.pop.open = opts.open !== false && Boolean(tok) && (tok.conf === 'low' || this.editable);
+        this.pop.more = false;
+        // D32: correction is the main action; a click on a confident word opens it prefilled and selected
+        const prefill = this.pop.open && opts.fromClick && tok && tok.conf !== 'low' && this.editable;
+        if (prefill) { this.pop.typing = true; this.pop.typed = tok.t; }
         if (!hasDOM) return;
         this.tick(() => {
           const el = document.getElementById(this.tokId(ref.lineId, ref.index));
@@ -360,6 +377,7 @@
             el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             this.placePop(el);
           }
+          if (prefill && this.$refs.typed) { this.$refs.typed.focus({ preventScroll: true }); this.$refs.typed.select(); }
           if (opts.pan !== false && tok && tok.bbox) this.panTo(tok.bbox);
         });
       },
@@ -372,7 +390,7 @@
 
       onTokClick(line, i) {
         const tok = line.tokens[i];
-        if (tok && (tok.conf === 'low' || this.editable)) this.focusWord({ lineId: line.id, index: i }, { open: true });
+        if (tok && (tok.conf === 'low' || this.editable)) this.focusWord({ lineId: line.id, index: i }, { open: true, fromClick: true });
         else { this.focus = null; this.pop.open = false; this.hotLine = line.id; }
       },
 
@@ -381,17 +399,120 @@
         this.onTokClick(line, i);
       },
 
+      // The part of the lines column the reader can see (the scroller clipped to the window), minus the margin.
+      visibleArea(node) {
+        const scroller = node && node.closest ? node.closest('.rv-lines-scroll') : null;
+        const r = scroller && scroller.getBoundingClientRect ? scroller.getBoundingClientRect() : null;
+        const W = window.innerWidth || 0;
+        const H = window.innerHeight || 0;
+        return {
+          top: Math.max(r ? r.top : 0, 0) + POP_EDGE,
+          bottom: Math.min(r ? r.bottom : H, H) - POP_EDGE,
+          left: Math.max(r ? r.left : 0, 0) + POP_EDGE,
+          right: Math.min(r ? r.right : W, W) - POP_EDGE,
+        };
+      },
+
+      // Open below the word, flip above when it would leave the visible column and there is more room
+      // above; the popover's right edge sits on the word's right edge (RTL) and never crosses a side edge.
       placePop(el) {
         const host = this.$refs && this.$refs.stage;
         if (!el || !host || !el.getBoundingClientRect) return;
-        const box = el.getBoundingClientRect();
+        const tok = el.getBoundingClientRect();
         const ref = host.getBoundingClientRect();
-        const top = Math.round(box.bottom - ref.top + 8);
-        const right = clamp(Math.round(ref.right - box.right), 0, Math.max(0, ref.width - 272));
-        this.pop.style = `top:${top}px; right:${right}px;`;
+        const view = this.visibleArea(host);
+        const node = this.$refs.pop;
+        const w = node && node.offsetWidth ? node.offsetWidth : POP_W;
+        const h = node && node.offsetHeight ? node.offsetHeight : POP_H_GUESS;
+        let top = tok.bottom + POP_GAP;
+        let above = false;
+        if (top + h > view.bottom) {
+          const roomAbove = tok.top - POP_GAP - view.top;
+          const roomBelow = view.bottom - top;
+          if (roomAbove >= h || roomAbove > roomBelow) { top = Math.max(view.top, tok.top - POP_GAP - h); above = true; }
+          else top = Math.max(view.top, view.bottom - h);
+        }
+        let right = Math.min(tok.right, view.right);
+        if (right - w < view.left) right = Math.min(view.right, view.left + w);
+        this.pop.above = above;
+        this.pop.style = `top:${Math.round(top - ref.top)}px; right:${Math.round(ref.right - right)}px;`;
       },
 
-      closePop() { this.pop.open = false; this.pop.typing = false; this.pop.typed = ''; },
+      repositionPop() {
+        if (!hasDOM || !this.pop.open || !this.focus) return;
+        this.placePop(document.getElementById(this.tokId(this.focus.lineId, this.focus.index)));
+        if (this.pop.more) this.placeMore();
+      },
+
+      // A click anywhere outside the popover closes it (clicks on words and scan boxes stop propagation and
+      // open their own popover instead); the release of a scan drag does not count.
+      onPopOutside() {
+        if (!this.pop.open) return;
+        if (this.dragMoved) { this.dragMoved = false; return; }
+        this.closePop();
+        this.focus = null;
+      },
+
+      closePop() { this.pop.open = false; this.pop.typing = false; this.pop.typed = ''; this.pop.more = false; },
+
+      // ---- «إجراءات أخرى»: a second-level menu (hover, click or ArrowLeft) with merge and delete, kept
+      // away from the correction so a destructive action is never one mis-click away (D32).
+      openMore(focusFirst) {
+        clearTimeout(this.moreTimer);
+        if (!this.pop.more) this.pop.more = true;
+        this.tick(() => {
+          this.placeMore();
+          if (focusFirst && this.$refs.more) {
+            const first = this.$refs.more.querySelector('button:not([disabled])');
+            if (first) first.focus();
+          }
+        });
+      },
+
+      closeMoreSoon() {
+        clearTimeout(this.moreTimer);
+        this.moreTimer = setTimeout(() => { this.pop.more = false; }, MORE_CLOSE_MS);
+      },
+
+      closeMore(focusRow) {
+        clearTimeout(this.moreTimer);
+        this.pop.more = false;
+        const row = this.$refs && this.$refs.moreRow;
+        if (focusRow && row && row.focus) row.focus();
+      },
+
+      toggleMore() { if (this.pop.more) this.closeMore(); else this.openMore(); },
+
+      // Beside the popover on the side with room (RTL: the left first), level with its row and kept inside
+      // the visible column; folded into the popover when neither side has room (a narrow column).
+      placeMore() {
+        const pop = this.$refs && this.$refs.pop;
+        const row = this.$refs && this.$refs.moreRow;
+        if (!pop || !row || !pop.getBoundingClientRect) return;
+        const fly = this.$refs.more;
+        const p = pop.getBoundingClientRect();
+        const view = this.visibleArea(pop);
+        const w = fly && fly.offsetWidth ? fly.offsetWidth : MORE_W;
+        const h = fly && fly.offsetHeight ? fly.offsetHeight : 132;
+        const roomLeft = p.left - view.left;
+        const roomRight = view.right - p.right;
+        let side = 'left';
+        if (roomLeft < w + 6) side = roomRight >= w + 6 ? 'right' : 'below';
+        let top = (row.offsetTop || 0) - 6;
+        if (p.top + top + h > view.bottom) top -= p.top + top + h - view.bottom;
+        if (p.top + top < view.top) top = view.top - p.top;
+        this.pop.moreSide = side;
+        this.pop.moreStyle = side === 'below' ? '' : `top:${Math.round(top)}px;`;
+      },
+
+      moveInMore(ev, dir) {
+        const fly = this.$refs && this.$refs.more;
+        const items = fly ? Array.from(fly.querySelectorAll('button:not([disabled])')) : [];
+        if (!items.length) return;
+        const i = items.indexOf(ev && ev.target);
+        const next = items[(i + dir + items.length) % items.length];
+        if (next) next.focus();
+      },
 
       // ------------------------------------------------------------ words: readings
       options(token) {
@@ -426,6 +547,7 @@
         else if (choice === 'tess') value = tok.tess;
         else if (choice === 'typed') value = String(text || '').replace(/\s+/g, ' ').trim();
         if (!value) return Promise.resolve(false);
+        if (choice === 'typed' && value === tok.t && !this.isUnresolved(tok)) { this.closePop(); return Promise.resolve(false); }
 
         const before = Object.assign({}, tok);
         const beforeCounts = Object.assign({}, this.counts);
@@ -591,8 +713,28 @@
         return { 'is-open': this.isUnresolved(tok), 'is-hot': this.same(this.hot, ref) || this.same(this.focus, ref) };
       },
 
+      // D32: what the line is in the book (body text, main heading, subheading); undo restores it.
+      setRole(line, role) {
+        this.menuFor = null;
+        if (!line || !this.editable || (line.role || 'body') === role) return Promise.resolve(false);
+        const before = line.role || 'body';
+        line.role = role;
+        return this.request(() => api(fill(this.urls.role, line.id), { method: 'POST', body: { role } }), {
+          apply: (data) => { if (data.line) this.replaceLine(data.line); },
+          rollback: () => { const l = this.lineById(line.id); if (l) l.role = before; },
+          retry: () => this.setRole(this.lineById(line.id), role),
+        });
+      },
+
+      roleLabel(line) {
+        const role = ROLES.find((r) => r.value === (line && line.role));
+        return role && role.value !== 'body' ? role.label : '';
+      },
+
       lineClass(line) {
         return {
+          'is-heading': line.role === 'heading',
+          'is-subheading': line.role === 'subheading',
           'is-current': this.currentLineId === line.id,
           'is-reviewed': Boolean(line.is_reviewed),
           'is-manual': Boolean(line.is_manual),
@@ -1313,6 +1455,7 @@
       // Esc closes the top-most layer only.
       closeTop() {
         if (this.menuFor != null) { this.menuFor = null; return; }
+        if (this.pop.more) { this.closeMore(true); return; }
         if (this.pop.typing) { this.pop.typing = false; this.pop.typed = ''; this.tick(() => { const el = this.focus && document.getElementById(this.tokId(this.focus.lineId, this.focus.index)); if (el) el.focus(); }); return; }
         if (this.pop.open) { this.closePop(); return; }
         if (this.edit || this.insert) { this.cancelEdit(); return; }
@@ -1328,6 +1471,12 @@
         const inField = tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable === true;
         if (this.sheetOpen) { if (ev.key === 'Escape') { ev.preventDefault(); this.closeSheet(); } return; }
         if (this.dialog.open) { if (ev.key === 'Escape') { ev.preventDefault(); this.dialog.open = false; } return; }
+        // Buttons and links keep their own keys (Enter / Space activate them, nothing deletes a word from
+        // them), and inside the word popover the arrows belong to its menus, not to page navigation.
+        const k = ev.key;
+        if ((tag === 'button' || tag === 'a') && (k === 'Enter' || k === ' ' || k === 'Backspace' || k === 'Delete')) return;
+        const inPop = Boolean(target.closest && target.closest('.rv-pop'));
+        if (inPop && !inField && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown')) return;
         const outside = Boolean(target.closest && target.closest('.rv-bar, .rv-film, .rv-toolbar, .sidebar, .topbar'));
         const inFlow = !inField && !outside && tag !== 'button' && tag !== 'a';
         const focused = Boolean(this.focused) && this.editable;

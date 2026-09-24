@@ -57,7 +57,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 {{ config|json_script:"review-config" }}
 <div class="review-screen" x-data="reviewScreen(JSON.parse(document.getElementById('review-config').textContent))"
      :class="{ 'is-swapped': swapped, 'is-readonly': !canEdit, 'is-loading': loading }"
-     @keydown.window="onKey($event)">
+     @keydown.window="onKey($event)" @resize.window.debounce.100ms="repositionPop()">
 
   {# before Alpine boots: a quiet skeleton, hidden the moment the component mounts #}
   <div class="rv-boot" x-show="false" aria-hidden="true">
@@ -172,9 +172,10 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         {# the lines #}
         <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading" x-cloak>
 
-          {# actionable readings popover: rows only for the readings that exist, key hints 1/2/3, a correction input #}
-          <div class="rv-pop" x-show="pop.open && focused" x-cloak :style="pop.style" role="dialog" aria-label="قراءات الكلمة" @mousedown.stop @keydown.escape.stop.prevent="closeTop()">
-            <div class="rv-pop-title" x-text="focused && focused.conf === 'low' ? (canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة') : 'الكلمة'"></div>
+          {# word popover (D31/D32): readings, then the correction (the main action), then a second-level menu with merge and delete #}
+          <div class="rv-pop" x-ref="pop" x-show="pop.open && focused" x-cloak :style="pop.style" :class="{ 'is-above': pop.above }"
+               role="dialog" aria-label="قائمة الكلمة" @mousedown.stop @click.outside="onPopOutside()" @keydown.escape.stop.prevent="closeTop()">
+            <div class="rv-pop-title" x-text="focused && focused.conf === 'low' ? (canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة') : 'تصحيح الكلمة'"></div>
             <template x-for="opt in options()" :key="opt.choice">
               <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
                 <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
@@ -183,34 +184,42 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
               </button>
             </template>
             <p class="rv-pop-note" x-show="focused && focused.digit">رقم: تحقّق منه على الصورة</p>
-            {# D31: a word the models split in two can be merged back; a stray letter or number can be removed #}
-            <template x-if="editable">
-              <div class="rv-word-actions" role="group" aria-label="إجراءات الكلمة">
-                <div class="rv-pop-sep" aria-hidden="true" x-show="options().length"></div>
-                <button type="button" class="rv-act" x-show="wordActions().next" @click="mergeWord(1)" title="دمج مع الكلمة التالية (Alt+←)">
-                  <span class="rv-act-label">دمج مع التالية</span>
-                  <bdi class="rv-act-preview" x-text="mergePreview(1)"></bdi>
-                  <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd></span>
-                </button>
-                <button type="button" class="rv-act" x-show="wordActions().prev" @click="mergeWord(-1)" title="دمج مع الكلمة السابقة (Alt+→)">
-                  <span class="rv-act-label">دمج مع السابقة</span>
-                  <bdi class="rv-act-preview" x-text="mergePreview(-1)"></bdi>
-                  <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></span>
-                </button>
-                <button type="button" class="rv-act rv-act-danger" @click="deleteWord()" title="حذف الكلمة (⌫)">
-                  <span class="rv-act-label">حذف الكلمة</span>
-                  <span class="rv-act-keys"><kbd class="kbd">⌫</kbd></span>
-                </button>
-              </div>
-            </template>
             <template x-if="editable">
               <form class="rv-typed" @submit.prevent="submitTyped()">
-                <div class="rv-pop-sep" aria-hidden="true"></div>
+                <div class="rv-pop-sep" aria-hidden="true" x-show="options().length"></div>
                 <label class="sr-only" for="rv-typed-input">تصحيح</label>
                 <input id="rv-typed-input" class="input" x-ref="typed" x-model="pop.typed" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto"
                        @focus="pop.typing = true" @keydown.escape.stop.prevent="closeTop()" @keydown.tab.prevent="move($event.shiftKey ? -1 : 1)">
                 <button type="submit" class="btn btn-sm" :disabled="!pop.typed.trim()">حفظ</button>
               </form>
+            </template>
+            <template x-if="editable">
+              <div class="rv-more-host" @mouseenter="openMore()" @mouseleave="closeMoreSoon()">
+                <div class="rv-pop-sep" aria-hidden="true"></div>
+                <button type="button" class="rv-act rv-more-row" x-ref="moreRow" aria-haspopup="menu" :aria-expanded="pop.more"
+                        @click="toggleMore()" @keydown.arrow-left.prevent="openMore(true)" @keydown.arrow-right.prevent="closeMore()">
+                  <span class="rv-act-label">إجراءات أخرى</span>
+                  <span class="rv-more-chev" aria-hidden="true" x-text="pop.moreSide === 'right' ? '›' : '‹'"></span>
+                </button>
+                <div class="rv-fly" x-ref="more" role="menu" aria-label="إجراءات أخرى" x-show="pop.more" x-cloak :class="'is-' + pop.moreSide" :style="pop.moreStyle"
+                     @keydown.arrow-right.prevent="closeMore(true)" @keydown.arrow-down.prevent="moveInMore($event, 1)" @keydown.arrow-up.prevent="moveInMore($event, -1)">
+                  <button type="button" class="rv-act" role="menuitem" :disabled="!wordActions().next" @click="mergeWord(1)" title="دمج مع الكلمة التالية (Alt+←)">
+                    <span class="rv-act-label">دمج مع التالية</span>
+                    <bdi class="rv-act-preview" x-text="mergePreview(1)"></bdi>
+                    <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd></span>
+                  </button>
+                  <button type="button" class="rv-act" role="menuitem" :disabled="!wordActions().prev" @click="mergeWord(-1)" title="دمج مع الكلمة السابقة (Alt+→)">
+                    <span class="rv-act-label">دمج مع السابقة</span>
+                    <bdi class="rv-act-preview" x-text="mergePreview(-1)"></bdi>
+                    <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></span>
+                  </button>
+                  <div class="rv-pop-sep" aria-hidden="true"></div>
+                  <button type="button" class="rv-act rv-act-danger" role="menuitem" @click="deleteWord()" title="حذف الكلمة (⌫)">
+                    <span class="rv-act-label">حذف الكلمة</span>
+                    <span class="rv-act-keys"><kbd class="kbd">⌫</kbd></span>
+                  </button>
+                </div>
+              </div>
             </template>
           </div>
 
@@ -225,7 +234,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
                 <template x-if="!edit || edit.lineId !== line.id">
                   {# tokens are separated by real spaces so selecting a line copies separate words #}
-                  <p class="rv-line-text"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span class="rv-w"><span class="rv-tok" :id="tokId(line.id, i)" :class="tokClass(line, tok, i)" :tabindex="tok.conf === 'low' ? 0 : -1" :role="tok.conf === 'low' ? 'button' : null" :aria-haspopup="tok.conf === 'low' ? 'dialog' : null" @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onTokClick(line, i)" @focus="onTokFocus(line, i)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template><span class="badge rv-manual" x-show="line.is_manual" x-cloak>مُدرَج</span></p>
+                  <p class="rv-line-text"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span class="rv-w"><span class="rv-tok" :id="tokId(line.id, i)" :class="tokClass(line, tok, i)" :tabindex="tok.conf === 'low' ? 0 : -1" :role="tok.conf === 'low' ? 'button' : null" :aria-haspopup="tok.conf === 'low' ? 'dialog' : null" @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onTokClick(line, i)" @focus="onTokFocus(line, i)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template><span class="badge rv-manual" x-show="line.is_manual" x-cloak>مُدرَج</span><span class="badge rv-role-tag" x-show="roleLabel(line)" x-cloak x-text="roleLabel(line)"></span></p>
                 </template>
                 <template x-if="edit && edit.lineId === line.id">
                   <div class="rv-editor-wrap">
@@ -243,13 +252,25 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                     <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
                   </button>
                   <div class="rv-menu-host">
-                    <button type="button" class="btn-icon btn-icon-sm" title="المزيد" aria-label="قائمة السطر" aria-haspopup="menu" :aria-expanded="menuFor === line.id" @click.stop="menuFor = menuFor === line.id ? null : line.id">
+                    <button type="button" class="btn-icon btn-icon-sm" title="المزيد" aria-label="قائمة السطر" aria-haspopup="menu" :aria-expanded="menuFor === line.id" @click.stop="closePop(); menuFor = menuFor === line.id ? null : line.id">
                       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
                     </button>
                     <div class="menu rv-menu" role="menu" x-show="menuFor === line.id" x-cloak @click.outside="menuFor = null" x-transition.opacity.duration.120ms>
                       <div class="menu-label">السطر <bdi class="num" x-text="li + 1"></bdi><span x-show="line.is_manual"> · مُدرَج يدويًا</span></div>
                       <button type="button" class="menu-item" role="menuitem" @click="startEdit(line)">تعديل السطر <kbd class="kbd ms-auto">E</kbd></button>
                       <button type="button" class="menu-item" role="menuitem" @click="startInsert(line)">إدراج سطر بعده</button>
+                      <template x-if="line.region_kind !== 'footnote'">
+                        <div role="group" aria-label="نوع السطر">
+                          <div class="menu-sep" aria-hidden="true"></div>
+                          <div class="menu-label">نوع السطر</div>
+                          <template x-for="r in roles" :key="r.value">
+                            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="(line.role || 'body') === r.value ? 'true' : 'false'" @click="setRole(line, r.value)">
+                              <span class="rv-role-check" aria-hidden="true" x-text="(line.role || 'body') === r.value ? '✓' : ''"></span>
+                              <span x-text="r.label"></span>
+                            </button>
+                          </template>
+                        </div>
+                      </template>
                       <div class="menu-sep" aria-hidden="true"></div>
                       <button type="button" class="menu-item is-danger" role="menuitem" @click="removeLine(line)">حذف السطر</button>
                     </div>
@@ -342,7 +363,8 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">Shift</kbd><kbd class="kbd">Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
         <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
-        <dt><span class="meta">نقرة على كلمة</span></dt><dd>قائمة الكلمة: القراءات، الدمج، الحذف، التصحيح</dd>
+        <dt><span class="meta">نقرة على كلمة</span></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
+        <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي</dd>
         <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو إلغاء التحرير</dd>
         <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd> / <kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>

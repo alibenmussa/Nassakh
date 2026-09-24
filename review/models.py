@@ -26,6 +26,7 @@ class LineRevision(models.Model):
         DELETE = "delete", "حذف سطر"
         MERGE = "merge", "دمج كلمتين"
         DROP_WORD = "drop_word", "حذف كلمة"
+        ROLE = "role", "نوع السطر"
         APPROVE = "approve", "اعتماد"
         REOPEN = "reopen", "إعادة فتح"
 

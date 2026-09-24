@@ -96,6 +96,18 @@ def line_edit(request: Request, line_id: int) -> Response:
 
 @api_view(["POST"])
 @permission_classes([CanReview])
+def line_role(request: Request, line_id: int) -> Response:
+    """Mark a line as body text, a main heading or a subheading (`{role}`)."""
+    line = _line(line_id)
+    try:
+        line = services.set_line_role(line, str(_data(request).get("role") or ""), request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response({"line": services.line_item(line)})
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
 def line_merge(request: Request, line_id: int) -> Response:
     """Join word `index` with the word after it into one word (a name the models split in two)."""
     line = _line(line_id)

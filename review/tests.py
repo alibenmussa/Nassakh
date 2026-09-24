@@ -784,3 +784,54 @@ def test_api_merge_and_delete_word(reviewer_client, page):
         urls["merge"] == "/api/lines/__id__/merge/"
         and urls["delete_word"] == "/api/lines/__id__/delete-word/"
     )
+
+
+# ---------------------------------------------------------------- line role (D32)
+
+
+def test_set_line_role_marks_headings_and_undo_restores_body(page, reviewer):
+    first = lines_of(page)[0]
+    assert first.role == Line.Role.BODY
+    line = services.set_line_role(first, "heading", reviewer)
+    assert line.role == "heading" and page.revisions.first().action == LineRevision.Action.ROLE
+    line = services.set_line_role(line, "subheading", reviewer)
+    assert line.role == "subheading"
+    count = page.revisions.count()
+    services.set_line_role(line, "subheading", reviewer)  # unchanged: nothing recorded
+    assert page.revisions.count() == count
+    services.undo_last(page, reviewer)
+    line.refresh_from_db()
+    assert line.role == "heading"
+    services.undo_last(page, reviewer)
+    line.refresh_from_db()
+    assert line.role == "body" and line.text == first.text  # the words are untouched
+
+
+def test_set_line_role_refuses_unknown_roles_and_footnote_headings(page):
+    first, _second, foot = lines_of(page)
+    with pytest.raises(services.ReviewError, match="نوع السطر غير معروف."):
+        services.set_line_role(first, "chapter")
+    with pytest.raises(services.ReviewError, match="سطر الحاشية لا يكون عنوانًا."):
+        services.set_line_role(foot, "heading")
+    assert services.set_line_role(foot, "body").role == "body"
+
+
+def test_undo_of_a_deleted_heading_brings_its_role_back(page):
+    line = services.set_line_role(lines_of(page)[0], "heading")
+    services.delete_line(line)
+    services.undo_last(page)
+    assert Line.objects.get(pk=line.pk).role == "heading"
+
+
+def test_api_line_role_and_payload(reviewer_client, page):
+    from django.test import Client
+
+    first = lines_of(page)[0]
+    assert post(Client(), "line_role", first.pk, {"role": "heading"}).status_code == 403  # anonymous
+    response = post(reviewer_client, "line_role", first.pk, {"role": "heading"})
+    assert response.status_code == 200 and response.json()["line"]["role"] == "heading"
+    response = post(reviewer_client, "line_role", first.pk, {"role": "nope"})
+    assert response.status_code == 400 and response.json()["message"] == "نوع السطر غير معروف."
+    payload = services.review_payload(reload(page), None)
+    assert payload["lines"][0]["role"] == "heading" and payload["lines"][1]["role"] == "body"
+    assert payload["urls"]["role"] == "/api/lines/__id__/role/"

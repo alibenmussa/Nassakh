@@ -54,6 +54,13 @@ class OcrRun(models.Model):
 class Line(models.Model):
     """A visual line of a page with its tokens, alternatives and review state."""
 
+    class Role(models.TextChoices):
+        """What the line is in the book, set by a reviewer (D32); assembly uses it for headings."""
+
+        BODY = "body", "محتوى"
+        HEADING = "heading", "عنوان رئيسي"
+        SUBHEADING = "subheading", "عنوان فرعي"
+
     page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="lines")
     order = models.PositiveIntegerField("الترتيب")
     region = models.ForeignKey(
@@ -68,6 +75,7 @@ class Line(models.Model):
     is_reviewed = models.BooleanField("مُراجَع", default=False)
     # Inserted by a reviewer (Phase 3) for text a model skipped; never produced by OCR.
     is_manual = models.BooleanField("أُدرج يدويًا", default=False)
+    role = models.CharField("نوع السطر", max_length=12, choices=Role.choices, default=Role.BODY)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="عدّله",

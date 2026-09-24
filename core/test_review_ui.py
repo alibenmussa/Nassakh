@@ -131,6 +131,7 @@ def _config() -> dict:
             "edit": "/api/lines/__id__/edit/",
             "delete": "/api/lines/__id__/delete/",
             "merge": "/api/lines/__id__/merge/",
+            "role": "/api/lines/__id__/role/",
             "delete_word": "/api/lines/__id__/delete-word/",
             "insert": "/api/pages/7/lines/",
             "undo": "/api/pages/7/undo/",
@@ -199,7 +200,7 @@ def test_review_template_words_popover_editing_and_states():
         ":tabindex=\"tok.conf === 'low' ? 0 : -1\"" in body
         and ":role=\"tok.conf === 'low' ? 'button' : null\"" in body
     )
-    assert 'class="rv-pop"' in body and 'role="dialog" aria-label="قراءات الكلمة"' in body
+    assert 'class="rv-pop"' in body and 'role="dialog" aria-label="قائمة الكلمة"' in body
     assert 'x-for="opt in options()"' in body and '<kbd class="kbd" x-text="opt.key"' in body
     assert 'placeholder="تصحيح…"' in body and '@submit.prevent="submitTyped()"' in body
     # inline line editor, insert, delete from a menu with the undo toast
@@ -335,6 +336,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   const m = reg.reviewScreen(clone(config)); m.init();
   m.onTokClick(m.lines[1], 1); // «الكتاب»: a confident word
   out.wordPop = { open: m.pop.open, options: m.options().length, acts: m.wordActions(), next: m.mergePreview(1), prev: m.mergePreview(-1) };
+  out.prefill = { typing: m.pop.typing, typed: m.pop.typed }; // D32: the correction is the main action
   const mergedLine = clone(config.lines[1]);
   mergedLine.tokens = [mergedLine.tokens[0], { t: 'الكتابحكاية', alt: null, tess: null, conf: 'high', digit: false, bbox: [620, 170, 890, 230], res: 'typed' }];
   globalThis.fetch = reply(200, { line: mergedLine, counts: { line_n_low: 1, page_unresolved: 4, page_low_total: 5, book_unresolved_total: 380 } });
@@ -363,6 +365,47 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   calls.length = 0;
   await m.deleteWord();
   out.deletedLine = { ids: m.lines.map((l) => l.id), call: calls.filter((x) => x[0] === 'POST').pop()[1] };
+  // D32: a click outside the popover closes it (not the release of a scan drag)
+  const o = reg.reviewScreen(clone(config)); o.init();
+  o.onTokClick(o.lines[0], 1); o.dragMoved = true; o.onPopOutside();
+  const afterDrag = { open: o.pop.open, dragMoved: o.dragMoved };
+  o.onPopOutside();
+  out.outside = { afterDrag, afterClick: { open: o.pop.open, focus: o.focus } };
+  // D32: placement against the visible column (scroller clipped to the window), 8 px from every edge
+  globalThis.innerWidth = 1200; globalThis.innerHeight = 800;
+  const scroller = { getBoundingClientRect: () => ({ top: 100, bottom: 780, left: 380, right: 1120 }) };
+  const pl = reg.reviewScreen(clone(config)); pl.init();
+  pl.$refs = { stage: { getBoundingClientRect: () => ({ top: 100, bottom: 2000, left: 400, right: 1100, width: 700 }), closest: () => scroller }, pop: { offsetWidth: 272, offsetHeight: 200 } };
+  const at = (top, left, right) => { pl.placePop({ getBoundingClientRect: () => ({ top, bottom: top + 30, left, right }) }); return { style: pl.pop.style, above: pl.pop.above }; };
+  out.place = { middle: at(300, 800, 860), bottom: at(700, 800, 860), leftEdge: at(300, 390, 450), rightEdge: at(300, 1080, 1130) };
+  const mv = (popRect) => {
+    pl.$refs.pop = { getBoundingClientRect: () => popRect, closest: () => scroller, offsetWidth: 272, offsetHeight: 200 };
+    pl.$refs.more = { offsetWidth: 248, offsetHeight: 130 }; pl.$refs.moreRow = { offsetTop: 150 };
+    pl.placeMore();
+    return { side: pl.pop.moreSide, style: pl.pop.moreStyle };
+  };
+  out.more = { roomLeft: mv({ top: 338, bottom: 538, left: 700, right: 972 }), roomRight: mv({ top: 338, bottom: 538, left: 500, right: 772 }),
+    narrow: mv({ top: 338, bottom: 538, left: 588, right: 860 }), low: mv({ top: 600, bottom: 800, left: 700, right: 972 }) };
+  // the submenu opens on hover and closes after a short grace (hover intent)
+  const mm = reg.reviewScreen(clone(config)); mm.init();
+  mm.onTokClick(mm.lines[1], 1); mm.openMore(); const openedByHover = mm.pop.more;
+  let fired = null; const realTimeout = globalThis.setTimeout; globalThis.setTimeout = (fn, ms) => { fired = ms; fn(); return 1; };
+  mm.closeMoreSoon(); globalThis.setTimeout = realTimeout;
+  out.moreHover = { opened: openedByHover, closedAfter: fired, closed: mm.pop.more === false };
+  mm.openMore(); mm.closeTop(); out.moreEsc = { more: mm.pop.more, popStillOpen: mm.pop.open };
+  // D32: line roles, optimistic with rollback
+  const rl = reg.reviewScreen(clone(config)); rl.init();
+  const headLine = clone(config.lines[0]); headLine.role = 'heading';
+  globalThis.fetch = reply(200, { line: headLine }); calls.length = 0;
+  await rl.setRole(rl.lines[0], 'heading');
+  out.role = { role: rl.lines[0].role, call: calls.filter((x) => x[0] === 'POST').pop(), cls: rl.lineClass(rl.lines[0])['is-heading'], label: rl.roleLabel(rl.lines[0]) };
+  globalThis.fetch = reply(500, { message: 'تعذّر' });
+  await rl.setRole(rl.lines[1], 'subheading');
+  out.roleRollback = { role: rl.lines[1].role || 'body', save: rl.save.state };
+  // keys on buttons stay native; arrows inside the popover belong to its menus
+  const kk = reg.reviewScreen(clone(config)); kk.init(); kk.onTokClick(kk.lines[1], 1); calls.length = 0;
+  const onButton = (key) => { let prevented = false; kk.onKey({ key, target: { tagName: 'BUTTON', closest: (sel) => (sel === '.rv-pop' ? {} : null) }, preventDefault: () => { prevented = true; } }); return prevented; };
+  out.keyGuard = { enter: onButton('Enter'), backspace: onButton('Backspace'), arrowLeft: onButton('ArrowLeft'), words: kk.lines[1].tokens.length, posts: calls.filter((x) => x[0] === 'POST').length };
   out.keysD31 = {
     mergeNext: ka({ key: 'ArrowLeft', altKey: true }, ctx), mergePrev: ka({ key: 'ArrowRight', altKey: true }, ctx),
     del: ka({ key: 'Backspace' }, ctx), del2: ka({ key: 'Delete' }, ctx),
@@ -398,6 +441,29 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
         "next": "الكتابحكاية",
         "prev": "وَفِيالكتاب",
     }
+    assert out["prefill"] == {"typing": True, "typed": "الكتاب"}
+    # D32: outside click closes the popover (a scan drag's release does not), and clears the focus
+    assert out["outside"]["afterDrag"] == {"open": True, "dragMoved": False}
+    assert out["outside"]["afterClick"] == {"open": False, "focus": None}
+    # placement: below the word, flipped above near the bottom, kept 8 px inside the visible column
+    place = out["place"]
+    assert place["middle"] == {"style": "top:238px; right:240px;", "above": False}
+    assert place["bottom"] == {"style": "top:392px; right:240px;", "above": True}
+    assert place["leftEdge"] == {"style": "top:238px; right:440px;", "above": False}  # left edge at 388
+    assert place["rightEdge"] == {"style": "top:238px; right:-12px;", "above": False}  # right edge at 1112
+    more = out["more"]
+    assert more["roomLeft"] == {"side": "left", "style": "top:144px;"}
+    assert more["roomRight"] == {"side": "right", "style": "top:144px;"}
+    assert more["narrow"] == {"side": "below", "style": ""}  # neither side has room: folded in
+    assert more["low"] == {"side": "left", "style": "top:42px;"}  # shifted up to stay above the bottom
+    assert out["moreHover"] == {"opened": True, "closedAfter": 180, "closed": True}
+    assert out["moreEsc"] == {"more": False, "popStillOpen": True}  # Esc closes the submenu first
+    # D32: line roles
+    role = out["role"]
+    assert role["role"] == "heading" and role["cls"] is True and role["label"] == "عنوان رئيسي"
+    assert role["call"][1] == "/api/lines/51/role/" and role["call"][2] == {"role": "heading"}
+    assert out["roleRollback"] == {"role": "body", "save": "error"}
+    assert out["keyGuard"] == {"enter": False, "backspace": False, "arrowLeft": False, "words": 3, "posts": 0}
     mo = out["mergeOptimistic"]
     assert mo["words"] == ["وَفِي", "الكتابحكاية"] and mo["bbox"] == [620, 170, 890, 230]
     assert (
@@ -511,18 +577,35 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     assert out["copy"] == "قال الأمير في سنة 1966\nوَفِي الكتاب حكاية\n\n(1) انظر المصدر"
 
 
-def test_review_popover_offers_merge_and_delete_for_any_word():
-    """D31: the word popover carries merge with the next / previous word (with a preview) and delete."""
+def test_review_popover_keeps_merge_and_delete_in_a_second_level_menu():
+    """D31/D32: correction is the main action; merge / delete sit in the «إجراءات أخرى» submenu."""
     body = _render()
-    assert 'class="rv-word-actions"' in body and 'aria-label="إجراءات الكلمة"' in body
+    assert '@click.outside="onPopOutside()"' in body and "is-above" in body
+    assert 'class="rv-fly"' in body and "إجراءات أخرى" in body and 'aria-haspopup="menu"' in body
+    assert '@mouseenter="openMore()"' in body and '@mouseleave="closeMoreSoon()"' in body
     assert "mergeWord(1)" in body and "mergeWord(-1)" in body and "deleteWord()" in body
+    assert "mergePreview(1)" in body and "دمج مع التالية" in body and "دمج مع السابقة" in body
+    assert "حذف الكلمة" in body
+    # the correction form comes before the «إجراءات أخرى» row
+    assert body.index('class="rv-typed"') < body.index("إجراءات أخرى")
+    # the line menu marks what a line is (not for footnotes)
     assert (
-        "mergePreview(1)" in body
-        and "دمج مع التالية" in body
-        and "دمج مع السابقة" in body
-        and "حذف الكلمة" in body
+        "نوع السطر" in body and "setRole(line, r.value)" in body and "line.region_kind !== 'footnote'" in body
     )
-    # the shortcut sheet lists the new keys
-    assert (
-        "دمج الكلمة مع التالية / السابقة" in body and "قائمة الكلمة: القراءات، الدمج، الحذف، التصحيح" in body
-    )
+    assert 'role="menuitemradio"' in body and "roleLabel(line)" in body
+    # the shortcut sheet lists the keys and the menus
+    assert "دمج الكلمة مع التالية / السابقة" in body and "نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي" in body
+
+
+def test_no_template_uses_a_multiline_comment_tag():
+    """Django's {# #} comments end at the line end; a multi-line one would render as visible page text."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "templates"
+    offenders = [
+        f"{path.relative_to(root)}:{n}"
+        for path in root.rglob("*.html")
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "{#" in line and "#}" not in line
+    ]
+    assert offenders == [], f"use {{% comment %}} for multi-line comments: {offenders}"

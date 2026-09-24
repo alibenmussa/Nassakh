@@ -144,6 +144,7 @@ def line_snapshot(line: Line) -> dict:
         "is_manual": line.is_manual,
         "is_reviewed": line.is_reviewed,
         "n_low": line.n_low,
+        "role": line.role,
     }
 
 
@@ -246,6 +247,7 @@ def line_item(line: Line) -> dict:
         "is_manual": line.is_manual,
         "is_reviewed": line.is_reviewed,
         "n_low": line.n_low,
+        "role": line.role,
         "tokens": [normalize_token(token) for token in line.tokens or []],
     }
 
@@ -373,6 +375,7 @@ def review_payload(page: Page, user) -> dict:
             "delete": _id_template("line_delete", "line_id"),
             "merge": _id_template("line_merge", "line_id"),
             "delete_word": _id_template("line_delete_word", "line_id"),
+            "role": _id_template("line_role", "line_id"),
             "insert": reverse("api:page_lines", args=[page.pk]),
             "undo": reverse("api:page_undo", args=[page.pk]),
             "approve": reverse("api:page_approve", args=[page.pk]),
@@ -693,6 +696,33 @@ def delete_token(line: Line, index, user=None) -> dict:
     return {"line": line, "deleted_line_id": None}
 
 
+@transaction.atomic
+def set_line_role(line: Line, role: str, user=None) -> Line:
+    """Mark what a line is: body text «محتوى», a main heading «عنوان رئيسي» or a subheading «عنوان فرعي».
+
+    Stored on the line (D32) for assembly (chapters, table of contents) and shown in the review
+    screen. Footnote lines stay body text. An unchanged role records nothing; undo restores the
+    previous role. Raises `ReviewError` (Arabic) for an unknown role or a footnote line.
+    """
+    page = _lock_page(line.page)
+    _check_editable(page)
+    line = _line_of(page, line.pk)
+    if line is None:
+        raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    if role not in Line.Role.values:
+        raise ReviewError("نوع السطر غير معروف.")
+    if role != Line.Role.BODY and _region_kind(line) == Region.Kind.FOOTNOTE:
+        raise ReviewError("سطر الحاشية لا يكون عنوانًا.")
+    if line.role == role:
+        return line
+    before = line_snapshot(line)
+    line.role = role
+    line.updated_by = _user_or_none(user)
+    line.save(update_fields=["role", "updated_by", "updated_at"])
+    _record(page, LineRevision.Action.ROLE, line, before, line_snapshot(line), user)
+    return line
+
+
 # ====================================================================== undo
 
 
@@ -705,7 +735,8 @@ def _restore_content(page: Page, revision: LineRevision) -> None:
     line.bbox = snap.get("bbox")
     _set_tokens(line, [normalize_token(token) for token in snap.get("tokens") or []])
     line.text = snap.get("text", line.text)
-    line.save(update_fields=["bbox", "tokens", "text", "n_low", "updated_at"])
+    line.role = snap.get("role") or line.role
+    line.save(update_fields=["bbox", "tokens", "text", "n_low", "role", "updated_at"])
 
 
 def _undo_insert(page: Page, revision: LineRevision) -> None:
@@ -734,6 +765,7 @@ def _undo_delete(page: Page, revision: LineRevision) -> None:
         confidence=snap.get("confidence", 1.0),
         is_manual=bool(snap.get("is_manual")),
         is_reviewed=bool(snap.get("is_reviewed")),
+        role=snap.get("role") or Line.Role.BODY,
     )
     if line_id is not None and not Line.objects.filter(pk=line_id).exists():
         line.pk = line_id
@@ -768,6 +800,7 @@ def undo_last(page: Page, user=None) -> dict:
         LineRevision.Action.EDIT,
         LineRevision.Action.MERGE,
         LineRevision.Action.DROP_WORD,
+        LineRevision.Action.ROLE,
     ):
         _restore_content(page, revision)
     elif action == LineRevision.Action.INSERT:

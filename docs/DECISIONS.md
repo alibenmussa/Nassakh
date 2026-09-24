@@ -185,3 +185,15 @@ with the next or previous word (union of both boxes, a reviewer decision), with 
 (3) A stray letter or number the OCR added can be removed from the menu or with Backspace / Delete. Both new
 actions are `LineRevision` entries (`merge`, `drop_word`), so undo restores the words with their boxes and
 readings. The word menu now opens for every word on an editable page, not only uncertain ones.
+
+## D32 — Word menu: correction first, merge and delete one level deeper; line roles (2026-09-24)
+Owner feedback after using the word menu. Correction is the main action: a confident word opens with its text
+prefilled and selected, readings of uncertain words stay on top, and merge / delete move into a second-level
+«إجراءات أخرى» menu (hover with a short grace period, click, or ArrowLeft) so they cannot be hit by mistake.
+A click outside closes the menu (the release of a scan drag does not). The menu is placed against the visible
+part of the lines column: below the word, flipped above near the bottom, never across a side edge; the submenu
+opens on the side with room, or folds into the menu in a narrow column. Keys on the menu's buttons stay native
+(Enter activates, arrows move inside the menus instead of turning pages). Lines carry a role, set from the line
+menu: body «محتوى», main heading «عنوان رئيسي», subheading «عنوان فرعي» (`ocr.Line.role`; footnote lines stay
+body; `LineRevision` action `role`, undoable). Assembly (Phase 4) uses the roles for chapters and the table of
+contents. Also added: a test that fails on multi-line `{# #}` template comments, which Django renders as text.
