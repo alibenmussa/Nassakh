@@ -229,8 +229,8 @@ detected boxes measure the letters' core band (about a quarter of a line) and ga
 
 ## D35 — Assembly may run before every page is reviewed (2026-09-24)
 Unreviewed OCR'd pages are included, flagged on their blocks and listed as warnings; pages still in the pipeline or in
-error are skipped with a warning; excluded pages never appear. Footnotes are numbered per chapter by default (per book or
-per page as options, remembered per book); exported numbering follows the stylesheet (Phase 6). Spec: PHASE4_SPEC §0.
+error are skipped with a warning; excluded pages never appear. Footnotes are numbered per page by default (owner, 2026-09-25; per chapter or
+per book as options, remembered per book); exported numbering follows the stylesheet (Phase 6). Spec: PHASE4_SPEC §0.
 
 ## D36 — `assembled` means "in the current manuscript, unchanged since" (2026-09-24)
 After a run, included reviewed pages become `assembled`. They stay editable in review; any change puts them back to

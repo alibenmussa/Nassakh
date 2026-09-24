@@ -195,7 +195,9 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
         </div>
 
         {# the document host: the fragment, swapped as one; x-ignore keeps Alpine out of its 5 000 blocks #}
-        <div class="ms-host" x-ref="host" x-ignore data-ms-host :class="{ 'is-reveal': reveal }" x-show="hasDocument"{% if not has_document %} x-cloak{% endif %}>{% if has_document %}{% include "assembly/_document.html" %}{% endif %}</div>
+        {# nothing else may sit on this element: Alpine skips every other directive of an x-ignore element (x-show, #}
+        {# x-cloak, :class, x-ref), so a cloak here would never lift; manuscript.js sets its classes (is-reveal) itself #}
+        <div class="ms-host" x-ignore data-ms-host>{% if has_document %}{% include "assembly/_document.html" %}{% endif %}</div>
 
         {# block tools: one floating «⋯» in the start margin of the hovered / focused block #}
         <div class="ms-tools" x-show="tools.blockId" x-cloak :style="tools.style" @mouseenter="keepTools()">
@@ -245,31 +247,40 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
       </div>
     </div>
 
-    {# ------------------------------------------------------------ side panel (end side): steps while assembling, then contents / notes, stats #}
+    {# ------------------------------------------------------------ side panel (end side, = bk-side): sections with the dashboard's heads #}
+    {# the steps while a run is on, then the contents / notes tabs (the review segmented control) over one list, then the numbers #}
     <aside class="ms-side" aria-label="محتويات المخطوطة وملاحظاتها">
       <button type="button" class="btn btn-sm ms-side-toggle" @click="sideOpen = !sideOpen" :aria-expanded="sideOpen">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
         <span>المحتويات والملاحظات</span>
       </button>
       <div class="ms-side-body" :class="{ 'is-open': sideOpen }">
-        <ol class="ms-steps" x-show="phase === 'assembling'"{% if not assembling %} x-cloak{% endif %} aria-label="خطوات التجميع">
-          <template x-for="s in steps" :key="s.key">
-            <li class="ms-step" :class="{ 'is-done': s.done, 'is-current': s.current }">
-              <span class="ms-step-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span>
-              <span x-text="s.label"></span>
-            </li>
-          </template>
-        </ol>
+        <div class="ms-side-section ms-run" role="group" aria-label="خطوات التجميع" x-show="phase === 'assembling'"{% if not assembling %} x-cloak{% endif %}>
+          <div class="bk-side-head"><span>التجميع</span><bdi class="num" x-text="stepsDone + ' / ' + steps.length"></bdi></div>
+          <ol class="ms-steps">
+            <template x-for="s in steps" :key="s.key">
+              <li class="ms-step" :class="{ 'is-done': s.done, 'is-current': s.current }">
+                <span class="ms-step-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span>
+                <span class="grow" x-text="s.label"></span>
+              </li>
+            </template>
+          </ol>
+        </div>
         <div class="ms-side-main" x-show="phase !== 'assembling' || hasDocument">
-          <div class="segmented ms-tabs" role="tablist" aria-label="لوحة المخطوطة">
-            <button type="button" role="tab" :aria-selected="tab === 'toc'" :class="{ 'is-selected': tab === 'toc' }" @click="tab = 'toc'">المحتويات</button>
-            <button type="button" role="tab" :aria-selected="tab === 'notes'" :class="{ 'is-selected': tab === 'notes' }" @click="tab = 'notes'">ملاحظات <bdi class="num" x-text="warningsTotal">{{ warnings_total|default:0 }}</bdi></button>
+          <div class="ms-side-section ms-side-lists">
+            <div class="segmented ms-tabs" role="tablist" aria-label="لوحة المخطوطة">
+              <button type="button" role="tab" id="ms-tab-toc" aria-controls="ms-panel-toc" :aria-selected="tab === 'toc'" :class="{ 'is-selected': tab === 'toc' }" @click="setTab('toc')">المحتويات</button>
+              <button type="button" role="tab" id="ms-tab-notes" aria-controls="ms-panel-notes" :aria-selected="tab === 'notes'" :class="{ 'is-selected': tab === 'notes' }" @click="setTab('notes')">ملاحظات <bdi class="num" x-text="warningsTotal">{{ warnings_total|default:0 }}</bdi></button>
+            </div>
+            <div class="ms-side-scroll">
+              <div class="ms-toc-host" id="ms-panel-toc" role="tabpanel" aria-labelledby="ms-tab-toc" data-ms-toc-host x-show="tab === 'toc'" @click="onSideClick($event)"></div>
+              <div class="ms-warn-host" id="ms-panel-notes" role="tabpanel" aria-labelledby="ms-tab-notes" data-ms-warnings-host x-show="tab === 'notes'" x-cloak @click="onSideClick($event)"></div>
+            </div>
           </div>
-          <div class="ms-side-scroll">
-            <div class="ms-toc-host" x-ref="tocHost" data-ms-toc-host x-show="tab === 'toc'" @click="onSideClick($event)"></div>
-            <div class="ms-warn-host" x-ref="warnHost" data-ms-warnings-host x-show="tab === 'notes'" x-cloak @click="onSideClick($event)"></div>
+          <div class="ms-side-section ms-side-stats" role="group" aria-label="أرقام المخطوطة">
+            <div class="bk-side-head"><span>الأرقام</span></div>
+            <div class="ms-stats-host" data-ms-stats-host></div>
           </div>
-          <div class="ms-stats-host" x-ref="statsHost" data-ms-stats-host></div>
         </div>
       </div>
     </aside>

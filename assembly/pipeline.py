@@ -41,6 +41,9 @@ ERROR_STATUS = "error"
 EXCLUDED_STATUS = "excluded"
 
 NUMBERING_MODES: tuple[str, ...] = ("chapter", "book", "page")
+# Footnote numbering when the book has not chosen one: as printed, restarting on each page (owner
+# decision 2026-09-25, amends D35's per-chapter default).
+DEFAULT_NUMBERING = "page"
 SEAM_MODES: tuple[str, ...] = ("join", "split")
 DIGIT_STYLES: tuple[str, ...] = ("western", "arabic_indic")
 
@@ -139,7 +142,7 @@ class PageIn:
 class Settings:
     """Assembly options (`Book.assembly_settings`, D38), validated by `normalize_settings`."""
 
-    footnote_numbering: str = "chapter"
+    footnote_numbering: str = DEFAULT_NUMBERING
     include_unreviewed: bool = True
     strip_tatweel: bool = True
     seams: dict[str, str] = field(default_factory=dict)
@@ -206,7 +209,7 @@ def normalize_settings(raw: dict | Settings | None) -> Settings:
         if _is_block_id(value)
     )
     return Settings(
-        footnote_numbering=numbering if numbering in NUMBERING_MODES else "chapter",
+        footnote_numbering=numbering if numbering in NUMBERING_MODES else DEFAULT_NUMBERING,
         include_unreviewed=_as_bool(data.get("include_unreviewed"), True),
         strip_tatweel=_as_bool(data.get("strip_tatweel"), True),
         seams=seams,
@@ -457,13 +460,18 @@ def repair_glued_marks(rich: Rich) -> Rich:
     return _rewrite(rich, _RE_GLUED_AFTER_CLOSER, lambda m: [m.span(1), " "])
 
 
+# A note reference after a closing-quote glyph («برقة » ١ ،»): the glyph closes.
+_RE_MARKER_AFTER_QUOTE = re.compile(rf"[{_DIGITS}]{{1,3}}(?=\s*(?:$|[{re.escape(MARKS)}{PLACEHOLDERS}]))")
+
+
 def quote_roles(text: str) -> dict[int, str]:
     """`{index: "open" | "close"}` for the quote characters of `text`.
 
     `«` and `“` open; `»` and `”` close an open quote. Books and OCR also print `»` / `”` for the
     opening quote («قاع » حمادة مرزق »»); a closing glyph with no quote open is read from its
-    context: followed by punctuation, a note reference or the end → closing; glued to the word
-    before it → closing; otherwise it opens a quote.
+    context: followed by punctuation, a note reference (a placeholder, or a number before a mark
+    or the end) or the end → closing; glued to the word before it → closing; otherwise it opens a
+    quote.
     """
     depth = {"guillemet": 0, "curly": 0}
     roles: dict[int, str] = {}
@@ -484,7 +492,12 @@ def quote_roles(text: str) -> dict[int, str]:
                 j += 1
             space_before = i == 0 or text[i - 1].isspace()
             space_after = i + 1 >= size or text[i + 1].isspace()
-            if j >= size or text[j] in CLOSING_CONTEXT or (not space_before and space_after):
+            if (
+                j >= size
+                or text[j] in CLOSING_CONTEXT
+                or (not space_before and space_after)
+                or _RE_MARKER_AFTER_QUOTE.match(text, j)
+            ):
                 roles[i] = "close"
             else:
                 roles[i] = "open"
@@ -527,12 +540,21 @@ def digits_in(text: str, style: str = "western") -> str:
     return convert_digits(Rich(text), style).text
 
 
+_RE_BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def strip_bidi_controls(rich: Rich) -> Rich:
+    """Remove the invisible direction marks OCR leaves in words («WV\u200f»); the document sets its own."""
+    return _drop(rich, (match.span() for match in _RE_BIDI_CONTROLS.finditer(rich.text)))
+
+
 def normalize_rich(rich: Rich, strip_tatweel_marks: bool = True, digit_style: str = "western") -> Rich:
     """All of D37 on one text: glued marks, spaces around marks and quotes, tatweel, spaces, digits.
 
-    Tatweel goes first so a stretched word is one word for the punctuation rules; digits go last.
+    Invisible direction marks go first; tatweel next so a stretched word is one word for the
+    punctuation rules; digits go last.
     """
-    rich = collapse_spaces(rich)
+    rich = collapse_spaces(strip_bidi_controls(rich))
     if strip_tatweel_marks:
         rich = strip_tatweel(rich)
     rich = repair_glued_marks(rich)
@@ -551,6 +573,14 @@ def ends_terminal(text: str) -> bool:
     """True when `text` ends with terminal punctuation (`. ؟ ! : » ) ]`, also `?` and `”`)."""
     stripped = text.translate(_NO_PLACEHOLDERS).rstrip()
     return bool(stripped) and stripped[-1] in TERMINAL
+
+
+_RE_ENDS_ARABIC_WORD = re.compile(f"[{_AR_LETTERS}][{_AR_MARKS}]*$")
+
+
+def ends_mid_sentence(text: str) -> bool:
+    """True when `text` ends on a bare Arabic word (no punctuation, number or Latin word after it)."""
+    return bool(_RE_ENDS_ARABIC_WORD.search(text.translate(_NO_PLACEHOLDERS).rstrip()))
 
 
 def word_count(text: str) -> int:
@@ -738,6 +768,10 @@ def breaks_between(
     indented = shape_b.indented
     if measure is not None and a.box is not None and b.box is not None:
         indented = indented and a.box[2] - b.box[2] > INDENT_SHARE * measure.width
+    if indented and ends_mid_sentence(a.text):
+        # A full line that stops on a bare word runs on: the "indent" is a start the boxes missed
+        # (a leading dash «– السعيد –», a first word Tesseract could not read), not a new paragraph.
+        indented = False
     return shape_a.short or indented or shape_a.centred or shape_b.centred
 
 
@@ -933,7 +967,14 @@ _RE_GLUED = re.compile(
 _AFTER_MARKER = rf"(?=\s|$|[{re.escape(MARKS + CLOSE_BRACKETS)}»”{PLACEHOLDERS}])"
 _RE_STANDALONE = re.compile(rf"(?<=\s)({_DIGIT_RUN}{{1,2}}){_AFTER_MARKER}")
 _RE_ALEF = re.compile(rf"(?:(?<=\s)|(?<=[»”])){ALEF}(?=\s|$|[.،؛:{PLACEHOLDERS}])")
-STRONG_STYLES: frozenset[str] = frozenset({"bracket", "superscript", "glued"})
+# A standalone number right after a closing quote or bracket («دينار » ١ ،») is printed as a marker.
+STRONG_STYLES: frozenset[str] = frozenset({"bracket", "superscript", "glued", "quoted"})
+_QUOTED_AFTER = frozenset("»”)]")
+# Standalone numbers that are text, not markers: a list number («3 ـ كتاب»), a year («سنة 21 ه»).
+_RE_LIST_DASH = re.compile(r"\s*[ـ–—-](?:\s|$)")
+YEAR_WORDS: frozenset[str] = frozenset({"سنة", "سنه", "عام", "سنتي", "عامي", "سنوات"})
+ERA_WORDS: frozenset[str] = frozenset({"ه", "هـ", "م", "ق", "ق.", "ق.م", "للهجرة", "هجرية", "ميلادية"})
+_RE_STRIP_MARKS = re.compile(f"[{_AR_MARKS}]")
 
 
 def marker_key(marker: str) -> str:
@@ -1035,9 +1076,10 @@ class Candidate:
     cut: int  # where the replaced span starts (the whitespace before the marker goes with it)
     key: str
     marker: str
-    style: str  # bracket | superscript | glued | standalone | alef
+    style: str  # bracket | superscript | glued | quoted | standalone | alef
     page: int
     line: int | None
+    rank: int = 0  # linking priority: 0 strong styles, 1 weak before a mark or the end, 2 weak before a word
 
 
 def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> list[Candidate]:
@@ -1045,8 +1087,9 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
 
     `(n)` `[n]` `(*)`; superscript digits; a digit run glued to the end of a word (`الفيل٢`, also
     after a closing quote `»١` or a period `الخ .1`); a standalone token of 1–2 digits
-    (`الفيل ٢ مرحلة`); a lone alef (`» ا .`, the OCR's `١`).
-    Overlapping matches keep the first style in that order.
+    (`الفيل ٢ مرحلة`; `quoted` right after a closing quote or bracket, `دينار » ١ ،`); a lone
+    alef (`» ا .`, the OCR's `١`). Overlapping matches keep the first style in that order. A
+    standalone number that starts a list item (`3 ـ كتاب`) or is a year (`سنة 21 ه`) is text.
     """
     text = rich.text
     found: list[tuple[int, int, str, str]] = []
@@ -1066,7 +1109,11 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
     for match in _RE_GLUED.finditer(text):
         add(match.start(1), match.end(1), match.group(1), "glued")
     for match in _RE_STANDALONE.finditer(text):
-        add(match.start(1), match.end(1), match.group(1), "standalone")
+        if _is_text_number(text, match.start(1), match.end(1)):
+            continue
+        before = text[: match.start(1)].rstrip()
+        style = "quoted" if before and before[-1] in _QUOTED_AFTER else "standalone"
+        add(match.start(1), match.end(1), match.group(1), style)
     for match in _RE_ALEF.finditer(text):
         add(match.start(), match.end(), match.group(), "alef")
     out = []
@@ -1078,8 +1125,26 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
         page = line_page.get(line) if line is not None else None
         if page is None:
             continue
-        out.append(Candidate(block_index, start, end, cut, marker_key(marker), marker, style, page, line))
+        rank = 0 if style in STRONG_STYLES else (1 if _before_mark(text, end) else 2)
+        out.append(
+            Candidate(block_index, start, end, cut, marker_key(marker), marker, style, page, line, rank)
+        )
     return out
+
+
+def _is_text_number(text: str, start: int, end: int) -> bool:
+    """A standalone number that is text: a list number before a dash, or a year (`سنة 21 ه`)."""
+    if _RE_LIST_DASH.match(text, end):
+        return True
+    previous = _RE_STRIP_MARKS.sub("", text[:start].split()[-1]) if text[:start].split() else ""
+    following = text[end:].split()
+    return previous in YEAR_WORDS or bool(following and following[0].rstrip("،,؛;") in ERA_WORDS)
+
+
+def _before_mark(text: str, end: int) -> bool:
+    """True when only spaces separate `end` from a mark, a closer, an inline node or the end."""
+    rest = text[end:].lstrip()
+    return not rest or rest[0] in MARKS or rest[0] in CLOSE_BRACKETS or rest[0] in "»”" + PLACEHOLDERS
 
 
 def link_footnotes(
@@ -1088,9 +1153,10 @@ def link_footnotes(
     """Replace the markers of linked notes by footnote nodes; returns the orphan notes and warnings.
 
     A candidate is linked only when a note of the same page carries that number (or `*`); each note
-    takes the first unused matching candidate of the page, bracketed / superscript / glued ones
-    before standalone digits and alefs. A bracketed, superscript or glued candidate left over on a
-    page that has notes → `marker_unmatched` (the text stays as printed).
+    takes the first unused matching candidate of the page, bracketed / superscript / glued / quoted
+    ones first, then standalone digits and alefs before a mark or the end, then those before a
+    word. A strong candidate left over on a page that has notes → `marker_unmatched` (the text
+    stays as printed).
     """
     by_page: dict[int, list[Candidate]] = {}
     for index, block in enumerate(blocks):
@@ -1106,12 +1172,12 @@ def link_footnotes(
         for note in notes:
             pick = None
             if note.key is not None:
-                for strong in (True, False):
+                for rank in (0, 1, 2):
                     pick = next(
                         (
                             i
                             for i, c in enumerate(cands)
-                            if i not in used and c.key == note.key and (c.style in STRONG_STYLES) is strong
+                            if i not in used and c.key == note.key and c.rank == rank
                         ),
                         None,
                     )
@@ -1190,6 +1256,13 @@ def attach_orphans(
                 if line is not None and line_page.get(line) == note.page and rich.text[i] not in PLACEHOLDERS:
                     position = i + 1
                     break
+            # after the orphans of this page already placed there, so they keep the notes' order
+            while (
+                position < len(rich.text)
+                and rich.text[position] == FN
+                and getattr(rich.meta[position].node, "orphan", False)
+            ):
+                position += 1
         line = note.lines[0].id if note.lines else None
         block.rich = rich.cut(0, position) + Rich.node(FN, note, line) + rich.cut(position)
         shown = f"«{digits_in(note.marker)}» " if note.marker else ""

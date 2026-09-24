@@ -149,8 +149,8 @@ def test_manuscript_view_never_assembled_shows_the_empty_state_with_options(edit
     assert body.count('role="radiogroup"') >= 1 and "حسب الفصل" in body and "حسب الكتاب" in body
     assert "تضمين الصفحات غير المُراجَعة" in body and "حذف التطويل" in body
     assert '@click="submitConvert()"' in body and "تحويل إلى كتاب" in body
-    # the document host is empty and cloaked, the layout too; the top bar has the popover for editors
-    assert 'x-ref="host" x-ignore data-ms-host' in body and "<article" not in body
+    # the document host is empty, the layout cloaked; the top bar has the popover for editors
+    assert '<div class="ms-host" x-ignore data-ms-host></div>' in body and "<article" not in body
     assert 'class="menu ms-convert"' in body and "manuscriptBar" in body and "src/js/manuscript.js" in body
     # a proofreader sees no options and no convert: the editor starts the conversion
     body = _view(_logged(proofreader), f.book)
@@ -172,10 +172,54 @@ def test_manuscript_view_assembling_state_shows_the_skeleton_and_the_steps(edito
         r'class="ms-skeleton" x-show="phase === \'assembling\' && !hasDocument" aria-hidden', body
     )
     assert re.search(r'class="empty-state ms-empty" x-show="phase === \'empty\'" x-cloak', body)
-    assert 'class="ms-steps" x-show="phase === \'assembling\'" aria-label="خطوات التجميع"' in body
+    assert 'class="ms-side-section ms-run" role="group" aria-label="خطوات التجميع"' in body
+    assert 'aria-label="خطوات التجميع" x-show="phase === \'assembling\'">' in body
+    assert '<div class="bk-side-head"><span>التجميع</span>' in body
     assert 'x-for="s in steps"' in body and 'class="ms-pill"' in body and "قيد التجميع" not in body
     # the toolbar and the layout are shown (no x-cloak) while assembling
     assert re.search(r'<div class="ms-toolbar" x-show="phase !== \'empty\'">', body)
+
+
+def _host_tag(body: str) -> str:
+    """The opening tag of the document host (the one x-ignore element of the view)."""
+    tags = re.findall(r"<[^>]*\bx-ignore\b[^>]*>", body)
+    assert len(tags) == 1, tags
+    return tags[0]
+
+
+def test_document_host_carries_no_alpine_directive_besides_x_ignore(editor):
+    """Regression (the empty manuscript after «تحويل إلى كتاب»): Alpine skips every other directive of an
+    x-ignore element, so an x-cloak or x-show on the host would never lift once the fragment is swapped in.
+    The host must be bare in every state, and the fragment endpoint must serve the document the view swaps."""
+    f, _ = _book()
+    client = _logged(editor)
+    # never assembled, then queued (the state the view opens in right after the dashboard's convert)
+    assert _host_tag(_view(client, f.book)) == '<div class="ms-host" x-ignore data-ms-host>'
+    run = AssemblyRun.objects.create(book=f.book, status=AssemblyRun.Status.QUEUED)
+    body = _view(client, f.book)
+    assert _host_tag(body) == '<div class="ms-host" x-ignore data-ms-host>'
+    assert _json_script(body, "manuscript-config")["state"]["active"] is True
+    # nothing between the layout and the host hides the host once the run is done: the layout and the column
+    # are not cloaked while assembling, and the skeleton is the only thing bound to `!hasDocument`
+    layout = body[body.index('class="ms-layout"') : body.index("data-ms-host")]
+    assert "x-cloak" not in layout.split('class="ms-skeleton"')[0]
+    # not cloaked while assembling; the x-shows are the layout's, the skeleton's and the error state's
+    assert layout.startswith('class="ms-layout" x-show="phase !== \'empty\'">')
+    assert layout.count("x-show=") == 3
+    assert "x-show=\"phase === 'assembling' && !hasDocument\"" in layout
+    assert "x-show=\"phase === 'error' && !hasDocument\"" in layout
+    # the run finishes: the fragment the view fetches is the document plus the panel parts and the meta
+    run.delete()
+    services.start_assembly(f.book, editor)
+    fragment = client.get(reverse("assembly:document", args=[f.book.pk])).content.decode()
+    assert fragment.startswith('<article class="ms-doc"') and 'data-ms-part="stats"' in fragment
+    assert 'id="ms-meta"' in fragment and _json_script(fragment, "ms-meta")["version"] == 1
+    # ... and the view rendered afterwards holds the same document inside the bare host
+    body = _view(client, f.book)
+    assert _host_tag(body) == '<div class="ms-host" x-ignore data-ms-host>'
+    assert '<article class="ms-doc"' in body
+    for attribute in ("x-cloak", "x-show", ":class", "x-ref"):
+        assert attribute not in _host_tag(body), attribute
 
 
 def test_manuscript_view_ready_renders_the_document_the_panel_and_the_chrome(editor):
@@ -764,14 +808,17 @@ const flush = () => new Promise((r) => setImmediate(r));
 const posts = () => calls.filter((x) => x[0] === 'POST');
 const reqs = () => calls.filter((x) => x[0] === 'GET').map((x) => x[1]);
 // fetch routes: the state answers in sequence, the document the current fragment, sheets the page, posts 202
-let stateQueue = []; let fragment = fixture.fragment_v1; let sheet = fixture.sheet; let stateGate = null;
+let stateQueue = []; let fragment = fixture.fragment_v1; let sheet = fixture.sheet; let stateGate = null; let docGate = null;
 const deferred = () => { let release; const done = new Promise((r) => { release = r; }); return { release, done }; };
 globalThis.fetch = async (url, init) => {
   const method = (init && init.method) || 'GET';
   calls.push([method, url, init && init.body ? JSON.parse(init.body) : null, init && init.headers]);
   if (method === 'POST') return { ok: true, status: 202, json: async () => ({ run_id: 9, status: 'done', stage: 'save', manuscript_url: '/books/1/manuscript/', state_url: '/api/books/1/manuscript/state/' }) };
   if (url.startsWith('/api/books/1/manuscript/state/')) { if (stateGate) await stateGate.done; const s = stateQueue.length > 1 ? stateQueue.shift() : stateQueue[0]; return { ok: true, status: 200, json: async () => clone(s) }; }
-  if (url.startsWith('/books/1/manuscript/document/')) return { ok: true, status: 200, text: async () => fragment, json: async () => null };
+  if (url.startsWith('/books/1/manuscript/document/')) {
+    if (docGate) { const g = docGate; docGate = null; await g.done; return { ok: true, status: 200, text: async () => g.html, json: async () => null }; }
+    return { ok: true, status: 200, text: async () => fragment, json: async () => null };
+  }
   if (url.startsWith('/api/books/1/sheets/')) return { ok: true, status: 200, json: async () => ({ pages: [clone(sheet)], book_line_h_px: 30 }) };
   return { ok: false, status: 404, json: async () => ({ detail: 'لا' }) };
 };
@@ -829,7 +876,7 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   stateGate.release(); stateGate = null;
   await flush(); await flush(); await flush();
   // the swap: the new block p20 is in, p10 kept its id, the scroll moved by the anchor's shift, changed blocks flash
-  out.afterSeam = { ids: ids(root), version: c.loadedVersion, busy: c.busy, phase: c.phase, reqs: reqs(), scrolls, flashing: c.flashingIds().sort(), seam2: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-mode'),
+  out.afterSeam = { ids: ids(root), version: c.loadedVersion, busy: c.busy, phase: c.phase, reqs: reqs(), scrolls: scrolls.slice(), flashing: c.flashingIds().sort(), seam2: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-mode'),
     decision: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-decision'), live: c.liveMessage, counts: c.countsText, focused: c.focused };
   // ---- the block menu and the roles post: the block's line ids, the anchor around it
   c.openMenu('p40'); out.menu = { open: c.menu.open, src: c.menu.src, role: c.menu.role, reviewed: c.menu.reviewed, reviewUrl: c.menu.reviewUrl, lines: c.menu.lines };
@@ -877,7 +924,17 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   timers.length = 0; fragment = fixture.fragment_v1;
   await a.c.poll(); await flush(); await flush(); await flush();
   out.done = { phase: a.c.phase, hasDocument: a.c.hasDocument, blocks: a.c.blockCount(), reveal: a.c.reveal, rise: a.root.querySelectorAll('.ms-block.is-rise').length, i1: a.root.querySelector('[data-block="p10"]').style['--i'],
-    stitch: a.root.querySelectorAll('.ms-seam.is-stitch').length, pill: a.c.pill.state, live: a.c.liveMessage, polling: timers.filter((t) => t.ms === 700).length, toc: a.root.querySelectorAll('[data-ms-toc-host] .ms-toc-link').length, primary: a.c.primary };
+    stitch: a.root.querySelectorAll('.ms-seam.is-stitch').length, pill: a.c.pill.state, live: a.c.liveMessage, polling: timers.filter((t) => t.ms === 700).length, toc: a.root.querySelectorAll('[data-ms-toc-host] .ms-toc-link').length, primary: a.c.primary,
+    hostReveal: a.root.querySelector('[data-ms-host]').classList.contains('is-reveal'), stepsDone: a.c.stepsDone, stats: a.root.querySelectorAll('[data-ms-stats-host] .ms-stat').length };
+  const revealEnd = timers.find((t) => t.ms === 1400); revealEnd.fn();
+  out.revealEnded = { reveal: a.c.reveal, hostReveal: a.root.querySelector('[data-ms-host]').classList.contains('is-reveal'), rise: a.root.querySelectorAll('.ms-block.is-rise').length };
+  // ---- stale responses: an older fragment that lands after a newer one is dropped
+  const gate = deferred(); gate.html = fixture.fragment_v1; docGate = gate; const slow = a.c.reload();
+  fragment = fixture.fragment_v2; await a.c.reload();
+  gate.release(); await slow; await flush();
+  out.staleReload = { slow: await slow, version: a.c.loadedVersion, ids: ids(a.root) };
+  // ---- the tabs persist
+  a.c.setTab('notes'); out.tab = { tab: a.c.tab, stored: store['nassakh.manuscript.tab'] }; a.c.setTab('toc');
   // ---- a failed run with no document: the error state; with a document the old one stays
   const e = make(fixture.state_queued, ''); stateQueue = [fixture.state_failed]; await e.c.poll();
   out.failedEmpty = { phase: e.c.phase, pill: e.c.pill, headline: e.c.errorHeadline, primary: e.c.primary };
@@ -1258,6 +1315,13 @@ def test_manuscript_component_under_node(tmp_path):
         and done["live"] == "اكتمل التجميع"
     )
     assert done["polling"] == 0 and done["toc"] == 2 and done["primary"] == "copy"
+    # the host (x-ignore: no Alpine binding) gets its reveal class from the component and loses it after
+    assert done["hostReveal"] is True and done["stepsDone"] == 7 and done["stats"] == 9
+    assert out["revealEnded"] == {"reveal": False, "hostReveal": False, "rise": 0}
+    # an older fragment landing after a newer one is dropped: the document stays at version 2
+    assert out["staleReload"]["slow"] is False and out["staleReload"]["version"] == 2
+    assert out["staleReload"]["ids"] == ["h1", "p10", "p20", "p40", "p50", "h70", "p80"]
+    assert out["tab"] == {"tab": "notes", "stored": "notes"}
     # failures, stale, permissions, the convert popover
     assert (
         out["failedEmpty"]["phase"] == "error"

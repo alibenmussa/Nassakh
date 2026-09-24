@@ -47,6 +47,6 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
   {% endfor %}
 </div>
 <dl class="ms-stats" data-ms-part="stats">
-  {% for r in stats_rows %}<div class="ms-stat" data-stat="{{ r.key }}"><dt>{{ r.label }}</dt><dd><bdi class="num">{{ r.value }}</bdi></dd></div>{% endfor %}
+  {% for r in stats_rows %}<div class="ms-stat{% if not r.value %} is-zero{% endif %}" data-stat="{{ r.key }}"><dt class="grow">{{ r.label }}</dt><dd><bdi class="num">{{ r.value }}</bdi></dd></div>{% endfor %}
 </dl>
 {{ meta|json_script:"ms-meta" }}{% endif %}

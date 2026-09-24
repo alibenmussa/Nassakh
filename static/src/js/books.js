@@ -207,7 +207,7 @@ document.addEventListener('alpine:init', () => {
     review: cfg.review || null, // {reviewed, total, unresolved_total, next_review_url} from the progress poll
     manuscript: cfg.manuscript || null, // assembly.services.manuscript_state (compact), refreshed by the poll
     manuscriptUrls: cfg.manuscriptUrls || {},
-    convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
+    convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
     filter: 'all',
@@ -554,7 +554,7 @@ document.addEventListener('alpine:init', () => {
     // the convert popover (assembly/_convert_popover.html): the options remembered per book (D38)
     openConvert() {
       const m = this.manuscript || {};
-      this.convert.options = Object.assign({ footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, m.options || {});
+      this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, m.options || {});
       this.convert.unreviewed = Number(m.unreviewed_pages) || 0;
       this.convert.label = m.exists ? 'إعادة التجميع' : 'تحويل';
       this.convert.error = '';
@@ -570,7 +570,7 @@ document.addEventListener('alpine:init', () => {
     },
     reassemble() {
       const m = this.manuscript || {};
-      return this.startAssembly(Object.assign({ footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, m.options || {}));
+      return this.startAssembly(Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, m.options || {}));
     },
     // POST assemble, then the manuscript view shows the assembly as it runs (§4.1).
     async startAssembly(options) {

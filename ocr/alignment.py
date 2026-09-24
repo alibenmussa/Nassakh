@@ -11,6 +11,7 @@ Words between two anchors are placed on the Tesseract words left unmatched betwe
 from __future__ import annotations
 
 import difflib
+import re
 from collections import Counter
 
 from rapidfuzz import fuzz
@@ -46,6 +47,16 @@ MERGED_DENSITY_MIN_WORDS = 3
 MERGED_MIN_READ = 0.5
 # Punctuation that opens (and so belongs with the word after it).
 _OPENERS = frozenset("«([{“‹")
+# Punctuation that ends what comes before it: at the start of a run it stays with the anchor before.
+_ENDERS = frozenset(".،؛:؟!,;?…)]")
+# A short token in brackets: a footnote reference or a number («(٧٢)», which Tesseract reads "(VY)").
+_BRACKETED = re.compile(r"^[(\[][^\s()\[\]]{1,4}[)\]][.,،؛:]*$")
+_BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")  # Tesseract adds RLMs
+
+
+def _bracketed(token: str) -> bool:
+    """True for a short token in brackets («(٧٢)», «(VY).»), bidi control marks aside."""
+    return bool(_BRACKETED.match(_BIDI_CONTROLS.sub("", str(token or ""))))
 
 
 def norm_token(token: str) -> str:
@@ -181,6 +192,17 @@ def _evidence(
         if keep:
             slots.append((k, grouped[k]))
     return slots
+
+
+def _without_bracketed(words: list[tuple[int, dict]], slots: list[tuple[int, list[int]]]) -> list:
+    """`slots` without the bracketed Tesseract words (a reference «(VY)» the primary text left out).
+
+    Used for a run that holds no bracketed word itself: the tail «(VY).» of the line before is then
+    no home for the word that starts the next line. Kept as they are when nothing else is left.
+    """
+    kept = [(k, [j for j in idx if not _bracketed(words[j][1].get("text"))]) for k, idx in slots]
+    kept = [(k, idx) for k, idx in kept if idx]
+    return kept if kept else slots
 
 
 def _units(tokens: list[str]) -> list[list[int]]:
@@ -335,12 +357,18 @@ def build_lines(primary_text: str, secondary_text: str | None, tesseract_lines: 
                 continue
             start = ja + 1 if ja is not None else 0
             stop = jb if jb is not None else len(words)
+            if edges[0] is not None:  # «التاريخ ⟨. تقع⟩ فزان»: the full stop ends the line before
+                while s < i and p_tokens[s] and set(p_tokens[s]) <= _ENDERS:
+                    line_of[s] = edges[0]
+                    s += 1
             units = _units(p_tokens[s:i])
             if not units:  # punctuation only: it ends the previous line (or opens the first)
                 for r in range(s, i):
                     line_of[r] = edges[0] if edges[0] is not None else edges[1]
                 continue
             slots = _evidence(words, lines_in, start, stop, edges, median_h)
+            if not any(_bracketed(p_tokens[s + x]) for unit in units for x in unit):
+                slots = _without_bracketed(words, slots)
             for unit, (k, j, seen) in zip(units, _place_run(len(units), slots, edges), strict=True):
                 for r in (s + x for x in unit):
                     line_of[r] = k

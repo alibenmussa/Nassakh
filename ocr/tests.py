@@ -1465,6 +1465,29 @@ def test_build_lines_punctuation_rides_with_its_word_to_the_next_line():
     assert built[1]["tokens"][0]["bbox"] == [110, 30, 120, 50] and built[1]["tokens"][1]["bbox"] is None
 
 
+def test_build_lines_a_word_after_a_reference_the_primary_left_out_starts_the_next_line():
+    # Book 12 page 2: Tesseract read «التاريخ (٧٢). ⏎ تقع فزان» as "التاريخ (VY).‏ ⏎ fe فزان" and Qari
+    # left the reference out: «تقع» belongs to the garbage "fe" that starts the next line, not to
+    # the bracketed tail of the line before; the full stop ends the line before.
+    lines = [
+        _line([("قبل", 110), ("التاريخ", 90), ("(VY).\u200f", 70)], 0),
+        _line([("fe", 110), ("فزان", 90), ("اليوم", 70)], 30),
+    ]
+    built = build_lines("قبل التاريخ . تقع فزان اليوم", None, lines)
+    assert [b["text"] for b in built] == ["قبل التاريخ .", "تقع فزان اليوم"]
+    assert built[1]["tokens"][0]["bbox"] == [110, 30, 120, 50] and built[1]["tokens"][0]["tess"] == "fe"
+    # when the primary has the reference, each takes its own garbage word
+    built = build_lines("قبل التاريخ (٧٢) . تقع فزان اليوم", None, lines)
+    assert [b["text"] for b in built] == ["قبل التاريخ (٧٢) .", "تقع فزان اليوم"]
+    # a bracketed reference that starts the next line (a note marker) still goes there
+    notes = [
+        _line([("قال", 110), ("كذا", 90)], 0),
+        _line([("(VY)", 110), ("انظر", 90), ("المصدر", 70)], 30),
+    ]
+    built = build_lines("قال كذا (١٢) انظر المصدر", None, notes)
+    assert [b["text"] for b in built] == ["قال كذا", "(١٢) انظر المصدر"]
+
+
 def test_merged_lines_reports_unseen_words_and_overlong_lines():
     def line(n: int, unseen: int = 0, width: int = 100, read: float = 1.0) -> dict:
         tess = max(1, n - unseen)

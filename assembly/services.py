@@ -58,6 +58,7 @@ RUN_ERROR = (
     "تعذّر تجميع المخطوطة؛ بقيت المخطوطة السابقة كما هي. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم."
 )
 ABANDONED_ERROR = "توقّف التجميع قبل أن يكتمل؛ أعد المحاولة."
+ENQUEUE_ERROR = "تعذّر إرسال التجميع إلى طابور المهام؛ تحقّق من تشغيل Redis وعامل Celery ثم أعد المحاولة."
 
 
 class AssemblyError(ValueError):
@@ -345,10 +346,23 @@ def _queue_run(book: Book, user, mutate=None, changed: bool = False) -> tuple[As
 
 
 def _enqueue(run: AssemblyRun) -> None:
-    """Send the run to the default queue (after its row is committed) and remember the task id."""
+    """Send the run to the default queue (after its row is committed) and remember the task id.
+
+    When the broker cannot be reached the run is closed with an error at once: left queued, it
+    would be returned by every new request (idempotent start) until it counted as abandoned.
+    """
     from .tasks import assemble_book
 
-    result = assemble_book.delay(run.pk)
+    try:
+        result = assemble_book.delay(run.pk)
+    except Exception as exc:  # noqa: BLE001 - reported on the run (broker down, misconfigured queue)
+        log.exception("assembly run %s of book %s could not be enqueued", run.pk, run.book_id)
+        AssemblyRun.objects.filter(pk=run.pk, status=AssemblyRun.Status.QUEUED).update(
+            status=AssemblyRun.Status.ERROR,
+            error=f"{ENQUEUE_ERROR}\n{type(exc).__name__}: {exc}"[:4000],
+            finished_at=timezone.now(),
+        )
+        return
     task_id = getattr(result, "id", "") or ""
     if task_id:
         AssemblyRun.objects.filter(pk=run.pk, task_id="").update(task_id=task_id[:64])
@@ -482,9 +496,16 @@ def run_assembly(run_id: int) -> AssemblyRun | None:
     if run is None or run.status != AssemblyRun.Status.QUEUED:
         return run
     started = time.monotonic()
+    # Claim the run in one conditional update: of two deliveries of the task (acks_late, a retry)
+    # only one moves it from queued to running; the other leaves it alone.
+    claimed = AssemblyRun.objects.filter(pk=run.pk, status=AssemblyRun.Status.QUEUED).update(
+        status=AssemblyRun.Status.RUNNING, stage="collect"
+    )
+    if not claimed:
+        run.refresh_from_db()
+        return run
     run.status = AssemblyRun.Status.RUNNING
     run.stage = "collect"
-    AssemblyRun.objects.filter(pk=run.pk).update(status=run.status, stage=run.stage)
     try:
         book = Book.objects.get(pk=run.book_id)
         options = normalize_settings(book.assembly_settings)

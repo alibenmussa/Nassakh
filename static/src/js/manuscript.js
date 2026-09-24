@@ -226,6 +226,7 @@
       let spy = null;
       let pollTimer = null;
       let pollGen = 0;
+      let reloadGen = 0;
       let failures = 0;
       let cardTimer = null;
       let noteTimer = null;
@@ -267,7 +268,7 @@
         card: { open: false, page: 0, from: 0, mode: '', decision: '', text: '', action: '', actionLabel: '', style: '', seamId: '' },
         notePop: { open: false, note: '', number: '', html: '', orphan: false, style: '' },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
-        convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
+        convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
         busy: false, // an override is on the wire or its run is on: no second post meanwhile
         copying: false,
         reveal: false,
@@ -313,6 +314,7 @@
           const idx = this.stageIndex;
           return STAGES.map((s, i) => ({ key: s.key, label: s.label(this.pageCount), done: idx > i, current: idx === i }));
         },
+        get stepsDone() { return clamp(this.stageIndex, 0, STAGES.length); },
         // the status pill (= rv-save): assembling, failed, stale, assembled … ago
         get pill() {
           if (this.active) return { state: 'saving', text: 'قيد التجميع…' };
@@ -393,7 +395,7 @@
         // ------------------------------------------------------------ starting runs
         resetConvert() {
           const s = this.state || {};
-          this.convert.options = Object.assign({ footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, s.options || {});
+          this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, s.options || {});
           this.convert.unreviewed = Number(s.unreviewed_pages) || 0;
           this.convert.label = s.exists ? 'إعادة التجميع' : 'تحويل';
           this.convert.error = '';
@@ -445,8 +447,13 @@
         },
 
         // ------------------------------------------------------------ the fragment: load, swap, index
+        // Only the latest fetch lands: two polls that both saw a new version must not swap an older fragment
+        // over a newer one.
         async reload(opts = {}) {
+          reloadGen += 1;
+          const gen = reloadGen;
           const r = await api(urls.document, { accept: 'text/html' });
+          if (gen !== reloadGen) return false; // a later reload is on the wire
           if (!r.ok || typeof r.data !== 'string') {
             if (!this.hasDocument) { this.phase = 'error'; this.state = Object.assign({}, this.state, { run: Object.assign({}, this.run || {}, { status: 'error', error: 'تعذّر تحميل المخطوطة.' }) }); }
             else this.phase = 'ready';
@@ -585,14 +592,17 @@
         },
         flashingIds() { return lastFlash.map((b) => attr(b, 'data-block')); },
         // The reveal: the first blocks rise in with a 16 ms stagger, join markers stitch (manuscript.css).
+        // The host is x-ignore (no Alpine binding reaches it), so its `is-reveal` class is set here.
         playReveal() {
           if (reducedMotion()) return;
           clearTimeout(revealTimer);
           this.reveal = true;
+          if (host && host.classList) host.classList.add('is-reveal');
           blocks.slice(0, REVEAL_BLOCKS).forEach((b, i) => { if (b.classList) b.classList.add('is-rise'); if (b.style && b.style.setProperty) b.style.setProperty('--i', String(i)); });
           qa(article, '.ms-seam[data-mode="join"]').forEach((s) => { if (s.classList) s.classList.add('is-stitch'); });
           revealTimer = setTimeout(() => {
             this.reveal = false;
+            if (host && host.classList) host.classList.remove('is-reveal');
             blocks.forEach((b) => { if (b.classList) b.classList.remove('is-rise'); });
             qa(article, '.ms-seam.is-stitch').forEach((s) => s.classList.remove('is-stitch'));
           }, REVEAL_MS);
@@ -941,6 +951,10 @@
         },
 
         // ------------------------------------------------------------ side panel: contents, warnings, scroll spy
+        setTab(name) {
+          this.tab = name === 'notes' ? 'notes' : 'toc';
+          storage.set(TAB_KEY, this.tab);
+        },
         onSideClick(e) {
           const t = e.target;
           const goto = closest(t, '[data-goto]');
@@ -954,8 +968,7 @@
           const w = this.warnings[i];
           if (!w) return false;
           warnCursor = i;
-          this.tab = 'notes';
-          storage.set(TAB_KEY, this.tab);
+          this.setTab('notes');
           const hostEl = this.sideHost('warnings');
           qa(hostEl, '.ms-warn.is-current').forEach((el) => el.classList.remove('is-current'));
           const row = q(hostEl, `.ms-warn[data-warn="${i}"]`);

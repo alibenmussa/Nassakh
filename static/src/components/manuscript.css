@@ -23,7 +23,7 @@
   .main:has(> .ms-screen) { padding-top: 0; }
   .ms-screen {
     --ms-gutter: 72px; /* the start margin of the document: source badge and block tools (= --rv-gutter) */
-    --ms-side-w: clamp(220px, 22vw, 300px);
+    --ms-side-w: clamp(200px, 15vw, 244px); /* = --bk-side-w, the min raised for the headings' text */
     --ms-toolbar-h: 44px;
     --ms-font: "Amiri", "Noto Naskh Arabic", "Scheherazade New", serif;
     display: flex;
@@ -384,78 +384,86 @@
   .ms-skeleton p span:nth-child(odd) { animation-delay: 80ms; }
   .ms-skeleton-title { width: 46%; height: 22px; margin: 0 auto 10px; }
 
-  /* ------------------------------------------------------------ side panel (= bk-side) */
+  /* ------------------------------------------------------------ side panel (= bk-side, D34) */
+  /* The dashboard panel one to one: sticky under the toolbar, a hairline on its inner edge, 22 px between
+     sections, `bk-side-head` heads, 12.5 px rows. The contents / notes tabs are the review segmented control. */
   .ms-side {
     position: sticky;
     top: calc(var(--topbar-height) + var(--ms-toolbar-h) + 20px);
     max-height: calc(100dvh - var(--topbar-height) - var(--ms-toolbar-h) - 40px);
     display: flex;
     flex-direction: column;
+    gap: 22px;
     min-width: 0;
     min-height: 0;
     padding-inline-start: 20px;
     border-inline-start: 1px solid var(--color-border);
+    font-size: 12.5px;
   }
   .ms-side-toggle { display: none; align-self: flex-start; }
-  .ms-side-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
-  .ms-side-main { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .ms-side-body, .ms-side-main { display: flex; flex-direction: column; gap: 22px; min-height: 0; }
+  .ms-side-section { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .ms-side-lists { flex: 1 1 auto; }
   .ms-tabs { align-self: flex-start; }
-  .ms-tabs > button { padding: 0 12px; }
-  .ms-side-scroll { flex: 1; min-height: 0; max-height: 52dvh; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-inline-end: 4px; }
-  .ms-side-empty { margin: 6px 0; line-height: 1.6; }
-  /* the steps ticking while a run is on */
-  .ms-steps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-  .ms-step { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--color-text-3); transition: color 200ms ease; }
+  .ms-tabs > button { padding: 0 10px; }
+  .ms-tabs > button .num { font-weight: 400; color: var(--color-text-3); }
+  .ms-tabs > .is-selected .num { color: var(--color-text-2); }
+  /* one scrolling list under the tabs; rows bleed 8 px so their text lines up with the heads */
+  .ms-side-scroll { flex: 1 1 auto; min-height: 0; max-height: 52dvh; margin-inline: -8px 0; padding-inline: 8px 4px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .ms-side-empty { margin: 4px 0; font-size: 12px; line-height: 1.6; }
+  /* the steps while a run is on (= bk-count rows with a mark instead of the dot) */
+  .ms-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ms-step { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--color-text-3); transition: color 200ms ease; }
   .ms-step-mark {
     display: inline-grid;
     place-items: center;
     flex: none;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: var(--radius-pill);
     border: 1px solid var(--color-border-strong);
     color: #fff;
     background: transparent;
     transition: background-color 200ms ease, border-color 200ms ease;
   }
-  .ms-step-mark .icon { width: 11px; height: 11px; stroke-width: 2.4; opacity: 0; transition: opacity 200ms ease; }
+  .ms-step-mark .icon { width: 10px; height: 10px; stroke-width: 2.6; opacity: 0; transition: opacity 200ms ease; }
   .ms-step.is-current { color: var(--color-text); font-weight: 500; }
   .ms-step.is-current .ms-step-mark { border-color: var(--color-accent); box-shadow: inset 0 0 0 3px var(--color-accent-soft); animation: ms-pulse 1200ms ease-in-out infinite; }
   .ms-step.is-done { color: var(--color-text-2); }
   .ms-step.is-done .ms-step-mark { background: var(--color-success); border-color: transparent; animation: ms-stamp-in 300ms ease-out both; }
   .ms-step.is-done .ms-step-mark .icon { opacity: 1; }
-  /* contents: the headings as a tree with the current chapter marked (scroll spy) */
+  /* contents: the headings as a tree, the current chapter marked (scroll spy); rows = bk-attention summary */
   .ms-toc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
   .ms-toc-list.is-nested { margin-top: 1px; }
   .ms-toc-link {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    min-height: 28px;
+    min-height: 26px;
     padding: 4px 8px;
     border-radius: var(--radius-sm);
     color: var(--color-text-2);
     font-size: 12.5px;
+    font-weight: 500;
     line-height: 1.45;
     transition: background-color 120ms ease, color 120ms ease;
   }
   .ms-toc-link:hover { background: var(--color-hover); color: var(--color-text); }
-  .ms-toc-item.is-current > .ms-toc-link { background: var(--color-active); color: var(--color-text); font-weight: 550; }
-  .ms-toc-item.is-l2 > .ms-toc-link { padding-inline-start: 22px; font-size: 12px; }
+  .ms-toc-item.is-current > .ms-toc-link { background: var(--color-active); color: var(--color-text); }
+  .ms-toc-item.is-l2 > .ms-toc-link { padding-inline-start: 22px; font-size: 12px; font-weight: 400; }
   .ms-toc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .ms-toc-page { flex: none; color: var(--color-text-3); font-size: 11.5px; }
-  /* warnings grouped by code (= bk-attention rows) */
-  .ms-warnings { display: flex; flex-direction: column; gap: 6px; }
+  .ms-toc-page { flex: none; color: var(--color-text-3); font-size: 11.5px; font-weight: 400; }
+  /* notes grouped by code: the group head = bk-attention summary, the rows = bk-attention-row */
+  .ms-warnings { display: flex; flex-direction: column; gap: 4px; }
   .ms-warn-group > summary {
     display: flex;
     align-items: center;
-    gap: 8px;
-    min-height: 28px;
+    gap: 6px;
+    height: 26px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 12.5px;
-    font-weight: 500;
     color: var(--color-text-2);
+    font-weight: 500;
     cursor: pointer;
     list-style: none;
     user-select: none;
@@ -463,31 +471,33 @@
   }
   .ms-warn-group > summary::-webkit-details-marker { display: none; }
   .ms-warn-group > summary:hover { background: var(--color-hover); color: var(--color-text); }
-  .ms-warn-group[open] > summary { color: var(--color-text); }
+  .ms-warn-group[open] > summary { background: var(--color-active); color: var(--color-text); }
   .ms-warn-group > summary .num { color: var(--color-text-3); font-weight: 400; }
-  .ms-warn-list { list-style: none; margin: 2px 0 6px; padding: 0; display: flex; flex-direction: column; }
+  .ms-warn-list { list-style: none; margin: 2px 0 6px; padding: 0 8px; display: flex; flex-direction: column; }
   .ms-warn {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 2px 8px;
-    padding: 6px 8px;
-    border-radius: var(--radius-sm);
+    min-height: 36px;
+    padding: 6px 0;
     border-bottom: 1px solid var(--color-border);
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.45;
     transition: background-color 150ms ease;
   }
   .ms-warn:last-child { border-bottom: 0; }
-  .ms-warn.is-current { background: var(--color-accent-soft); }
-  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; }
+  .ms-warn.is-current { margin-inline: -8px; padding-inline: 8px; border-radius: var(--radius-sm); background: var(--color-accent-soft); }
+  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ms-warn-msg { color: var(--color-text); }
   .ms-warn-actions { grid-column: 2; display: flex; align-items: center; gap: 2px; margin-inline-start: -8px; }
   .ms-warn-actions .btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
-  /* stats */
-  .ms-stats { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; margin: 0; padding-top: 12px; border-top: 1px solid var(--color-border); font-size: 12.5px; }
-  .ms-stat { display: contents; }
-  .ms-stat dt { color: var(--color-text-2); }
-  .ms-stat dd { margin: 0; color: var(--color-text); text-align: end; font-variant-numeric: tabular-nums; }
+  /* the run's numbers under a hairline (= bk-summary-review + bk-counts rows) */
+  .ms-side-stats { padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .ms-stats { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; }
+  .ms-stat { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--color-text); font-weight: 500; }
+  .ms-stat dt { flex: 1; min-width: 0; }
+  .ms-stat dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .ms-stat.is-zero { color: var(--color-text-3); font-weight: 400; }
 
   /* ------------------------------------------------------------ the source drawer («عرض الأصل») */
   .ms-drawer {
@@ -552,7 +562,7 @@
     .ms-bar-dash { display: none; }
   }
   @media (max-width: 1100px) {
-    .ms-screen { --ms-side-w: clamp(190px, 20vw, 240px); }
+    .ms-screen { --ms-side-w: clamp(180px, 15vw, 220px); }
     .ms-counts { display: none; }
   }
   @media (max-width: 900px) {
@@ -561,8 +571,9 @@
     .ms-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
     .ms-side { order: -1; position: static; max-height: none; padding-inline-start: 0; border-inline-start: 0; }
     .ms-side-toggle { display: inline-flex; }
-    .ms-side-body { display: none; padding-top: 12px; }
+    .ms-side-body { display: none; gap: 14px; padding-top: 12px; }
     .ms-side-body.is-open { display: flex; }
+    .ms-side-main { gap: 14px; }
     .ms-side-scroll { max-height: 40dvh; }
     .ms-drawer { inset-inline: 0; width: auto; max-width: none; }
     .ms-block::before { font-size: 10px; width: calc(var(--ms-gutter) - 8px); }

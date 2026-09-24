@@ -141,12 +141,12 @@ def test_normalize_settings_defaults_and_bad_values():
             "dismissed_suggestions": ["p12", "h9", "n3", 5, "p"],
         }
     )
-    assert settings.footnote_numbering == "chapter"
+    assert settings.footnote_numbering == "page"  # the default: as printed, per page
     assert settings.include_unreviewed is False and settings.strip_tatweel is False
     assert settings.seams == {"12": "join", "14": "split"}
     assert settings.dismissed_suggestions == frozenset({"p12", "h9"})
     assert settings.as_dict() == {
-        "footnote_numbering": "chapter",
+        "footnote_numbering": "page",
         "include_unreviewed": False,
         "strip_tatweel": False,
         "seams": {"12": "join", "14": "split"},
@@ -365,7 +365,7 @@ def test_lines_with_the_same_indent_form_one_indented_block():
     lines = [
         ln("سطر كامل", FULL, y=0.10, id=1),
         ln("ينتهي قصيرًا", SHORT, y=0.12, id=2),
-        ln("بند مزاح يبدأ هنا", (0.1, 0.84), y=0.14, id=3),
+        ln("بند مزاح يبدأ هنا،", (0.1, 0.84), y=0.14, id=3),
         ln("ويستمر بالمسافة نفسها", (0.1, 0.845), y=0.16, id=4),
         ln("وينتهي هنا", (0.5, 0.84), y=0.18, id=5),
         ln("فقرة كاملة", FULL, y=0.20, id=6),
@@ -650,6 +650,97 @@ def test_each_note_takes_the_first_unused_matching_candidate():
     assert codes(result).count("marker_unmatched") == 1  # (2)
 
 
+def test_several_orphans_of_a_page_keep_the_order_of_their_notes():
+    # Book 13 page 8: two notes whose markers the OCR lost were appended in reverse order.
+    page = pg(
+        1,
+        [
+            ln("متن الصفحة بلا علامات", id=60),
+            ln("(2) أبو الفداء", kind="footnote", id=61),
+            ln("(3) الإدريسي", kind="footnote", id=62),
+        ],
+    )
+    result = run([page])
+    assert [n["attrs"]["id"] for n in notes_of(result)] == ["n61", "n62"]
+    assert [n["attrs"]["marker"] for n in notes_of(result)] == ["2", "3"]
+    assert [w["lineIds"] for w in result.warnings if w["code"] == "note_orphan"] == [[61], [62]]
+
+
+def test_a_number_after_a_closing_quote_is_a_marker_and_warns_when_unmatched():
+    # Book 13 page 6: «دينار » ١ ، … برقة » ١ ،» with one note: the first links, the second warns.
+    page = pg(
+        1,
+        [
+            ln("«ألف دينار » ١ ، وهناك إشارة وهي برقة » ١ ، فأرض", id=70),
+            ln("ا ابن عبد الحكم", kind="footnote", id=71),
+        ],
+    )
+    result = run([page])
+    assert text_of(blocks_of(result)[0]) == "«ألف دينار»[1]، وهناك إشارة وهي برقة» 1، فأرض"
+    (warning,) = [w for w in result.warnings if w["code"] == "marker_unmatched"]
+    assert warning["message"] == "علامة الحاشية «1» في الصفحة 1 بلا حاشية مقابلة."
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "بالخلاصات التالية: 2 ـ كتاب الإشارات",  # a list number (book 15)
+        "القوس الروماني. 2 – المقابر",
+        "جاء المسلمون سنة 2 ه بقيادة عمرو",  # a year
+        "منذ سنة 2 للهجرة هي برقة",
+    ],
+)
+def test_list_numbers_and_years_are_never_markers(body):
+    result = run([pg(1, [ln(body, id=80), ln("(2) حاشية", kind="footnote", id=81)])])
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is True and " 2 " in text_of(blocks_of(result)[0])
+
+
+def test_a_standalone_number_before_a_mark_wins_over_one_before_a_word():
+    page = pg(1, [ln("سار 2 ميلًا ثم قال كذا 2 . وانتهى", id=90), ln("(2) الحاشية", kind="footnote")])
+    assert text_of(blocks_of(run([page]))[0]) == "سار 2 ميلًا ثم قال كذا[1]. وانتهى"
+
+
+def test_an_indented_line_after_a_full_line_ending_on_a_bare_word_continues_the_paragraph():
+    # Book 13 page 3: the box of «– السعيد – ابن …» misses its leading dash and looks indented.
+    lines = [
+        ln("ومن أقدم النصوص", INDENT, y=0.10, id=1),
+        ln("إذ يقول: «كان لباتوس", FULL, y=0.12, id=2),
+        ln("– السعيد – ابن اسمه", INDENT, y=0.14, id=3),
+        ln("ما إن ارتقى العرش", FULL, y=0.16, id=4),
+        ln("وانتهى النص.", FULL, y=0.18, id=5),
+        ln("فقرة جديدة بمسافة", INDENT, y=0.20, id=6),
+        ln("تنتهي بكلمة لاتينية Touchera", FULL, y=0.22, id=7),
+        ln("وإذن فالمدينة", INDENT, y=0.24, id=8),
+        ln("تقع في الداخل", FULL, y=0.26, id=9),
+    ]
+    assert [b.line_ids for b in split_paragraphs(pg(1, lines))] == [[1, 2, 3, 4, 5], [6, 7], [8, 9]]
+    assert pipeline.ends_mid_sentence("كان لباتوس") and pipeline.ends_mid_sentence("الإسلامُ")
+    assert not pipeline.ends_mid_sentence("انتهى.") and not pipeline.ends_mid_sentence("سنة 21")
+
+
+def test_direction_marks_are_removed_from_the_derived_text():
+    assert normalize_text("مليتية WV\u200f ميلاً \u200e،") == "مليتية WV ميلاً،"
+
+
+def test_footnotes_are_numbered_per_page_by_default():
+    assert Settings().footnote_numbering == "page" == pipeline.DEFAULT_NUMBERING
+    pages = [
+        pg(
+            1,
+            [
+                ln("متن (١) و(٢).", id=1),
+                ln("(١) أ", kind="footnote", id=2),
+                ln("(٢) ب", kind="footnote", id=3),
+            ],
+        ),
+        pg(2, [ln("متن (١) انتهى.", INDENT, id=4), ln("(١) ج", kind="footnote", id=5)]),
+    ]
+    result = assemble(pages, {}, {"id": 7})
+    assert [n["attrs"]["number"] for n in notes_of(result)] == [1, 2, 1]
+    assert result.document["attrs"]["footnoteNumbering"] == "page"
+
+
 def _chapters(numbering):
     pages = [
         pg(1, [ln("الفصل الأول", CENTRED, role="heading", id=1), ln("متن (١) و(٢).", INDENT, id=2)]),
@@ -799,7 +890,7 @@ def test_document_shape():
         "bookId": 7,
         "runId": 31,
         "assembledAt": None,
-        "footnoteNumbering": "chapter",
+        "footnoteNumbering": "page",
         "digitStyle": "western",
         "seams": result.seams,
     }
@@ -1156,6 +1247,45 @@ def test_the_task_runs_a_queued_run(db):
     assert run.status == AssemblyRun.Status.DONE and Manuscript.objects.filter(book=f.book).exists()
 
 
+def test_a_run_the_broker_refuses_fails_at_once_and_the_next_start_is_a_new_run(editor, monkeypatch):
+    from assembly import tasks
+
+    f, _ = two_page_book()
+
+    def refuse(*args, **kwargs):
+        raise ConnectionError("Error 61 connecting to localhost:6379")
+
+    monkeypatch.setattr(tasks.assemble_book, "delay", refuse)
+    run = services.start_assembly(f.book, editor)
+    assert run.status == AssemblyRun.Status.ERROR and run.error.startswith(services.ENQUEUE_ERROR)
+    state = services.manuscript_state(f.book)
+    assert state["active"] is False and state["run"]["error"] == services.ENQUEUE_ERROR
+    monkeypatch.undo()
+    again = services.start_assembly(f.book, editor)
+    assert again.pk != run.pk and again.status == AssemblyRun.Status.DONE
+
+
+def test_a_run_claimed_by_another_delivery_is_left_alone(db, monkeypatch):
+    # Two deliveries of the task (acks_late) both read the run as queued: only one may run it.
+    f, _ = two_page_book()
+    run = AssemblyRun.objects.create(book=f.book, status=AssemblyRun.Status.QUEUED)
+    stale = AssemblyRun.objects.get(pk=run.pk)
+    AssemblyRun.objects.filter(pk=run.pk).update(status=AssemblyRun.Status.RUNNING, stage="footnotes")
+
+    class Stale:
+        def filter(self, **kwargs):
+            return self
+
+        def first(self):
+            return stale
+
+    monkeypatch.setattr(AssemblyRun.objects, "select_related", lambda *args: Stale())
+    monkeypatch.setattr(services, "load_book", lambda book: pytest.fail("the run was run twice"))
+    result = services.run_assembly(run.pk)
+    assert result.status == AssemblyRun.Status.RUNNING and result.stage == "footnotes"
+    assert not Manuscript.objects.filter(book=f.book).exists()
+
+
 # ---------------------------------------------------------------- D36 and staleness
 
 
@@ -1248,7 +1378,7 @@ def test_manuscript_state_before_any_run_costs_one_query(db, django_assert_num_q
         "stale_pages": [],
         "warnings_count": 0,
         "stats": {},
-        "options": {"footnote_numbering": "chapter", "include_unreviewed": True, "strip_tatweel": True},
+        "options": {"footnote_numbering": "page", "include_unreviewed": True, "strip_tatweel": True},
         "unreviewed_pages": 1,
     }
     assert services.manuscript_state(f.book)["unreviewed_pages"] == 1
