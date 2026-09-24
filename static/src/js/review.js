@@ -64,10 +64,18 @@
   const fill = (template, id) => String(template || '').replace('__id__', String(id));
   const plainToken = (word) => ({ t: word, alt: null, tess: null, conf: 'high', digit: isDigits(word), bbox: null, res: 'typed' });
   const splitWords = (text) => String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  const isBox = (b) => Array.isArray(b) && b.length === 4;
+  const unionBox = (a, b) => {
+    const boxes = [a, b].filter(isBox);
+    if (!boxes.length) return null;
+    return [Math.min(...boxes.map((x) => x[0])), Math.min(...boxes.map((x) => x[1])), Math.max(...boxes.map((x) => x[2])), Math.max(...boxes.map((x) => x[3]))];
+  };
 
   // Keyboard map (PHASE3_SPEC §4), RTL: ArrowLeft = next page. Pure, so the tests can exercise it.
-  // ctx: inField (typing in an input), inFlow (Tab may be taken over), focused (a low word is focused),
-  // optionKeys (digit hints of the open popover).
+  // ctx: inField (typing in an input), inFlow (Tab may be taken over), focused (a word is focused and the
+  // page is editable), optionKeys (digit hints of the open popover).
+  // D31: Alt+ArrowLeft merges the focused word with the next one (RTL: the next word is on the left),
+  // Alt+ArrowRight with the previous one, Backspace / Delete removes the focused word.
   function keyAction(ev, ctx) {
     const k = ev.key;
     const mod = ev.metaKey || ev.ctrlKey;
@@ -77,7 +85,12 @@
     if (ctx.inField) return null;
     if (k === 'Tab') return ctx.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
     if (k === 'Enter') return ev.altKey ? 'insert' : (ctx.focused ? 'accept' : null);
-    if (ev.altKey) return null;
+    if (ev.altKey) {
+      if (ctx.focused && k === 'ArrowLeft') return 'mergeNext';
+      if (ctx.focused && k === 'ArrowRight') return 'mergePrev';
+      return null;
+    }
+    if ((k === 'Backspace' || k === 'Delete') && ctx.focused) return 'deleteWord';
     if (k === '?') return 'sheet';
     if (k === 'ArrowLeft') return 'nextPage';
     if (k === 'ArrowRight') return 'prevPage';
@@ -337,7 +350,8 @@
         this.pop.typed = '';
         this.pop.typing = false;
         const tok = this.focused;
-        this.pop.open = opts.open !== false && Boolean(tok) && tok.conf === 'low';
+        // any word opens the popover on an editable page (merge / delete, D31); read-only: uncertain words only
+        this.pop.open = opts.open !== false && Boolean(tok) && (tok.conf === 'low' || this.editable);
         if (!hasDOM) return;
         this.tick(() => {
           const el = document.getElementById(this.tokId(ref.lineId, ref.index));
@@ -358,7 +372,7 @@
 
       onTokClick(line, i) {
         const tok = line.tokens[i];
-        if (tok && tok.conf === 'low') this.focusWord({ lineId: line.id, index: i }, { open: true });
+        if (tok && (tok.conf === 'low' || this.editable)) this.focusWord({ lineId: line.id, index: i }, { open: true });
         else { this.focus = null; this.pop.open = false; this.hotLine = line.id; }
       },
 
@@ -444,6 +458,94 @@
             this.setCounts(beforeCounts);
           },
           retry: () => { this.focus = { lineId: ref.lineId, index: ref.index }; return this.choose(choice, text); },
+        });
+      },
+
+      // ------------------------------------------------------------ words: merge / delete (D31)
+      // What the popover may offer for the focused word: merge with the next / previous word on its line.
+      wordActions() {
+        const ref = this.focus;
+        const line = this.lineById(ref && ref.lineId);
+        const n = line ? (line.tokens || []).length : 0;
+        if (!line || !this.editable || !n) return { next: false, prev: false, del: false };
+        return { next: ref.index + 1 < n, prev: ref.index > 0, del: true };
+      },
+
+      // The word a merge would produce («هير» + «ودوت» → «هيرودوت»); '' when there is nothing to merge with.
+      mergePreview(dir) {
+        const ref = this.focus;
+        const line = this.lineById(ref && ref.lineId);
+        const tokens = line ? line.tokens || [] : [];
+        const k = dir < 0 ? (ref ? ref.index - 1 : -1) : (ref ? ref.index : -1);
+        if (k < 0 || k + 1 >= tokens.length) return '';
+        return tokens[k].t + tokens[k + 1].t;
+      },
+
+      // Join the focused word with the next (dir 1, reading order: to its left) or previous (dir -1) word.
+      // Optimistic: the merged word lands at once with the union of both boxes; a failure restores both.
+      mergeWord(dir) {
+        const ref = this.focus;
+        const line = this.lineById(ref && ref.lineId);
+        if (!line || !this.editable) return Promise.resolve(false);
+        const tokens = line.tokens || [];
+        const k = dir < 0 ? ref.index - 1 : ref.index;
+        if (k < 0 || k + 1 >= tokens.length) return Promise.resolve(false);
+        const before = tokens.map((t) => Object.assign({}, t));
+        const beforeText = line.text;
+        const beforeCounts = Object.assign({}, this.counts);
+        const merged = plainToken(tokens[k].t + tokens[k + 1].t);
+        merged.bbox = unionBox(tokens[k].bbox, tokens[k + 1].bbox);
+        tokens.splice(k, 2, merged);
+        line.text = tokens.map((t) => t.t).join(' ');
+        this.recount();
+        this.closePop();
+        const at = { lineId: line.id, index: k };
+        this.focusWord(at, { open: false });
+        this.flash(at);
+        return this.request(() => api(fill(this.urls.merge, line.id), { method: 'POST', body: { index: k } }), {
+          apply: (data) => {
+            if (data.line) this.replaceLine(data.line);
+            this.applyApiCounts(data.counts, this.lineById(line.id));
+          },
+          rollback: () => {
+            const l = this.lineById(line.id);
+            if (l) { l.tokens = before; l.text = beforeText; }
+            this.setCounts(beforeCounts);
+            this.recount();
+          },
+          retry: () => { this.focus = { lineId: ref.lineId, index: ref.index }; return this.mergeWord(dir); },
+        });
+      },
+
+      // Remove the focused word (a stray letter or number); the line's only word removes the line.
+      deleteWord() {
+        const ref = this.focus;
+        const line = this.lineById(ref && ref.lineId);
+        if (!line || !this.editable) return Promise.resolve(false);
+        const tokens = line.tokens || [];
+        if (!tokens[ref.index]) return Promise.resolve(false);
+        if (tokens.length === 1) { this.closePop(); this.focus = null; return this.removeLine(line); }
+        const before = tokens.map((t) => Object.assign({}, t));
+        const beforeText = line.text;
+        const beforeCounts = Object.assign({}, this.counts);
+        tokens.splice(ref.index, 1);
+        line.text = tokens.map((t) => t.t).join(' ');
+        this.recount();
+        this.closePop();
+        this.focusWord({ lineId: line.id, index: Math.min(ref.index, tokens.length - 1) }, { open: false });
+        return this.request(() => api(fill(this.urls.delete_word, line.id), { method: 'POST', body: { index: ref.index } }), {
+          apply: (data) => {
+            if (data.line) this.replaceLine(data.line);
+            this.applyApiCounts(data.counts, this.lineById(line.id));
+            this.showUndoToast('حُذفت الكلمة');
+          },
+          rollback: () => {
+            const l = this.lineById(line.id);
+            if (l) { l.tokens = before; l.text = beforeText; }
+            this.setCounts(beforeCounts);
+            this.recount();
+          },
+          retry: () => { this.focus = { lineId: ref.lineId, index: ref.index }; return this.deleteWord(); },
         });
       },
 
@@ -1228,7 +1330,7 @@
         if (this.dialog.open) { if (ev.key === 'Escape') { ev.preventDefault(); this.dialog.open = false; } return; }
         const outside = Boolean(target.closest && target.closest('.rv-bar, .rv-film, .rv-toolbar, .sidebar, .topbar'));
         const inFlow = !inField && !outside && tag !== 'button' && tag !== 'a';
-        const focused = Boolean(this.focused) && this.focused.conf === 'low' && this.editable;
+        const focused = Boolean(this.focused) && this.editable;
         const action = keyAction(ev, { inField, inFlow, focused, optionKeys: this.options().map((o) => o.key) });
         if (action) this.runAction(action, ev);
       },
@@ -1247,6 +1349,9 @@
           case 'choose3': stop(); this.chooseNth(3); break;
           case 'type': stop(); this.startTyping(ev.key); break;
           case 'edit': stop(); this.startEdit(); break;
+          case 'mergeNext': stop(); this.mergeWord(1); break;
+          case 'mergePrev': stop(); this.mergeWord(-1); break;
+          case 'deleteWord': stop(); this.deleteWord(); break;
           case 'approve': stop(); this.approve(false); break;
           case 'nextReview': stop(); this.goNextReview(); break;
           case 'nextPage': stop(); this.goNextPage(); break;

@@ -684,3 +684,103 @@ def test_line_revision_admin_and_labels(db):
     from django.apps import apps
 
     assert apps.get_app_config("review").verbose_name == "المراجعة"
+
+
+# ---------------------------------------------------------------- merge / delete one word (D31)
+
+
+def split_name_line(page) -> Line:
+    """A body line where the models split «هيرودوت» in two, plus a stray letter the OCR added."""
+    body = page.regions.get(kind="body")
+    return make_line(
+        page,
+        3,
+        body,
+        [
+            tok("هير", bbox=[60, 60, 100, 80]),
+            tok("ودوت", "low", alt="ودت", bbox=[30, 62, 58, 81]),
+            tok("ب", "low", bbox=[24, 70, 28, 78]),
+            tok("قال", bbox=[0, 60, 22, 80]),
+        ],
+    )
+
+
+def test_merge_tokens_joins_a_split_word_under_one_box_and_undo_splits_it_again(page, reviewer):
+    line = split_name_line(page)
+    services.refresh_page_text(page)
+    unresolved = reload(page).n_unresolved
+    line = services.merge_tokens(line, 0, reviewer)
+    assert [t["t"] for t in line.tokens] == ["هيرودوت", "ب", "قال"]
+    merged = line.tokens[0]
+    assert merged["bbox"] == [30, 60, 100, 81] and merged["conf"] == "high" and merged["res"] == "typed"
+    assert merged["alt"] is None and merged["tess"] is None
+    assert line.text == "هيرودوت ب قال" and line.n_low == 1  # the uncertain half is resolved by the merge
+    page = reload(page)
+    assert page.n_unresolved == unresolved - 1 and "هيرودوت" in page.final_text
+    assert page.revisions.first().action == LineRevision.Action.MERGE
+    services.undo_last(page, reviewer)
+    line.refresh_from_db()
+    assert [t["t"] for t in line.tokens] == ["هير", "ودوت", "ب", "قال"] and line.n_low == 2
+    assert line.tokens[1]["alt"] == "ودت" and reload(page).n_unresolved == unresolved
+
+
+def test_merge_tokens_needs_a_following_word_on_the_line(page):
+    line = split_name_line(page)
+    with pytest.raises(services.ReviewError, match="لا توجد كلمة بعدها في هذا السطر للدمج."):
+        services.merge_tokens(line, 3)
+    with pytest.raises(services.ReviewError, match="رقم الكلمة غير صالح."):
+        services.merge_tokens(line, 9)
+
+
+def test_delete_token_removes_a_stray_letter_and_undo_restores_it(page, reviewer):
+    line = split_name_line(page)
+    result = services.delete_token(line, 2, reviewer)
+    line = result["line"]
+    assert result["deleted_line_id"] is None and [t["t"] for t in line.tokens] == ["هير", "ودوت", "قال"]
+    assert line.n_low == 1 and page.revisions.first().action == LineRevision.Action.DROP_WORD
+    assert " ب " not in reload(page).final_text
+    services.undo_last(page, reviewer)
+    line.refresh_from_db()
+    assert [t["t"] for t in line.tokens] == ["هير", "ودوت", "ب", "قال"]
+    assert line.tokens[2]["bbox"] == [24, 70, 28, 78] and line.n_low == 2
+
+
+def test_delete_token_of_a_lines_only_word_deletes_the_line_and_undo_brings_it_back(page):
+    lone = make_line(page, 3, page.regions.get(kind="body"), [tok("٧", "low", digit=True)])
+    result = services.delete_token(lone, 0)
+    assert result == {"line": None, "deleted_line_id": lone.pk}
+    assert not Line.objects.filter(pk=lone.pk).exists()
+    assert page.revisions.first().action == LineRevision.Action.DELETE
+    services.undo_last(page)
+    assert Line.objects.get(pk=lone.pk).tokens[0]["t"] == "٧"
+
+
+def test_api_merge_and_delete_word(reviewer_client, page):
+    from django.test import Client
+
+    line = split_name_line(page)
+    services.refresh_page_text(page)
+    assert post(Client(), "line_merge", line.pk, {"index": 0}).status_code == 403  # anonymous
+    response = post(reviewer_client, "line_merge", line.pk, {"index": 0})
+    assert response.status_code == 200
+    body = response.json()
+    assert [t["t"] for t in body["line"]["tokens"]] == ["هيرودوت", "ب", "قال"] and body["counts"][
+        "line_n_low"
+    ] == 1
+    response = post(reviewer_client, "line_delete_word", line.pk, {"index": 1})
+    assert response.status_code == 200 and [t["t"] for t in response.json()["line"]["tokens"]] == [
+        "هيرودوت",
+        "قال",
+    ]
+    response = post(reviewer_client, "line_merge", line.pk, {"index": 1})
+    assert (
+        response.status_code == 400 and response.json()["message"] == "لا توجد كلمة بعدها في هذا السطر للدمج."
+    )
+    lone = make_line(page, 4, page.regions.get(kind="body"), [tok("٧", "low", digit=True)])
+    response = post(reviewer_client, "line_delete_word", lone.pk, {"index": 0})
+    assert response.status_code == 200 and response.json()["deleted_id"] == lone.pk
+    urls = services.review_payload(reload(page), None)["urls"]
+    assert (
+        urls["merge"] == "/api/lines/__id__/merge/"
+        and urls["delete_word"] == "/api/lines/__id__/delete-word/"
+    )

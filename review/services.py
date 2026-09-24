@@ -371,6 +371,8 @@ def review_payload(page: Page, user) -> dict:
             "resolve": _id_template("line_resolve", "line_id"),
             "edit": _id_template("line_edit", "line_id"),
             "delete": _id_template("line_delete", "line_id"),
+            "merge": _id_template("line_merge", "line_id"),
+            "delete_word": _id_template("line_delete_word", "line_id"),
             "insert": reverse("api:page_lines", args=[page.pk]),
             "undo": reverse("api:page_undo", args=[page.pk]),
             "approve": reverse("api:page_approve", args=[page.pk]),
@@ -616,6 +618,81 @@ def delete_line(line: Line, user=None) -> int:
     return line_id
 
 
+def _union_box(a: list | None, b: list | None) -> list | None:
+    """Union of two word boxes (None when neither has one)."""
+    boxes = [box for box in (a, b) if isinstance(box, list | tuple) and len(box) == 4]
+    if not boxes:
+        return None
+    return [
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    ]
+
+
+@transaction.atomic
+def merge_tokens(line: Line, index, user=None) -> Line:
+    """Join word `index` with the word after it (reading order) into one word, e.g. «هير» + «ودوت».
+
+    For a name or place the models split in two (D31). The two readings are written together without
+    a space; the merged word's box is the union of both boxes and it counts as the reviewer's
+    decision (typed, high confidence, no alternatives). Undo restores both words. Raises
+    `ReviewError` when there is no word after `index` on the line.
+    """
+    page = _lock_page(line.page)
+    _check_editable(page)
+    line = _line_of(page, line.pk)
+    if line is None:
+        raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    tokens = [normalize_token(token) for token in line.tokens or []]
+    i = _as_index(index, len(tokens))
+    if i + 1 >= len(tokens):
+        raise ReviewError("لا توجد كلمة بعدها في هذا السطر للدمج.")
+    before = line_snapshot(line)
+    first, second = tokens[i], tokens[i + 1]
+    merged = typed_token(first["t"] + second["t"], _union_box(first.get("bbox"), second.get("bbox")))
+    tokens[i : i + 2] = [merged]
+    _set_tokens(line, tokens)
+    line.updated_by = _user_or_none(user)
+    line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _record(page, LineRevision.Action.MERGE, line, before, line_snapshot(line), user)
+    refresh_page_text(page)
+    return line
+
+
+@transaction.atomic
+def delete_token(line: Line, index, user=None) -> dict:
+    """Remove one stray word (a lone letter or number the OCR added) from the line.
+
+    Returns `{"line": Line | None, "deleted_line_id": int | None}`: removing the only word of a line
+    deletes the line itself (recorded as a line delete, so undo brings the line back). Undo restores
+    the word with its box and readings.
+    """
+    page = _lock_page(line.page)
+    _check_editable(page)
+    line = _line_of(page, line.pk)
+    if line is None:
+        raise ReviewError("السطر غير موجود في هذه الصفحة.")
+    tokens = [normalize_token(token) for token in line.tokens or []]
+    i = _as_index(index, len(tokens))
+    if len(tokens) == 1:
+        line_id = line.pk
+        _record(page, LineRevision.Action.DELETE, None, line_snapshot(line), None, user)
+        line.delete()
+        _compact_orders(page)
+        refresh_page_text(page)
+        return {"line": None, "deleted_line_id": line_id}
+    before = line_snapshot(line)
+    del tokens[i]
+    _set_tokens(line, tokens)
+    line.updated_by = _user_or_none(user)
+    line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _record(page, LineRevision.Action.DROP_WORD, line, before, line_snapshot(line), user)
+    refresh_page_text(page)
+    return {"line": line, "deleted_line_id": None}
+
+
 # ====================================================================== undo
 
 
@@ -686,7 +763,12 @@ def undo_last(page: Page, user=None) -> dict:
         raise ReviewError("لا شيء للتراجع عنه.")
     _check_editable(page)
     action = revision.action
-    if action in (LineRevision.Action.RESOLVE, LineRevision.Action.EDIT):
+    if action in (
+        LineRevision.Action.RESOLVE,
+        LineRevision.Action.EDIT,
+        LineRevision.Action.MERGE,
+        LineRevision.Action.DROP_WORD,
+    ):
         _restore_content(page, revision)
     elif action == LineRevision.Action.INSERT:
         _undo_insert(page, revision)

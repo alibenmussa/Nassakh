@@ -24,5 +24,7 @@ api_urlpatterns = [
     path("lines/<int:line_id>/resolve/", api.line_resolve, name="line_resolve"),
     path("lines/<int:line_id>/edit/", api.line_edit, name="line_edit"),
     path("lines/<int:line_id>/delete/", api.line_delete, name="line_delete"),
+    path("lines/<int:line_id>/merge/", api.line_merge, name="line_merge"),
+    path("lines/<int:line_id>/delete-word/", api.line_delete_word, name="line_delete_word"),
     path("books/<int:book_id>/filmstrip/", api.book_filmstrip, name="book_filmstrip"),
 ]

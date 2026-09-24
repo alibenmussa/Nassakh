@@ -292,7 +292,11 @@ role (superusers pass). Users without a role see the screen read-only.
 Shortcuts: `Tab` / `Shift+Tab` next / previous uncertain word · `1` `2` `3` choose a reading · `Enter` accept the
 current reading · typing starts a correction · `Esc` close · `E` edit the line · `Alt+Enter` insert a line below ·
 `Ctrl/Cmd+Z` undo · `A` approve · `N` next page to review · `ArrowLeft` / `ArrowRight` next / previous page ·
-`+` `-` `0` zoom. The «?» button shows the full sheet.
+`+` `-` `0` zoom · `Alt+ArrowLeft` / `Alt+ArrowRight` merge the focused word with the next / previous word ·
+`Backspace` / `Delete` remove the focused word. Clicking any word (not only uncertain ones) opens its menu:
+readings (for uncertain words), merge with the next / previous word with a preview of the result, delete, and a
+typed correction. A merged word gets the union of both boxes; deleting a line's only word deletes the line.
+Both are undoable like every other action (D31). The «?» button shows the full sheet.
 
 ### What a review action changes
 
@@ -323,6 +327,8 @@ lines were replaced, so they can no longer be undone.
 |---|---|---|---|
 | GET | `pages/<id>/review/` | `page_review` | review payload (PHASE3_SPEC §4) |
 | POST | `lines/<id>/resolve/` | `line_resolve` | `{index, choice, text?}` → `{line, counts, page}` |
+| POST | `lines/<id>/merge/` | `line_merge` | `{index}` joins word `index` with the next one → `{line, counts}` |
+| POST | `lines/<id>/delete-word/` | `line_delete_word` | `{index}` → `{line, counts}`, or `{deleted_id, counts}` when it was the line's only word |
 | POST | `lines/<id>/edit/` | `line_edit` | `{text}` → `{line, counts}` |
 | POST | `lines/<id>/delete/` | `line_delete` | → `{deleted_id, counts}` |
 | POST | `pages/<id>/lines/` | `page_lines` | `{after: line id or null, text}` → 201 `{line, lines, counts}` |

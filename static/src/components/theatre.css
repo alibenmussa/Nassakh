@@ -387,6 +387,7 @@
     transform-origin: 100% 50%;
   }
   [data-fit="center"] .fac-text { text-align-last: center; }
+  [data-fit="end"] .fac-text { text-align-last: end; } /* a paragraph's first line: flush left, indent on the right (D31) */
   [data-fit="over"] .fac-text { mask-image: linear-gradient(to right, transparent, #000 14px); -webkit-mask-image: linear-gradient(to right, transparent, #000 14px); }
   .fac-text .tok { unicode-bidi: isolate; opacity: 0.85; transition: opacity 400ms ease; }
   .fac-text .tok.is-veiled { opacity: 0.45; transition-duration: 500ms; }

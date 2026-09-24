@@ -96,6 +96,38 @@ def line_edit(request: Request, line_id: int) -> Response:
 
 @api_view(["POST"])
 @permission_classes([CanReview])
+def line_merge(request: Request, line_id: int) -> Response:
+    """Join word `index` with the word after it into one word (a name the models split in two)."""
+    line = _line(line_id)
+    try:
+        line = services.merge_tokens(line, _data(request).get("index"), request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response(
+        {"line": services.line_item(line), "counts": services.mutation_counts(_page(line.page_id), line)}
+    )
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def line_delete_word(request: Request, line_id: int) -> Response:
+    """Remove one stray word; removing a line's only word deletes the line (`deleted_id`)."""
+    line = _line(line_id)
+    page_id = line.page_id
+    try:
+        result = services.delete_token(line, _data(request).get("index"), request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    page = _page(page_id)
+    if result["line"] is None:
+        return Response({"deleted_id": result["deleted_line_id"], "counts": services.mutation_counts(page)})
+    return Response(
+        {"line": services.line_item(result["line"]), "counts": services.mutation_counts(page, result["line"])}
+    )
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
 def line_delete(request: Request, line_id: int) -> Response:
     """Delete a line (undo brings it back)."""
     line = _line(line_id)

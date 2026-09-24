@@ -174,7 +174,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
           {# actionable readings popover: rows only for the readings that exist, key hints 1/2/3, a correction input #}
           <div class="rv-pop" x-show="pop.open && focused" x-cloak :style="pop.style" role="dialog" aria-label="قراءات الكلمة" @mousedown.stop @keydown.escape.stop.prevent="closeTop()">
-            <div class="rv-pop-title" x-text="canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة'"></div>
+            <div class="rv-pop-title" x-text="focused && focused.conf === 'low' ? (canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة') : 'الكلمة'"></div>
             <template x-for="opt in options()" :key="opt.choice">
               <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
                 <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
@@ -183,6 +183,26 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
               </button>
             </template>
             <p class="rv-pop-note" x-show="focused && focused.digit">رقم: تحقّق منه على الصورة</p>
+            {# D31: a word the models split in two can be merged back; a stray letter or number can be removed #}
+            <template x-if="editable">
+              <div class="rv-word-actions" role="group" aria-label="إجراءات الكلمة">
+                <div class="rv-pop-sep" aria-hidden="true" x-show="options().length"></div>
+                <button type="button" class="rv-act" x-show="wordActions().next" @click="mergeWord(1)" title="دمج مع الكلمة التالية (Alt+←)">
+                  <span class="rv-act-label">دمج مع التالية</span>
+                  <bdi class="rv-act-preview" x-text="mergePreview(1)"></bdi>
+                  <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd></span>
+                </button>
+                <button type="button" class="rv-act" x-show="wordActions().prev" @click="mergeWord(-1)" title="دمج مع الكلمة السابقة (Alt+→)">
+                  <span class="rv-act-label">دمج مع السابقة</span>
+                  <bdi class="rv-act-preview" x-text="mergePreview(-1)"></bdi>
+                  <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></span>
+                </button>
+                <button type="button" class="rv-act rv-act-danger" @click="deleteWord()" title="حذف الكلمة (⌫)">
+                  <span class="rv-act-label">حذف الكلمة</span>
+                  <span class="rv-act-keys"><kbd class="kbd">⌫</kbd></span>
+                </button>
+              </div>
+            </template>
             <template x-if="editable">
               <form class="rv-typed" @submit.prevent="submitTyped()">
                 <div class="rv-pop-sep" aria-hidden="true"></div>
@@ -322,8 +342,11 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">Shift</kbd><kbd class="kbd">Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
         <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
+        <dt><span class="meta">نقرة على كلمة</span></dt><dd>قائمة الكلمة: القراءات، الدمج، الحذف، التصحيح</dd>
         <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو إلغاء التحرير</dd>
+        <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd> / <kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>
+        <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة</dd>
         <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
         <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">Enter</kbd></dt><dd>إدراج سطر بعد السطر الحالي</dd>
         <dt><kbd class="kbd">⌘</kbd><kbd class="kbd">Z</kbd></dt><dd>تراجع</dd>

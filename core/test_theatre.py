@@ -501,6 +501,13 @@ const gp = D.layout(para).groups[0];
 out.layPara = { fs: gp.fsCw, hasScale: gp.lines.some((l) => 'scale' in l),
   lines: gp.lines.map((l) => ({ shape: l.shape, fit: l.fit, lx0: +l.lx0.toFixed(4), lx1: +l.lx1.toFixed(4), ws: l.ws, sx: l.sx, r: l.r })) };
 out.layParaHeightFs = 0.78 * 0.03 * HW;
+// D31: a paragraph's first line stays flush left with its indent; little text → end-aligned; long text uses the indent
+const indentPage = { width: W, height: H, text_state: 'final', median_line_h: 0.03, lines: [
+  { region_kind: 'body', bbox: [0.15, 0.10, 0.83, 0.13], tokens: toks('كلمة كلمة') },
+  ...Array.from({ length: 5 }, (_, k) => ({ region_kind: 'body', bbox: [0.15, 0.15 + 0.05 * k, 0.85, 0.18 + 0.05 * k], tokens: toks(long) })),
+  { region_kind: 'body', bbox: [0.15, 0.45, 0.80, 0.48], tokens: toks(long + ' كلمة') },
+] };
+out.layIndent = D.layout(indentPage).groups[0].lines.map((l) => ({ shape: l.shape, fit: l.fit, lx0: +l.lx0.toFixed(4), lx1: +l.lx1.toFixed(4) }));
 out.layParaSpace = (50 * gp.fsCw) / 100; // one space at the group size (the harness measures 50 per char)
 const six = 'كلمة كلمة كلمة كلمة كلمة كلمة';
 const bookBase = { width: W, height: H, text_state: 'final', median_line_h: 0.03,
@@ -771,7 +778,7 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     lines = para["lines"]
     assert para["hasScale"] is False  # no per-line font size any more
     assert [ln["fit"] for ln in lines] == ["center", "justify"] + ["justify"] * 6 + ["start", "over", "tight"]
-    assert [ln["shape"] for ln in lines] == ["center"] + ["full"] * 7 + ["short", "full", "full"]
+    assert [ln["shape"] for ln in lines] == ["center", "indent"] + ["full"] * 6 + ["short", "full", "full"]
     # jittered full lines snap to one width: the paragraph's end edge (left) and start edge (right)
     assert {(ln["lx0"], ln["lx1"]) for ln in lines[2:8]} == {(0.15, 0.85)}
     assert (lines[1]["lx0"], lines[1]["lx1"]) == (0.15, 0.82)  # the indented first line keeps its indent
@@ -785,6 +792,12 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert abs(lines[10]["ws"]) <= 0.5 * out["layParaSpace"] + 1e-9
     # two lines merged: spaces at their limit, condensed to 90 % and clipped with a fade
     assert lines[9]["sx"] == 0.9 and abs(abs(lines[9]["ws"]) - 0.5 * out["layParaSpace"]) < 1e-5
+    # D31: a paragraph's first line keeps its printed indent and stays flush left; with little text it is
+    # end-aligned (never hanging from the right); when its text needs the room it grows into the indent
+    indent = out["layIndent"]
+    assert indent[0] == {"shape": "indent", "fit": "end", "lx0": 0.15, "lx1": 0.83}
+    assert all(ln == {"shape": "full", "fit": "justify", "lx0": 0.15, "lx1": 0.85} for ln in indent[1:6])
+    assert indent[6] == {"shape": "indent", "fit": "tight", "lx0": 0.15, "lx1": 0.85}
     # the book's typical line height sets the size when the page agrees within 20 %, else the page's own
     book = out["layBook"]
     assert book["own"] == round(0.78 * 0.03 * 1.5, 5)

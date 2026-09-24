@@ -130,6 +130,8 @@ def _config() -> dict:
             "resolve": "/api/lines/__id__/resolve/",
             "edit": "/api/lines/__id__/edit/",
             "delete": "/api/lines/__id__/delete/",
+            "merge": "/api/lines/__id__/merge/",
+            "delete_word": "/api/lines/__id__/delete-word/",
             "insert": "/api/pages/7/lines/",
             "undo": "/api/pages/7/undo/",
             "approve": "/api/pages/7/approve/",
@@ -329,6 +331,44 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   f.panTo([100, 1400, 200, 1430]);  // bottom word is off-pane at fit width -> sheet glides up to centre it
   const k = f.sheetW / f.image.width;
   out.fitWidthPan = { y: f.zoom.y, wordCentreOnPane: 1415 * k + f.zoom.y };
+  // D31: any word opens the popover; merge with the next / previous word; delete a stray word
+  const m = reg.reviewScreen(clone(config)); m.init();
+  m.onTokClick(m.lines[1], 1); // «الكتاب»: a confident word
+  out.wordPop = { open: m.pop.open, options: m.options().length, acts: m.wordActions(), next: m.mergePreview(1), prev: m.mergePreview(-1) };
+  const mergedLine = clone(config.lines[1]);
+  mergedLine.tokens = [mergedLine.tokens[0], { t: 'الكتابحكاية', alt: null, tess: null, conf: 'high', digit: false, bbox: [620, 170, 890, 230], res: 'typed' }];
+  globalThis.fetch = reply(200, { line: mergedLine, counts: { line_n_low: 1, page_unresolved: 4, page_low_total: 5, book_unresolved_total: 380 } });
+  calls.length = 0;
+  const mp = m.mergeWord(1);
+  out.mergeOptimistic = { words: m.lines[1].tokens.map((t) => t.t), bbox: m.lines[1].tokens[1].bbox, text: m.lines[1].text, focus: clone(m.focus), popOpen: m.pop.open };
+  await mp;
+  out.mergeCall = calls.filter((x) => x[0] === 'POST').pop();
+  // a failed merge restores both words and arms the retry
+  m.focusWord({ lineId: 51, index: 0 });
+  const before51 = JSON.stringify(m.lines[0].tokens.map((t) => t.t));
+  globalThis.fetch = reply(500, { message: 'تعذّر' });
+  await m.mergeWord(1);
+  out.mergeRolledBack = { same: JSON.stringify(m.lines[0].tokens.map((t) => t.t)) === before51, save: m.save.state };
+  // delete a word: it goes at once and the undo toast offers it back; a line's only word removes the line
+  m.save.state = 'idle';
+  m.focusWord({ lineId: 53, index: 2 });
+  const delLine = clone(config.lines[2]); delLine.tokens = delLine.tokens.slice(0, 2);
+  globalThis.fetch = reply(200, { line: delLine, counts: { line_n_low: 1, page_unresolved: 3, page_low_total: 4, book_unresolved_total: 379 } });
+  calls.length = 0;
+  await m.deleteWord();
+  out.deleted = { words: m.lines[2].tokens.map((t) => t.t), toast: m.undoToast && m.undoToast.message, call: calls.filter((x) => x[0] === 'POST').pop() };
+  m.lines[1].tokens = [m.lines[1].tokens[0]];
+  m.focusWord({ lineId: 52, index: 0 });
+  globalThis.fetch = reply(200, { deleted_id: 52, counts: { line_n_low: 0, page_unresolved: 2, page_low_total: 3, book_unresolved_total: 378 } });
+  calls.length = 0;
+  await m.deleteWord();
+  out.deletedLine = { ids: m.lines.map((l) => l.id), call: calls.filter((x) => x[0] === 'POST').pop()[1] };
+  out.keysD31 = {
+    mergeNext: ka({ key: 'ArrowLeft', altKey: true }, ctx), mergePrev: ka({ key: 'ArrowRight', altKey: true }, ctx),
+    del: ka({ key: 'Backspace' }, ctx), del2: ka({ key: 'Delete' }, ctx),
+    delUnfocused: ka({ key: 'Backspace' }, { ...ctx, focused: false }), delInField: ka({ key: 'Backspace' }, { ...ctx, inField: true }),
+    altArrowUnfocused: ka({ key: 'ArrowLeft', altKey: true }, { ...ctx, focused: false }),
+  };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -350,6 +390,37 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     out = json.loads(run.stdout.strip().splitlines()[-1])
 
     assert out["bar"] == {"number": 3, "total": 120, "resolved": 1, "lowTotal": 5, "canApprove": True}
+    # D31: a confident word opens the popover with merge / delete (no readings rows)
+    assert out["wordPop"] == {
+        "open": True,
+        "options": 0,
+        "acts": {"next": True, "prev": True, "del": True},
+        "next": "الكتابحكاية",
+        "prev": "وَفِيالكتاب",
+    }
+    mo = out["mergeOptimistic"]
+    assert mo["words"] == ["وَفِي", "الكتابحكاية"] and mo["bbox"] == [620, 170, 890, 230]
+    assert (
+        mo["text"] == "وَفِي الكتابحكاية"
+        and mo["focus"] == {"lineId": 52, "index": 1}
+        and mo["popOpen"] is False
+    )
+    assert out["mergeCall"][1] == "/api/lines/52/merge/" and out["mergeCall"][2] == {"index": 1}
+    assert out["mergeRolledBack"] == {"same": True, "save": "error"}
+    assert out["deleted"]["words"] == ["(1)", "انظر"] and out["deleted"]["toast"] == "حُذفت الكلمة"
+    assert out["deleted"]["call"][1] == "/api/lines/53/delete-word/" and out["deleted"]["call"][2] == {
+        "index": 2
+    }
+    assert out["deletedLine"] == {"ids": [51, 53], "call": "/api/lines/52/delete/"}
+    assert out["keysD31"] == {
+        "mergeNext": "mergeNext",
+        "mergePrev": "mergePrev",
+        "del": "deleteWord",
+        "del2": "deleteWord",
+        "delUnfocused": None,
+        "delInField": None,
+        "altArrowUnfocused": None,
+    }
     # fit height is the default; the whole page height fits the pane, the sheet is centred horizontally
     assert out["fitDefault"] == "height"
     fh = out["fitHeight"]
@@ -438,3 +509,20 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     assert keys["zoom"] == ["zoomIn", "zoomOut", "zoomReset"]
     assert keys["inField"] is None and keys["escInField"] == "close"
     assert out["copy"] == "قال الأمير في سنة 1966\nوَفِي الكتاب حكاية\n\n(1) انظر المصدر"
+
+
+def test_review_popover_offers_merge_and_delete_for_any_word():
+    """D31: the word popover carries merge with the next / previous word (with a preview) and delete."""
+    body = _render()
+    assert 'class="rv-word-actions"' in body and 'aria-label="إجراءات الكلمة"' in body
+    assert "mergeWord(1)" in body and "mergeWord(-1)" in body and "deleteWord()" in body
+    assert (
+        "mergePreview(1)" in body
+        and "دمج مع التالية" in body
+        and "دمج مع السابقة" in body
+        and "حذف الكلمة" in body
+    )
+    # the shortcut sheet lists the new keys
+    assert (
+        "دمج الكلمة مع التالية / السابقة" in body and "قائمة الكلمة: القراءات، الدمج، الحذف، التصحيح" in body
+    )

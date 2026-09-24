@@ -174,3 +174,14 @@ horizontal condense down to 90 %, then an end fade. Line edges within 3 % of the
 paragraph's shared edge; indented first lines, headings and short last lines keep their shape. The scan keeps
 the true boxes. Across pages, the book's median line height (`book_line_h_px` in `api:book_sheets`) sets the
 size when a page agrees within ±20 %. Spec: `docs/DASHBOARD_SPEC.md` §4.6.
+
+## D31 — Paragraph first lines keep their indent; reviewers can merge and delete words (2026-09-24)
+Owner feedback. (1) On the dashboard, a paragraph's first line is detected by a finer start-edge tolerance
+(1.2 % instead of 3 %, so a small printed indent is not snapped away); it keeps its indent and stays flush with
+the paragraph's left edge: justified within its indented measure, end-aligned when its text is short (never
+hanging from the right), and allowed to grow into the indent when its text needs the room. (2) The models
+sometimes split a name or place in two («هير ودوت»): any word's menu in the review screen offers merging it
+with the next or previous word (union of both boxes, a reviewer decision), with Alt+ArrowLeft / Alt+ArrowRight.
+(3) A stray letter or number the OCR added can be removed from the menu or with Backspace / Delete. Both new
+actions are `LineRevision` entries (`merge`, `drop_word`), so undo restores the words with their boxes and
+readings. The word menu now opens for every word on an editable page, not only uncertain ones.

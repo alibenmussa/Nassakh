@@ -47,7 +47,8 @@
   const SKELETON_WIDTHS = [100, 100, 92, 100, 84, 100, 96, 100, 88, 100, 100, 72, 100, 48];
   const DEFAULT_BODY = [0.12, 0.10, 0.88, 0.90];
   // §4.7 one type size per text group, paragraph edges shared, lines fitted by word spacing (D30)
-  const SNAP_TOL = 0.03; // line edges within 3 % of the text width share the paragraph edge
+  const SNAP_TOL = 0.03; // line edges within 3 % of the text width share the paragraph edge…
+  const SNAP_TOL_START = 0.012; // …but the start edge (right) snaps only within 1.2 %, so a paragraph indent survives
   const FIT_Q = 0.1; // the group's size lets 90 % of its full lines fit their measure at natural spacing…
   const FIT_FLOOR = 0.75; // …but never drops below 75 % of the size the printed line height gives
   const FIT_OUTLIER = 0.8; // a line needing < 80 % of the group's median size (merged lines, extra words) does not set it
@@ -593,14 +594,16 @@
   }
 
   // Snap a measured line to the paragraph edges (L = end edge on the left, R = start edge on the right,
-  // RTL) and classify it: full (reaches the measure: justified; an indented first line keeps its indent),
-  // center (inset on both sides about equally: a heading), short (ends early: a paragraph's last line).
-  function snapLine(r, L, R, tol) {
+  // RTL) and classify it: full (reaches the measure: justified), indent (reaches the measure but starts
+  // inset: a paragraph's first line, flush left with its printed indent), center (inset on both sides
+  // about equally: a heading), short (ends early: a paragraph's last line).
+  function snapLine(r, L, R, tol, tolStart) {
     const atEnd = Math.abs(r.lx0 - L) <= tol;
-    const atStart = Math.abs(r.lx1 - R) <= tol;
+    const atStart = Math.abs(r.lx1 - R) <= tolStart;
     if (atEnd) r.lx0 = L;
     if (atStart) r.lx1 = R;
-    if (atEnd || r.lx0 < L) { r.shape = 'full'; return; }
+    // reaches the measure: justified; one inset at its start (right) is a paragraph's first line (D31)
+    if (atEnd || r.lx0 < L) { r.shape = !atStart && r.lx1 < R ? 'indent' : 'full'; return; }
     if (!atStart && r.lx1 < R) {
       const inEnd = r.lx0 - L;
       const inStart = R - r.lx1;
@@ -744,11 +747,12 @@
         const bx0 = Math.min(...boxed.map((r) => r.lx0));
         const bx1 = Math.max(...boxed.map((r) => r.lx1));
         const tol = SNAP_TOL * Math.max(bx1 - bx0, 0.05);
+        const tolStart = SNAP_TOL_START * Math.max(bx1 - bx0, 0.05);
         const domL = dominantEdge(boxed.map((r) => r.lx0), tol, false);
-        const domR = dominantEdge(boxed.map((r) => r.lx1), tol, true);
+        const domR = dominantEdge(boxed.map((r) => r.lx1), tolStart, true);
         edgeL = domL === null ? bx0 : domL;
         edgeR = domR === null ? bx1 : domR;
-        boxed.forEach((r) => snapLine(r, edgeL, edgeR, tol));
+        boxed.forEach((r) => snapLine(r, edgeL, edgeR, tol, tolStart));
       }
 
       // one size for the group: lowered only as far as its full lines need to fit their measure
@@ -759,7 +763,7 @@
           r.spaces = Math.max(0, r.l.words.length - 1);
         });
         if (!titlePage) {
-          const caps = rows.filter((r) => r.l && r.shape === 'full').map((r) => ((r.lx1 - r.lx0) * 100) / r.w100);
+          const caps = rows.filter((r) => r.l && (r.shape === 'full' || r.shape === 'indent')).map((r) => ((r.lx1 - r.lx0) * 100) / r.w100);
           const typical = mid(caps);
           // lines far longer than their neighbours do not shrink the page: they are tightened instead
           const fitFs = quantile(caps.filter((c) => c >= FIT_OUTLIER * typical), FIT_Q);
@@ -783,6 +787,7 @@
         if (r.l) {
           const textW = (r.w100 * fs) / 100;
           if (r.shape === 'short' && textW > r.lx1 - r.lx0) r.lx0 = Math.max(edgeL, r.lx1 - textW); // a last line may run on to the measure
+          if (r.shape === 'indent' && textW > r.lx1 - r.lx0) r.lx1 = Math.min(edgeR, r.lx0 + textW); // a long first line uses its indent
           if (r.shape === 'center' && textW > r.lx1 - r.lx0) {
             const c = (r.lx0 + r.lx1) / 2;
             const w = Math.min(textW, edgeR - edgeL);
@@ -794,6 +799,7 @@
           if (ratio >= 1) {
             if (r.shape === 'short') fit = 'start';
             else if (r.shape === 'center') fit = 'center';
+            else if (r.shape === 'indent') fit = ratio >= 1.4 ? 'end' : 'justify'; // flush left, the indent stays visible
             else fit = ratio >= 1.4 ? 'start' : 'justify';
           } else {
             const over = textW - boxW;
