@@ -7,6 +7,7 @@ offsets them into gray-image coordinates when it OCRs a region crop.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -18,6 +19,14 @@ from core.arabic import normalize_ws
 from .base import OcrEngine, OcrResult
 
 log = logging.getLogger(__name__)
+
+# Word kinds for `reading_order`: Arabic letters or Arabic-Indic digits read right to left; Latin
+# letters and Western digits left to right; anything else (punctuation) is neutral.
+_RTL_CHARS = re.compile(
+    r"[\u0621-\u064A\u0660-\u0669\u066E-\u06D3\u06F0-\u06F9\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFC]"
+)
+_LTR_CHARS = re.compile(r"[A-Za-z0-9\u00C0-\u024F]")
+ORDER_TOLERANCE = 3  # pixels of overlap below which a box counts as wholly beside another
 
 
 class TesseractEngine(OcrEngine):
@@ -119,12 +128,15 @@ def parse_image_to_data(data: dict) -> tuple[str, list[dict]]:
     text_lines: list[str] = []
     previous_par: tuple[int, int] | None = None
     for key in sorted(grouped):
-        # Tesseract's word_num order is already the logical (bidi) reading order: Arabic words
-        # right to left with embedded Latin runs left to right. Sorting by x would reverse those runs.
-        words = [
-            {k: v for k, v in w.items() if k != "_order"}
-            for w in sorted(grouped[key], key=lambda w: w["_order"])
-        ]
+        # Tesseract's word_num order is the logical (bidi) reading order: Arabic words right to left
+        # with embedded Latin runs left to right (sorting by x would reverse those runs), except on
+        # the lines it lays out left to right, which `reading_order` rebuilds from the boxes.
+        words = reading_order(
+            [
+                {k: v for k, v in w.items() if k != "_order"}
+                for w in sorted(grouped[key], key=lambda w: w["_order"])
+            ]
+        )
         bbox = [
             min(w["bbox"][0] for w in words),
             min(w["bbox"][1] for w in words),
@@ -141,3 +153,78 @@ def parse_image_to_data(data: dict) -> tuple[str, list[dict]]:
     # keep paragraph breaks (double newline) but strip stray whitespace inside lines
     text = "\n".join(normalize_ws(part) if part else "" for part in text.split("\n"))
     return text.strip("\n"), lines
+
+
+def _kind(word: dict) -> str:
+    text = str(word.get("text") or "")
+    if _RTL_CHARS.search(text):
+        return "rtl"
+    return "ltr" if _LTR_CHARS.search(text) else "neutral"
+
+
+def _centre(word: dict) -> float:
+    box = word.get("bbox") or [0, 0, 0, 0]
+    return (box[0] + box[2]) / 2
+
+
+def _span(words: list[dict]) -> tuple[float, float]:
+    return min(w["bbox"][0] for w in words), max(w["bbox"][2] for w in words)
+
+
+def _wholly_right_of(later: tuple[float, float], earlier: tuple[float, float]) -> bool:
+    """True when the span `later` starts where `earlier` ends or further right (out of RTL order)."""
+    return later[0] >= earlier[1] - ORDER_TOLERANCE
+
+
+def _runs_right_to_left(words: list[dict]) -> bool:
+    """False when the line is visibly laid out left to right: a word of a right-to-left run, or a whole
+    run, lies wholly to the right of the one before it. Overlapping boxes are not an inversion."""
+    runs: list[tuple[str, list[dict]]] = []
+    for word in words:
+        kind = _kind(word)
+        if kind == "neutral":
+            continue
+        if runs and runs[-1][0] == kind:
+            runs[-1][1].append(word)
+        else:
+            runs.append((kind, [word]))
+    for kind, members in runs:
+        if kind == "rtl" and any(
+            _wholly_right_of(_span([b]), _span([a])) for a, b in zip(members, members[1:], strict=False)
+        ):
+            return False
+    spans = [_span(members) for _, members in runs]
+    return not any(_wholly_right_of(b, a) for a, b in zip(spans, spans[1:], strict=False))
+
+
+def reading_order(words: list[dict]) -> list[dict]:
+    """The words of one Tesseract line in reading order for a right-to-left page.
+
+    Tesseract's order is kept when it reads right to left: Arabic words right to left and the runs of
+    Latin words placed right to left among them. Some lines, often those where an Arabic word was
+    misread as Latin ("EX,", "Tay"), come back laid out left to right, the end of the line first;
+    those are rebuilt from the boxes: every word right to left, then each run of Latin words and
+    Western numbers (with the punctuation between them) turned back to left to right.
+    """
+    if len(words) < 2 or any(not w.get("bbox") for w in words) or _runs_right_to_left(words):
+        return words
+    visual = sorted(words, key=lambda w: -_centre(w))
+    out: list[dict] = []
+    i = 0
+    while i < len(visual):
+        if _kind(visual[i]) == "rtl":
+            out.append(visual[i])
+            i += 1
+            continue
+        j = i
+        while j < len(visual) and _kind(visual[j]) != "rtl":
+            j += 1
+        group = visual[i:j]
+        a, b = 0, len(group)
+        while a < b and _kind(group[a]) == "neutral":
+            a += 1
+        while b > a and _kind(group[b - 1]) == "neutral":
+            b -= 1
+        out.extend([*group[:a], *reversed(group[a:b]), *group[b:]])
+        i = j
+    return out

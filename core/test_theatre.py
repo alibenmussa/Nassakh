@@ -1238,16 +1238,17 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     ]
     # jump parsing: Eastern digits, whitespace, unknown numbers
     assert out["jump"] == [2, 4, None, None, None, "لا صفحة بهذا الرقم"]
-    # exactly one primary per state
+    # exactly one primary per state; once every page is reviewed an editor converts the book (Phase 4 §4.1)
+    # and a proofreader copies its text; a proofreader never gets «بدء المعالجة»
     assert out["primary"] == [
         "start",
         "start",
         "",
         "guides",
         "review",
+        "convert",
         "copy",
-        "copy",
-    ]  # a proofreader never gets «بدء المعالجة»
+    ]
     assert out["statusText"] == ["قيد المعالجة · 2 من 4 صفحة", "قيد التعرّف"]
     # the end of processing: no reload, a toast with the review entry, the primary swaps
     assert out["end"] == {

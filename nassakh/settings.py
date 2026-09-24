@@ -34,6 +34,8 @@ INSTALLED_APPS = [
     "processing",
     "ocr",
     "review",
+    "assembly",
+    "editor",
 ]
 
 MIDDLEWARE = [
@@ -181,7 +183,7 @@ LOGGING = {
         # Project apps log at INFO; the root handler prints them.
         **{
             name: {"level": "INFO", "propagate": True}
-            for name in ("core", "accounts", "books", "processing", "ocr", "review")
+            for name in ("core", "accounts", "books", "processing", "ocr", "review", "assembly", "editor")
         },
     },
 }

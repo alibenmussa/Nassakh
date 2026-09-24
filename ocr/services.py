@@ -3,13 +3,15 @@
 Flow per page (spec §6-§7):
 
     run_fast_ocr    Tesseract on every region (B&W crops) → OcrRuns with word boxes → provisional_text.
+                    Printed lines Tesseract dropped are read again one by one (`rescue_lines`).
                     Born-digital books with `use_text_layer`: the repaired text layer becomes the
                     final text at once (Tesseract still runs for geometry) and the page is finalised.
     run_full_ocr    primary and secondary Qari on the OCR-able regions (gray crops, footnotes at 2x,
                     running header / page number skipped) → OcrRuns → finalize_page.
     finalize_page   per region, picks the text from the latest runs (primary → secondary → Tesseract
                     fallback with the `ocr_fallback` flag, D16), anchors the tokens to Tesseract's
-                    lines (D12), stores Line rows, `final_text` (Western digits, D6), `ocr_done`.
+                    lines (D12), stores Line rows, `final_text` (Western digits, D6), `ocr_done`
+                    (`compose_page` builds the same result in memory without saving it).
 
 All coordinates stored on runs and lines are in gray-image pixel space.
 """
@@ -38,7 +40,7 @@ from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
 from . import chooser
-from .alignment import build_lines, word_f1
+from .alignment import build_lines, merged_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
 from .engines.pdf_text import PdfPageRef
@@ -54,6 +56,7 @@ PAGE_SCOPE = "page"
 REGION_SCOPE = "region"
 FLAG_FALLBACK = "ocr_fallback"
 FLAG_ALIGNMENT = "alignment_poor"
+FLAG_MERGED = "lines_merged"
 
 # A page-number line: only digits (Western, Arabic-Indic, Persian), dashes, dots, brackets, spaces.
 _PN_CHARS = r"\s0-9٠-٩۰-۹\-‐‑‒–—―ـ.·•…()\[\]{}﴾﴿<>«»"
@@ -385,6 +388,339 @@ def sanity_check(text: str, reference: str, looped: bool = False) -> tuple[bool,
     return True, "ok"
 
 
+# ---------------------------------------------------------------- line rescue (Tesseract stage)
+
+# Tesseract's page segmentation sometimes drops a whole printed line, most often the last line of a
+# paragraph; the primary words of that line were then appended to the line above. After a region's
+# Tesseract run, every detected line band (`Preprocess.line_boxes`, the letters' core) that no
+# Tesseract line covers, and every inked band the detector missed in a gap between Tesseract lines
+# (a short last line), is read again alone as a single line and added to the run as a `rescued` line.
+RESCUE_PSM = 7  # Tesseract "single text line"
+RESCUE_PAD = 20  # white pixels around a rescue crop
+RESCUE_COVER = 0.5  # a band is read when a Tesseract line covers at least this share of its height
+RESCUE_MIN_BAND = 0.5  # bands thinner than this share of the median detected band are slivers
+RESCUE_MIN_GAP = 0.5  # gaps thinner than this share of the median line height hold no line
+RESCUE_MIN_PEAK = 3  # an inked band in a gap needs a row this many band heights long
+RESCUE_INK_FLOOR = 0.08  # rows with more ink than this share of the band's densest row belong to it
+RESCUE_MARGIN = 0.2  # share of the line's inked height kept above and below it
+RESCUE_MAX_HEIGHT = 1.5  # a crop is at most this many median line heights tall
+# Tesseract's single-line mode returns nothing for many lines of these large scans and reads them well
+# once the core band is about this tall (measured on 80 lines of books 12, 13, 15).
+RESCUE_CORE_PX = 8
+RESCUE_MIN_SCALE = 0.3
+RESCUE_MIN_CONF = 50  # a word counts as read at this confidence with two letters or digits
+RESCUE_MIN_READ = 0.4  # share of the words that must count as read, else the band is noise
+RESCUE_MAX_BANDS = 20  # per page: keeps a page where Tesseract failed wholesale cheap
+LINE_TO_BAND = 4.0  # median Tesseract line height / median detected band height, when unknown
+_RULE_WORD = re.compile(r"^[|¦]+$")  # a vertical rule read as a word
+
+
+def _is_rescued(line: dict) -> bool:
+    return bool(line.get("rescued"))
+
+
+def _line_height(lines: list[dict]) -> float:
+    """Median height of the Tesseract lines with two words or more (0 without any)."""
+    heights = [
+        int(line["bbox"][3]) - int(line["bbox"][1])
+        for line in lines
+        if line.get("bbox") and len(line.get("words") or []) >= 2
+    ]
+    return float(np.median(heights)) if heights else 0.0
+
+
+def _in_region(band: dict, bbox: list[int]) -> bool:
+    """True when the band's vertical centre lies in `bbox` and the two overlap horizontally."""
+    cy = (band["y0"] + band["y1"]) / 2
+    return bbox[1] <= cy < bbox[3] and min(band["x1"], bbox[2]) > max(band["x0"], bbox[0])
+
+
+def _covered(band: dict, lines: list[dict]) -> bool:
+    """True when a Tesseract line covers at least `RESCUE_COVER` of the band's height."""
+    need = RESCUE_COVER * max(1, band["y1"] - band["y0"])
+    for line in lines:
+        box = line.get("bbox")
+        if box and min(band["y1"], box[3]) - max(band["y0"], box[1]) >= need:
+            return True
+    return False
+
+
+def _ink_profile(bw: np.ndarray, bbox: list[int]) -> np.ndarray:
+    """Dark pixels per row of `bw` between the columns of `bbox` (rows of the whole image)."""
+    return (bw[:, int(bbox[0]) : int(bbox[2])] < 128).sum(axis=1)
+
+
+def _row_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """`[start, end)` of every run of True in a 1-D mask."""
+    padded = np.concatenate([[False], mask.astype(bool), [False]])
+    edges = np.flatnonzero(padded[1:] != padded[:-1])
+    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2], strict=True)]
+
+
+def _gaps(lines: list[dict], bbox: list[int], min_gap: float) -> list[tuple[int, int]]:
+    """Vertical gaps of at least `min_gap` pixels between the Tesseract lines of a region (and its edges)."""
+    spans = sorted((int(line["bbox"][1]), int(line["bbox"][3])) for line in lines if line.get("bbox"))
+    out: list[tuple[int, int]] = []
+    edge = int(bbox[1])
+    for top, bottom in spans:
+        if top - edge >= min_gap:
+            out.append((edge, top))
+        edge = max(edge, bottom)
+    if int(bbox[3]) - edge >= min_gap:
+        out.append((edge, int(bbox[3])))
+    return out
+
+
+def _gap_bands(
+    profile: np.ndarray, gaps: list[tuple[int, int]], band_h: float, bbox: list[int]
+) -> list[dict]:
+    """Inked bands the projection detector missed (a short line has too little ink for its threshold).
+
+    In each gap, rows darker than the gap's own background (vertical rules, specks) form runs; a run
+    at least `RESCUE_MIN_BAND` band heights tall whose densest row is at least `RESCUE_MIN_PEAK` band
+    heights long is a line, and its rows of at least half that density are its core band.
+    """
+    out: list[dict] = []
+    for g0, g1 in gaps:
+        seg = profile[g0:g1]
+        if seg.size == 0:
+            continue
+        floor = 2 * float(np.median(seg)) + 2
+        for a, b in _row_runs(seg > floor):
+            peak = float(seg[a:b].max())
+            if b - a < RESCUE_MIN_BAND * band_h or peak < RESCUE_MIN_PEAK * band_h:
+                continue
+            core = np.flatnonzero(seg[a:b] >= peak / 2)
+            out.append(
+                {
+                    "x0": int(bbox[0]),
+                    "y0": g0 + a + int(core[0]),
+                    "x1": int(bbox[2]),
+                    "y1": g0 + a + int(core[-1]) + 1,
+                }
+            )
+    return out
+
+
+def rescue_candidates(
+    bands: list[dict], lines: list[dict], bbox: list[int], profile: np.ndarray, band_h: float, line_h: float
+) -> list[tuple[dict, tuple[int, int]]]:
+    """Printed lines of a region that none of its Tesseract `lines` covers: `(core band, crop rows)`.
+
+    Detected bands (`Preprocess.line_boxes`) in the region count unless they are slivers. The rows
+    they will be read from (`_crop_rows`) are then treated like Tesseract lines, and every gap left
+    is searched for inked bands the detector missed (`_gap_bands`), so a short last line right
+    after a lost full line is found too. Sorted top to bottom.
+    """
+    found: list[tuple[dict, tuple[int, int]]] = []
+    spans = list(lines)
+
+    def claim(band: dict) -> None:
+        rows = _crop_rows(profile, band, spans, bbox, line_h)
+        if rows[1] - rows[0] >= RESCUE_MIN_BAND * band_h:
+            found.append((band, rows))
+            spans.append({"bbox": [int(bbox[0]), rows[0], int(bbox[2]), rows[1]]})
+
+    detected = [
+        b
+        for b in bands
+        if _in_region(b, bbox) and b["y1"] - b["y0"] >= RESCUE_MIN_BAND * band_h and not _covered(b, lines)
+    ]
+    for band in sorted(detected, key=lambda b: b["y0"]):
+        claim(band)
+    for band in _gap_bands(profile, _gaps(spans, bbox, RESCUE_MIN_GAP * line_h), band_h, bbox):
+        claim(band)
+    return sorted(found, key=lambda c: c[0]["y0"])
+
+
+def _crop_rows(
+    profile: np.ndarray, band: dict, lines: list[dict], bbox: list[int], line_h: float
+) -> tuple[int, int]:
+    """Rows `[y0, y1)` of the printed line around a core band, between the neighbouring Tesseract lines.
+
+    The line is the band grown while the rows keep some ink (`RESCUE_INK_FLOOR` of its densest row),
+    plus a margin; it never reaches into a Tesseract line above or below and is at most
+    `RESCUE_MAX_HEIGHT` median lines tall. Tesseract's single-line mode needs this tight crop: with a
+    band of white above or below the text it often returns nothing.
+    """
+    cy = (band["y0"] + band["y1"]) / 2
+    lo, hi = int(bbox[1]), int(bbox[3])
+    for line in lines:
+        box = line.get("bbox")
+        if not box:
+            continue
+        if (box[1] + box[3]) / 2 < cy:
+            lo = max(lo, int(box[3]))
+        else:
+            hi = min(hi, int(box[1]))
+    y0, y1 = max(lo, int(band["y0"])), min(hi, int(band["y1"]))
+    if y1 <= y0:
+        return y0, y0
+    floor = max(2.0, RESCUE_INK_FLOOR * float(profile[y0:y1].max()))
+    while y0 > lo and profile[y0 - 1] > floor:
+        y0 -= 1
+    while y1 < hi and profile[y1] > floor:
+        y1 += 1
+    margin = max(2, int(round(RESCUE_MARGIN * (y1 - y0))))
+    y0, y1 = max(lo, y0 - margin), min(hi, y1 + margin)
+    if line_h and y1 - y0 > RESCUE_MAX_HEIGHT * line_h:
+        half = RESCUE_MAX_HEIGHT * line_h / 2
+        y0, y1 = max(y0, int(cy - half)), min(y1, int(cy + half))
+    return y0, y1
+
+
+def reads_as_text(words: list[dict]) -> bool:
+    """Does a single-line reading hold text rather than specks read as "ee" or "TT"?
+
+    A word counts as read with two letters or digits at `RESCUE_MIN_CONF` confidence or more. At least
+    `RESCUE_MIN_READ` of the words must count, and either one of them is Arabic or two of them
+    count (a lone Latin word is how Tesseract reads a smudge).
+    """
+    read = [
+        str(w.get("text") or "")
+        for w in words
+        if float(w.get("conf", -1)) >= RESCUE_MIN_CONF
+        and sum(1 for ch in str(w.get("text") or "") if ch.isalnum()) >= 2
+    ]
+    if not read or len(read) < RESCUE_MIN_READ * len(words):
+        return False
+    return len(read) >= 2 or bool(_ARABIC_LETTER.search(read[0]))
+
+
+def _read_band(
+    engine: OcrEngine,
+    bw: np.ndarray,
+    rows: tuple[int, int],
+    band: dict,
+    bbox: list[int],
+    tmpdir: Path,
+    stem: str,
+) -> dict | None:
+    """Read rows `rows` of the region `bbox` as one line (psm 7); the line in gray-image space, or None.
+
+    The crop is padded with white and scaled so the core band is about `RESCUE_CORE_PX` tall. Words
+    that are only a vertical rule are dropped; a reading that is not text (`reads_as_text`) gives None.
+    """
+    y0, y1 = rows
+    x0, x1 = int(bbox[0]), int(bbox[2])
+    part = np.pad(bw[y0:y1, x0:x1], RESCUE_PAD, mode="constant", constant_values=255)
+    scale = min(1.0, max(RESCUE_MIN_SCALE, RESCUE_CORE_PX / max(1, band["y1"] - band["y0"])))
+    if scale < 1.0:
+        img = Image.fromarray(part)
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
+        part = np.asarray(img, dtype=np.uint8)
+    path = _save_temp(part, tmpdir, stem)
+    result = engine.recognize(path, None, hints={"psm": RESCUE_PSM})
+    found = _offset_lines((result.extra or {}).get("lines") or [], x0 - RESCUE_PAD, y0 - RESCUE_PAD, scale)
+    words = []
+    for line in found:
+        for word in line.get("words") or []:
+            text = str(word.get("text") or "").strip()
+            box = word.get("bbox")
+            if not text or not box or _RULE_WORD.match(text):
+                continue
+            box = [max(x0, box[0]), max(y0, box[1]), min(x1, box[2]), min(y1, box[3])]
+            words.append({**word, "text": text, "bbox": box})
+    if not words or not reads_as_text(words):
+        return None
+    line_box = [
+        min(w["bbox"][0] for w in words),
+        min(w["bbox"][1] for w in words),
+        max(w["bbox"][2] for w in words),
+        max(w["bbox"][3] for w in words),
+    ]
+    return {"bbox": line_box, "words": words, "rescued": True}
+
+
+def _insert_line(lines: list[dict], line: dict) -> list[dict]:
+    """`lines` with `line` inserted before the first line whose centre lies below its centre."""
+    cy = (line["bbox"][1] + line["bbox"][3]) / 2
+    for k, other in enumerate(lines):
+        box = other.get("bbox")
+        if box and (box[1] + box[3]) / 2 > cy:
+            return [*lines[:k], line, *lines[k:]]
+    return [*lines, line]
+
+
+def lines_text(lines: list[dict]) -> str:
+    """A Tesseract run's parsed text from its lines: one text line per line (as `parse_image_to_data`)."""
+    return normalize_ws(
+        "\n".join(" ".join(str(w.get("text") or "") for w in line.get("words") or []) for line in lines)
+    )
+
+
+def rescue_lines(
+    pre: Preprocess,
+    bw: np.ndarray,
+    runs: list[tuple[Target, OcrRun]],
+    engine_name: str,
+    tmpdir: Path,
+    save: bool = True,
+) -> int:
+    """Read the printed lines Tesseract dropped from OCR-able regions and add them to their runs.
+
+    For every successful run of a region that is not a running header or page number, the lines a
+    previous rescue added are dropped, then each candidate of `rescue_candidates` is cropped to its
+    rows, read as a single line (`_read_band`) and, when it reads as text, inserted into
+    `params["lines"]` in reading position with `"rescued": true`; `parsed_text` is rebuilt from the
+    lines when they changed and `params["rescue"]` records what was tried. At most
+    `RESCUE_MAX_BANDS` bands are read per call. Saves the runs unless `save` is False (dry runs).
+    Returns the number of lines added.
+    """
+    usable = [
+        (target, run)
+        for target, run in runs
+        if run.status == OcrRun.Status.OK and target.kind not in SKIPPED_KINDS
+    ]
+    if not usable:
+        return 0
+    bands = [b for b in (pre.line_boxes or []) if all(k in b for k in ("x0", "y0", "x1", "y1"))]
+    band_h = (
+        float(np.median([b["y1"] - b["y0"] for b in bands])) if bands else float(pre.median_line_height or 0)
+    )
+    base = {
+        id(run): [ln for ln in (run.params.get("lines") or []) if not _is_rescued(ln)] for _, run in usable
+    }
+    line_h = _line_height([ln for lines in base.values() for ln in lines]) or LINE_TO_BAND * band_h
+    engine: OcrEngine | None = None
+    budget = RESCUE_MAX_BANDS
+    added = 0
+    for n, (target, run) in enumerate(usable):
+        before = list(run.params.get("lines") or [])
+        lines = base[id(run)]
+        tried = 0
+        new_lines = list(lines)
+        if band_h and line_h:
+            profile = _ink_profile(bw, target.bbox)
+            candidates = rescue_candidates(bands, lines, target.bbox, profile, band_h, line_h)
+            for c, (band, rows) in enumerate(candidates):
+                if budget <= 0:
+                    log.info("page %s: line rescue stopped after %d bands", pre.page_id, RESCUE_MAX_BANDS)
+                    break
+                budget -= 1
+                tried += 1
+                try:
+                    engine = engine or registry.get_engine(engine_name)
+                    line = _read_band(engine, bw, rows, band, target.bbox, tmpdir, f"rescue-{n}-{c}")
+                except Exception:  # noqa: BLE001 - the rescue is a bonus: never fail the stage for it
+                    log.exception("page %s: line rescue failed on rows %s", pre.page_id, rows)
+                    continue
+                if line is not None:
+                    new_lines = _insert_line(new_lines, line)
+                    added += 1
+        run.params["lines"] = new_lines
+        run.params["rescue"] = {"tried": tried, "added": sum(1 for ln in new_lines if _is_rescued(ln))}
+        fields = ["params"]
+        if new_lines != before:
+            run.parsed_text = lines_text(new_lines)
+            fields.append("parsed_text")
+        if save:
+            run.save(update_fields=fields)
+    if added:
+        log.info("page %s: %d line(s) Tesseract dropped were rescued", pre.page_id, added)
+    return added
+
+
 # ---------------------------------------------------------------- fast OCR (default queue)
 
 TESSERACT_HEADLINE = "تعذّر تشغيل Tesseract على هذه الصفحة؛ تحقّق من تثبيت tesseract وحزمة اللغة العربية."
@@ -402,7 +738,8 @@ def _load_fast_engine(name: str) -> None:
 def run_fast_ocr(page: Page) -> None:
     """Tesseract on every region of the B&W image (page-level without regions); provisional text.
 
-    Every region gets an OcrRun with word/line boxes in `params["lines"]`. `provisional_text` joins
+    Every region gets an OcrRun with word/line boxes in `params["lines"]`; printed lines Tesseract
+    dropped are then read one by one and added to those lines (`rescue_lines`). `provisional_text` joins
     the body-like regions in order, then a blank line, then the footnotes; running header and page
     number are omitted, and a leading / trailing line that is only a page number is dropped
     (`strip_page_number_lines`). The page-number region's digits (else the dropped line's) are
@@ -416,9 +753,8 @@ def run_fast_ocr(page: Page) -> None:
     bw = _load_field_image(pre.bw_image, "بالأبيض والأسود")
     _load_fast_engine(fast)
     targets = _targets(page, bw.shape, ocr_only=False)
-    texts: list[tuple[str, str]] = []
+    done: list[tuple[Target, OcrRun]] = []
     failures: list[str] = []
-    printed = ""
     is_final = page.text_state == Page.TextState.FINAL
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-fast-") as tmp:
         tmpdir = Path(tmp)
@@ -444,12 +780,17 @@ def run_fast_ocr(page: Page) -> None:
             if run.status != OcrRun.Status.OK:
                 failures.append(run.error)
                 continue
-            if target.kind == Region.Kind.PAGE_NUMBER:
-                printed = printed or printed_number_of(run.parsed_text)
-            elif target.kind not in SKIPPED_KINDS:
-                texts.append((target.kind, run.parsed_text))
-    if failures and len(failures) == len(targets):
-        raise OcrError(f"{TESSERACT_HEADLINE}\n{failures[0]}")
+            done.append((target, run))
+        if failures and len(failures) == len(targets):
+            raise OcrError(f"{TESSERACT_HEADLINE}\n{failures[0]}")
+        rescue_lines(pre, bw, done, fast, tmpdir)
+    printed = ""
+    texts: list[tuple[str, str]] = []
+    for target, run in done:
+        if target.kind == Region.Kind.PAGE_NUMBER:
+            printed = printed or printed_number_of(run.parsed_text)
+        elif target.kind not in SKIPPED_KINDS:
+            texts.append((target.kind, run.parsed_text))
 
     has_region = any(target.kind == Region.Kind.PAGE_NUMBER for target in targets)
     provisional, stripped = strip_page_number_lines(
@@ -591,6 +932,7 @@ def run_full_ocr(page: Page) -> None:
                     _load_fast_engine(fast)
                 bw_path = _save_temp(_crop_image(bw, target.bbox), tmpdir, f"bw-{i}-{target.kind}")
                 tess = run_engine(page, fast, target, bw_path, "bw")
+                rescue_lines(pre, bw, [(target, tess)], fast, tmpdir)
             reference = tess.parsed_text if tess.status == OcrRun.Status.OK else ""
 
             scale = upscale if target.kind in FOOTNOTE_KINDS and upscale > 1 else 1
@@ -725,16 +1067,26 @@ def select_text(
     return reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source
 
 
-def _collect_region_texts(page: Page) -> list[RegionText]:
-    """Selected text of every OCR-able target (or the text-layer page) with its Tesseract lines."""
+def _collect_region_texts(page: Page, tesseract: dict[int | None, OcrRun] | None = None) -> list[RegionText]:
+    """Selected text of every OCR-able target (or the text-layer page) with its Tesseract lines.
+
+    `tesseract` maps a region id (None for the page-level target) to the Tesseract run to use in
+    place of the latest stored one (a dry run's rescued runs).
+    """
     primary, secondary, fast = engine_names()
     h, w = _page_shape(page)
+    override = tesseract or {}
+
+    def tesseract_of(target: Target, runs: dict[str, OcrRun]) -> OcrRun | None:
+        key = target.region.pk if target.region is not None else None
+        return override[key] if key in override else runs.get(fast)
+
     if uses_text_layer(page):
         pdf_run = _latest_text_layer_run(page)
         if pdf_run is not None:
             tess_lines: list[dict] = []
             for target in _targets(page, (h, w), ocr_only=False):
-                tess = _latest_runs(page, target).get(fast)
+                tess = tesseract_of(target, _latest_runs(page, target))
                 if tess is not None and tess.status == OcrRun.Status.OK:
                     tess_lines.extend(tess.params.get("lines") or [])
             page_target = Target(None, [0, 0, w, h])
@@ -747,7 +1099,7 @@ def _collect_region_texts(page: Page) -> list[RegionText]:
     out: list[RegionText] = []
     for target in _targets(page, (h, w), ocr_only=True):
         runs = _latest_runs(page, target)
-        tess = runs.get(fast)
+        tess = tesseract_of(target, runs)
         text, alt, fallback, reason, source = select_text(runs.get(primary), runs.get(secondary), tess)
         lines = (
             list(tess.params.get("lines") or [])
@@ -845,31 +1197,41 @@ def count_unresolved(tokens: list[dict]) -> int:
     return sum(1 for token in tokens or [] if is_unresolved(token))
 
 
-def finalize_page(page: Page) -> None:
-    """Build the Line rows and the final text of a page from its stored runs; mark it `ocr_done`.
+@dataclass
+class ComposedPage:
+    """A page's lines and final text built in memory from its runs (`compose_page`), not saved yet.
 
-    Low-confidence tokens with several readings go through the word-chooser hook
-    (`ocr.chooser`, D26, off by default); `Line.n_low` counts the unresolved tokens and
-    `Page.n_unresolved` their sum over the page. Review revisions recorded before this pass can no
-    longer be undone (their lines are replaced).
-
-    A page with review work (reviewed lines or an approval stamp; approved pages are refused by
-    `books.services.run_stage`, this guards a pass that was queued before) keeps its lines exactly
-    as they are: see `_keep_reviewed_lines`. Otherwise every line is replaced. `final_text` gets
-    Western digits (D6) while `Line.ocr_text` and the tokens keep the raw OCR output. Sets or clears
-    the `ocr_fallback` and `alignment_poor` flags, then refreshes the book status
-    (`ready_for_review` once every non-excluded page is done). A first or last line of the page
-    that is only a page number is dropped (no Line row, not in the text): without a page-number
-    region its digits go to `printed_number`; with one, only a line repeating the voted number is
-    dropped and the vote is never overwritten.
+    `lines` are unsaved `Line` objects; `merged` holds the orders of the lines that look like two
+    printed lines in one (`alignment.merged_lines`); `printed` is the number of a dropped
+    page-number line ('' when none) and `has_region` whether a page-number region owns the number.
     """
-    if _has_review_work(page):
-        _keep_reviewed_lines(page)
-        return
-    region_texts = _collect_region_texts(page)
+
+    region_texts: list[RegionText]
+    lines: list[Line]
+    final_text: str
+    fallback: bool
+    poor: bool
+    merged: list[int]
+    printed: str
+    has_region: bool
+    total_tokens: int
+
+
+def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> ComposedPage:
+    """Build the lines and the final text of a page from its runs without touching the database.
+
+    `region_texts` defaults to `_collect_region_texts(page)` (the latest runs); a dry run passes
+    its own. Tokens go through the word-chooser hook (`ocr.chooser`, D26, off by default). A first
+    or last line of the page that is only a page number is dropped (see `finalize_page`). A region
+    whose tokens are anchored well enough (`MIN_ANCHOR_RATIO`) reports its lines that still look
+    merged in `merged`; with poor anchoring the line split itself is a guess.
+    """
+    if region_texts is None:
+        region_texts = _collect_region_texts(page)
     new_lines: list[Line] = []
     main_parts: list[str] = []
     foot_parts: list[str] = []
+    merged: list[int] = []
     total_tokens = anchored = 0
     has_geometry = False
     order = 0
@@ -888,6 +1250,10 @@ def finalize_page(page: Page) -> None:
     dropped = {flat[i] for i in drop}
     for r, (rt, built) in enumerate(zip(region_texts, built_per_region, strict=True)):
         has_geometry = has_geometry or bool(rt.tess_lines)
+        n_tokens = sum(len(b["tokens"]) for b in built)
+        well_anchored = bool(rt.tess_lines) and n_tokens > 0
+        well_anchored = well_anchored and sum(b["n_anchored"] for b in built) >= MIN_ANCHOR_RATIO * n_tokens
+        suspect = set(merged_lines(built)) if well_anchored else set()
         texts = []
         for k, b in enumerate(built):
             if (r, k) in dropped:
@@ -910,6 +1276,8 @@ def finalize_page(page: Page) -> None:
                     n_low=count_unresolved(tokens),
                 )
             )
+            if k in suspect:
+                merged.append(order)
             order += 1
             total_tokens += len(tokens)
             anchored += b["n_anchored"]
@@ -918,8 +1286,43 @@ def finalize_page(page: Page) -> None:
     final_text = join_region_texts(
         [(PAGE_KIND, "\n".join(p for p in main_parts if p))] + [(Region.Kind.FOOTNOTE, p) for p in foot_parts]
     )
-    fallback = any(rt.fallback for rt in region_texts)
-    poor = has_geometry and total_tokens >= 10 and anchored / total_tokens < MIN_ANCHOR_RATIO
+    return ComposedPage(
+        region_texts=region_texts,
+        lines=new_lines,
+        final_text=final_text,
+        fallback=any(rt.fallback for rt in region_texts),
+        poor=has_geometry and total_tokens >= 10 and anchored / total_tokens < MIN_ANCHOR_RATIO,
+        merged=merged,
+        printed=printed,
+        has_region=has_region,
+        total_tokens=total_tokens,
+    )
+
+
+def finalize_page(page: Page) -> ComposedPage | None:
+    """Build the Line rows and the final text of a page from its stored runs; mark it `ocr_done`.
+
+    Low-confidence tokens with several readings go through the word-chooser hook
+    (`ocr.chooser`, D26, off by default); `Line.n_low` counts the unresolved tokens and
+    `Page.n_unresolved` their sum over the page. Review revisions recorded before this pass can no
+    longer be undone (their lines are replaced).
+
+    A page with review work (reviewed lines or an approval stamp; approved pages are refused by
+    `books.services.run_stage`, this guards a pass that was queued before) keeps its lines exactly
+    as they are: see `_keep_reviewed_lines`. Otherwise every line is replaced by those of
+    `compose_page`. `final_text` gets Western digits (D6) while `Line.ocr_text` and the tokens keep
+    the raw OCR output. Sets or clears the `ocr_fallback`, `alignment_poor` and `lines_merged`
+    flags, then refreshes the book status (`ready_for_review` once every non-excluded page is
+    done). A first or last line of the page that is only a page number is dropped (no Line row, not
+    in the text): without a page-number region its digits go to `printed_number`; with one, only a
+    line repeating the voted number is dropped and the vote is never overwritten. Returns what
+    `compose_page` built (None for a page whose reviewed lines were kept).
+    """
+    if _has_review_work(page):
+        _keep_reviewed_lines(page)
+        return None
+    composed = compose_page(page)
+    new_lines = composed.lines
 
     from review.models import LineRevision  # review history of the page (other app: lazy import)
 
@@ -927,15 +1330,20 @@ def finalize_page(page: Page) -> None:
         page.lines.all().delete()
         Line.objects.bulk_create(new_lines)
         LineRevision.objects.filter(page=page, undone=False).update(undone=True)
-        page.final_text = to_western_digits(final_text)
+        page.final_text = to_western_digits(composed.final_text)
         page.text_state = Page.TextState.FINAL
         page.attention_flags = _set_flags(
-            page.attention_flags, {FLAG_FALLBACK: fallback, FLAG_ALIGNMENT: poor}
+            page.attention_flags,
+            {
+                FLAG_FALLBACK: composed.fallback,
+                FLAG_ALIGNMENT: composed.poor,
+                FLAG_MERGED: bool(composed.merged),
+            },
         )
         page.n_unresolved = sum(line.n_low for line in new_lines)
         fields = ["final_text", "text_state", "attention_flags", "n_unresolved"]
-        if printed and not has_region:
-            page.printed_number = printed
+        if composed.printed and not composed.has_region:
+            page.printed_number = composed.printed
             fields.append("printed_number")
         if not page.is_excluded:
             page.status = Page.Status.OCR_DONE
@@ -945,14 +1353,16 @@ def finalize_page(page: Page) -> None:
         page.save(update_fields=fields)
     _refresh_book_status(page)
     log.info(
-        "page %s finalised: %d lines, %d tokens (%d low), fallback=%s, sources=%s",
+        "page %s finalised: %d lines, %d tokens (%d low), fallback=%s, merged=%s, sources=%s",
         page.pk,
         len(new_lines),
-        total_tokens,
+        composed.total_tokens,
         sum(line.n_low for line in new_lines),
-        fallback,
-        sorted({rt.source for rt in region_texts if rt.source}),
+        composed.fallback,
+        composed.merged,
+        sorted({rt.source for rt in composed.region_texts if rt.source}),
     )
+    return composed
 
 
 def _has_review_work(page: Page) -> bool:
@@ -991,6 +1401,104 @@ def _refresh_book_status(page: Page) -> None:
     book = Book.objects.filter(pk=page.book_id).first()
     if book is not None:
         book.refresh_status()
+
+
+# ---------------------------------------------------------------- rebuilding lines from stored runs
+
+TRAILING_MIN = 3  # a line ending with this many words without a Tesseract box is counted in reports
+
+
+def trailing_unanchored(tokens: list[dict]) -> int:
+    """Number of words at the end of a line that have no Tesseract box."""
+    count = 0
+    for token in reversed(tokens or []):
+        if token.get("bbox"):
+            break
+        count += 1
+    return count
+
+
+@dataclass
+class LineStats:
+    """Counts reported by `rebuild_page_lines` for one version of a page's lines."""
+
+    lines: int
+    trailing: int  # lines ending with TRAILING_MIN or more words without a Tesseract box
+    merged: int | None = None  # lines that look merged (`alignment.merged_lines`); unknown for stored lines
+
+    @classmethod
+    def of(cls, token_lists: list[list[dict]], merged: int | None = None) -> LineStats:
+        trailing = sum(1 for tokens in token_lists if trailing_unanchored(tokens) >= TRAILING_MIN)
+        return cls(lines=len(token_lists), trailing=trailing, merged=merged)
+
+
+@dataclass
+class RebuildResult:
+    """What `rebuild_page_lines` did to one page."""
+
+    before: LineStats
+    after: LineStats
+    rescued: int
+    lines: list[Line]  # the new lines (saved when the rebuild was saved)
+    saved: bool
+
+
+def rebuild_skip_reason(page: Page) -> str:
+    """Why `rebuild_page_lines` must leave `page` alone, or '' when it may rebuild it.
+
+    Only pages whose lines are untouched OCR output qualify: status `ocr_done`, not excluded, not
+    approved, no review revision at all (`review.LineRevision`, undone ones included), no reviewed
+    and no manually inserted line.
+    """
+    from review.models import LineRevision  # review history of the page (other app: lazy import)
+
+    if page.is_excluded:
+        return "excluded"
+    if page.status != Page.Status.OCR_DONE:
+        return f"status {page.status}"
+    if page.reviewed_at is not None:
+        return "approved"
+    if LineRevision.objects.filter(page=page).exists():
+        return "has review revisions"
+    if page.lines.filter(is_manual=True).exists():
+        return "has manual lines"
+    if page.lines.filter(is_reviewed=True).exists():
+        return "has reviewed lines"
+    return ""
+
+
+def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
+    """Re-run the line rescue on a page's stored Tesseract runs and rebuild its lines from its stored runs.
+
+    No model is called: Tesseract only reads the rescue bands (`rescue_lines`) and the lines are
+    built from the runs already stored (`compose_page`). With `save` the runs are saved and the page
+    is finalised again (`finalize_page`); without it nothing is written. Raises `OcrError` for a page
+    that `rebuild_skip_reason` refuses (callers check it first to list those pages).
+    """
+    reason = rebuild_skip_reason(page)
+    if reason:
+        raise OcrError(f"لا يمكن إعادة بناء أسطر هذه الصفحة ({reason}).")
+    pre = _preprocess_of(page)
+    bw = _load_field_image(pre.bw_image, "بالأبيض والأسود")
+    _, _, fast = engine_names()
+    before = LineStats.of([line.tokens for line in page.lines.order_by("order", "id")])
+    pairs: list[tuple[Target, OcrRun]] = []
+    for target in _targets(page, bw.shape, ocr_only=True):
+        tess = _latest_runs(page, target).get(fast)
+        if tess is not None and tess.status == OcrRun.Status.OK:
+            pairs.append((target, tess))
+    if save:
+        with transaction.atomic(), tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
+            rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp))
+            composed = finalize_page(page)
+    else:
+        with tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
+            rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp), save=False)
+        override = {target.region.pk if target.region is not None else None: run for target, run in pairs}
+        composed = compose_page(page, _collect_region_texts(page, override))
+    lines = composed.lines if composed is not None else []
+    after = LineStats.of([line.tokens for line in lines], len(composed.merged) if composed else None)
+    return RebuildResult(before=before, after=after, rescued=rescued, lines=lines, saved=save)
 
 
 # ---------------------------------------------------------------- payloads for the API / panel

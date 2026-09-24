@@ -500,7 +500,7 @@ _STATUS_RANK: dict[str, int] = {
     Page.Status.ASSEMBLED: 5,
 }
 # Attention flags written by the OCR stage (recomputed by `ocr.services.finalize_page`).
-_OCR_FLAGS: frozenset[str] = frozenset({"ocr_fallback", "alignment_poor"})
+_OCR_FLAGS: frozenset[str] = frozenset({"ocr_fallback", "alignment_poor", "lines_merged"})
 # Pipeline stage that continues a re-included page from its completed status.
 _NEXT_STAGE: dict[str, str] = {
     Page.Status.UPLOADED: "preprocess",
@@ -677,18 +677,24 @@ def book_progress(book: Book) -> dict:
     (preprocessed 1/3, layout done 2/3, OCR done 3/3). `flags` counts pages that carry attention
     flags or are in error. `active` is true while the book is processing or in OCR. `review` is
     `review.services.book_review_summary` (reviewed / total pages, unresolved words, next URL).
+    `manuscript` is `assembly.services.manuscript_state` (exists, latest run, stale pages, …).
     """
     by_status: dict[str, int] = {status: 0 for status in Page.Status.values}
     flags = 0
-    for status, page_flags in book.pages.filter(is_excluded=False).values_list("status", "attention_flags"):
+    rows: list[tuple[int, int, str]] = []
+    pages = book.pages.filter(is_excluded=False).values_list("id", "number", "status", "attention_flags")
+    for pk, number, status, page_flags in pages:
         by_status[status] = by_status.get(status, 0) + 1
         flags += 1 if page_flags or status == Page.Status.ERROR else 0
-    from review.services import book_review_summary  # other app: lazy import
+        rows.append((pk, number, status))
+    from assembly.services import manuscript_state  # other apps: lazy imports
+    from review.services import book_review_summary
 
     failed = book.status == Book.Status.ERROR
     return {
         **_progress_payload(book, by_status, flags),
         "review": book_review_summary(book),
+        "manuscript": manuscript_state(book, rows),
         "error_headline": _headline(book.error_message) if failed else "",
         "error_detail": _detail(book.error_message) if failed else "",
     }
@@ -957,7 +963,13 @@ def page_url_templates(book: Book) -> dict[str, str]:
 
 
 def book_dashboard(book: Book) -> dict:
-    """Everything the dashboard template needs, including the Alpine component's initial state."""
+    """Everything the dashboard template needs, including the Alpine component's initial state.
+
+    `config.manuscript` is the compact manuscript state (as in the progress poll) and
+    `config.manuscriptUrls` the assemble / state / manuscript URLs (`assembly.services.manuscript_urls`).
+    """
+    from assembly.services import manuscript_urls  # other app: lazy import
+
     progress = book_progress(book)
     by_status = progress["by_status"]
     stages = [
@@ -993,6 +1005,8 @@ def book_dashboard(book: Book) -> dict:
         "stages": [{"key": stage["key"], "statuses": stage["statuses"]} for stage in stages],
         "pages": tiles,
         "review": progress["review"],
+        "manuscript": progress["manuscript"],
+        "manuscriptUrls": manuscript_urls(book),
         "sheetsUrl": reverse("api:book_sheets", args=[book.pk]),
         "sheetsMax": SHEETS_MAX,
         "statusLabels": {status: str(label) for status, label in Page.Status.choices},
@@ -1012,6 +1026,8 @@ def book_dashboard(book: Book) -> dict:
         "error_headline": _headline(book.error_message),
         "error_detail": _detail(book.error_message),
         "review": progress["review"],
+        "manuscript": progress["manuscript"],
+        "manuscript_urls": config["manuscriptUrls"],
         "config": config,
     }
 

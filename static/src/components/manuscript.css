@@ -1,0 +1,581 @@
+/* Manuscript view (Phase 4, PHASE4_SPEC §4.2). Classes are prefixed ms-. The chrome carries the review
+   screen's and the dashboard's vocabulary one to one (shared values are marked `= rv-…` / `= bk-…`); the
+   document column is set in Amiri, the book face. Motion: the reveal (blocks rising in, join markers
+   stitching), the flash after a re-run, the skeleton shimmer and the pill's dot; chrome 120–200 ms ease-out on
+   opacity / transform (DESIGN.md §8). prefers-reduced-motion drops every one of them (static states). */
+@font-face {
+  font-family: "Amiri";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/amiri/Amiri-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Amiri";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/amiri/Amiri-Bold.ttf") format("truetype");
+}
+
+@layer components {
+  /* the view hangs its toolbar from the top bar (= .main:has(> .bk-dashboard.has-pages)) */
+  .main:has(> .ms-screen) { padding-top: 0; }
+  .ms-screen {
+    --ms-gutter: 72px; /* the start margin of the document: source badge and block tools (= --rv-gutter) */
+    --ms-side-w: clamp(220px, 22vw, 300px);
+    --ms-toolbar-h: 44px;
+    --ms-font: "Amiri", "Noto Naskh Arabic", "Scheherazade New", serif;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .ms-screen.is-busy .ms-doc { cursor: progress; }
+
+  /* ------------------------------------------------------------ top bar (header_actions) */
+  .ms-bar { display: flex; align-items: center; min-width: 0; } /* = rv-bar */
+  .ms-bar-inner { display: flex; align-items: center; gap: 10px; min-width: 0; position: relative; }
+  .ms-pill { /* = rv-save */
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: var(--radius-pill);
+    font-size: 12px;
+    color: var(--color-text-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transition: color 120ms ease, background-color 120ms ease;
+    cursor: default;
+  }
+  .ms-pill-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--color-neutral); }
+  .ms-pill.is-saving .ms-pill-dot { background: var(--color-accent); animation: ms-pulse 900ms ease-in-out infinite; }
+  .ms-pill.is-saved { color: var(--color-text-2); }
+  .ms-pill.is-saved .ms-pill-dot { background: var(--color-success); }
+  .ms-pill.is-warn { color: var(--color-warning-text); background: var(--color-warning-bg); }
+  .ms-pill.is-warn .ms-pill-dot { background: var(--color-warning); }
+  .ms-pill.is-error { color: var(--color-danger-text); background: var(--color-danger-bg); }
+  .ms-pill.is-error .ms-pill-dot { background: var(--color-danger); }
+  .ms-menu { width: 250px; max-width: 250px; inset-inline-start: auto; inset-inline-end: 0; } /* = bk-menu */
+  .ms-menu .menu-item .icon { color: var(--color-text-3); }
+  .ms-menu-glyph { display: inline-grid; place-items: center; width: 14px; font-weight: 600; color: var(--color-text-3); }
+  .ms-convert-host { position: absolute; top: 100%; inset-inline-end: 0; }
+
+  /* the convert popover (DESIGN.md popovers): numbering, unreviewed pages, tatweel, the action */
+  .ms-convert {
+    position: absolute;
+    top: 6px;
+    inset-inline-end: 0;
+    width: 300px;
+    max-width: min(300px, calc(100vw - 32px));
+    padding: 8px 10px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: ms-pop-in 150ms ease-out both;
+    z-index: 45;
+  }
+  .ms-convert-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ms-convert-title { font-size: 13px; font-weight: 600; }
+  .ms-convert-fields { display: flex; flex-direction: column; gap: 10px; }
+  .ms-convert-group { display: flex; flex-direction: column; gap: 6px; }
+  .ms-convert-label { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
+  .ms-convert-seg > button { flex: 1; padding: 0 6px; font-size: 12px; }
+  .ms-convert-check { font-size: 12.5px; }
+  .ms-convert-error { margin: 0; font-size: 12px; color: var(--color-danger); }
+  .ms-convert-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .ms-empty-options { width: 100%; max-width: 320px; margin-top: 8px; padding: 12px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); text-align: start; }
+  .ms-empty .ms-convert-seg { width: 100%; }
+
+  /* ------------------------------------------------------------ toolbar hanging from the top bar (= bk-toolbar) */
+  .ms-toolbar {
+    position: sticky;
+    top: var(--topbar-height);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: var(--ms-toolbar-h);
+    margin-inline: -32px;
+    padding: 0 32px;
+    background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .ms-toolbar-start, .ms-toolbar-end { display: flex; align-items: center; gap: 12px; min-width: 0; flex: none; }
+  .ms-toolbar-end { margin-inline-start: auto; }
+  .ms-seam-toggle { display: inline-flex; align-items: center; gap: 8px; }
+  .ms-toolbar-label { font-size: 12.5px; color: var(--color-text-2); white-space: nowrap; }
+  .ms-counts { white-space: nowrap; }
+  .ms-jump { position: relative; display: inline-flex; align-items: center; } /* = bk-jump */
+  .ms-jump input {
+    width: 112px;
+    height: 34px;
+    padding: 0 30px 0 10px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-muted);
+    color: var(--color-text);
+    font-size: 13px;
+    direction: ltr;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+    transition: box-shadow 120ms ease;
+  }
+  .ms-jump input:focus { outline: none; box-shadow: var(--ring); }
+  .ms-jump .kbd { position: absolute; right: 8px; pointer-events: none; }
+
+  /* ------------------------------------------------------------ banners */
+  .ms-banners { display: flex; flex-direction: column; gap: 8px; margin-top: -8px; }
+  .ms-banners:empty { display: none; }
+  .ms-stale { align-items: center; }
+  .ms-stale-pages { margin-inline-start: 4px; }
+  .ms-stale-page { color: inherit; text-decoration: underline; text-underline-offset: 3px; font-variant-numeric: tabular-nums; }
+  .ms-stale-page:hover { color: var(--color-text); }
+  .ms-poll { align-self: flex-start; }
+
+  /* ------------------------------------------------------------ the empty state and the error state */
+  .ms-empty { max-width: 440px; }
+  .ms-empty .empty-text { line-height: 1.7; }
+  .ms-state-error { margin: 40px auto; }
+  .ms-state-error .icon-lg { color: var(--color-danger); }
+
+  /* ------------------------------------------------------------ layout: the document beside the side panel (= bk-layout) */
+  .ms-layout { display: grid; grid-template-columns: minmax(0, 1fr) var(--ms-side-w); gap: 24px; align-items: start; }
+  .ms-main { min-width: 0; }
+  .ms-column {
+    position: relative;
+    max-width: calc(720px + var(--ms-gutter));
+    margin-inline: auto;
+    padding-inline-start: var(--ms-gutter);
+    padding-bottom: 96px;
+  }
+  .ms-host > [data-ms-part], .ms-host > script { display: none; } /* until the component moves them to the panel */
+
+  /* ------------------------------------------------------------ the document (the book face) */
+  .ms-doc {
+    font-family: var(--ms-font);
+    font-size: 19px;
+    line-height: 1.9;
+    color: var(--color-text);
+    text-align: justify;
+    text-align-last: start;
+    overflow-wrap: anywhere;
+    font-variant-numeric: lining-nums;
+  }
+  .ms-title { margin: 12px 0 44px; padding-bottom: 28px; border-bottom: 1px solid var(--color-border); text-align: center; text-align-last: center; }
+  .ms-title-text { margin: 0; font-size: 30px; font-weight: 700; line-height: 1.4; }
+  .ms-title-author { margin: 8px 0 0; font-size: 16px; color: var(--color-text-2); }
+  .ms-chapter { content-visibility: auto; contain-intrinsic-size: auto 1200px; }
+  .ms-block {
+    position: relative;
+    margin: 0;
+    border-radius: var(--radius-xs);
+    outline: none;
+    scroll-margin-top: calc(var(--topbar-height) + var(--ms-toolbar-h) + 24px);
+    transition: background-color 150ms ease;
+  }
+  .ms-block:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 6px; }
+  .ms-block.is-pulse { animation: ms-pulse-bg 500ms ease-out both; }
+  .ms-p { margin-bottom: 0.4em; text-indent: 1.5em; }
+  .ms-h1 { margin: 1.6em 0 0.8em; font-size: 26px; font-weight: 700; line-height: 1.5; text-align: center; text-align-last: center; text-indent: 0; }
+  .ms-h2 { margin: 1.3em 0 0.5em; font-size: 20px; font-weight: 700; line-height: 1.6; text-align: center; text-align-last: center; text-indent: 0; }
+  .ms-chapter:first-of-type .ms-h1:first-child { margin-top: 0.4em; }
+  /* the source badge in the start margin («ص 12–13»): shown on hover, focus and while the tools point at the block */
+  .ms-block::before {
+    content: "ص " attr(data-src);
+    position: absolute;
+    inset-inline-start: calc(-1 * var(--ms-gutter));
+    top: 0.45em;
+    width: calc(var(--ms-gutter) - 16px);
+    font: 500 11px/1.5 var(--font-sans);
+    color: var(--color-text-3);
+    text-align: start;
+    text-indent: 0;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    pointer-events: none;
+  }
+  .ms-block:hover::before, .ms-block:focus-visible::before, .ms-block.is-tools::before { opacity: 1; }
+  /* blocks from unreviewed pages: a thin amber start rule (D35) */
+  .ms-block[data-reviewed="false"] { border-inline-start: 2px solid var(--color-warning-border); padding-inline-start: 12px; margin-inline-start: -14px; }
+  .ms-block[data-reviewed="false"]::before { inset-inline-start: calc(-1 * var(--ms-gutter) + 14px); }
+  /* heading suggestions (§2.6): a dotted underline and the chip «عنوان؟» */
+  .ms-block[data-suggested="heading"] { text-decoration: underline dotted var(--color-text-3); text-decoration-thickness: 1px; text-underline-offset: 5px; }
+  .ms-suggest {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    margin-inline-start: 8px;
+    padding: 1px 2px 1px 8px;
+    vertical-align: middle;
+    border-radius: var(--radius-pill);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-text);
+    font: 500 11.5px/1 var(--font-sans);
+    text-indent: 0;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .ms-suggest-label { padding-inline-end: 4px; }
+  .ms-suggest-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: inherit;
+    font: 600 12px/1 var(--font-sans);
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .ms-suggest-btn:hover { background: rgba(37, 99, 235, 0.14); }
+  .ms-suggest-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+  /* uncertain words keep the review screen's amber underline (= rv-tok.is-open) */
+  .ms-uncertain { background: none; color: inherit; padding: 0 1px; border-radius: 0; border-bottom: 1.5px solid var(--color-warning); }
+  .ms-unmatched { border-bottom: 1.5px dotted var(--color-warning); background: var(--color-warning-bg); border-radius: 2px; }
+  /* footnote references: superscript number buttons */
+  .ms-ref {
+    display: inline-block;
+    vertical-align: super;
+    margin: 0 1px;
+    padding: 0 3px;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--color-accent-text);
+    font: 600 11px/1.3 var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-indent: 0;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .ms-ref:hover, .ms-ref:focus-visible { background: var(--color-accent-soft); outline: none; }
+  .ms-ref:focus-visible { box-shadow: var(--ring); }
+  .ms-ref.is-orphan { color: var(--color-warning-text); background: var(--color-warning-bg); }
+  .ms-ref.is-orphan:hover, .ms-ref.is-orphan:focus-visible { background: var(--color-warning-border); }
+
+  /* ------------------------------------------------------------ seams */
+  /* a join: a thin vertical hairline with the new page's number, inline at the join point */
+  .ms-seam {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 1em;
+    margin: 0 5px;
+    padding: 0 3px;
+    vertical-align: -0.05em;
+    border-radius: 3px;
+    color: var(--color-text-3);
+    font: 500 11px/1 var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    text-indent: 0;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .ms-seam::before { content: ""; width: 1px; height: 1.25em; background: var(--color-border-strong); transition: background-color 200ms ease, transform 200ms ease; }
+  .ms-seam:hover, .ms-seam:focus-visible { background: var(--color-accent-soft); color: var(--color-accent-text); outline: none; }
+  .ms-seam:focus-visible { box-shadow: var(--ring); }
+  .ms-seam:hover::before, .ms-seam:focus-visible::before { background: var(--color-accent); }
+  /* an override shows a small dot */
+  .ms-seam[data-decision="override"]::after { content: ""; width: 5px; height: 5px; border-radius: var(--radius-pill); background: var(--color-accent); }
+  /* a split: a faint full-width hairline with «ص 13» at the start; a missing page reads amber */
+  .ms-split { display: flex; align-items: center; gap: 10px; margin: 10px 0 12px; color: var(--color-text-3); font: 500 11px/1 var(--font-sans); }
+  .ms-split::after { content: ""; flex: 1; border-top: 1px solid var(--color-border); }
+  .ms-split .ms-seam { margin: 0; height: 22px; padding: 0 6px; vertical-align: baseline; }
+  .ms-split .ms-seam::before { display: none; }
+  .ms-split.is-missing { color: var(--color-warning-text); }
+  .ms-split.is-missing::after { border-top-color: var(--color-warning-border); }
+  .ms-split.is-missing .ms-split-page { padding: 3px 8px; border-radius: var(--radius-pill); background: var(--color-warning-bg); }
+  .hide-seams .ms-seam { display: none; }
+  .hide-seams .ms-split { display: none; }
+  /* the stitch of the reveal: a short accent line settling into the hairline (400 ms) */
+  .ms-host.is-reveal .ms-seam.is-stitch::before { animation: ms-stitch 400ms ease-out both; animation-delay: 240ms; }
+  /* the reveal: the first blocks rise in with a 16 ms stagger (= rv-line-in) */
+  .ms-host.is-reveal .ms-block.is-rise { animation: ms-rise 320ms ease-out both; animation-delay: calc(var(--i, 0) * 16ms); }
+  /* after a re-run, the blocks whose markup changed flash once */
+  .ms-block.is-flash { animation: ms-flash 600ms ease-out both; }
+
+  /* ------------------------------------------------------------ notes after each chapter */
+  .ms-notes {
+    margin: 30px 0 8px;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--color-border);
+    list-style: none;
+    font-size: 14.5px;
+    line-height: 1.8;
+    text-align: start;
+  }
+  .ms-notes::before { content: "الحواشي"; display: block; margin-bottom: 6px; font: 600 11.5px/1.4 var(--font-sans); color: var(--color-text-3); }
+  .ms-note { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; margin: 0 -6px; border-radius: var(--radius-sm); transition: background-color 150ms ease; }
+  .ms-note.is-hot, .ms-note:target { background: var(--color-accent-soft); }
+  .ms-note.is-pulse { animation: ms-pulse-bg 500ms ease-out both; }
+  .ms-note-num { flex: none; min-width: 1.6em; color: var(--color-accent-text); font: 600 12px/1.8 var(--font-sans); font-variant-numeric: tabular-nums; text-align: center; border-radius: 3px; }
+  .ms-note-num:hover, .ms-note-num:focus-visible { background: var(--color-accent-soft); outline: none; }
+  .ms-note-num:focus-visible { box-shadow: var(--ring); }
+  .ms-note-body { flex: 1; min-width: 0; }
+  .ms-note[data-orphan="true"] { background: var(--color-warning-bg); }
+  .ms-note[data-orphan="true"] .ms-note-num { color: var(--color-warning-text); }
+  .ms-note-flag { flex: none; align-self: center; font: 500 11px/1.4 var(--font-sans); color: var(--color-warning-text); white-space: nowrap; }
+
+  /* ------------------------------------------------------------ floating tools (single elements moved to their anchor) */
+  .ms-tools { position: absolute; inset-inline-start: 0; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; padding-top: 22px; animation: ms-fade-in 120ms ease-out both; }
+  .ms-tools-btn { width: 24px; height: 24px; }
+  .ms-block-menu { position: absolute; inset-inline-start: 0; z-index: 40; }
+  .ms-block-menu .menu-item[disabled] { opacity: 0.45; cursor: default; }
+  .ms-role-check { display: inline-block; width: 14px; color: var(--color-accent-text); } /* = rv-role-check */
+  .ms-card {
+    position: absolute;
+    z-index: 30;
+    width: 300px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 8px 10px;
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    font-size: 12.5px;
+    color: var(--color-text-2);
+    animation: ms-pop-in 150ms ease-out both;
+  }
+  .ms-card-text { flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
+  .ms-card-actions { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; }
+  .ms-note-pop {
+    position: absolute;
+    z-index: 30;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--color-surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    font-family: var(--ms-font);
+    font-size: 15px;
+    line-height: 1.7;
+    text-align: start;
+    animation: ms-pop-in 150ms ease-out both;
+    pointer-events: auto;
+  }
+  .ms-note-pop-num { flex: none; color: var(--color-accent-text); font: 600 12px/1.7 var(--font-sans); }
+  .ms-note-pop-text { flex: 1; min-width: 0; }
+  .ms-note-pop-flag { flex: none; font: 500 11px/1.4 var(--font-sans); color: var(--color-warning-text); }
+
+  /* ------------------------------------------------------------ skeleton (= rv-skeleton, the assembling reveal) */
+  .ms-skeleton { display: flex; flex-direction: column; gap: 22px; padding: 12px 0 40px; }
+  .ms-skeleton p { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+  .ms-skeleton span, .ms-sheet-skeleton {
+    display: block;
+    height: 14px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--color-bg-muted) 25%, var(--color-bg-subtle) 50%, var(--color-bg-muted) 75%);
+    background-size: 200% 100%;
+    animation: ms-shimmer 1.4s linear infinite;
+  }
+  .ms-skeleton p span:nth-child(odd) { animation-delay: 80ms; }
+  .ms-skeleton-title { width: 46%; height: 22px; margin: 0 auto 10px; }
+
+  /* ------------------------------------------------------------ side panel (= bk-side) */
+  .ms-side {
+    position: sticky;
+    top: calc(var(--topbar-height) + var(--ms-toolbar-h) + 20px);
+    max-height: calc(100dvh - var(--topbar-height) - var(--ms-toolbar-h) - 40px);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    padding-inline-start: 20px;
+    border-inline-start: 1px solid var(--color-border);
+  }
+  .ms-side-toggle { display: none; align-self: flex-start; }
+  .ms-side-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .ms-side-main { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .ms-tabs { align-self: flex-start; }
+  .ms-tabs > button { padding: 0 12px; }
+  .ms-side-scroll { flex: 1; min-height: 0; max-height: 52dvh; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-inline-end: 4px; }
+  .ms-side-empty { margin: 6px 0; line-height: 1.6; }
+  /* the steps ticking while a run is on */
+  .ms-steps { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .ms-step { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--color-text-3); transition: color 200ms ease; }
+  .ms-step-mark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border-strong);
+    color: #fff;
+    background: transparent;
+    transition: background-color 200ms ease, border-color 200ms ease;
+  }
+  .ms-step-mark .icon { width: 11px; height: 11px; stroke-width: 2.4; opacity: 0; transition: opacity 200ms ease; }
+  .ms-step.is-current { color: var(--color-text); font-weight: 500; }
+  .ms-step.is-current .ms-step-mark { border-color: var(--color-accent); box-shadow: inset 0 0 0 3px var(--color-accent-soft); animation: ms-pulse 1200ms ease-in-out infinite; }
+  .ms-step.is-done { color: var(--color-text-2); }
+  .ms-step.is-done .ms-step-mark { background: var(--color-success); border-color: transparent; animation: ms-stamp-in 300ms ease-out both; }
+  .ms-step.is-done .ms-step-mark .icon { opacity: 1; }
+  /* contents: the headings as a tree with the current chapter marked (scroll spy) */
+  .ms-toc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .ms-toc-list.is-nested { margin-top: 1px; }
+  .ms-toc-link {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-2);
+    font-size: 12.5px;
+    line-height: 1.45;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .ms-toc-link:hover { background: var(--color-hover); color: var(--color-text); }
+  .ms-toc-item.is-current > .ms-toc-link { background: var(--color-active); color: var(--color-text); font-weight: 550; }
+  .ms-toc-item.is-l2 > .ms-toc-link { padding-inline-start: 22px; font-size: 12px; }
+  .ms-toc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .ms-toc-page { flex: none; color: var(--color-text-3); font-size: 11.5px; }
+  /* warnings grouped by code (= bk-attention rows) */
+  .ms-warnings { display: flex; flex-direction: column; gap: 6px; }
+  .ms-warn-group > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--color-text-2);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: background-color 120ms ease;
+  }
+  .ms-warn-group > summary::-webkit-details-marker { display: none; }
+  .ms-warn-group > summary:hover { background: var(--color-hover); color: var(--color-text); }
+  .ms-warn-group[open] > summary { color: var(--color-text); }
+  .ms-warn-group > summary .num { color: var(--color-text-3); font-weight: 400; }
+  .ms-warn-list { list-style: none; margin: 2px 0 6px; padding: 0; display: flex; flex-direction: column; }
+  .ms-warn {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    border-bottom: 1px solid var(--color-border);
+    font-size: 12px;
+    line-height: 1.45;
+    transition: background-color 150ms ease;
+  }
+  .ms-warn:last-child { border-bottom: 0; }
+  .ms-warn.is-current { background: var(--color-accent-soft); }
+  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; }
+  .ms-warn-msg { color: var(--color-text); }
+  .ms-warn-actions { grid-column: 2; display: flex; align-items: center; gap: 2px; margin-inline-start: -8px; }
+  .ms-warn-actions .btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
+  /* stats */
+  .ms-stats { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; margin: 0; padding-top: 12px; border-top: 1px solid var(--color-border); font-size: 12.5px; }
+  .ms-stat { display: contents; }
+  .ms-stat dt { color: var(--color-text-2); }
+  .ms-stat dd { margin: 0; color: var(--color-text); text-align: end; font-variant-numeric: tabular-nums; }
+
+  /* ------------------------------------------------------------ the source drawer («عرض الأصل») */
+  .ms-drawer {
+    position: fixed;
+    top: var(--topbar-height);
+    bottom: 0;
+    inset-inline-start: var(--sidebar-width);
+    z-index: 45;
+    width: clamp(360px, 42vw, 760px);
+    max-width: calc(100vw - var(--sidebar-width));
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border-inline-end: 1px solid var(--color-border);
+    box-shadow: var(--shadow-pop);
+    animation: ms-drawer-in 200ms ease-out both;
+  }
+  [dir="ltr"] .ms-drawer { animation-name: ms-drawer-in-ltr; }
+  .ms-drawer-head { display: flex; align-items: center; gap: 8px; height: 56px; flex: none; padding: 0 12px 0 16px; border-bottom: 1px solid var(--color-border); }
+  .ms-drawer-head .section-title { flex: none; }
+  .ms-drawer-pager { display: inline-flex; align-items: center; gap: 2px; }
+  .ms-drawer-review { margin-inline-start: auto; }
+  .ms-drawer-body { position: relative; flex: 1; min-height: 0; container-type: size; display: grid; place-items: center; padding: 16px; background: var(--color-bg-subtle); overflow: hidden; }
+  .ms-sheet-skeleton { position: absolute; inset: 16px; height: auto; width: auto; border-radius: var(--radius-sm); }
+  .ms-drawer-error { margin: 0; }
+  .ms-drawer-error .icon-lg { color: var(--color-danger); }
+  /* the page at fit height: the scan and its overlay are the same box (ratios), physical left/top */
+  .ms-sheet {
+    position: relative;
+    width: min(100%, calc((100cqh - 32px) * var(--ar, 0.7)));
+    aspect-ratio: var(--ar, 0.7);
+    background: #fff;
+    border-radius: var(--radius-xs);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.06);
+    overflow: hidden;
+  }
+  .ms-sheet-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: fill; }
+  .ms-sheet-empty { position: absolute; inset: 0; display: grid; place-items: center; }
+  .ms-sheet-overlay { position: absolute; inset: 0; pointer-events: none; }
+  .ms-band { /* = rv-band */
+    position: absolute;
+    border-radius: 2px;
+    background: var(--color-accent-soft);
+    box-shadow: inset 0 1px 0 rgba(37, 99, 235, 0.16), inset 0 -1px 0 rgba(37, 99, 235, 0.16), 0 0 0 1.5px rgba(37, 99, 235, 0.35);
+  }
+
+  /* ------------------------------------------------------------ keyframes (= rv-… / bk-…) */
+  @keyframes ms-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
+  @keyframes ms-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes ms-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ms-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes ms-stitch { 0% { background: var(--color-accent); transform: scaleY(1.9); } 60% { background: var(--color-accent); transform: scaleY(1); } 100% { background: var(--color-border-strong); transform: none; } }
+  @keyframes ms-flash { from { background-color: var(--color-accent-soft); } to { background-color: transparent; } }
+  @keyframes ms-pulse-bg { from { background: var(--color-accent-soft); } to { background: transparent; } }
+  @keyframes ms-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @keyframes ms-stamp-in { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes ms-drawer-in { from { transform: translateX(100%); } to { transform: none; } }
+  @keyframes ms-drawer-in-ltr { from { transform: translateX(-100%); } to { transform: none; } }
+
+  /* ------------------------------------------------------------ responsive + reduced motion (§4.2) */
+  @media (max-width: 1180px) {
+    .ms-bar-dash { display: none; }
+  }
+  @media (max-width: 1100px) {
+    .ms-screen { --ms-side-w: clamp(190px, 20vw, 240px); }
+    .ms-counts { display: none; }
+  }
+  @media (max-width: 900px) {
+    .ms-screen { --ms-gutter: 44px; }
+    .ms-toolbar { flex-wrap: wrap; height: auto; min-height: var(--ms-toolbar-h); padding: 6px 16px; margin-inline: -16px; }
+    .ms-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    .ms-side { order: -1; position: static; max-height: none; padding-inline-start: 0; border-inline-start: 0; }
+    .ms-side-toggle { display: inline-flex; }
+    .ms-side-body { display: none; padding-top: 12px; }
+    .ms-side-body.is-open { display: flex; }
+    .ms-side-scroll { max-height: 40dvh; }
+    .ms-drawer { inset-inline: 0; width: auto; max-width: none; }
+    .ms-block::before { font-size: 10px; width: calc(var(--ms-gutter) - 8px); }
+    .ms-card { width: min(300px, calc(100vw - 32px)); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ms-host.is-reveal .ms-block.is-rise { animation: none; }
+    .ms-host.is-reveal .ms-seam.is-stitch::before { animation: none; }
+    .ms-block.is-flash { animation: none; background-color: var(--color-accent-soft); }
+    .ms-block.is-pulse, .ms-note.is-pulse { animation: none; }
+    .ms-skeleton span, .ms-sheet-skeleton { animation: none; }
+    .ms-pill.is-saving .ms-pill-dot { animation: none; }
+    .ms-step.is-current .ms-step-mark, .ms-step.is-done .ms-step-mark { animation: none; }
+    .ms-drawer, .ms-card, .ms-note-pop, .ms-convert, .ms-tools { animation: none; }
+  }
+}

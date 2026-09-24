@@ -1,7 +1,8 @@
 """Review services: resolve uncertain words, edit / insert / delete lines, undo, approve (PHASE3 §5).
 
 Every mutating service runs in one transaction on a locked page row, records a `LineRevision`
-(snapshots before / after, which is what `undo_last` restores), recomputes the line's `n_low`
+(snapshots before / after, which is what `undo_last` restores), puts an `assembled` page back to
+`reviewed` (D36: the manuscript is out of date until the next assembly), recomputes the line's `n_low`
 (unresolved tokens: `conf == "low"` and no `res`), the page's `n_unresolved` and rebuilds
 `page.final_text` from the lines: body-like regions in order, a blank line, then the footnotes,
 Western digits (D6). The printed page number is never part of the lines, so it never re-enters
@@ -36,7 +37,10 @@ from processing.models import Region
 from .models import LineRevision
 
 CHOICES: tuple[str, ...] = ("primary", "secondary", "tess", "typed")
-REVIEWABLE_STATUSES: frozenset[str] = frozenset({Page.Status.OCR_DONE, Page.Status.REVIEWED})
+# `assembled` pages stay editable (D36): any change puts them back to `reviewed` (`_touch_page`).
+REVIEWABLE_STATUSES: frozenset[str] = frozenset(
+    {Page.Status.OCR_DONE, Page.Status.REVIEWED, Page.Status.ASSEMBLED}
+)
 REVIEWED_STATUSES: frozenset[str] = frozenset({Page.Status.REVIEWED, Page.Status.ASSEMBLED})
 DEFAULT_REGION_KIND = Region.Kind.BODY  # lines without a region (text-layer pages) read as body
 MAX_TYPED_WORDS = 6
@@ -176,8 +180,18 @@ def _check_word(line: Line, tokens: list[dict], index: int, expected) -> None:
         raise ReviewConflict(line)
 
 
+def _touch_page(page: Page) -> None:
+    """A change to an `assembled` page puts it back to `reviewed` (D36): the manuscript no longer
+    holds its current text, so it shows as out of date until the book is re-assembled."""
+    if page.status == Page.Status.ASSEMBLED:
+        page.status = Page.Status.REVIEWED
+        page.save(update_fields=["status"])
+        _refresh_book(page)
+
+
 def _record(page: Page, action: str, line: Line | None, before, after, user) -> LineRevision:
-    """Store one revision of the page."""
+    """Store one revision of the page (and take an assembled page back to `reviewed`, D36)."""
+    _touch_page(page)
     return LineRevision.objects.create(
         page=page, line=line, action=action, before=before, after=after, user=_user_or_none(user)
     )
@@ -635,7 +649,7 @@ def insert_line(page: Page, after_line_id: int | None, text: str, user=None) -> 
         ocr_text="",
         confidence=1.0,
         is_manual=True,
-        is_reviewed=page.status == Page.Status.REVIEWED,
+        is_reviewed=page.status in REVIEWED_STATUSES,
         updated_by=_user_or_none(user),
     )
     _set_tokens(line, [typed_token(word) for word in words])
@@ -849,6 +863,8 @@ def undo_last(page: Page, user=None) -> dict:
         raise ReviewError("لا شيء للتراجع عنه.")
     _check_editable(page)
     action = revision.action
+    if action not in (LineRevision.Action.APPROVE, LineRevision.Action.REOPEN):
+        _touch_page(page)  # D36; approve / reopen restore their own status snapshot below
     if action in (
         LineRevision.Action.RESOLVE,
         LineRevision.Action.EDIT,
@@ -895,10 +911,10 @@ def approve_page(page: Page, user, force: bool = False) -> dict:
 
     With unresolved words left and `force` false, raises `ReviewBlocked` (API 409). Every line is
     marked reviewed (so a new OCR pass keeps them), `reviewed_by` / `reviewed_at` are set and the
-    book status is re-derived. Approving an approved page changes nothing.
+    book status is re-derived. Approving an approved (`reviewed` or `assembled`) page changes nothing.
     """
     page = _lock_page(page)
-    if page.status == Page.Status.REVIEWED:
+    if page.status in REVIEWED_STATUSES:
         return {"status": page.status, **_next_after(page)}
     if page.status != Page.Status.OCR_DONE or page.text_state != Page.TextState.FINAL:
         raise ReviewError("الصفحة ليست جاهزة للاعتماد بعد.")
@@ -919,9 +935,9 @@ def approve_page(page: Page, user, force: bool = False) -> dict:
 
 @transaction.atomic
 def reopen_page(page: Page, user) -> None:
-    """Take an approved page back to `ocr_done` (lines unreviewed) so it can be reviewed again."""
+    """Take an approved (`reviewed` or `assembled`) page back to `ocr_done` (lines unreviewed)."""
     page = _lock_page(page)
-    if page.status != Page.Status.REVIEWED:
+    if page.status not in REVIEWED_STATUSES:
         raise ReviewError("الصفحة غير معتمدة؛ لا حاجة لإعادة فتحها.")
     before = _page_state(page)
     page.status = Page.Status.OCR_DONE

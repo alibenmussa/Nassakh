@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phase 2 built 2026-09-24 (commit `daabcfc`, 198 tests) and under agent review; Phase 1 results in `playground/poc/REPORT.md`; decisions D1–D22.** Run instructions in `docs/RUNBOOK.md`.
+Status: **Phases 1-3 built and reviewed; Phase 4 (assembly, manuscript view) built 2026-09-24, awaiting the owner's test; decisions D1–D39.** Phase specs in `docs/PHASE2_SPEC.md`, `docs/PHASE3_SPEC.md`, `docs/DASHBOARD_SPEC.md`, `docs/PHASE4_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 

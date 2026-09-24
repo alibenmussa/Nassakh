@@ -6,6 +6,7 @@
 @import "./components/ocr.css";
 @import "./components/theatre.css";
 @import "./components/review.css";
+@import "./components/manuscript.css";
 
 @source "../../templates";
 @source "./js";
@@ -15,6 +16,7 @@
 @source "../../processing";
 @source "../../ocr";
 @source "../../review";
+@source "../../assembly";
 
 /* ------------------------------------------------------------------ tokens (DESIGN.md §2–4) */
 @theme {

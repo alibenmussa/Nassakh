@@ -1,0 +1,21 @@
+{% comment %}The convert popover (PHASE4_SPEC §4.1, the menu-popover look): the options and the «تحويل» button. The
+enclosing Alpine scope provides `ms` (bookDashboard on the dashboard, manuscriptView on the manuscript view): both
+hold `convert` {open, busy, error, label, options, unreviewed} and `submitConvert()` / `closeConvert()`.{% endcomment %}
+<div class="menu ms-convert" role="dialog" aria-label="خيارات التجميع" x-show="ms.convert.open" x-cloak
+     x-ref="convertPop" @click.outside="ms.closeConvert()" @keydown.escape.stop.prevent="ms.closeConvert()"
+     x-transition.opacity.duration.120ms>
+  <div class="ms-convert-head">
+    <span class="ms-convert-title">تحويل إلى كتاب</span>
+    <button type="button" class="btn-icon btn-icon-sm" aria-label="إغلاق" @click="ms.closeConvert()">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+  {% include "assembly/_convert_options.html" %}
+  <p class="ms-convert-error" role="alert" x-show="ms.convert.error" x-text="ms.convert.error"></p>
+  <div class="ms-convert-actions">
+    <button type="button" class="btn btn-primary btn-sm" x-ref="convertSubmit" :disabled="ms.convert.busy" @click="ms.submitConvert()">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+      <span x-text="ms.convert.label">تحويل</span>
+    </button>
+  </div>
+</div>

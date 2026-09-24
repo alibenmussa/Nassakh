@@ -26,7 +26,7 @@ from books.models import Book, Page
 from books.services import run_stage
 from core.storage import save_array
 from ocr import services, tasks
-from ocr.alignment import align_tokens, build_lines, word_f1
+from ocr.alignment import align_tokens, build_lines, merged_lines, word_f1
 from ocr.engines import pdf_text, registry
 from ocr.engines.base import OcrResult
 from ocr.engines.fake import FakeEngine
@@ -1398,3 +1398,380 @@ def test_a_patched_word_chooser_resolves_a_word_but_keeps_it_low(page, settings)
     assert line.text == "قال الأمير في سنة ١٩٦٦ إن الكتب مفيد" and line.ocr_text.endswith("الكتاب مفيد")
     assert line.n_low == 1  # only the number is left
     assert page.n_unresolved == 2 and "إن الكتب مفيد" in page.final_text
+
+
+# ---------------------------------------------------------------- run placement and merged lines
+
+
+def _line(words: list[tuple[str, int]], y: int, h: int = 20) -> dict:
+    """A Tesseract line at `y` whose words are `(text, x0)` pairs, 10 px wide each."""
+    boxes = [{"text": t, "bbox": [x, y, x + 10, y + h], "conf": 90.0} for t, x in words]
+    return {"bbox": [min(x for _, x in words), y, max(x for _, x in words) + 10, y + h], "words": boxes}
+
+
+def test_build_lines_moves_a_run_onto_the_garbage_that_starts_the_next_line():
+    # Book 12 page 2: «وترجم التربة» end up on the next line, where Tesseract read them as "pl rr 4".
+    lines = [
+        _line([("امتد", 90), ("حتى", 70), ("غات", 50)], 0),
+        _line([("pl", 110), ("rr", 95), ("4", 80), ("الصلصالية", 60), ("التي", 40), ("تشاهد", 20)], 30),
+    ]
+    built = build_lines("امتد حتى غات وترجم التربة الصلصالية التي تشاهد", None, lines)
+    assert [b["text"] for b in built] == ["امتد حتى غات", "وترجم التربة الصلصالية التي تشاهد"]
+    moved = built[1]["tokens"][:2]
+    assert all(t["bbox"] is None for t in moved)  # two words, three garbage words: no one-to-one boxes
+    assert built[1]["n_unseen"] == 0 and built[0]["n_unseen"] == 0
+
+    # as many garbage words as words: each word takes the box (and the reading) of its garbage word
+    lines[1] = _line([("pl", 110), ("rr", 95), ("الصلصالية", 60), ("التي", 40), ("تشاهد", 20)], 30)
+    built = build_lines("امتد حتى غات وترجم التربة الصلصالية التي تشاهد", None, lines)
+    first, second = built[1]["tokens"][:2]
+    assert first["bbox"] == [110, 30, 120, 50] and first["tess"] == "pl"
+    assert second["bbox"] == [95, 30, 105, 50] and second["tess"] == "rr"
+
+
+def test_build_lines_gives_a_run_to_the_line_without_anchors_between_its_anchors():
+    lines = [
+        _line([("قال", 90), ("الأمير", 70)], 0),
+        {**_line([("xq", 90), ("zzv", 70), ("kk", 50)], 30), "rescued": True},
+        _line([("ثم", 90), ("انتهى", 70)], 60),
+    ]
+    built = build_lines("قال الأمير وهذا سطر ثالث ثم انتهى", None, lines)
+    assert [b["text"] for b in built] == ["قال الأمير", "وهذا سطر ثالث", "ثم انتهى"]
+    assert built[1]["rescued"] is True and built[1]["bbox"] == [50, 30, 100, 50]
+    assert [t["bbox"][0] for t in built[1]["tokens"]] == [90, 70, 50]  # three words, three boxes
+
+
+def test_build_lines_keeps_words_tesseract_never_saw_on_the_previous_line_and_counts_them():
+    lines = [_line([("قال", 90), ("الأمير", 70)], 0), _line([("ثم", 90), ("انتهى", 70)], 30)]
+    built = build_lines("قال الأمير وهذا سطر ضائع هنا . ثم انتهى", None, lines)
+    assert built[0]["text"] == "قال الأمير وهذا سطر ضائع هنا ."
+    assert built[0]["n_unseen"] == 4  # the full stop does not count
+    assert services.trailing_unanchored(built[0]["tokens"]) == 5
+    # a full stop alone between two lines ends the first one and is not "unseen"
+    built = build_lines("قال الأمير . ثم انتهى", None, lines)
+    assert built[0]["text"] == "قال الأمير ." and built[0]["n_unseen"] == 0
+    # nor are numbers and one-letter abbreviations (Tesseract misreads them too often)
+    built = build_lines("قال الأمير ١٢ ه ، ٣ م . ثم انتهى", None, lines)
+    assert built[0]["n_unseen"] == 0 and services.trailing_unanchored(built[0]["tokens"]) == 6
+
+
+def test_build_lines_punctuation_rides_with_its_word_to_the_next_line():
+    lines = [
+        _line([("بين", 90), ("الفحمي", 70)], 0),
+        _line([("Gala", 110), ("ويربط", 90), ("هذا", 70)], 30),
+    ]
+    built = build_lines("بين الفحمي والنوبي . ويربط هذا", None, lines)
+    assert [b["text"] for b in built] == ["بين الفحمي", "والنوبي . ويربط هذا"]
+    assert built[1]["tokens"][0]["bbox"] == [110, 30, 120, 50] and built[1]["tokens"][1]["bbox"] is None
+
+
+def test_merged_lines_reports_unseen_words_and_overlong_lines():
+    def line(n: int, unseen: int = 0, width: int = 100, read: float = 1.0) -> dict:
+        tess = max(1, n - unseen)
+        return {
+            "tokens": [{"t": "كلمة"}] * n,
+            "n_unseen": unseen,
+            "bbox": [0, 0, width, 20],
+            "tess_words": tess,
+            "tess_matched": round(read * tess),
+        }
+
+    assert merged_lines([line(9), line(10), line(9), line(11)]) == []
+    assert merged_lines([line(9), line(12, unseen=3), line(9)]) == [1]  # three words nobody saw
+    assert merged_lines([line(9), line(12, unseen=3, read=0.25), line(9)]) == []  # a line read as garbage
+    many = [line(9), line(10), line(9), line(10)]
+    assert merged_lines([*many, line(19, unseen=1)]) == [4]  # 19 words where 100 px hold about 9.5
+    assert merged_lines([*many, line(19)]) == []  # ... but Tesseract saw every one of them
+    assert merged_lines([*many, line(19, unseen=1, width=200)]) == []  # a line twice as wide
+    assert merged_lines([line(9), line(19, unseen=1)]) == []  # too few lines for a density
+
+
+# ---------------------------------------------------------------- line rescue (Tesseract stage)
+
+BAND_A, BAND_B, BAND_C = (30, 45), (60, 75), (90, 105)  # printed lines (ink rows) of the body region
+TESS_A, TESS_B, TESS_C = "قال الأمير في سنة", "وهذا سطر ثان من المتن", "ثم انتهى الكلام هنا"
+QARI_ABC = "قال الأمير في سنة وهذا سطر ثانٍ من المتن ثم انتهى الكلام هنا"
+
+
+def _inked_page(page: Page, detected: tuple[tuple[int, int], ...] = (BAND_A, BAND_B, BAND_C)) -> Region:
+    """Three printed lines in the B&W image, the detector's core bands for `detected`, one body region."""
+    bw = np.full((H, W), 255, dtype=np.uint8)
+    for y0, y1 in (BAND_A, BAND_B, BAND_C):
+        bw[y0:y1, 10:110] = 0
+    pre = page.preprocess
+    save_array(pre.bw_image, bw, "bw.png")
+    pre.line_boxes = [{"x0": 10, "y0": y0 + 5, "x1": 110, "y1": y0 + 10} for y0, _ in detected]
+    pre.median_line_height = 5
+    pre.save()
+    return Region.objects.create(page=page, kind="body", bbox=[0, 20, W, 120], order=0)
+
+
+def _tess_body(texts: list[tuple[str, tuple[int, int]]]) -> OcrResult:
+    """Tesseract's answer for the body crop (origin y=20): one line per `(text, band)`."""
+    lines = []
+    for text, (y0, y1) in texts:
+        lines += tess_lines(text, y0=y0 - 22, line_h=y1 - y0 + 4)
+    return OcrResult(
+        text="\n".join(t for t, _ in texts), duration_s=0.1, finish="n/a", extra={"lines": lines}
+    )
+
+
+def _psm7(text: str, conf: float = 90.0) -> OcrResult:
+    """A single-line reading of a rescue crop (padded 20 px, rows 57-78: the text sits at y 23-38)."""
+    words = text.split()
+    step = 100 // max(len(words), 1)
+    boxes = [
+        {"text": t, "bbox": [130 - (i + 1) * step, 23, 130 - i * step, 38], "conf": conf}
+        for i, t in enumerate(words)
+    ]
+    return OcrResult(
+        text=text,
+        duration_s=0.05,
+        finish="n/a",
+        extra={"lines": [{"bbox": [30, 23, 130, 38], "words": boxes}]},
+    )
+
+
+def _rescue_engines(tesseract_found, rescue_reading) -> dict[str, FakeEngine]:
+    """Fakes for one body region: Tesseract finds `tesseract_found`; a rescue crop reads `rescue_reading`."""
+
+    def tesseract(path: Path, cap):
+        return rescue_reading if path.stem.startswith("rescue") else tesseract_found
+
+    fakes = engines(primary_body=QARI_ABC, secondary_body=QARI_ABC)
+    fakes["tesseract"] = FakeEngine(name="tesseract", responder=tesseract)
+    return fakes
+
+
+def _rescue_calls(engine: FakeEngine) -> list[dict]:
+    return [c for c in engine.calls if Path(c["path"]).stem.startswith("rescue")]
+
+
+def test_a_line_tesseract_missed_is_rescued_into_its_own_line(page):
+    region = _inked_page(page)
+    fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7(TESS_B))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        run = page.ocr_runs.get(engine_name="tesseract", region=region)
+        assert [line.get("rescued", False) for line in run.params["lines"]] == [False, True, False]
+        assert run.params["rescue"] == {"tried": 1, "added": 1}
+        assert run.parsed_text == "\n".join([TESS_A, TESS_B, TESS_C]) == page.provisional_text
+        calls = _rescue_calls(fakes["tesseract"])
+        assert len(calls) == 1 and calls[0]["hints"] == {"psm": 7}
+        assert calls[0]["image_size"] == [W + 40, 21 + 40]  # rows 57-78 of the region, padded
+        rescued = run.params["lines"][1]
+        assert rescued["bbox"][1] == 57 + 23 - 20 and rescued["bbox"][3] == 57 + 38 - 20  # gray-image rows
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    lines = list(page.lines.order_by("order"))
+    assert [line.text for line in lines] == [
+        "قال الأمير في سنة",
+        "وهذا سطر ثانٍ من المتن",
+        "ثم انتهى الكلام هنا",
+    ]
+    assert lines[1].bbox == rescued["bbox"] and all(t["bbox"] for t in lines[1].tokens)
+    assert "lines_merged" not in page.attention_flags
+
+
+def test_a_short_line_the_detector_missed_is_found_in_the_gap(page):
+    _inked_page(page, detected=(BAND_A, BAND_C))  # the projection detector saw only two lines
+    fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7(TESS_B))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.lines.count() == 3 and len(_rescue_calls(fakes["tesseract"])) == 1
+
+
+def test_a_noisy_reading_adds_nothing_and_the_page_is_flagged_merged(page):
+    region = _inked_page(page)
+    fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7("ee TT", conf=30))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    run = page.ocr_runs.get(engine_name="tesseract", region=region)
+    assert run.params["rescue"] == {"tried": 1, "added": 0} and len(run.params["lines"]) == 2
+    page.refresh_from_db()
+    lines = list(page.lines.order_by("order"))
+    assert lines[0].text == "قال الأمير في سنة وهذا سطر ثانٍ من المتن"  # still two printed lines in one
+    assert "lines_merged" in page.attention_flags
+    from core.templatetags.nassakh import FLAG_LABELS
+
+    assert FLAG_LABELS["lines_merged"] == "سطران مطبوعان في سطر واحد"
+
+
+def test_nothing_changes_on_a_page_where_tesseract_found_every_line(page):
+    region = _inked_page(page)
+    found = _tess_body([(TESS_A, BAND_A), (TESS_B, BAND_B), (TESS_C, BAND_C)])
+    fakes = _rescue_engines(found, _psm7("لا يُقرأ"))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    assert _rescue_calls(fakes["tesseract"]) == []
+    run = page.ocr_runs.get(engine_name="tesseract", region=region)
+    assert run.params["lines"] == services._offset_lines(found.extra["lines"], 0, 20)
+    assert run.params["rescue"] == {"tried": 0, "added": 0}
+    assert run.parsed_text == "\n".join([TESS_A, TESS_B, TESS_C])
+    page.refresh_from_db()
+    assert page.lines.count() == 3 and "lines_merged" not in page.attention_flags
+
+
+def test_rescue_is_idempotent_on_a_stored_run(page, tmp_path):
+    region = _inked_page(page)
+    fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7(TESS_B))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        run = page.ocr_runs.get(engine_name="tesseract", region=region)
+        target = services.Target(region, region.bbox)
+        bw = services._load_field_image(page.preprocess.bw_image, "bw")
+        assert services.rescue_lines(page.preprocess, bw, [(target, run)], "tesseract", tmp_path) == 1
+    run.refresh_from_db()
+    assert sum(1 for line in run.params["lines"] if line.get("rescued")) == 1
+    assert run.parsed_text.count(TESS_B) == 1
+
+
+def test_a_failing_rescue_read_never_fails_the_fast_pass(page):
+    region = _inked_page(page)
+    found = _tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)])
+
+    def tesseract(path: Path, cap):
+        if path.stem.startswith("rescue"):
+            raise RuntimeError("tesseract crashed")
+        return found
+
+    fakes = engines()
+    fakes["tesseract"] = FakeEngine(name="tesseract", responder=tesseract)
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+    run = page.ocr_runs.get(engine_name="tesseract", region=region)
+    assert run.status == "ok" and run.params["rescue"] == {"tried": 1, "added": 0}
+    page.refresh_from_db()
+    assert page.provisional_text == TESS_A + "\n" + TESS_C
+
+
+def test_reading_order_rebuilds_a_line_tesseract_laid_out_left_to_right():
+    from ocr.engines.tesseract import reading_order
+
+    def words(*items):
+        return [{"text": t, "bbox": [x0, 0, x1, 20]} for t, x0, x1 in items]
+
+    # Book 13 page 3: «إلى مكان آخر في ليبيا ، حيث أنشأوا مدينة» came back as the left run first
+    laid_out = words(
+        ("حيث", 300, 340), ("مدينة", 200, 280), ("LS", 400, 440), ("إلى", 660, 700), ("في", 500, 530)
+    )
+    assert [w["text"] for w in reading_order(laid_out)] == ["إلى", "في", "LS", "حيث", "مدينة"]
+    # a right-to-left line with a Latin run keeps Tesseract's order (the run stays left to right)
+    fine = words(("قال", 300, 360), ("Ibn", 150, 210), ("Khaldun", 220, 280), ("في", 60, 120))
+    assert reading_order(fine) == fine
+    # overlapping boxes are not an inversion
+    close = words(("لتلك", 740, 810), ("المياه", 700, 882), ("الجوفية", 500, 580))
+    assert reading_order(close) == close
+    # a line laid out left to right with a Latin run: the run itself stays left to right
+    mixed = words(("من", 100, 140), ("Never", 300, 360), ("Split", 370, 420), ("الهدف", 600, 660))
+    assert [w["text"] for w in reading_order(mixed)] == ["الهدف", "Never", "Split", "من"]
+
+
+def test_reads_as_text_rejects_specks_and_accepts_words():
+    assert services.reads_as_text([{"text": "وهذا", "conf": 91}, {"text": ".", "conf": 80}])
+    assert not services.reads_as_text([{"text": "ee", "conf": 34}, {"text": "ل", "conf": 79}])
+    assert not services.reads_as_text([{"text": "TT", "conf": 32}, {"text": "ig", "conf": 40}])
+    assert not services.reads_as_text([{"text": "ees", "conf": 70}])  # a lone Latin word is a smudge
+    assert services.reads_as_text([{"text": "Goodchild,", "conf": 88}, {"text": "148:", "conf": 80}])
+
+
+# ---------------------------------------------------------------- manage.py rebuild_lines
+
+
+def _old_page(page: Page) -> tuple[Region, dict[str, FakeEngine]]:
+    """A page OCR'd before the rescue existed: Tesseract missed line B and nothing read it again."""
+    region = _inked_page(page)
+    fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7(""))
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.lines.count() == 2 and page.status == Page.Status.OCR_DONE
+    fakes["tesseract"].responder = lambda path, cap: (
+        _psm7(TESS_B) if path.stem.startswith("rescue") else pytest.fail("only rescue crops are read")
+    )
+    return region, fakes
+
+
+def _rebuild(fakes, *args: str) -> str:
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    out = StringIO()
+    with registry.override(fakes):
+        call_command("rebuild_lines", *args, stdout=out)
+    return out.getvalue()
+
+
+def test_rebuild_lines_rescues_and_rebuilds_without_calling_a_model(page):
+    region, fakes = _old_page(page)
+    model_calls = len(fakes["qari_v03"].calls) + len(fakes["qari_v02"].calls)
+    out = _rebuild(fakes, "--book", str(page.book_id))
+    assert len(fakes["qari_v03"].calls) + len(fakes["qari_v02"].calls) == model_calls
+    page.refresh_from_db()
+    assert [line.text for line in page.lines.order_by("order")] == [
+        "قال الأمير في سنة",
+        "وهذا سطر ثانٍ من المتن",
+        "ثم انتهى الكلام هنا",
+    ]
+    assert page.status == Page.Status.OCR_DONE and "lines_merged" not in page.attention_flags
+    run = page.ocr_runs.get(engine_name="tesseract", region=region)
+    assert run.params["rescue"] == {"tried": 1, "added": 1}
+    row = next(line for line in out.splitlines() if line.split()[:2] == [str(page.book_id), "1"])
+    assert row.split() == [str(page.book_id), "1", "2", "->", "3", "1", "->", "0", "1", "0"]
+
+
+def test_rebuild_lines_dry_run_writes_nothing(page):
+    region, fakes = _old_page(page)
+    lines_before = list(page.lines.order_by("order").values_list("id", "text", "tokens"))
+    run_before = page.ocr_runs.get(engine_name="tesseract", region=region)
+    flags = list(page.attention_flags)
+    out = _rebuild(fakes, "--book", str(page.book_id), "--page", "1", "--dry-run")
+    assert "dry run" in out and "1 line(s) rescued" in out
+    page.refresh_from_db()
+    assert list(page.lines.order_by("order").values_list("id", "text", "tokens")) == lines_before
+    run_after = page.ocr_runs.get(pk=run_before.pk)
+    assert run_after.params == run_before.params and run_after.parsed_text == run_before.parsed_text
+    assert page.attention_flags == flags and "lines_merged" in flags
+
+
+def test_rebuild_lines_lists_and_skips_reviewed_edited_and_unfinished_pages(page, book):
+    from review.models import LineRevision
+
+    _, fakes = _old_page(page)
+    made = []
+    for number, damage in ((2, "revision"), (3, "manual"), (4, "reviewed"), (5, "status")):
+        other = Page.objects.create(
+            book=book, number=number, source_index=number, status=Page.Status.OCR_DONE
+        )
+        line = Line.objects.create(page=other, order=0, text="سطر", tokens=[{"t": "سطر", "bbox": None}])
+        if damage == "revision":
+            LineRevision.objects.create(page=other, line=line, action="edit", undone=True)
+        elif damage == "manual":
+            Line.objects.filter(pk=line.pk).update(is_manual=True)
+        elif damage == "reviewed":
+            Line.objects.filter(pk=line.pk).update(is_reviewed=True)
+        else:
+            Page.objects.filter(pk=other.pk).update(status=Page.Status.LAYOUT_DONE)
+        made.append(other)
+    out = _rebuild(fakes, "--book", str(book.pk))
+    assert "skipped 4 page(s)" in out
+    for number, reason in ((2, "has review revisions"), (3, "has manual lines"), (4, "has reviewed lines")):
+        assert f"book {book.pk} page {number}: {reason}" in out
+    assert f"book {book.pk} page 5: status layout_done" in out
+    for other in made:
+        assert list(other.lines.values_list("text", flat=True)) == ["سطر"]
+    page.refresh_from_db()
+    assert page.lines.count() == 3  # the untouched page was rebuilt
+
+
+def test_rebuild_lines_page_needs_a_book():
+    from django.core.management.base import CommandError
+
+    with pytest.raises(CommandError, match="--page needs --book"):
+        _rebuild({}, "--page", "3")

@@ -1,0 +1,344 @@
+{% extends "base.html" %}
+{% load nassakh %}
+{% comment %}
+Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22). Context:
+book, state (assembly.services.manuscript_state), can_edit, can_review, assembling, failed, config (the Alpine
+component's start), and the fragment context of assembly/render.py (has_document, document_html, outline,
+warning_groups, stats_rows, counts_text, meta). The top-bar controls live in header_actions (outside the
+component root) and read the view through Alpine.store('manuscript').view; everything else is the
+`manuscriptView` component in static/src/js/manuscript.js; styles in static/src/components/manuscript.css.
+The document host is x-ignore: the fragment is static markup, hover / focus / clicks are delegated.
+{% endcomment %}
+{% block head_title %}المخطوطة · {{ book.title }} · نسّاخ{% endblock %}
+{% block title %}<span class="title-page">المخطوطة</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+
+{% block header_actions %}
+<div class="ms-bar" x-data="manuscriptBar">
+  <template x-if="v">
+    <div class="ms-bar-inner">
+      <a class="btn btn-ghost btn-sm ms-bar-dash" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
+
+      {# status pill (= rv-save): assembled … ago, assembling, stale, failed #}
+      <span class="ms-pill" :class="'is-' + v.pill.state" role="status" aria-live="polite" x-show="v.pill.text">
+        <span class="ms-pill-dot" aria-hidden="true"></span>
+        <span x-text="v.pill.text"></span>
+      </span>
+
+      {# the one primary (§4.2): re-assemble when stale or failed, else copy; convert before the first run #}
+      {% if can_edit %}
+      <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'reassemble'" @click="v.reassemble()" :disabled="v.busy" title="إعادة تجميع المخطوطة بالخيارات المحفوظة">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة التجميع</span>
+      </button>
+      <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'convert'" @click="v.openConvert()" :aria-expanded="v.convert.open" aria-haspopup="dialog">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+        <span>تحويل إلى كتاب</span>
+      </button>
+      {% endif %}
+      <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'copy'" @click="v.copyText()" :disabled="v.copying" title="ينسخ نص المخطوطة كاملًا (C)">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+        <span>نسخ نص المخطوطة</span>
+      </button>
+
+      {# «⋯» menu: the assembly options, copy, re-assemble, the dashboard #}
+      <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
+        <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
+          <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
+        </button>
+        <div class="menu menu-popover ms-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+          {% if can_edit %}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openConvert()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+            <span>خيارات التجميع…</span>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" x-show="v.hasDocument && v.primary !== 'reassemble'" :disabled="v.busy" @click="open = false; v.reassemble()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>إعادة التجميع</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
+          {% endif %}
+          <button type="button" class="menu-item" role="menuitem" x-show="v.hasDocument && v.primary !== 'copy'" :disabled="v.copying" @click="open = false; v.copyText()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>نسخ نص المخطوطة</span>
+            <kbd class="kbd ms-auto">C</kbd>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
+            <span class="ms-menu-glyph" aria-hidden="true">?</span>
+            <span>اختصارات لوحة المفاتيح</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
+          <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
+            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+            <span>لوحة الكتاب</span>
+          </a>
+        </div>
+      </div>
+
+      {% if can_edit %}
+      <div class="ms-convert-host" x-data="{ get ms() { return v; } }">{% include "assembly/_convert_popover.html" %}</div>
+      {% endif %}
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block content %}
+{{ config|json_script:"manuscript-config" }}
+<div class="ms-screen" data-manuscript x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
+     :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy }"
+     @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()">
+  <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
+
+  {# ------------------------------------------------------------ toolbar hanging from the top bar (= bk-toolbar) #}
+  <div class="ms-toolbar" x-show="phase !== 'empty'"{% if not has_document and not assembling and not failed %} x-cloak{% endif %}>
+    <div class="ms-toolbar-start">
+      <div class="ms-seam-toggle" role="group" aria-label="فواصل الصفحات">
+        <span class="ms-toolbar-label">فواصل الصفحات</span>
+        <div class="segmented" data-seam-toggle>
+          <button type="button" :aria-pressed="seams" aria-pressed="true" @click="setSeams(true)" title="إظهار فواصل الصفحات (S)">إظهار</button>
+          <button type="button" :aria-pressed="!seams" aria-pressed="false" @click="setSeams(false)" title="إخفاء فواصل الصفحات (S)">إخفاء</button>
+        </div>
+      </div>
+      <span class="ms-counts meta" x-show="countsText" x-text="countsText">{{ counts_text }}</span>
+    </div>
+    <div class="ms-toolbar-end">
+      <label class="ms-jump">
+        <span class="sr-only">الانتقال إلى صفحة</span>
+        <input type="text" inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة" x-ref="jump" autocomplete="off"
+               @keydown.enter.prevent="jump($el.value); $el.value = ''" @keydown.escape.stop="$el.value = ''; $el.blur()">
+        <kbd class="kbd" aria-hidden="true">G</kbd>
+      </label>
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------ banners: stale, failed (with a document), poll trouble #}
+  <div class="ms-banners">
+    <div class="banner ms-stale" x-show="stale" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">
+        <span x-text="staleText"></span>
+        <span class="ms-stale-pages" x-show="stalePages.length">
+          <template x-for="(n, i) in stalePages" :key="n">
+            <span><a class="ms-stale-page" :href="reviewUrl(n)"><bdi class="num" x-text="n"></bdi></a><span x-show="i < stalePages.length - 1">، </span></span>
+          </template>
+        </span>
+      </span>
+      {% if can_edit %}
+      <button type="button" class="btn btn-sm" @click="reassemble()" :disabled="busy">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة التجميع</span>
+      </button>
+      {% endif %}
+    </div>
+    <div class="banner banner-danger" role="alert" x-show="failed && hasDocument" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow"><span x-text="errorHeadline"></span> بقيت المخطوطة السابقة كما هي.</span>
+      {% if can_edit %}
+      <button type="button" class="btn btn-sm" @click="reassemble()" :disabled="busy">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة المحاولة</span>
+      </button>
+      {% endif %}
+    </div>
+    <button type="button" class="bk-poll ms-poll" x-show="pollState === 'error'" x-cloak @click="pollNow()" title="إعادة محاولة التحديث الآن">
+      <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
+    </button>
+    <a class="bk-poll ms-poll" x-show="pollState === 'auth'" x-cloak href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
+      <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
+    </a>
+  </div>
+
+  {# ------------------------------------------------------------ never assembled: one sentence, the options, the action #}
+  <div class="empty-state ms-empty" x-show="phase === 'empty'"{% if has_document or assembling or failed %} x-cloak{% endif %}>
+    <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-book"/></svg>
+    <h2 class="empty-title">لم يُجمَّع هذا الكتاب بعد</h2>
+    <p class="empty-text">التجميع يحوّل صفحات الكتاب إلى مخطوطة واحدة متّصلة: تُحذف الترويسات وأرقام الصفحات، وتُوصل الفقرات عبر الصفحات، وتُربط الحواشي بعلاماتها، وتصير الأسطر المعلَّمة عناوينَ وفصولًا.</p>
+    {% if can_edit %}
+    <div class="ms-empty-options" x-data="{ get ms() { return $data; } }">
+      {% include "assembly/_convert_options.html" %}
+    </div>
+    <p class="ms-convert-error" role="alert" x-show="convert.error" x-text="convert.error"></p>
+    <button type="button" class="btn btn-primary" @click="submitConvert()" :disabled="convert.busy">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+      <span>تحويل إلى كتاب</span>
+    </button>
+    {% else %}
+    <p class="meta">يبدأ التحويل محرّر الكتاب من لوحة الكتاب أو من هنا.</p>
+    {% endif %}
+  </div>
+
+  {# ------------------------------------------------------------ the document beside the side panel (D34 layout) #}
+  <div class="ms-layout" x-show="phase !== 'empty'"{% if not has_document and not assembling and not failed %} x-cloak{% endif %}>
+    <div class="ms-main">
+      <div class="ms-column" x-ref="column">
+
+        {# assembling, no document yet: the reveal starts with review-style skeleton paragraphs #}
+        <div class="ms-skeleton" x-show="phase === 'assembling' && !hasDocument"{% if not assembling or has_document %} x-cloak{% endif %} aria-hidden="true">
+          <span class="ms-skeleton-title"></span>
+          <p><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span></p>
+          <p><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span></p>
+          <p><span style="width:94%"></span><span style="width:87%"></span><span style="width:52%"></span></p>
+          <p><span style="width:91%"></span><span style="width:96%"></span><span style="width:89%"></span><span style="width:70%"></span></p>
+        </div>
+
+        {# failed with no document: a designed error state #}
+        <div class="empty-state ms-state-error" x-show="phase === 'error' && !hasDocument"{% if not failed or has_document %} x-cloak{% endif %} role="alert">
+          <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+          <h3 class="empty-title" x-text="errorHeadline"></h3>
+          <p class="empty-text">لم تُكتب مخطوطة. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.</p>
+          {% if can_edit %}
+          <button type="button" class="btn" @click="reassemble()" :disabled="busy">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>إعادة المحاولة</span>
+          </button>
+          {% endif %}
+        </div>
+
+        {# the document host: the fragment, swapped as one; x-ignore keeps Alpine out of its 5 000 blocks #}
+        <div class="ms-host" x-ref="host" x-ignore data-ms-host :class="{ 'is-reveal': reveal }" x-show="hasDocument"{% if not has_document %} x-cloak{% endif %}>{% if has_document %}{% include "assembly/_document.html" %}{% endif %}</div>
+
+        {# block tools: one floating «⋯» in the start margin of the hovered / focused block #}
+        <div class="ms-tools" x-show="tools.blockId" x-cloak :style="tools.style" @mouseenter="keepTools()">
+          <button type="button" class="btn-icon btn-icon-sm ms-tools-btn" x-ref="toolsBtn" aria-haspopup="menu" :aria-expanded="menu.open" title="قائمة الفقرة" aria-label="قائمة الفقرة" @click="toggleMenu(tools.blockId)">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
+          </button>
+        </div>
+        <div class="menu ms-block-menu" role="menu" x-ref="menu" x-show="menu.open" x-cloak :style="menu.style" @click.outside="closeMenu()" @keydown.escape.stop.prevent="closeMenu(true)" x-transition.opacity.duration.120ms>
+          <div class="menu-label">ص <bdi class="num" x-text="menu.src"></bdi><span x-show="!menu.reviewed"> · لم تُراجَع بعد</span></div>
+          <button type="button" class="menu-item" role="menuitem" @click="openSource(menu.blockId)">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
+            <span>عرض الأصل</span>
+            <kbd class="kbd ms-auto">O</kbd>
+          </button>
+          <div class="menu-sep" role="separator"></div>
+          <div class="menu-label">نوع الفقرة</div>
+          <template x-for="r in roles" :key="r.value">
+            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
+              <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
+              <span x-text="r.label"></span>
+            </button>
+          </template>
+          <div class="menu-sep" role="separator"></div>
+          <a class="menu-item" role="menuitem" :href="menu.reviewUrl">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+            <span>فتح في المراجعة</span>
+          </a>
+        </div>
+
+        {# seam card: what happened at this page boundary and the override #}
+        <div class="ms-card" role="group" aria-label="فاصل صفحة" x-ref="card" x-show="card.open" x-cloak :style="card.style" @mouseenter="keepCard()" @mouseleave="closeCardSoon()" @keydown.escape.stop.prevent="hideCard(true)">
+          <span class="ms-card-text" x-text="card.text"></span>
+          {% if can_edit %}
+          <span class="ms-card-actions">
+            <button type="button" class="btn btn-sm" x-show="card.action" :disabled="busy" @click="applySeam()" x-text="card.actionLabel"></button>
+            <button type="button" class="btn btn-ghost btn-sm" x-show="card.decision === 'override'" :disabled="busy" @click="resetSeam()" title="إلغاء التعديل اليدوي والعودة إلى القرار التلقائي">تلقائي</button>
+          </span>
+          {% endif %}
+        </div>
+
+        {# footnote popover on hover / focus of a reference #}
+        <div class="ms-note-pop" role="tooltip" x-ref="notePop" x-show="notePop.open" x-cloak :style="notePop.style" @mouseenter="keepNote()" @mouseleave="closeNoteSoon()">
+          <span class="ms-note-pop-num num"><bdi x-text="notePop.number"></bdi></span>
+          <span class="ms-note-pop-text" x-html="notePop.html"></span>
+          <span class="ms-note-pop-flag" x-show="notePop.orphan">بلا علامة في المتن</span>
+        </div>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------ side panel (end side): steps while assembling, then contents / notes, stats #}
+    <aside class="ms-side" aria-label="محتويات المخطوطة وملاحظاتها">
+      <button type="button" class="btn btn-sm ms-side-toggle" @click="sideOpen = !sideOpen" :aria-expanded="sideOpen">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+        <span>المحتويات والملاحظات</span>
+      </button>
+      <div class="ms-side-body" :class="{ 'is-open': sideOpen }">
+        <ol class="ms-steps" x-show="phase === 'assembling'"{% if not assembling %} x-cloak{% endif %} aria-label="خطوات التجميع">
+          <template x-for="s in steps" :key="s.key">
+            <li class="ms-step" :class="{ 'is-done': s.done, 'is-current': s.current }">
+              <span class="ms-step-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span>
+              <span x-text="s.label"></span>
+            </li>
+          </template>
+        </ol>
+        <div class="ms-side-main" x-show="phase !== 'assembling' || hasDocument">
+          <div class="segmented ms-tabs" role="tablist" aria-label="لوحة المخطوطة">
+            <button type="button" role="tab" :aria-selected="tab === 'toc'" :class="{ 'is-selected': tab === 'toc' }" @click="tab = 'toc'">المحتويات</button>
+            <button type="button" role="tab" :aria-selected="tab === 'notes'" :class="{ 'is-selected': tab === 'notes' }" @click="tab = 'notes'">ملاحظات <bdi class="num" x-text="warningsTotal">{{ warnings_total|default:0 }}</bdi></button>
+          </div>
+          <div class="ms-side-scroll">
+            <div class="ms-toc-host" x-ref="tocHost" data-ms-toc-host x-show="tab === 'toc'" @click="onSideClick($event)"></div>
+            <div class="ms-warn-host" x-ref="warnHost" data-ms-warnings-host x-show="tab === 'notes'" x-cloak @click="onSideClick($event)"></div>
+          </div>
+          <div class="ms-stats-host" x-ref="statsHost" data-ms-stats-host></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  {# ------------------------------------------------------------ source drawer («عرض الأصل»): the scan with the block's lines #}
+  <aside class="ms-drawer" role="dialog" aria-modal="false" aria-label="الأصل" x-ref="drawer" x-show="drawer.open" x-cloak @keydown.escape.stop.prevent="closeDrawer()">
+    <div class="ms-drawer-head">
+      <h2 class="section-title">الأصل</h2>
+      <span class="meta num" x-show="drawerPage">ص <bdi x-text="drawerPage"></bdi></span>
+      <div class="ms-drawer-pager" role="group" aria-label="صفحات الفقرة" x-show="drawer.pages.length > 1">
+        <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة السابقة" :disabled="drawer.index <= 0" @click="drawerStep(-1)">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+        </button>
+        <span class="meta num"><bdi x-text="drawer.index + 1"></bdi> / <bdi x-text="drawer.pages.length"></bdi></span>
+        <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة التالية" :disabled="drawer.index >= drawer.pages.length - 1" @click="drawerStep(1)">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+        </button>
+      </div>
+      <a class="btn btn-ghost btn-sm ms-drawer-review" :href="reviewUrl(drawerPage)" x-show="drawerPage">فتح في المراجعة</a>
+      <button type="button" class="btn-icon" x-ref="drawerClose" aria-label="إغلاق" title="إغلاق (Esc)" @click="closeDrawer()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <div class="ms-drawer-body">
+      <div class="ms-sheet-skeleton" x-show="drawer.loading" aria-hidden="true"></div>
+      <div class="empty-state ms-drawer-error" x-show="drawer.error && !drawer.loading" x-cloak>
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+        <p class="empty-text" x-text="drawer.error"></p>
+        <button type="button" class="btn btn-sm" @click="loadSheet(drawerPage, true)">إعادة المحاولة</button>
+      </div>
+      <template x-if="drawer.sheet && !drawer.loading">
+        <div class="ms-sheet" dir="ltr" :style="'--ar:' + drawerAspect">
+          <img class="ms-sheet-img" :src="drawer.sheet.display_url || drawer.sheet.scan_url" :alt="'صورة الصفحة ' + drawerPage" decoding="async">
+          <div class="ms-sheet-empty" x-show="!drawer.sheet.display_url && !drawer.sheet.scan_url"><span class="meta">لا صورة لهذه الصفحة بعد.</span></div>
+          <div class="ms-sheet-overlay" aria-hidden="true">
+            <template x-for="b in drawerBoxes()" :key="b.id">
+              <div class="ms-band" :class="{ 'is-block': b.own }" :style="boxStyle(b.bbox)"></div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </aside>
+
+  {# ------------------------------------------------------------ shortcut sheet (= rv-shortcuts) #}
+  <div class="rv-scrim" x-show="sheetOpen" x-cloak x-transition.opacity.duration.150ms @click.self="closeSheet()">
+    <div class="rv-modal rv-shortcuts" role="dialog" aria-modal="true" aria-labelledby="ms-sheet-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeSheet()">
+      <div class="rv-modal-head">
+        <h2 class="rv-modal-title" id="ms-sheet-title">اختصارات لوحة المفاتيح</h2>
+        <button type="button" class="btn-icon" x-ref="sheetClose" aria-label="إغلاق" @click="closeSheet()">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <dl class="rv-keys">
+        <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة</dd>
+        <dt><kbd class="kbd">S</kbd></dt><dd>إظهار فواصل الصفحات أو إخفاؤها</dd>
+        <dt><kbd class="kbd">J</kbd> / <kbd class="kbd">K</kbd> أو <kbd class="kbd">↓</kbd> / <kbd class="kbd">↑</kbd></dt><dd>الفقرة التالية / السابقة</dd>
+        <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة، فتح في المراجعة</dd>
+        <dt><kbd class="kbd">O</kbd></dt><dd>عرض أصل الفقرة المحدَّدة</dd>
+        <dt><kbd class="kbd">]</kbd> / <kbd class="kbd">[</kbd></dt><dd>الملاحظة التالية / السابقة</dd>
+        <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>فصل الفقرة أو وصلها، و<kbd class="kbd">⌫</kbd> يعيد القرار التلقائي</dd>
+        <dt><kbd class="kbd">C</kbd></dt><dd>نسخ نص المخطوطة</dd>
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق الأصل والقوائم</dd>
+        <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
+      </dl>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}{% endblock %}

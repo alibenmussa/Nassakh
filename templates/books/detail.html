@@ -57,6 +57,21 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <span>نسخ نص الكتاب</span>
       </button>
       {% endif %}
+      {# Phase 4 (§4.1): convert once every page is reviewed, re-assemble a stale manuscript, open a fresh one #}
+      {% if role == 'admin' or role == 'editor' %}
+      <button type="button" class="btn btn-primary" x-show="d.primary === 'convert'" @click="d.openConvert()" :aria-expanded="d.convert.open" aria-haspopup="dialog" title="تجميع صفحات الكتاب في مخطوطة واحدة">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+        <span>تحويل إلى كتاب</span>
+      </button>
+      <button type="button" class="btn btn-primary" x-show="d.primary === 'reassemble'" @click="d.reassemble()" :disabled="d.convert.busy" title="إعادة تجميع المخطوطة بعد تغيّر النص">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة التجميع</span>
+      </button>
+      {% endif %}
+      <a class="btn btn-primary" x-show="d.primary === 'manuscript'" :href="d.manuscriptUrl" data-manuscript-open>
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+        <span>فتح المخطوطة</span>
+      </a>
 
       {# «⋯» menu: everything else (§2.1.6); an item that is currently the primary is hidden here #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
@@ -71,6 +86,17 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
             <span>نسخ نص الكتاب</span>
           </button>
           <div class="menu-sep" role="separator" x-show="d.primary !== 'copy'"></div>
+          {% endif %}
+          <a class="menu-item" role="menuitem" :href="d.manuscriptUrl" x-show="d.manuscriptUrl && d.hasManuscript && d.primary !== 'manuscript'">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+            <span>فتح المخطوطة</span>
+          </a>
+          {% if role == 'admin' or role == 'editor' %}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openConvert()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+            <span>تحويل إلى كتاب…</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
           {% endif %}
           {% if role == 'admin' or role == 'editor' %}
           {% if guides_url and tiles %}
@@ -98,6 +124,9 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           </a>
         </div>
       </div>
+      {% if role == 'admin' or role == 'editor' %}
+      <div class="bk-convert-host" x-data="{ get ms() { return d; } }">{% include "assembly/_convert_popover.html" %}</div>
+      {% endif %}
     </div>
   </template>
 </div>
@@ -213,6 +242,14 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           <span class="status" x-show="!allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>مُراجَعة <bdi class="num" x-text="reviewSummary.reviewed"></bdi> من <bdi class="num" x-text="reviewSummary.total"></bdi> صفحة</span></span>
           <span class="meta num" x-show="reviewSummary.unresolved_total > 0"><bdi x-text="reviewSummary.unresolved_total"></bdi> كلمة غير مؤكَّدة</span>
           <span class="status" x-show="allReviewed"><span class="dot dot-success" aria-hidden="true"></span><span>رُوجعت كل الصفحات</span></span>
+        </div>
+        <div class="bk-manuscript" role="group" aria-label="المخطوطة" x-show="anyOcrDone"{% if not stages.3.count %} x-cloak{% endif %}>
+          <div class="bk-side-head"><span>المخطوطة</span></div>
+          <span class="status bk-manuscript-line"><span class="dot" :class="manuscriptDot" aria-hidden="true"></span><span x-text="manuscriptLine"></span></span>
+          <a class="link bk-manuscript-open" :href="manuscriptUrl" x-show="hasManuscript && manuscriptUrl">فتح المخطوطة</a>
+          {% if role == 'admin' or role == 'editor' %}
+          <button type="button" class="link bk-manuscript-convert" x-show="!hasManuscript && allReviewed" @click="openConvert()">تحويل إلى كتاب…</button>
+          {% endif %}
         </div>
         <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
           <summary>تحتاج انتباهًا <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span></summary>

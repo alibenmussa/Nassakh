@@ -226,3 +226,30 @@ Footnotes are now set solid: packed from the first note down with a line box of 
 free to run on below their printed lines to 97 % of the page before the type shrinks. A footnote whose
 lines have only some text boxes uses them; one with none is sized from the body's lines, because the
 detected boxes measure the letters' core band (about a quarter of a line) and gave tiny type.
+
+## D35 — Assembly may run before every page is reviewed (2026-09-24)
+Unreviewed OCR'd pages are included, flagged on their blocks and listed as warnings; pages still in the pipeline or in
+error are skipped with a warning; excluded pages never appear. Footnotes are numbered per chapter by default (per book or
+per page as options, remembered per book); exported numbering follows the stylesheet (Phase 6). Spec: PHASE4_SPEC §0.
+
+## D36 — `assembled` means "in the current manuscript, unchanged since" (2026-09-24)
+After a run, included reviewed pages become `assembled`. They stay editable in review; any change puts them back to
+`reviewed` and the manuscript shows as out of date until re-assembled.
+
+## D37 — Assembly normalises typography in the derived text only (2026-09-24)
+Punctuation glued to the next word by the primary model («تاكنست .وتاكنست») is moved back, spaces before . ، ؛ : ؟ ! are
+dropped, tatweel is removed (setting, on by default), digits follow `digit_style`. Stored lines, tokens and diacritics are
+never changed.
+
+## D38 — Assembly overrides live with the book (2026-09-24)
+Seam overrides (join/split), dismissed heading suggestions and assembly options are stored in `Book.assembly_settings` and
+re-applied by every run. Heading fixes from the manuscript view go through the review service (`set_line_role`).
+
+## D39 — OCR lines: rescue lines Tesseract skips, place orphan words by evidence (2026-09-24, amends D12)
+Tesseract sometimes drops a whole printed line (usually a paragraph's last line), so its Qari words were appended to the
+line above (two printed lines shown as one). After each Tesseract run, detected bands and ink gaps with no Tesseract line
+are re-read one line at a time (psm 7, tight crop) and inserted as rescued lines; unanchored words go to the line whose
+unmatched Tesseract words they sit on (garbage line starts, rescued lines); visibly inverted Tesseract lines are reordered;
+a line that still looks merged gets the attention flag «سطران مطبوعان في سطر واحد». `manage.py rebuild_lines` applies
+this to existing pages from their stored runs without calling a model, skipping pages with any review edit.
+

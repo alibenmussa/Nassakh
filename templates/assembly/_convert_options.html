@@ -1,0 +1,21 @@
+{% comment %}The assembly options (PHASE4_SPEC §4.1): footnote numbering, unreviewed pages, tatweel. Included by the
+convert popover (dashboard and manuscript view) and by the never-assembled empty state. The enclosing Alpine scope
+provides `ms` (the component holding `convert.options` and `convert.unreviewed`).{% endcomment %}
+<div class="ms-convert-fields">
+  <div class="ms-convert-group">
+    <span class="ms-convert-label" id="ms-numbering-label">ترقيم الحواشي</span>
+    <div class="segmented ms-convert-seg" role="radiogroup" aria-labelledby="ms-numbering-label">
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'chapter'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'chapter' }" @click="ms.convert.options.footnote_numbering = 'chapter'">حسب الفصل</button>
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'book'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'book' }" @click="ms.convert.options.footnote_numbering = 'book'">حسب الكتاب</button>
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'page'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'page' }" @click="ms.convert.options.footnote_numbering = 'page'">حسب الصفحة</button>
+    </div>
+  </div>
+  <label class="check ms-convert-check">
+    <input type="checkbox" x-model="ms.convert.options.include_unreviewed">
+    <span>تضمين الصفحات غير المُراجَعة (<bdi class="num" x-text="ms.convert.unreviewed"></bdi>)</span>
+  </label>
+  <label class="check ms-convert-check">
+    <input type="checkbox" x-model="ms.convert.options.strip_tatweel">
+    <span>حذف التطويل</span>
+  </label>
+</div>

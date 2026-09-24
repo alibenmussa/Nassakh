@@ -14,7 +14,7 @@ The **manuscript view** is where the owner verifies the assembly (D22: viewing v
 not a reading view). Its tools are always visible: page seams with a join/split control, the source scan of any
 block, heading suggestions, footnote links and a warnings list. UI/UX is the priority of this phase.
 
-## 0. Decisions taken for this phase (D35–D38, to confirm with the owner)
+## 0. Decisions taken for this phase (D35–D38; D39 covers the OCR line fix built alongside)
 
 - **D35 — Assembly may run before every page is reviewed.** OCR'd pages that are not reviewed yet are included
   and flagged (a warning per page and a mark on their blocks). Pages still in the pipeline or in error are skipped

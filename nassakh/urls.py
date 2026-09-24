@@ -7,8 +7,9 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 - `/books/`                 books app HTML routes                namespace `books`
 - `/books/`                 processing HTML routes (guides)      namespace `processing`
 - `/books/`                 review screens (Phase 3)             namespace `review`
+- `/books/`                 manuscript view (Phase 4)            namespace `assembly`
 - `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
-- `/api/`                   JSON routes from books/processing/ocr/review `api_urlpatterns`, all in
+- `/api/`                   JSON routes from books/processing/ocr/review/assembly `api_urlpatterns`, all in
                             the single namespace `api` (reverse as `api:<name>`)
 - `/media/<path>`           uploaded and derived files through the login-protected view
 """
@@ -16,6 +17,7 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 from django.contrib import admin
 from django.urls import include, path
 
+from assembly import urls as assembly_urls
 from books import urls as books_urls
 from core import views as core_views
 from ocr import urls as ocr_urls
@@ -27,6 +29,7 @@ api_urlpatterns = (
     + processing_urls.api_urlpatterns
     + ocr_urls.api_urlpatterns
     + review_urls.api_urlpatterns
+    + assembly_urls.api_urlpatterns
 )
 
 urlpatterns = [
@@ -36,6 +39,7 @@ urlpatterns = [
     path("books/", include("books.urls")),
     path("books/", include("processing.urls")),
     path("books/", include("review.urls")),
+    path("books/", include("assembly.urls")),
     path("ocr/", include("ocr.urls")),
     path("api/", include((api_urlpatterns, "api"))),
     # Media always goes through the login-protected view. With DEBUG on this is what serves

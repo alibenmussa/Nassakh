@@ -111,6 +111,20 @@ document.addEventListener('alpine:init', () => {
     return digits ? parseInt(digits, 10) : NaN;
   }
   const norm = (v) => (v === undefined || v === null || v === false ? '' : v === true ? '1' : String(v));
+  // «صفحة واحدة», «صفحتان», «5 صفحات», «214 صفحة» (= NassakhManuscript.arCount / assembly.render.ar_count)
+  const arCount = (n, forms) => {
+    n = Number(n) || 0;
+    if (n === 1) return forms[0];
+    if (n === 2) return forms[1];
+    const units = n % 100;
+    return `${n} ${units >= 3 && units <= 10 ? forms[2] : forms[3]}`;
+  };
+  const PAGE_FORMS = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  const NOTE_FORMS = ['ملاحظة واحدة', 'ملاحظتان', 'ملاحظات', 'ملاحظة'];
+  const csrfToken = () => {
+    const meta = typeof document !== 'undefined' && document.querySelector ? document.querySelector('meta[name="csrf-token"]') : null;
+    return (meta && meta.content) || '';
+  };
   const byNumberAsc = (a, b) => a.number - b.number;
   const toast = (message) => { if (window.Nassakh && window.Nassakh.toast) window.Nassakh.toast(message); };
   const setHidden = (el, hidden) => { if (el) el.hidden = Boolean(hidden); };
@@ -191,6 +205,9 @@ document.addEventListener('alpine:init', () => {
     errorDetail: cfg.errorDetail || '',
     byStatus: cfg.byStatus || {},
     review: cfg.review || null, // {reviewed, total, unresolved_total, next_review_url} from the progress poll
+    manuscript: cfg.manuscript || null, // assembly.services.manuscript_state (compact), refreshed by the poll
+    manuscriptUrls: cfg.manuscriptUrls || {},
+    convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
     filter: 'all',
@@ -334,6 +351,7 @@ document.addEventListener('alpine:init', () => {
       if (d.error_headline !== undefined) this.errorHeadline = d.error_headline || '';
       if (d.error_detail !== undefined) this.errorDetail = d.error_detail || '';
       if (d.review) this.review = d.review;
+      if (d.manuscript) this.manuscript = d.manuscript;
       this.active = Boolean(d.active);
       const changed = [];
       const added = [];
@@ -483,13 +501,106 @@ document.addEventListener('alpine:init', () => {
       const s = this.reviewSummary;
       return s.total > 0 && s.reviewed >= s.total;
     },
-    // Exactly one primary button per state (§2.1.5), chosen from the poll without a reload.
+    // Exactly one primary button per state (§2.1.5, PHASE4 §4.1), chosen from the poll without a reload:
+    // once every page is reviewed, convert (or re-assemble a stale / failed manuscript) for editors, open a
+    // fresh manuscript for everyone, else copy the book's text.
     get primary() {
       if (this.canEdit && (this.status === 'uploaded' || this.status === 'error')) return 'start';
       if (this.canEdit && this.status === 'needs_guides' && cfg.guidesUrl) return 'guides';
       if (this.nextReviewUrl) return 'review';
-      if (this.allReviewed && this.bookTextUrl) return 'copy';
+      if (this.allReviewed) {
+        const m = this.manuscript || {};
+        if (m.active) return this.manuscriptUrl ? 'manuscript' : '';
+        if (m.exists && !m.stale && !this.manuscriptFailed) return this.manuscriptUrl ? 'manuscript' : 'copy';
+        if (this.canEdit) return m.exists ? 'reassemble' : 'convert';
+        if (m.exists && this.manuscriptUrl) return 'manuscript';
+        if (this.bookTextUrl) return 'copy';
+      }
       return '';
+    },
+    // ------------------------------------------------------------ the manuscript (Phase 4, §4.1)
+    get hasManuscript() {
+      const m = this.manuscript || {};
+      return Boolean(m.exists || m.active);
+    },
+    get manuscriptFailed() {
+      const m = this.manuscript || {};
+      return Boolean(m.run && m.run.status === 'error') && !m.active;
+    },
+    get manuscriptUrl() {
+      return this.manuscriptUrls.page || '';
+    },
+    // the side panel's state line: «مُجمَّعة · 214 صفحة · 3 ملاحظات», «تغيّر نص 4 صفحات بعد التجميع», «قيد التجميع»
+    get manuscriptLine() {
+      const m = this.manuscript || {};
+      if (m.active) return 'قيد التجميع';
+      if (this.manuscriptFailed) return 'فشل التجميع';
+      if (m.exists && m.stale) return `تغيّر نص ${arCount((m.stale_pages || []).length, PAGE_FORMS)} بعد التجميع`;
+      if (m.exists) {
+        const pages = (m.stats && m.stats.pages_included) || 0;
+        const notes = m.warnings_count || 0;
+        return `مُجمَّعة · ${arCount(pages, PAGE_FORMS)} · ${notes ? arCount(notes, NOTE_FORMS) : 'بلا ملاحظات'}`;
+      }
+      return 'لم تُجمَّع بعد';
+    },
+    get manuscriptDot() {
+      const m = this.manuscript || {};
+      if (m.active) return 'dot-accent';
+      if (this.manuscriptFailed) return 'dot-danger';
+      if (m.exists && m.stale) return 'dot-warning';
+      if (m.exists) return 'dot-success';
+      return 'dot-neutral';
+    },
+    // the convert popover (assembly/_convert_popover.html): the options remembered per book (D38)
+    openConvert() {
+      const m = this.manuscript || {};
+      this.convert.options = Object.assign({ footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, m.options || {});
+      this.convert.unreviewed = Number(m.unreviewed_pages) || 0;
+      this.convert.label = m.exists ? 'إعادة التجميع' : 'تحويل';
+      this.convert.error = '';
+      this.convert.open = true;
+    },
+    closeConvert() {
+      this.convert.open = false;
+    },
+    async submitConvert() {
+      const ok = await this.startAssembly(Object.assign({}, this.convert.options));
+      if (ok) this.convert.open = false;
+      return ok;
+    },
+    reassemble() {
+      const m = this.manuscript || {};
+      return this.startAssembly(Object.assign({ footnote_numbering: 'chapter', include_unreviewed: true, strip_tatweel: true }, m.options || {}));
+    },
+    // POST assemble, then the manuscript view shows the assembly as it runs (§4.1).
+    async startAssembly(options) {
+      const url = this.manuscriptUrls.assemble;
+      if (!url || this.convert.busy) return false;
+      this.convert.busy = true;
+      this.convert.error = '';
+      let data = null;
+      let ok = false;
+      let message = '';
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
+          body: JSON.stringify(options || {}),
+        });
+        try { data = await res.json(); } catch (e) { data = null; }
+        ok = res.ok;
+        if (!ok) message = (data && (data.detail || data.message)) || (res.status === 403 ? 'هذا الإجراء يتطلب صلاحية محرّر.' : 'تعذّر بدء التجميع. حاول مرة أخرى.');
+      } catch (e) {
+        message = 'انقطع الاتصال بالخادم. تحقّق من الشبكة ثم أعد المحاولة.';
+      }
+      this.convert.busy = false;
+      if (!ok) { this.convert.error = message; toast(message); return false; }
+      this.manuscript = Object.assign({}, this.manuscript || {}, { active: true, run: { id: data && data.run_id, status: data && data.status, stage: data && data.stage, error: '' } });
+      const target = (data && data.manuscript_url) || this.manuscriptUrl;
+      if (target && typeof window !== 'undefined' && window.location && window.location.assign) window.location.assign(target);
+      return true;
     },
     stagePercent(p) {
       if (p.error) return 100;

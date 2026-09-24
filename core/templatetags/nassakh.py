@@ -38,6 +38,7 @@ FLAG_LABELS: dict[str, str] = {
     "edge_strip_removed": "أُزيل شريط من حافة الصفحة",
     "ocr_fallback": "استُخدم نص Tesseract الاحتياطي",
     "alignment_poor": "ربط الكلمات بالأسطر ضعيف",
+    "lines_merged": "سطران مطبوعان في سطر واحد",
 }
 
 

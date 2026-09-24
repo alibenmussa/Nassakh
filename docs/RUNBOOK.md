@@ -360,7 +360,32 @@ with at least two distinct readings (`t`, `alt`, `tess`) when `NASSAKH["WORD_CHO
 `none` (the default). It returns None today (placeholder for a future small classifier). A returned string that is
 one of the readings becomes the word with `res = "chooser"`; `conf` stays `low`. No UI.
 
-## 11. Troubleshooting
+## 11. Phase 4 — assembly and the manuscript view
+
+Upgrading: `make migrate` once (new `books.0006_book_assembly_settings`, `assembly.0001_initial`, `editor.0001_initial`).
+
+**Existing pages with merged lines (D39).** Preview, then apply, from the stored OCR runs (no model is called):
+
+```
+.venv/bin/python manage.py rebuild_lines --dry-run            # every book
+.venv/bin/python manage.py rebuild_lines --book 13            # apply to one book
+```
+
+It only touches `ocr_done` pages without review edits; reviewed or edited pages are listed and skipped (re-run OCR on
+them knowingly, it replaces their lines). New books get the fix automatically.
+
+**Assembling.** On the dashboard: «تحويل إلى كتاب» (primary once every page is reviewed, else in the «⋯» menu) opens the
+options (footnote numbering, include unreviewed pages, remove tatweel) and goes to `/books/<id>/manuscript/`, where the
+steps tick and the manuscript appears. The worker (`make worker`) must run; the task is on the default queue.
+In the view: page seams show joins/splits (click to toggle, «تلقائي» to undo an override), `O` or «عرض الأصل» opens a
+block's scan with its lines highlighted, «⋯» on a block sets its role (heading/subheading/body), suggested headings
+have ✓ / ×, «ملاحظات» lists warnings with a jump and a review link. Keys: G jump, S seams, J/K blocks, ] / [ warnings,
+C copy, ? shortcuts, Esc closes. Editing a page in review afterwards marks the manuscript out of date; «إعادة التجميع»
+rebuilds it and keeps the previous one as a snapshot (the last 10).
+
+From the shell: `manage.py assemble <book_id> --dry-run` prints stats and warnings without writing.
+
+## 12. Troubleshooting
 
 | Symptom | Fix |
 |---|---|

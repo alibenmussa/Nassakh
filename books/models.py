@@ -55,6 +55,10 @@ class Book(models.Model):
     digit_style = models.CharField(
         "نمط الأرقام", max_length=20, default=DigitStyle.WESTERN, choices=DigitStyle.choices
     )
+    # Assembly options and overrides (D38): footnote_numbering, include_unreviewed, strip_tatweel,
+    # seams {"<page number>": "join" | "split"}, dismissed_suggestions [block ids]. Read through
+    # `assembly.pipeline.normalize_settings`.
+    assembly_settings = models.JSONField("إعدادات التجميع", default=dict, blank=True)
 
     status = models.CharField("الحالة", max_length=20, choices=Status.choices, default=Status.UPLOADED)
     error_message = models.TextField("رسالة الخطأ", blank=True)
