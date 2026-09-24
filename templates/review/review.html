@@ -77,8 +77,12 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <div class="rv-toolbar-end">
           <div class="rv-zoom" role="group" aria-label="التكبير">
             <button type="button" class="btn-icon btn-icon-sm" title="تصغير (-)" aria-label="تصغير" @click="zoomOut()"><span aria-hidden="true">−</span></button>
-            <button type="button" class="rv-zoom-label meta num" title="ملاءمة العرض (0)" @click="zoomReset()" x-text="zoomLabel" dir="ltr"></button>
+            <button type="button" class="rv-zoom-label meta num" :title="fitLabel + ' (0)'" @click="zoomReset()" x-text="zoomLabel" dir="ltr"></button>
             <button type="button" class="btn-icon btn-icon-sm" title="تكبير (+)" aria-label="تكبير" @click="zoomIn()"><span aria-hidden="true">+</span></button>
+          </div>
+          <div class="segmented rv-fit" role="group" aria-label="ملاءمة الصفحة">
+            <button type="button" :aria-pressed="fit === 'height'" @click="setFit('height')" title="ملاءمة الارتفاع: الصفحة كاملة">الارتفاع</button>
+            <button type="button" :aria-pressed="fit === 'width'" @click="setFit('width')" title="ملاءمة العرض: عرض الصفحة كاملًا">العرض</button>
           </div>
           <button type="button" class="btn-icon btn-icon-sm" :aria-pressed="swapped" title="تبديل جهتَي الصورة والنص" aria-label="تبديل جهتَي الصورة والنص" @click="toggleSwap()">
             <svg class="icon" aria-hidden="true"><path d="M7 8h13M17 5l3 3-3 3"/><path d="M17 16H4M7 13l-3 3 3 3"/></svg>

@@ -24,6 +24,7 @@
     set(key, value) { try { window.localStorage.setItem(key, value); } catch (_) { /* private mode */ } },
   };
   const SWAP_KEY = 'nassakh.review.swapped';
+  const FIT_KEY = 'nassakh.review.fit'; // 'height' (default) | 'width'
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 6;
   const SAVED_MS = 1600;
@@ -146,6 +147,7 @@
       tab: 'display',
       swapped: false,
       zoom: { scale: 1, x: 0, y: 0 },
+      fit: 'height',
       pane: { w: 0, h: 0 },
       gliding: false,
       drag: null,
@@ -158,6 +160,7 @@
       init() {
         this.reduced = reducedMotion();
         this.swapped = storage.get(SWAP_KEY, '0') === '1';
+        this.fit = storage.get(FIT_KEY, 'height') === 'width' ? 'width' : 'height';
         this.apply(config);
         this.shown = this.counts.resolved;
         this.syncBar();
@@ -961,16 +964,38 @@
         this.ro.observe(el);
       },
 
-      get sheetW() { return this.pane.w; },
-      get sheetH() { return this.image.width ? (this.pane.w * this.image.height) / this.image.width : this.pane.h; },
-      get sheetStyle() { return `transform: translate(${Math.round(this.zoom.x)}px, ${Math.round(this.zoom.y)}px) scale(${this.zoom.scale});`; },
+      // Base (scale 1) size of the page sheet. Fit height: the whole page height fits the pane; fit width: the page
+      // width fits the pane. Word boxes and the line band are % of the sheet, so they follow any size unchanged.
+      get sheetW() {
+        const W = this.image.width;
+        const H = this.image.height;
+        if (this.fit === 'height' && W && H && this.pane.h > 0) return (this.pane.h * W) / H;
+        return this.pane.w;
+      },
+      get sheetH() { return this.image.width ? (this.sheetW * this.image.height) / this.image.width : this.pane.h; },
+      get sheetStyle() {
+        const w = this.sheetW > 0 ? `width:${Math.round(this.sheetW)}px; ` : '';
+        return `${w}transform: translate(${Math.round(this.zoom.x)}px, ${Math.round(this.zoom.y)}px) scale(${this.zoom.scale});`;
+      },
+      get fitLabel() { return this.fit === 'height' ? 'ملاءمة الارتفاع' : 'ملاءمة العرض'; },
+
+      setFit(mode) {
+        const next = mode === 'width' ? 'width' : 'height';
+        if (next === this.fit) { this.zoomReset(); return; }
+        this.fit = next;
+        storage.set(FIT_KEY, next);
+        this.zoomReset();
+        // keep the focused word in view in the new layout
+        const tok = this.focused;
+        if (tok && tok.bbox) this.tick(() => this.panTo(tok.bbox));
+      },
 
       clampPan() {
         const z = this.zoom;
         const w = this.sheetW * z.scale;
         const h = this.sheetH * z.scale;
         z.x = w <= this.pane.w ? (this.pane.w - w) / 2 : clamp(z.x, this.pane.w - w, 0);
-        z.y = h <= this.pane.h ? 0 : clamp(z.y, this.pane.h - h, 0);
+        z.y = h <= this.pane.h ? (this.fit === 'height' ? (this.pane.h - h) / 2 : 0) : clamp(z.y, this.pane.h - h, 0);
       },
 
       zoomBy(factor, cx, cy) {
@@ -1059,7 +1084,7 @@
       panTo(bbox) {
         if (!bbox || !this.pane.w || !this.image.width) return;
         const z = this.zoom;
-        const k = (this.pane.w / this.image.width) * z.scale; // display px per image px
+        const k = (this.sheetW / this.image.width) * z.scale; // display px per image px (sheet, not pane)
         const cx = ((bbox[0] + bbox[2]) / 2) * k + z.x;
         const cy = ((bbox[1] + bbox[3]) / 2) * k + z.y;
         const my = Math.min(96, this.pane.h * 0.22);

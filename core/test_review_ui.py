@@ -316,6 +316,19 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   };
   // page text for the clipboard: body, blank line, footnotes
   out.copy = c.pageText();
+  // fit modes: the sheet base size follows the mode; boxes are % of the sheet; pan maths use the sheet width
+  const f = reg.reviewScreen(clone(config)); f.init();
+  f.image = { width: 1000, height: 1500 }; f.pane = { w: 800, h: 600 }; f.zoom = { scale: 1, x: 0, y: 0 };
+  out.fitDefault = f.fit;
+  f.clampPan();
+  out.fitHeight = { w: f.sheetW, h: f.sheetH, x: f.zoom.x, y: f.zoom.y, style: f.sheetStyle, box: f.boxStyle([100, 300, 200, 330]) };
+  f.panTo([100, 1400, 200, 1430]);  // near the bottom: fully visible already at fit height -> no move
+  out.fitHeightPan = { x: f.zoom.x, y: f.zoom.y };
+  f.setFit('width');
+  out.fitWidth = { fit: f.fit, w: f.sheetW, h: f.sheetH, scale: f.zoom.scale, box: f.boxStyle([100, 300, 200, 330]), label: f.fitLabel };
+  f.panTo([100, 1400, 200, 1430]);  // bottom word is off-pane at fit width -> sheet glides up to centre it
+  const k = f.sheetW / f.image.width;
+  out.fitWidthPan = { y: f.zoom.y, wordCentreOnPane: 1415 * k + f.zoom.y };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -337,6 +350,18 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     out = json.loads(run.stdout.strip().splitlines()[-1])
 
     assert out["bar"] == {"number": 3, "total": 120, "resolved": 1, "lowTotal": 5, "canApprove": True}
+    # fit height is the default; the whole page height fits the pane, the sheet is centred horizontally
+    assert out["fitDefault"] == "height"
+    fh = out["fitHeight"]
+    assert fh["h"] == 600 and fh["w"] == 400 and fh["x"] == 200 and fh["y"] == 0
+    assert fh["style"].startswith("width:400px; transform: translate(200px, 0px) scale(1)")
+    assert out["fitHeightPan"] == {"x": 200, "y": 0}
+    # fit width: page width fills the pane; box percentages are identical in both modes
+    fw = out["fitWidth"]
+    assert fw["fit"] == "width" and fw["w"] == 800 and fw["h"] == 1200 and fw["scale"] == 1
+    assert fw["box"] == fh["box"] and fw["label"] == "ملاءمة العرض"
+    # pan uses the sheet width: the bottom word ends up inside the pane
+    assert 0 < out["fitWidthPan"]["wordCentreOnPane"] < 600 and out["fitWidthPan"]["y"] < 0
     # unresolved words in reading order (the already resolved «(1)» is skipped),
     # Tab wraps, Shift+Tab goes back
     assert out["order"] == [[51, 1], [51, 4], [52, 0], [53, 1]]
