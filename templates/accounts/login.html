@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block head_title %}تسجيل الدخول · نسّاخ{% endblock %}
+
+{% block body %}
+<main class="auth-screen">
+  <div class="card auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark brand-mark-lg" aria-hidden="true">ن</span>
+      <h1 class="auth-title">نسّاخ</h1>
+      <p class="meta">إحياء الكتب العربية المصوّرة</p>
+    </div>
+
+    {% if form.non_field_errors %}
+    <div class="banner banner-danger" role="alert">
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'accounts:login' %}" class="stack" novalidate>
+      {% csrf_token %}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+
+      <div class="field">
+        <label class="label" for="{{ form.username.id_for_label }}">{{ form.username.label }}</label>
+        {{ form.username }}
+        {% for error in form.username.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+      </div>
+
+      <div class="field">
+        <label class="label" for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
+        {{ form.password }}
+        {% for error in form.password.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+      </div>
+
+      <button type="submit" class="btn btn-primary w-full">تسجيل الدخول</button>
+    </form>
+  </div>
+</main>
+{% endblock %}

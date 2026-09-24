@@ -1,0 +1,82 @@
+/* Component classes specific to the ocr panels (text panel, token highlights, engine runs). */
+@layer components {
+  .text-panel { display: flex; flex-direction: column; gap: 14px; }
+  .text-panel .card-header { margin-bottom: 0; }
+
+  /* long-form reading (DESIGN.md §3): 15px / 1.8 */
+  .text-body {
+    font-size: 15px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    text-align: start;
+  }
+  .text-empty { padding-block: 8px; }
+
+  .text-lines {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 15px;
+    line-height: 1.8;
+    counter-reset: text-line;
+  }
+  .text-line {
+    position: relative;
+    padding-inline-start: 34px;
+    text-align: start;
+    border-radius: var(--radius-xs);
+  }
+  .text-line:hover { background: var(--color-hover); }
+  /* line numbers: Western digits, tabular, in the start gutter */
+  .text-line::before {
+    counter-increment: text-line;
+    content: counter(text-line);
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    width: 26px;
+    text-align: end;
+    font-size: 11px;
+    line-height: inherit;
+    color: var(--color-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .text-line.is-reviewed::before { color: var(--color-success); }
+
+  .tok { border-radius: 2px; padding-inline: 1px; }
+  .tok + .tok { margin-inline-start: 0.3em; }
+  .tok-low { cursor: help; box-shadow: inset 0 -1px 0 var(--color-warning); }
+
+  .legend { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    flex: none;
+    border-radius: 3px;
+    box-shadow: inset 0 -1px 0 var(--color-warning);
+  }
+
+  .ocr-runs { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .ocr-runs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .ocr-runs-table th {
+    padding: 4px 6px;
+    text-align: start;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-3);
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+  }
+  .ocr-runs-table td { padding: 5px 6px; border-bottom: 1px solid var(--color-border); vertical-align: middle; }
+  .ocr-runs-table tbody tr:last-child td { border-bottom: 0; }
+  .ocr-runs-table tr.is-error td { color: var(--color-text-2); }
+  .ocr-runs-table .num { text-align: end; font-variant-numeric: tabular-nums; }
+  .ocr-runs-notes { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+  .spinner-sm { width: 14px; height: 14px; border-width: 2px; }
+}

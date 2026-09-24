@@ -1,22 +1,36 @@
-"""
-URL configuration for nassakh project.
+"""Root URL configuration.
 
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/6.1/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+Mount points (each app fills its own `urls.py`; this file stays untouched):
+
+- `/admin/`                 Django admin (users and groups are managed here for now)
+- `/accounts/`              login / logout                       namespace `accounts`
+- `/books/`                 books app HTML routes                namespace `books`
+- `/books/`                 processing HTML routes (guides)      namespace `processing`
+- `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
+- `/api/`                   JSON routes from books/processing/ocr `api_urlpatterns`, all in
+                            the single namespace `api` (reverse as `api:<name>`)
+- `/media/<path>`           uploaded and derived files through the login-protected view
 """
+
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
+
+from books import urls as books_urls
+from core import views as core_views
+from ocr import urls as ocr_urls
+from processing import urls as processing_urls
+
+api_urlpatterns = books_urls.api_urlpatterns + processing_urls.api_urlpatterns + ocr_urls.api_urlpatterns
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path("admin/", admin.site.urls),
+    path("", include("core.urls")),
+    path("accounts/", include("accounts.urls")),
+    path("books/", include("books.urls")),
+    path("books/", include("processing.urls")),
+    path("ocr/", include("ocr.urls")),
+    path("api/", include((api_urlpatterns, "api"))),
+    # Media always goes through the login-protected view. With DEBUG on this is what serves
+    # uploads locally; in production nginx can front it (X-Accel-Redirect) without URL changes.
+    path("media/<path:path>", core_views.protected_media, name="media"),
 ]

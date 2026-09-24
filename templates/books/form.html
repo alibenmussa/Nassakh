@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block head_title %}كتاب جديد · نسّاخ{% endblock %}
+{% block title %}كتاب جديد{% endblock %}
+
+{% block content %}
+<form method="post" enctype="multipart/form-data" class="form-column stack-lg" novalidate
+      x-data="bookForm({ pagesPerSheet: '{{ form.pages_per_sheet.value|default:1|escapejs }}', splitRatio: '{{ form.split_ratio.value|default:'0.5'|escapejs }}' })"
+      @submit="submitting = true">
+  {% csrf_token %}
+
+  {% if form.non_field_errors %}
+  <div class="banner banner-danger" role="alert">
+    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+    <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  <section class="card stack">
+    <div class="card-header">
+      <h2 class="section-title">بيانات الكتاب</h2>
+      <span class="meta">تظهر في لوحة الكتاب وفي المخرجات لاحقًا</span>
+    </div>
+    {% include "books/_field.html" with field=form.title %}
+    <div class="field-row">
+      {% include "books/_field.html" with field=form.author %}
+      {% include "books/_field.html" with field=form.original_year %}
+    </div>
+    {% include "books/_field.html" with field=form.notes %}
+  </section>
+
+  <section class="card stack">
+    <div class="card-header">
+      <h2 class="section-title">الملف</h2>
+      <span class="meta">يُحفظ الملف الأصلي كما هو ولا يُعدَّل</span>
+    </div>
+    {% include "books/_field.html" with field=form.source_pdf %}
+  </section>
+
+  <section class="card stack">
+    <div class="card-header">
+      <h2 class="section-title">خيارات الاستخراج</h2>
+      <span class="meta">يمكن استثناء صفحات بعينها لاحقًا من لوحة الكتاب</span>
+    </div>
+
+    <div class="field-row">
+      {% include "books/_field.html" with field=form.skip_first %}
+      {% include "books/_field.html" with field=form.skip_last %}
+    </div>
+
+    <div class="field">
+      <span class="label" id="pages-per-sheet-label">{{ form.pages_per_sheet.label }}</span>
+      <div class="segmented" role="radiogroup" aria-labelledby="pages-per-sheet-label">
+        <label>
+          <input type="radio" name="pages_per_sheet" value="1" x-model.number="pagesPerSheet">
+          <span>صفحة واحدة</span>
+        </label>
+        <label>
+          <input type="radio" name="pages_per_sheet" value="2" x-model.number="pagesPerSheet">
+          <span>صفحتان</span>
+        </label>
+      </div>
+      <p class="help">{{ form.pages_per_sheet.help_text }}</p>
+      {% for error in form.pages_per_sheet.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+    </div>
+
+    <div class="field" x-show="pagesPerSheet === 2" x-cloak x-transition.opacity.duration.150ms>
+      <label class="label" for="id_split_ratio">{{ form.split_ratio.label }} <span class="meta num" x-text="splitPercent"></span></label>
+      <div class="split-preview" aria-hidden="true">
+        <span class="split-preview-page">يسرى</span>
+        <span class="split-preview-page">يمنى</span>
+        <span class="split-preview-line" :style="splitLineStyle"></span>
+      </div>
+      <input type="range" id="id_split_ratio" name="split_ratio" class="range" min="0.3" max="0.7" step="0.01" x-model="splitRatio" dir="ltr">
+      <p class="help">{{ form.split_ratio.help_text }}</p>
+      {% for error in form.split_ratio.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+    </div>
+
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" name="use_text_layer" id="id_use_text_layer"{% if form.use_text_layer.value %} checked{% endif %}>
+        <span>{{ form.use_text_layer.label }}</span>
+      </label>
+      <p class="help">{{ form.use_text_layer.help_text }}</p>
+    </div>
+  </section>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" :disabled="submitting">
+      <span x-show="!submitting">إنشاء الكتاب</span>
+      <span x-show="submitting" x-cloak class="inline-flex items-center gap-2"><span class="spinner spinner-sm"></span> يُرفع الملف…</span>
+    </button>
+    <a class="btn btn-ghost" href="{% url 'books:list' %}">إلغاء</a>
+    <span class="meta">بعد الإنشاء تُفتح لوحة الكتاب، ومنها تبدأ المعالجة.</span>
+  </div>
+</form>
+{% endblock %}

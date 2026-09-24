@@ -1,0 +1,7 @@
+{# One form field: label above, widget, help below, specific errors. Context: field (BoundField). #}
+<div class="field">
+  <label class="label" for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %}<span class="req" aria-hidden="true">*</span>{% endif %}</label>
+  {{ field }}
+  {% if field.help_text %}<p class="help" id="{{ field.id_for_label }}_help">{{ field.help_text }}</p>{% endif %}
+  {% for error in field.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+</div>

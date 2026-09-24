@@ -1,7 +1,7 @@
 # Phase 1 OCR report
-_generated 2026-09-24 00:55_
+_generated 2026-09-24 01:47_
 
-Runs: 184 total, 184 ok, 0 error. Pages with ground truth: 17/17. Scored runs: 184.
+Runs: 218 total, 218 ok, 0 error. Pages with ground truth: 17/17. Scored runs: 218.
 
 ## 1. Accuracy by engine, input variant and backend
 
@@ -14,10 +14,12 @@ CER = character error rate (lower is better). `raw` counts diacritic errors; `no
 | qari_kitab | gray_2x | torch | 4 | 4 | 0.359 | 0.355 | 0.348 | 0.418 | 0.635 | 16.6 | 0 |
 | qari_kitab | regions | torch | 8 | 8 | 0.602 | 0.601 | 0.607 | 0.631 | 0.447 | 15.3 | 1 |
 | qari_v02 | bw | torch | 17 | 17 | 0.880 | 0.849 | 0.694 | 0.943 | 0.667 | 39.8 | 9 |
+| qari_v02 | gray | mlx | 17 | 17 | 0.353 | 0.349 | 0.321 | 0.400 | 0.747 | 25.4 | 8 |
 | qari_v02 | gray | torch | 17 | 17 | 0.418 | 0.416 | 0.375 | 0.593 | 0.778 | 39.7 | 9 |
 | qari_v02 | gray_2x | torch | 4 | 4 | 0.329 | 0.316 | 0.285 | 0.419 | 0.807 | 30.2 | 1 |
 | qari_v02 | regions | torch | 8 | 8 | 0.080 | 0.071 | 0.067 | 0.139 | 0.891 | 16.8 | 1 |
 | qari_v03 | bw | torch | 17 | 17 | 0.152 | 0.149 | 0.133 | 0.221 | 0.810 | 28.0 | 2 |
+| qari_v03 | gray | mlx | 17 | 17 | 0.152 | 0.151 | 0.127 | 0.183 | 0.857 | 20.0 | 3 |
 | qari_v03 | gray | torch | 17 | 17 | 0.153 | 0.151 | 0.128 | 0.186 | 0.857 | 30.0 | 3 |
 | qari_v03 | gray_2x | torch | 4 | 4 | 0.230 | 0.222 | 0.217 | 0.285 | 0.768 | 44.6 | 1 |
 | qari_v03 | regions | torch | 8 | 8 | 0.154 | 0.150 | 0.132 | 0.219 | 0.850 | 26.4 | 1 |
@@ -33,8 +35,8 @@ CER = character error rate (lower is better). `raw` counts diacritic errors; `no
 | sample | what | engine | best variant | CER lenient | CER raw | pages |
 |---|---|---|---|---|---|---|
 | s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | qari_kitab | gray | 0.271 | 0.287 | 4 |
-| s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | qari_v02 | gray | 0.388 | 0.394 | 4 |
-| s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | qari_v03 | gray | 0.299 | 0.321 | 4 |
+| s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | qari_v02 | gray | 0.340 | 0.351 | 8 |
+| s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | qari_v03 | gray | 0.299 | 0.321 | 8 |
 | s1 | 1966 typeset book, ~200 DPI scans, covers on pages 1-4 | tesseract | bw | 0.104 | 0.114 | 4 |
 | s2 | two book pages per landscape sheet, footnotes under a rule | qari_kitab | regions | 0.828 | 0.824 | 5 |
 | s2 | two book pages per landscape sheet, footnotes under a rule | qari_v02 | regions | 0.080 | 0.087 | 5 |
@@ -46,7 +48,7 @@ CER = character error rate (lower is better). `raw` counts diacritic errors; `no
 | s3 | born-digital Word PDF with tables; text layer has reversed lam-alef | tesseract | gray | 0.161 | 0.181 | 3 |
 | s4 | low-resolution photocopies (~900x1300 px), skew, marginalia, footnotes | qari_kitab | regions | 0.240 | 0.232 | 3 |
 | s4 | low-resolution photocopies (~900x1300 px), skew, marginalia, footnotes | qari_v02 | regions | 0.045 | 0.067 | 3 |
-| s4 | low-resolution photocopies (~900x1300 px), skew, marginalia, footnotes | qari_v03 | gray | 0.075 | 0.095 | 4 |
+| s4 | low-resolution photocopies (~900x1300 px), skew, marginalia, footnotes | qari_v03 | gray | 0.076 | 0.097 | 8 |
 | s4 | low-resolution photocopies (~900x1300 px), skew, marginalia, footnotes | tesseract | gray | 0.088 | 0.108 | 4 |
 
 ## 3. Per page for the best combination: qari_v02 / regions / torch
@@ -61,6 +63,47 @@ CER = character error rate (lower is better). `raw` counts diacritic errors; `no
 | s4_p003 | 0.090 | 0.054 | 0.045 | 0.190 | 0.823 | 19.5 | no |
 | s4_p006 | 0.045 | 0.037 | 0.033 | 0.090 | 0.935 | 18.6 | no |
 | s4_p016 | 0.065 | 0.058 | 0.057 | 0.177 | 0.832 | 18.2 | no |
+
+## 4. Backend comparison: PyTorch MPS vs MLX (same page, engine, variant)
+
+| page | engine | variant | torch s | mlx s | speed-up | CER torch | CER mlx |
+|---|---|---|---|---|---|---|---|
+| s1_p006 | qari_v02 | gray | 17.6 | 10.8 | 1.640 | 0.012 | 0.014 |
+| s1_p006 | qari_v03 | gray | 26.3 | 17.0 | 1.546 | 0.023 | 0.021 |
+| s1_p009 | qari_v02 | gray | 61.5 | 9.370 | 6.565 | 0.274 | 0.181 |
+| s1_p009 | qari_v03 | gray | 20.3 | 13.7 | 1.477 | 0.177 | 0.177 |
+| s1_p012 | qari_v02 | gray | 14.7 | 10.6 | 1.391 | 0.007 | 0.007 |
+| s1_p012 | qari_v03 | gray | 27.5 | 15.7 | 1.752 | 0.007 | 0.006 |
+| s1_p018 | qari_v02 | gray | 61.9 | 42.1 | 1.469 | 1.257 | 0.964 |
+| s1_p018 | qari_v03 | gray | 62.1 | 41.8 | 1.486 | 0.990 | 0.992 |
+| s2_p003L | qari_v02 | gray | 61.9 | 7.750 | 7.990 | 0.093 | 0.042 |
+| s2_p003L | qari_v03 | gray | 16.6 | 11.9 | 1.402 | 0.038 | 0.037 |
+| s2_p003R | qari_v02 | gray | 62.4 | 43.2 | 1.443 | 0.227 | 0.411 |
+| s2_p003R | qari_v03 | gray | 18.5 | 11.2 | 1.648 | 0.015 | 0.016 |
+| s2_p010L | qari_v02 | gray | 61.9 | 44.1 | 1.405 | 1.971 | 0.107 |
+| s2_p010L | qari_v03 | gray | 19.3 | 13.4 | 1.441 | 0.026 | 0.024 |
+| s2_p010R | qari_v02 | gray | 9.430 | 7.690 | 1.226 | 0.148 | 0.155 |
+| s2_p010R | qari_v03 | gray | 17.1 | 12.0 | 1.420 | 0.027 | 0.027 |
+| s2_p015L | qari_v02 | gray | 9.390 | 7.420 | 1.265 | 0.019 | 0.021 |
+| s2_p015L | qari_v03 | gray | 12.5 | 9.390 | 1.328 | 0.018 | 0.018 |
+| s2_p015R | qari_v02 | gray | 63.2 | 43.2 | 1.463 | 0.037 | 0.534 |
+| s2_p015R | qari_v03 | gray | 62.2 | 41.3 | 1.508 | 0.097 | 0.097 |
+| s3_p001 | qari_v02 | gray | 13.0 | 9.980 | 1.307 | 0.133 | 0.131 |
+| s3_p001 | qari_v03 | gray | 21.1 | 13.1 | 1.608 | 0.128 | 0.131 |
+| s3_p003 | qari_v02 | gray | 11.6 | 42.7 | 0.271 | 0.194 | 0.890 |
+| s3_p003 | qari_v03 | gray | 18.3 | 13.2 | 1.394 | 0.166 | 0.143 |
+| s3_p004 | qari_v02 | gray | 62.6 | 43.6 | 1.435 | 0.152 | 0.153 |
+| s3_p004 | qari_v03 | gray | 16.1 | 12.9 | 1.256 | 0.162 | 0.164 |
+| s4_p003 | qari_v02 | gray | 68.0 | 41.0 | 1.659 | 1.281 | 1.284 |
+| s4_p003 | qari_v03 | gray | 64.6 | 42.1 | 1.537 | 0.163 | 0.158 |
+| s4_p006 | qari_v02 | gray | 17.7 | 13.2 | 1.341 | 0.045 | 0.045 |
+| s4_p006 | qari_v03 | gray | 35.6 | 22.9 | 1.555 | 0.034 | 0.051 |
+| s4_p011 | qari_v02 | gray | 18.3 | 14.0 | 1.303 | 0.024 | 0.027 |
+| s4_p011 | qari_v03 | gray | 36.6 | 24.4 | 1.497 | 0.024 | 0.024 |
+| s4_p016 | qari_v02 | gray | 59.3 | 40.6 | 1.461 | 0.496 | 0.496 |
+| s4_p016 | qari_v03 | gray | 36.0 | 23.4 | 1.542 | 0.077 | 0.075 |
+
+Mean speed-up: 1.77x; mean CER torch 0.2512659528591797, mlx 0.22418043883124122
 
 ## 5. Low-resolution pages: grayscale vs 2x upscaled (lenient CER, negative delta = upscaling helped)
 
@@ -94,11 +137,11 @@ Qari v0.2 returns the page as one paragraph and v0.3's tags do not follow visual
 | qari_kitab | gray_2x | 4 | 0 | 31.2 |
 | qari_kitab | regions | 8 | 0 | 21.5 |
 | qari_v02 | bw | 17 | 0 | 23.1 |
-| qari_v02 | gray | 17 | 0 | 23.1 |
+| qari_v02 | gray | 34 | 0 | 23.1 |
 | qari_v02 | gray_2x | 4 | 0 | 32 |
 | qari_v02 | regions | 8 | 0 | 21.2 |
 | qari_v03 | bw | 17 | 0 | 19.6 |
-| qari_v03 | gray | 17 | 0 | 19.2 |
+| qari_v03 | gray | 34 | 0 | 19.1 |
 | qari_v03 | gray_2x | 4 | 0 | 27.5 |
 | qari_v03 | regions | 8 | 0 | 18.8 |
 | tesseract | bw | 17 | 4 | 1.941 |
@@ -111,7 +154,9 @@ Qari v0.2 returns the page as one paragraph and v0.3's tags do not follow visual
 | engine | backend | runs | ok | errors | pages |
 |---|---|---|---|---|---|
 | qari_kitab | torch | 46 | 46 | 0 | 17 |
+| qari_v02 | mlx | 17 | 17 | 0 | 17 |
 | qari_v02 | torch | 46 | 46 | 0 | 17 |
+| qari_v03 | mlx | 17 | 17 | 0 | 17 |
 | qari_v03 | torch | 46 | 46 | 0 | 17 |
 | tesseract | cpu | 46 | 46 | 0 | 17 |
 

@@ -1,0 +1,93 @@
+{% load processing_tags %}
+{# Preprocessing controls for the page-detail side panel. Context: `page`, `book`.
+   After a re-run the component sets `src` on every element with `data-page-image="display|gray|bw|thumb"`
+   and dispatches `nassakh:page-updated` on `window` with {pageId, images, output, regions, status, flags}. #}
+{% if page %}
+{% preprocess_panel_config page "preprocess-config" %}
+<section class="pp-panel" x-data="preprocessPanel(JSON.parse(document.getElementById('preprocess-config').textContent))" aria-labelledby="pp-title">
+  <div class="card-header">
+    <h2 class="section-title" id="pp-title">المعالجة الأولية</h2>
+    <span class="badge" :class="{ 'badge-accent': state.is_manual }" x-text="state.has_preprocess ? (state.is_manual ? 'معدّلة يدويًا' : 'تلقائية') : 'لم تُعالَج'"></span>
+  </div>
+
+  <template x-if="!state.has_preprocess">
+    <div class="stack">
+      <p class="help">لم تُعالَج هذه الصفحة بعد. شغّل المعالجة الأولية لاستقامة الصفحة وقصّها وتنظيفها.</p>
+      <div><button type="button" class="btn" @click="reset()" :disabled="busy">تشغيل المعالجة</button></div>
+      <div class="banner banner-danger" x-show="error" x-cloak role="alert">
+        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span x-text="error"></span>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="state.has_preprocess">
+    <div class="stack">
+      <div class="field">
+        <div class="pp-row">
+          <label class="label" for="pp-angle">التدوير</label>
+          <span class="meta"><span x-text="angle.toFixed(1)"></span>°<template x-if="autoAngle !== null"><span> · تلقائي <span x-text="autoAngle.toFixed(1)"></span>°</span></template></span>
+        </div>
+        <input id="pp-angle" type="range" class="range" min="-5" max="5" step="0.1" x-model.number="angle" list="pp-angle-ticks">
+        <datalist id="pp-angle-ticks"><option value="0"></option></datalist>
+      </div>
+
+      <div class="field">
+        <div class="pp-row">
+          <span class="label">صندوق القص</span>
+          <span class="meta">بالبكسل داخل إطار <span x-text="state.frame.width"></span>×<span x-text="state.frame.height"></span></span>
+        </div>
+        <div class="pp-crop-grid">
+          <label class="pp-crop-cell"><span class="meta">x0</span><input type="number" class="input" min="0" :max="state.frame.width" x-model.number="crop[0]" aria-label="القص: الحد الأيسر"></label>
+          <label class="pp-crop-cell"><span class="meta">y0</span><input type="number" class="input" min="0" :max="state.frame.height" x-model.number="crop[1]" aria-label="القص: الحد الأعلى"></label>
+          <label class="pp-crop-cell"><span class="meta">x1</span><input type="number" class="input" min="0" :max="state.frame.width" x-model.number="crop[2]" aria-label="القص: الحد الأيمن"></label>
+          <label class="pp-crop-cell"><span class="meta">y1</span><input type="number" class="input" min="0" :max="state.frame.height" x-model.number="crop[3]" aria-label="القص: الحد الأسفل"></label>
+        </div>
+        <div class="pp-row">
+          <button type="button" class="btn btn-ghost btn-sm" @click="fullCrop()">الإطار كاملًا</button>
+          <button type="button" class="btn btn-ghost btn-sm" @click="autoCrop()" x-show="autoCropBox">القص التلقائي</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="pp-row">
+          <label class="label" for="pp-k">معامل Sauvola (k)</label>
+          <span class="meta" x-text="k.toFixed(2)"></span>
+        </div>
+        <input id="pp-k" type="range" class="range" min="0.05" max="0.5" step="0.01" x-model.number="k">
+        <p class="help">قيمة أصغر تُبقي حبرًا أكثر في صورة الأبيض والأسود؛ قيمة أكبر تُنظّف الخلفية أكثر.</p>
+      </div>
+
+      <div class="pp-grid-2">
+        <label class="field"><span class="label">نافذة Sauvola</span><input type="number" class="input" min="5" max="201" step="2" x-model.number="window"></label>
+        <label class="field"><span class="label">قوة إزالة التشويش</span><input type="number" class="input" min="0" max="30" x-model.number="nlm"></label>
+      </div>
+
+      <div class="pp-actions">
+        <button type="button" class="btn" @click="rerun()" :disabled="busy">
+          <span class="spinner spinner-sm" x-show="busy" x-cloak aria-hidden="true"></span>
+          <span>إعادة المعالجة</span>
+        </button>
+        <button type="button" class="btn btn-ghost" @click="reset()" :disabled="busy || !state.is_manual">استعادة القيم التلقائية</button>
+      </div>
+
+      <div class="banner banner-danger" x-show="error" x-cloak role="alert">
+        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span x-text="error"></span>
+      </div>
+      <p class="help" x-show="notice" x-text="notice" x-cloak role="status"></p>
+
+      <dl class="pp-stats">
+        <div><dt>الأسطر</dt><dd x-text="state.stats.n_lines"></dd></div>
+        <div><dt>ثقة الانحراف</dt><dd x-text="Number(state.stats.skew_confidence).toFixed(2)"></dd></div>
+        <div><dt>خط الحاشية</dt><dd x-text="state.stats.footnote_rule_y === null ? '—' : state.stats.footnote_rule_y + ' px'"></dd></div>
+        <div><dt>الناتج</dt><dd><span x-text="state.output.width"></span>×<span x-text="state.output.height"></span></dd></div>
+      </dl>
+
+      <div class="pp-flags" x-show="state.flags.length" x-cloak>
+        <template x-for="f in state.flags" :key="f.code"><span class="badge badge-warning" x-text="f.label"></span></template>
+      </div>
+    </div>
+  </template>
+</section>
+{% else %}
+<p class="help">لا توجد صفحة لعرض إعدادات المعالجة.</p>
+{% endif %}

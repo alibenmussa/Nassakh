@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% load nassakh %}
+{% block head_title %}الكتب · نسّاخ{% endblock %}
+{% block title %}الكتب{% endblock %}
+
+{% block header_actions %}
+  {% if role == 'admin' or role == 'editor' %}
+  <a class="btn btn-primary btn-sm" href="{% url 'books:create' %}">
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+    <span>كتاب جديد</span>
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+{% if role == 'admin' or role == 'editor' %}{% url 'books:create' as create_url %}{% endif %}
+{% if not rows %}
+  {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب بعد" text="ارفع ملف PDF لكتاب مصوّر أو رقمي، حدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة، ثم اضغط «بدء المعالجة» ليستخرج نسّاخ الصفحات ويتعرّف على نصّها." action_url=create_url action_label="كتاب جديد" %}
+{% else %}
+  <div class="page-header">
+    <p class="meta">عدد الكتب: <span class="num">{{ rows|length }}</span> · تُحدَّث الحالة عند كل زيارة</p>
+  </div>
+  <div class="table-wrap">
+    <table class="table books-table">
+      <thead>
+        <tr>
+          <th scope="col">الكتاب</th>
+          <th scope="col" class="num">الصفحات</th>
+          <th scope="col">الحالة</th>
+          <th scope="col" class="books-progress-col">التقدّم</th>
+          <th scope="col">آخر تعديل</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="books-title-cell">
+            <a class="books-title" href="{% url 'books:detail' row.book.pk %}">{{ row.book.title }}</a>
+            {% if row.book.author or row.book.original_year %}
+            <span class="meta books-subtitle">{{ row.book.author }}{% if row.book.author and row.book.original_year %} · {% endif %}{% if row.book.original_year %}{{ row.book.original_year }}{% endif %}</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {% if row.total %}{{ row.total }}{% else %}<span class="meta">{{ row.book.source_page_count }} في الملف</span>{% endif %}
+          </td>
+          <td>{% include "partials/_status_dot.html" with status=row.status label=row.status_label %}</td>
+          <td class="books-progress-cell">
+            {% progress_bar percent=row.percent state=row.bar_state label="نسبة التقدّم" %}
+            <span class="meta num">{{ row.percent }}%</span>
+          </td>
+          <td class="meta" dir="ltr">{{ row.book.updated_at|date:"Y/m/d H:i" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+{% endblock %}

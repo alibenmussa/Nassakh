@@ -1,0 +1,7 @@
+{# Empty state (DESIGN.md §6): explains how to get started. Context: title, text, action_url + action_label (optional), icon (optional sprite id, e.g. "i-book"). #}
+<div class="empty-state">
+  {% if icon %}<svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#{{ icon }}"/></svg>{% endif %}
+  <h2 class="empty-title">{{ title }}</h2>
+  {% if text %}<p class="empty-text">{{ text }}</p>{% endif %}
+  {% if action_url and action_label %}<a class="btn btn-primary" href="{{ action_url }}">{{ action_label }}</a>{% endif %}
+</div>

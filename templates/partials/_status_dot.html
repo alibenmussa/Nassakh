@@ -1,0 +1,2 @@
+{% load nassakh %}{# Status indicator: dot + label (never colour alone). Context: status (str), label (optional str). #}
+<span class="status"><span class="dot {{ status|status_dot }}" aria-hidden="true"></span>{% if label %}<span>{{ label }}</span>{% endif %}</span>

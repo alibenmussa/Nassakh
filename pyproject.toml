@@ -1,0 +1,62 @@
+[build-system]
+# Nassakh is a Django project, not a library. The build produces a metadata-only
+# distribution so that `uv pip install .` works without packaging the apps.
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nassakh"
+version = "0.2.0"
+description = "Nassakh — Arabic scanned-book revival: OCR, review, editor, publishing"
+requires-python = ">=3.13"
+dependencies = [
+    "django>=6.1,<6.2",
+    "djangorestframework>=3.16",
+    "django-environ>=0.12",
+    "psycopg[binary]>=3.2",
+    "celery[redis]>=5.5",
+    "redis>=5.0",
+    "pillow>=11",
+    "pymupdf>=1.26",
+    "opencv-python-headless>=4.10",
+    "scikit-image>=0.25",
+    "numpy>=2",
+    "rapidfuzz>=3.9",
+    "pytesseract>=0.3.13",
+    "torch>=2.4",
+    "torchvision",
+    "transformers>=4.51",
+    "accelerate",
+    "safetensors",
+    "huggingface_hub",
+]
+
+[project.optional-dependencies]
+mlx = ["mlx-vlm>=0.3"]
+dev = ["pytest>=8", "pytest-django>=4.9", "factory-boy>=3.3", "ruff>=0.6"]
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "nassakh.settings_test"
+python_files = ["tests.py", "test_*.py"]
+testpaths = ["core", "accounts", "books", "processing", "ocr"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+exclude = ["migrations", "playground", ".venv", "node_modules", "static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "DJ"]
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nassakh", "core", "accounts", "books", "processing", "ocr"]
+section-order = ["future", "standard-library", "django", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+django = ["django", "rest_framework", "celery"]

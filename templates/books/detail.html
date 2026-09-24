@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% load nassakh %}
+{% block head_title %}{{ book.title }} · نسّاخ{% endblock %}
+{% block title %}{{ book.title }}{% endblock %}
+
+{% block header_actions %}
+  <a class="btn btn-ghost btn-sm" href="{% url 'books:list' %}">
+    <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+    <span>كل الكتب</span>
+  </a>
+{% endblock %}
+
+{% block content %}
+{{ config|json_script:"dashboard-config" }}
+<div class="stack-lg" x-data="bookDashboard(JSON.parse(document.getElementById('dashboard-config').textContent))">
+
+  {# ------------------------------------------------------------ header: meta + actions #}
+  <header class="book-header">
+    <div class="book-meta">
+      <span class="status book-status">
+        <span class="dot" :class="dot" aria-hidden="true"></span>
+        <span x-text="statusLabel">{{ progress.status_label }}</span>
+      </span>
+      {% if book.author %}<span class="book-meta-item">{{ book.author }}</span>{% endif %}
+      {% if book.original_year %}<span class="book-meta-item num">{{ book.original_year }}</span>{% endif %}
+      <span class="book-meta-item num">
+        <span x-text="total">{{ progress.total }}</span> صفحة{% if book.source_page_count %} · {{ book.source_page_count }} في الملف{% endif %}
+      </span>
+      {% if book.has_text_layer %}<span class="badge badge-accent">طبقة نصية</span>{% elif book.has_text_layer == False %}<span class="badge">مسح ضوئي</span>{% endif %}
+      {% if book.pages_per_sheet == 2 %}<span class="badge">صفحتان في كل ورقة</span>{% endif %}
+      {% if book.skip_first or book.skip_last %}<span class="badge num">تجاوز {{ book.skip_first }} + {{ book.skip_last }}</span>{% endif %}
+    </div>
+
+    {% if role == 'admin' or role == 'editor' %}
+    <div class="action-row">
+      {% if can_start %}
+      <form method="post" action="{% url 'books:start' book.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+          <span>{% if book.status == 'error' %}إعادة بدء المعالجة{% else %}بدء المعالجة{% endif %}</span>
+        </button>
+      </form>
+      {% endif %}
+      <span class="status" x-show="active" x-cloak>
+        <span class="spinner spinner-sm" aria-hidden="true"></span>
+        <span>قيد العمل… تُحدَّث اللوحة كل ثانيتين</span>
+      </span>
+      {% if guides_url and tiles %}
+      <a class="btn{% if book.status == 'needs_guides' %} btn-primary{% endif %}" href="{{ guides_url }}">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+        <span>ضبط الأدلة</span>
+      </a>
+      {% endif %}
+      {% if tiles %}
+      <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
+        <button type="button" class="btn" @click="open = !open" :aria-expanded="open" aria-haspopup="menu">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+          <span>إعادة التشغيل</span>
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </button>
+        <div class="menu menu-popover" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+          <div class="menu-label">كل الصفحات من مرحلة</div>
+          {% for stage in rerun_stages %}
+          <form method="post" action="{% url 'books:rerun' book.pk %}">
+            {% csrf_token %}
+            <input type="hidden" name="stage" value="{{ stage.value }}">
+            <button type="submit" class="menu-item" role="menuitem">{{ stage.label }}</button>
+          </form>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </header>
+
+  {# ------------------------------------------------------------ banners #}
+  {% if book.status == 'error' %}
+  <div class="banner banner-danger" role="alert">
+    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+    <div class="grow stack-sm">
+      <span>{{ error_headline|default:"حدث خطأ أثناء المعالجة." }}</span>
+      {% if error_detail %}<details class="error-details"><summary class="meta">التفاصيل التقنية</summary><pre dir="ltr">{{ error_detail }}</pre></details>{% endif %}
+    </div>
+  </div>
+  {% elif book.status == 'needs_guides' %}
+  <div class="banner">
+    <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+    <span class="grow">لم يُكتشف خط الحاشية في عدد كافٍ من الصفحات. افتح «ضبط الأدلة»، حدّد خط الحاشية وحدّ الترويسة على صفحة مرجعية، ثم طبّقهما على كل الصفحات لتستكمل المعالجة.</span>
+  </div>
+  {% endif %}
+
+  {% if not tiles %}
+  {# ------------------------------------------------------------ empty state: nothing ingested yet #}
+  <div class="empty-state">
+    <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-image"/></svg>
+    <h2 class="empty-title">لم تُستخرج الصفحات بعد</h2>
+    <p class="empty-text">
+      {% if book.source_page_count %}الملف يحوي {{ book.source_page_count }} صفحة{% if book.skip_first or book.skip_last %}، وستُتجاوز {{ book.skip_first }} في البداية و{{ book.skip_last }} في النهاية{% endif %}.{% endif %}
+      عند بدء المعالجة تُستخرج الصفحات صورةً صورة، ثم تُعالَج وتُخطَّط ويُتعرَّف على نصّها تلقائيًا.
+    </p>
+    {% if can_start and role == 'admin' or can_start and role == 'editor' %}
+    <form method="post" action="{% url 'books:start' book.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary">بدء المعالجة</button>
+    </form>
+    {% elif book.status == 'processing' %}
+    <span class="status"><span class="spinner spinner-sm" aria-hidden="true"></span> تُستخرج الصفحات الآن…</span>
+    {% endif %}
+  </div>
+  {% else %}
+
+  <div class="dashboard-grid">
+    {# ------------------------------------------------------------ stage progress #}
+    <section class="card stage-card" aria-labelledby="stage-title">
+      <div class="card-header">
+        <h2 class="section-title" id="stage-title">التقدّم</h2>
+        <span class="meta num"><span x-text="percent">{{ progress.percent }}</span>%</span>
+      </div>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent" aria-valuenow="{{ progress.percent }}" aria-label="نسبة إتمام المعالجة">
+        <div class="progress-fill{% if progress.bar_state %} is-{{ progress.bar_state }}{% endif %}" :style="`width:${percent}%`" style="width: {{ progress.percent }}%"></div>
+      </div>
+      <ul class="stage-list">
+        {% for stage in stages %}
+        <li class="stage-row">
+          <span class="status"><span class="dot {{ stage.dot }}" aria-hidden="true"></span><span>{{ stage.label }}</span></span>
+          <div class="progress progress-thin" aria-hidden="true">
+            <div class="progress-fill{% if stage.state %} is-{{ stage.state }}{% endif %}" :style="barWidth('{{ stage.key }}')" style="width: {{ stage.percent }}%"></div>
+          </div>
+          <span class="meta num"><span x-text="count('{{ stage.key }}')">{{ stage.count }}</span> / <span x-text="total">{{ progress.total }}</span></span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    {# ------------------------------------------------------------ attention list (live) #}
+    <section class="card attention-card" aria-labelledby="attention-title" x-show="attention.length > 0" x-cloak>
+      <div class="card-header">
+        <h2 class="section-title" id="attention-title">تحتاج انتباهًا</h2>
+        <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span>
+      </div>
+      <ul class="attention-list">
+        <template x-for="item in attention" :key="item.id">
+          <li class="attention-row">
+            <a class="link num" :href="item.url">صفحة <span x-text="item.number"></span></a>
+            <span class="attention-flags">
+              <template x-if="item.error">
+                <span class="status"><span class="dot dot-danger" aria-hidden="true"></span><span x-text="item.error_headline || 'خطأ في المعالجة'"></span></span>
+              </template>
+              <template x-for="label in item.flag_labels" :key="label">
+                <span class="badge badge-warning" x-text="label"></span>
+              </template>
+            </span>
+          </li>
+        </template>
+      </ul>
+    </section>
+  </div>
+
+  {# ------------------------------------------------------------ pages grid #}
+  <section aria-labelledby="pages-title" class="stack">
+    <div class="card-header">
+      <h2 class="section-title" id="pages-title">الصفحات</h2>
+      <span class="meta">مرّر على صفحة لاستثنائها أو إعادتها · انقر لفتحها</span>
+    </div>
+    <div class="page-grid">
+      {% for t in tiles %}
+      <div class="page-tile{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"
+           :class="{ 'is-excluded': tile({{ t.id }}).is_excluded, 'is-error': tile({{ t.id }}).error }">
+        <a class="page-tile-link" href="{{ t.url }}" aria-label="الصفحة {{ t.number }} — {{ t.status_label }}">
+          <span class="page-tile-thumb">
+            <img class="page-tile-img" {% if t.thumb_url %}src="{{ t.thumb_url }}"{% endif %} :src="tile({{ t.id }}).thumb_url || null" x-show="tile({{ t.id }}).thumb_url" alt="" loading="lazy" decoding="async"{% if not t.thumb_url %} x-cloak{% endif %}>
+            <span class="page-tile-placeholder" x-show="!tile({{ t.id }}).thumb_url"{% if t.thumb_url %} x-cloak{% endif %} aria-hidden="true">
+              <svg class="icon icon-lg" aria-hidden="true"><use href="#i-image"/></svg>
+            </span>
+            <span class="page-tile-flag badge badge-dark num" x-show="tile({{ t.id }}).n_flags > 0"{% if not t.n_flags %} x-cloak{% endif %} :title="tile({{ t.id }}).flag_labels.join('، ')">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-flag"/></svg>
+              <span x-text="tile({{ t.id }}).n_flags">{{ t.n_flags }}</span>
+            </span>
+            <span class="page-tile-excluded badge badge-dark" x-show="tile({{ t.id }}).is_excluded"{% if not t.is_excluded %} x-cloak{% endif %}>مستثناة</span>
+          </span>
+          <span class="page-tile-footer">
+            <span class="status"><span class="dot" :class="tile({{ t.id }}).dot" aria-hidden="true"></span><span class="num">{{ t.number }}</span></span>
+            <span class="meta page-tile-status" x-text="tile({{ t.id }}).status_label">{{ t.status_label }}</span>
+          </span>
+        </a>
+        {% if role == 'admin' or role == 'editor' %}
+        <form method="post" action="{% url 'books:toggle_exclude' book.pk t.number %}" class="page-tile-toggle">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.path }}">
+          <button type="submit" class="btn-icon btn-icon-sm"
+                  :title="tile({{ t.id }}).is_excluded ? 'إعادة الصفحة إلى الكتاب' : 'استثناء الصفحة من الكتاب'"
+                  :aria-label="tile({{ t.id }}).is_excluded ? 'إعادة الصفحة {{ t.number }} إلى الكتاب' : 'استثناء الصفحة {{ t.number }} من الكتاب'">
+            <svg class="icon" x-show="!tile({{ t.id }}).is_excluded" aria-hidden="true"><use href="#i-eye-off"/></svg>
+            <svg class="icon" x-show="tile({{ t.id }}).is_excluded" x-cloak aria-hidden="true"><use href="#i-eye"/></svg>
+          </button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
