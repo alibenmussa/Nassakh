@@ -97,3 +97,28 @@ kept by v0.2, sometimes dropped by v0.3, and garbled by Tesseract `ara` alone.
 A narrow column of characters from the neighbouring page (sample 1 page 18) made both Qari models emit
 nonsense for the whole page. The crop step must keep only the main text block: narrow ink bands at the
 edge separated from the block by a wide empty gap are dropped.
+
+## D19 — PostgreSQL 17 on port 5433 (2026-09-24)
+Django 6.1 refuses PostgreSQL 14 (`minimum_database_version = (15,)`), which is what Homebrew had on the
+owner's Mac. The integration agent installed `postgresql@17` as a second brew service on port 5433 and left
+`postgresql@14` untouched on 5432. `.env` points at 5433. Alternative rejected: pinning Django to 5.2 LTS.
+Reversible with `brew services stop postgresql@17 && brew uninstall postgresql@17`.
+
+## D20 — Celery workers use spawned children (2026-09-24)
+On macOS with Python 3.13 the prefork pool spawns rather than forks; without `FORKED_BY_MULTIPROCESSING=1`
+every task died in `fast_trace_task`. Set in `nassakh/celery.py`. Children re-import Django and Torch on
+start, so worker start-up is slower; `-P threads` is the fallback if that ever matters.
+
+## D21 — Phase 2 deviations from the spec, accepted (2026-09-24)
+`propose_guides` returns `(guides, confidence)`; `PdfTextEngine.recognize` takes a PDF page reference, not an
+image; born-digital pages are finalised during fast OCR so they never wait for the GPU queue; `OcrRun.input_variant`
+also uses `pdf` and `ingest`; crop box in the preprocess panel is numeric inputs (the display image is already
+cropped); the "الأصل" tab shows the grayscale render; a manual preprocess re-run does not re-enqueue OCR (the
+panel says so). Alternatives in the review screen come only from the other Qari model, never from Tesseract.
+
+## D22 — Experience goals are acceptance criteria (2026-09-24)
+Nassakh generates book formats; viewing exists to verify the machine's work, not to read. Owner-approved
+essentials: the reveal on upload (thumbnails crossfade from scan to cleaned page), provisional Tesseract text
+that settles into the final text, one-click copy of clean text per page and per book, plain progress
+("X من Y صفحة", no persona, no time estimates), and failures that look designed (Arabic headline, fallback
+text, retry). Rejected: a reading view, time-remaining estimates.

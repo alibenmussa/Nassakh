@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phase 1 complete (2026-09-24): 184 runs, 17 ground-truth pages, results in `playground/poc/REPORT.md`, decisions D14–D18. Phase 2 awaiting go-ahead.** No Django application code yet.
+Status: **Phase 2 built 2026-09-24 (commit `daabcfc`, 198 tests) and under agent review; Phase 1 results in `playground/poc/REPORT.md`; decisions D1–D22.** Run instructions in `docs/RUNBOOK.md`.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 
@@ -31,6 +31,19 @@ Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 Embedded scans are lower resolution than a 300 DPI render would be, so rendering would only upsample. **Decision: extract the embedded image natively when a PDF page is a single full-page image (applying the page rotation); render at 300 DPI otherwise.**
 
 ---
+
+## 0b. Project goal
+
+**Nassakh is done when one person at the publishing house, with no developer involved, can drop the scanned PDF of a
+public-domain Arabic book of up to 800 pages into the browser and, within a single working week, generate a print-ready
+PDF, a screen PDF and an EPUB that a reader cannot distinguish from a freshly typeset edition.** The process is visible
+from the first second: pages clean themselves as they are processed, each page's text appears in a faded first pass and
+settles into the final text, and the clean text of any page or of the whole book can be copied with one click. The
+machine reads a clean scan with fewer than 3 errors per 100 characters and a poor photocopy with fewer than 8, and it
+marks exactly where it is unsure, so verifying a page against its scan takes minutes rather than the hour retyping
+takes. Every paragraph keeps a link to the scan it came from, diacritics survive untouched, digits and footnotes come
+out as the house wants them, and the same book can be re-exported any time with another trim size or font from one
+stylesheet. Everything runs on a single Mac today and a Linux server tomorrow. Experience goals: D22.
 
 ## 1. Architecture (Mac-native)
 
