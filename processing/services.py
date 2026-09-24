@@ -19,12 +19,11 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 import numpy as np
-from PIL import Image
 
 from books.models import Book, Page
-from core.images import load_gray, to_pil
+from core.images import fit_width, load_gray
+from core.serializers import flag_items, region_items  # noqa: F401 - re-exported for the API
 from core.storage import save_array
-from core.templatetags.nassakh import FLAG_LABELS
 from processing import pipeline
 from processing.models import LayoutGuides, Preprocess, Region
 
@@ -68,14 +67,6 @@ def _load_original(page: Page) -> np.ndarray:
             return load_gray(fh)
     except FileNotFoundError as exc:
         raise ProcessingError("ملف الصورة الأصلية مفقود من التخزين. أعد استخراج صفحات الكتاب.") from exc
-
-
-def _fit_width(array: np.ndarray, max_width: int) -> Image.Image:
-    """PIL image no wider than `max_width` (downscaled with Lanczos when needed)."""
-    img = to_pil(array)
-    if img.width > max_width:
-        img = img.resize((max_width, max(1, round(img.height * max_width / img.width))), Image.LANCZOS)
-    return img
 
 
 def clean_manual_params(data: Mapping | None) -> dict:
@@ -132,7 +123,10 @@ def stored_manual_params(page: Page) -> dict | None:
     pre = Preprocess.objects.filter(page=page).first()
     if pre is None or not pre.is_manual:
         return None
-    return {
+    if pre.manual_params:
+        # Only the keys the user actually overrode; the rest are re-detected on every run.
+        return dict(pre.manual_params)
+    return {  # rows written before `manual_params` existed: pin everything as before
         "angle": pre.angle,
         "crop_box": pre.crop_box or None,
         "sauvola_window": pre.sauvola_window,
@@ -153,7 +147,8 @@ def preprocess_page(page: Page, manual: dict | None = None) -> Preprocess:
     `manual` may hold `angle`, `crop_box`, `sauvola_window`, `sauvola_k`, `nlm_h`; the pipeline
     detects the rest. Writes gray.png, bw.png, display.webp (≤ 1400 px wide) and thumb.webp
     (≤ 240 px), the line boxes, footnote rule and flags, clears any earlier error and sets the
-    page status to `preprocessed`. Idempotent: files are replaced in place.
+    page status to `preprocessed` (an excluded page keeps `excluded`). Idempotent: files are
+    replaced in place.
     """
     gray = _load_original(page)
     overrides = {k: v for k, v in (manual or {}).items() if k in MANUAL_KEYS and v is not None}
@@ -164,15 +159,16 @@ def preprocess_page(page: Page, manual: dict | None = None) -> Preprocess:
     for name, value in result.model_fields().items():
         setattr(pre, name, value)
     pre.is_manual = bool(overrides)
+    pre.manual_params = {k: list(v) if isinstance(v, tuple) else v for k, v in overrides.items()}
 
     save_array(pre.gray_image, result.gray, "gray.png")
     save_array(pre.bw_image, result.bw, "bw.png")
-    save_array(pre.display_image, _fit_width(result.gray, DISPLAY_MAX_WIDTH), "display.webp")
-    save_array(pre.thumbnail, _fit_width(result.gray, THUMB_MAX_WIDTH), "thumb.webp")
+    save_array(pre.display_image, fit_width(result.gray, DISPLAY_MAX_WIDTH), "display.webp")
+    save_array(pre.thumbnail, fit_width(result.gray, THUMB_MAX_WIDTH), "thumb.webp")
     pre.save()
 
     _replace_stage_flags(page, pipeline.PREPROCESS_FLAGS, result.flags)
-    page.status = Page.Status.PREPROCESSED
+    page.status = Page.Status.EXCLUDED if page.is_excluded else Page.Status.PREPROCESSED
     page.error_from = ""
     page.error_message = ""
     page.save(update_fields=["status", "error_from", "error_message", "attention_flags"])
@@ -194,6 +190,40 @@ def preprocess_is_quick(page: Page) -> bool:
     return pixels <= SYNC_MAX_PIXELS
 
 
+EXCLUDED_PAGE_ERROR = "الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا."
+
+
+def rerun_preprocess(page: Page, manual: dict | None) -> tuple[dict, bool]:
+    """Re-run preprocessing from the panel with `manual` overrides (None = automatic values).
+
+    Pages that already have regions get them re-derived from the new gray image, so region boxes
+    stay in its pixel space; OCR is not re-enqueued (D21). Ordinary pages run in the request and
+    return `(payload, False)` with the new state; originals above `SYNC_MAX_PIXELS` are queued as
+    preprocess → layout (layout only when regions exist) and return `({"task_id", "detail"}, True)`.
+    Raises ProcessingError (Arabic) for an excluded page or a failed run.
+    """
+    if page.is_excluded:
+        raise ProcessingError(EXCLUDED_PAGE_ERROR)
+    rederive = page.regions.exists()
+    if not preprocess_is_quick(page):
+        from celery import chain
+
+        from processing import tasks
+
+        steps = [tasks.preprocess_page.s(page.pk, manual or {})]
+        if rederive:
+            steps.append(tasks.layout_page.s())
+        result = chain(*steps).apply_async()
+        return {"task_id": result.id, "detail": "الصورة كبيرة؛ أُرسلت المعالجة إلى العامل الخلفي."}, True
+
+    pre = preprocess_page(page, manual=manual)
+    if rederive:
+        derive_regions(page)
+    payload = preprocess_payload(page, pre)
+    payload["regions"] = region_items(page.regions.all())
+    return payload, False
+
+
 def _versioned_url(field) -> str:
     """File URL with a cache-busting version so a rewritten image is reloaded by the browser."""
     if not field or not field.name:
@@ -203,11 +233,6 @@ def _versioned_url(field) -> str:
     except (FileNotFoundError, NotImplementedError, OSError):
         stamp = 0
     return f"{field.url}?v={stamp}"
-
-
-def flag_items(flags: list[str] | None) -> list[dict]:
-    """Attention flags as `{"code", "label"}` pairs with Arabic labels."""
-    return [{"code": f, "label": FLAG_LABELS.get(f, f)} for f in (flags or [])]
 
 
 def preprocess_payload(page: Page, pre: Preprocess | None = None) -> dict:
@@ -498,7 +523,7 @@ def _derive_regions(page: Page) -> tuple[list[Region], bool]:
     needs_status = page.status in (Page.Status.UPLOADED, Page.Status.PREPROCESSED) or (
         page.status == Page.Status.ERROR and page.error_from in ("", STAGE_LAYOUT)
     )
-    if changed or needs_status:
+    if (changed or needs_status) and not page.is_excluded:  # an excluded page stays `excluded`
         page.status = Page.Status.LAYOUT_DONE
         page.error_from = ""
         page.error_message = ""
@@ -563,8 +588,10 @@ def set_page_guides_override(page: Page, data: Mapping | None) -> tuple[list[Reg
     """Store a per-page guide override (or clear it when `data` is empty/`reset`) and re-derive.
 
     Returns `(regions, ocr_enqueued)`; OCR is re-run through the books chain when the regions
-    changed.
+    changed. Raises ProcessingError for an excluded page.
     """
+    if page.is_excluded:
+        raise ProcessingError(EXCLUDED_PAGE_ERROR)
     data = dict(data or {})
     reset = data.pop("reset", False)
     clean = {} if reset else clean_guides(data, partial=True)
@@ -577,16 +604,77 @@ def set_page_guides_override(page: Page, data: Mapping | None) -> tuple[list[Reg
     return regions, changed
 
 
-def region_items(regions: list[Region]) -> list[dict]:
-    """Regions as JSON-ready dicts (`id`, `kind`, `label`, `bbox`, `order`, `source`)."""
-    return [
-        {
-            "id": r.pk,
-            "kind": r.kind,
-            "label": r.get_kind_display(),
-            "bbox": r.bbox,
-            "order": r.order,
-            "source": r.source,
-        }
-        for r in regions
-    ]
+# ---------------------------------------------------------------- guides screen
+
+
+def ratio_percent(ratio: float | None) -> str:
+    """Ratio → percentage string with one decimal and Western digits ('' for None)."""
+    return "" if ratio is None else f"{ratio * 100:.1f}"
+
+
+def _parse_page_number(requested: str | None) -> int | None:
+    """`?page=` value as a page number, None when it is not a plain decimal number."""
+    try:
+        return int(requested) if requested and requested.strip().isdecimal() else None
+    except ValueError:
+        return None
+
+
+def guides_reference_page(book: Book, guides: LayoutGuides | None, requested: str | None) -> Page | None:
+    """The page shown on the guides screen: `?page=<number>`, else the stored reference, else the first."""
+    candidates = book.pages.filter(is_excluded=False, preprocess__isnull=False).select_related("preprocess")
+    number = _parse_page_number(requested)
+    if number is not None:
+        page = candidates.filter(number=number).first()
+        if page is not None:
+            return page
+    if guides is not None and guides.reference_page_id:
+        page = candidates.filter(pk=guides.reference_page_id).first()
+        if page is not None:
+            return page
+    return candidates.order_by("number").first()
+
+
+def guides_context(book: Book, requested_page: str | None) -> dict:
+    """Everything the guides screen renders: guide values, detection stats and the reference page.
+
+    `config` feeds the Alpine component (guide ratios, the proposal, the reference page's detected
+    rule, line boxes and output size); `pages` lists every preprocessed page with whether a
+    footnote rule was detected on it.
+    """
+    guides = LayoutGuides.objects.filter(book=book).first()
+    stats = guides_stats(book)
+    reference = guides_reference_page(book, guides, requested_page)
+    values = book_guides_dict(book)
+
+    pre: Preprocess | None = reference.preprocess if reference is not None else None
+    detected_rule = None
+    if pre is not None and pre.footnote_rule_y is not None and pre.output_height:
+        detected_rule = round(pre.footnote_rule_y / pre.output_height, 4)
+
+    pages = (
+        Preprocess.objects.filter(page__book=book, page__is_excluded=False, output_height__gt=0)
+        .order_by("page__number")
+        .values_list("page__number", "footnote_rule_y")
+    )
+    config = {
+        "header_cut": values["header_cut"],
+        "footnote_line": values["footnote_line"],
+        "page_number_zone": values["page_number_zone"],
+        "page_number_height": values["page_number_height"],
+        "proposal": stats.footnote_line,
+        "detected_rule": detected_rule,
+        "line_boxes": pre.line_boxes if pre is not None else [],
+        "output": {"width": pre.output_width, "height": pre.output_height} if pre is not None else None,
+    }
+    return {
+        "book": book,
+        "guides": guides,
+        "config": config,
+        "stats": stats,
+        "proposal_percent": ratio_percent(stats.footnote_line),
+        "reference": reference,
+        "reference_image": pre.display_image.url if pre is not None and pre.display_image else "",
+        "pages": [{"number": n, "has_rule": rule is not None} for n, rule in pages],
+        "zones": LayoutGuides.PageNumberZone.choices,
+    }

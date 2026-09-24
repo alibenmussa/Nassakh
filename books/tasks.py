@@ -13,7 +13,6 @@ from django.core.exceptions import ObjectDoesNotExist
 
 from books import services
 from books.models import Book, Page
-from processing.models import Preprocess
 
 log = logging.getLogger(__name__)
 
@@ -21,9 +20,6 @@ INGEST_ERROR = (
     "تعذّر استخراج الصفحات من الملف. تأكد أن الملف PDF سليم وغير محمي، ثم اضغط «بدء المعالجة» مجددًا."
 )
 NO_PAGES_ERROR = "لم تُستخرج أي صفحة. راجع قيم تجاوز الصفحات الأولى والأخيرة ثم أعد المحاولة."
-
-# Below this fraction of pages with a detected footnote rule the proposal is not trusted (spec §7).
-GUIDES_MIN_CONFIDENCE = 0.4
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,))
@@ -36,6 +32,10 @@ def ingest_book_task(self, book_id: int) -> int:
     book = Book.objects.get(pk=book_id)
     try:
         services.ingest_book(book)
+    except services.IngestError as exc:  # actionable Arabic message (e.g. the skip values leave no pages)
+        log.warning("ingest of book %s refused: %s", book_id, exc)
+        services.set_book_error(book, str(exc))
+        return book_id
     except OSError as exc:
         if self.request.retries >= self.max_retries:
             log.exception("ingest failed for book %s after retries", book_id)
@@ -59,32 +59,6 @@ def ingest_book_task(self, book_id: int) -> int:
     return book_id
 
 
-def _unpack_proposal(result) -> tuple[object, float | None]:
-    """`propose_guides` returns the guides with a confidence alongside; accept a tuple or an attribute.
-
-    Returns None as confidence when the result carries none, so the caller can compute it.
-    """
-    if isinstance(result, tuple):
-        guides, confidence = result[0], result[1]
-    else:
-        guides, confidence = result, getattr(result, "confidence", None)
-    if confidence is None:
-        return guides, None
-    try:
-        return guides, float(confidence)
-    except (TypeError, ValueError):
-        return guides, None
-
-
-def rule_fraction(book: Book) -> float:
-    """Share of non-excluded, preprocessed pages with a detected footnote rule (the spec's confidence)."""
-    rows = Preprocess.objects.filter(page__book=book, page__is_excluded=False)
-    total = rows.count()
-    if not total:
-        return 0.0
-    return rows.filter(footnote_rule_y__isnull=False).count() / total
-
-
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,))
 def after_preprocess(self, results, book_id: int) -> int:
     """Chord callback once every page is preprocessed.
@@ -94,15 +68,17 @@ def after_preprocess(self, results, book_id: int) -> int:
     `ocr` and every preprocessed page gets the chain layout → ocr_fast → ocr_full.
     """
     book = Book.objects.get(pk=book_id)
+    if not book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED).exists():
+        book.refresh_status()  # every page failed preprocessing: nothing to lay out
+        return book_id
 
     if not services.has_guides(book):
-        from processing.services import propose_guides
+        # Below MIN_RULE_FRACTION of pages with a detected footnote rule the proposal is not trusted.
+        from processing.services import MIN_RULE_FRACTION, propose_guides
 
-        _guides, confidence = _unpack_proposal(propose_guides(book))
-        if confidence is None:
-            confidence = rule_fraction(book)
+        _guides, confidence = propose_guides(book)
         log.info("book %s: guides proposed with confidence %.2f", book_id, confidence)
-        if confidence < GUIDES_MIN_CONFIDENCE:
+        if confidence < MIN_RULE_FRACTION:
             book.status = Book.Status.NEEDS_GUIDES
             book.save(update_fields=["status", "updated_at"])
             return book_id
@@ -120,7 +96,7 @@ def _enqueue_layout(book: Book) -> int:
     book.status = Book.Status.OCR
     book.save(update_fields=["status", "updated_at"])
     for page in pages:
-        services.run_stage(page, "layout")
+        services.run_stage(page, "layout", refresh_book=False)
     return len(pages)
 
 
@@ -132,6 +108,10 @@ def rerun_book_from(self, book_id: int, stage: str) -> int:
     except ObjectDoesNotExist:
         log.warning("rerun_book_from: book %s no longer exists", book_id)
         return book_id
-    count = services.rerun_book(book, stage)
+    try:
+        count = services.rerun_book(book, stage)
+    except ValueError as exc:  # the view validates first; a state change in between lands here
+        log.warning("rerun_book_from: book %s not re-run from %s: %s", book_id, stage, exc)
+        return book_id
     log.info("book %s: %s pages re-queued from %s", book_id, count, stage)
     return book_id

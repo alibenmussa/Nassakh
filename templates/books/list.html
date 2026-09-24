@@ -4,12 +4,13 @@
 {% block title %}الكتب{% endblock %}
 
 {% block header_actions %}
-  {% if role == 'admin' or role == 'editor' %}
+  {# With no books the empty state carries the only primary action (DESIGN.md: one primary per view). #}
+  {% if rows %}{% if role == 'admin' or role == 'editor' %}
   <a class="btn btn-primary btn-sm" href="{% url 'books:create' %}">
     <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
     <span>كتاب جديد</span>
   </a>
-  {% endif %}
+  {% endif %}{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -18,7 +19,7 @@
   {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب بعد" text="ارفع ملف PDF لكتاب مصوّر أو رقمي، حدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة، ثم اضغط «بدء المعالجة» ليستخرج نسّاخ الصفحات ويتعرّف على نصّها." action_url=create_url action_label="كتاب جديد" %}
 {% else %}
   <div class="page-header">
-    <p class="meta">عدد الكتب: <span class="num">{{ rows|length }}</span> · تُحدَّث الحالة عند كل زيارة</p>
+    <p class="meta">عدد الكتب: <span class="num">{{ rows|length }}</span></p>
   </div>
   <div class="table-wrap">
     <table class="table books-table">

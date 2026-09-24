@@ -17,6 +17,7 @@
   <symbol id="i-logout" viewBox="0 0 24 24"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M9 8l-4 4 4 4M5 12h10"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5H2.5z"/><path d="M12 10v4.5M12 17.5v.5"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8v.5"/></symbol>
@@ -117,6 +118,14 @@
 </div>
 {% endblock %}
 
+{# Shared quiet toast (static/src/js/ui.js): one at a time, a new one replaces the old. #}
+<div x-data role="status" aria-live="polite">
+  <div class="toast" x-show="$store.toast.visible" x-cloak x-transition.opacity.duration.200ms>
+    <span class="grow" x-text="$store.toast.message"></span>
+  </div>
+</div>
+
+<script src="{% static 'src/js/ui.js' %}"></script>
 <script src="{% static 'src/js/books.js' %}"></script>
 <script src="{% static 'src/js/processing.js' %}"></script>
 <script src="{% static 'src/js/ocr.js' %}"></script>

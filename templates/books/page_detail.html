@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load nassakh %}
 {% block head_title %}صفحة {{ page.number }} · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}{{ book.title }} <span class="title-sep" aria-hidden="true">/</span> صفحة {{ page.number }}{% endblock %}
+{% block title %}<span class="title-page num">صفحة {{ page.number }}</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
 
 {% block header_actions %}
   <nav class="pager" aria-label="التنقّل بين الصفحات">
@@ -13,7 +13,7 @@
     {% else %}
     <span class="btn btn-sm" aria-disabled="true"><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg><span>السابقة</span></span>
     {% endif %}
-    <span class="meta num pager-count">{{ page.number }} / {{ total_pages }}</span>
+    <span class="meta num pager-count" dir="ltr" aria-label="الصفحة {{ page.number }} من {{ total_pages }}">{{ page.number }} / {{ total_pages }}</span>
     {% if next_url %}
     <a class="btn btn-sm" href="{{ next_url }}" title="الصفحة التالية (←)" rel="next">
       <span>التالية</span>
@@ -28,7 +28,9 @@
 
 {% block content %}
 {{ viewer|json_script:"viewer-config" }}
-<div class="detail-layout" x-data="pageDetail(JSON.parse(document.getElementById('viewer-config').textContent))" @keydown.window="onKey($event)" @nassakh:page-updated.window="onPageUpdated($event.detail)">
+{{ page_state|json_script:"page-state" }}
+{% stage_labels as all_stage_labels %}{{ all_stage_labels|json_script:"page-stage-labels" }}
+<div class="detail-layout" x-data="pageDetail(JSON.parse(document.getElementById('viewer-config').textContent))" @keydown.window="onKey($event)" @nassakh:page-updated.window="onPageUpdated($event.detail)" @nassakh:page-state.window="onPageState($event.detail)">
 
   {# ------------------------------------------------------------ image panel #}
   <section class="viewer" aria-label="صورة الصفحة">
@@ -73,40 +75,41 @@
     <section class="card stack" aria-labelledby="page-state-title">
       <div class="card-header">
         <h2 class="section-title" id="page-state-title">الحالة</h2>
-        {% include "partials/_status_dot.html" with status=page.status label=page|ar_status %}
+        <span class="status"><span class="dot" :class="state.dot || '{{ page.status|status_dot }}'" aria-hidden="true"></span><span x-text="state.status_label">{{ page|ar_status }}</span></span>
       </div>
 
       <dl class="kv">
         <dt>النص</dt>
-        <dd><span class="badge{% if page.text_state == 'final' %} badge-accent{% endif %}">{{ page.get_text_state_display }}</span></dd>
+        <dd><span class="badge{% if page.text_state == 'final' %} badge-accent{% endif %}" :class="{ 'badge-accent': state.text_state === 'final' }" x-text="state.text_state_label">{{ page.get_text_state_display }}</span></dd>
         <dt>من الملف</dt>
         <dd class="num">الصفحة {{ source_page }}{% if page.source_half != 'full' %} · {{ page.get_source_half_display }}{% endif %}</dd>
         {% if page.is_excluded %}<dt>الضمّ</dt><dd>مستثناة من الكتاب</dd>{% endif %}
       </dl>
 
-      {% if page_flags %}
-      <ul class="flag-list" aria-label="إشارات الانتباه">
-        {% for flag in page_flags %}<li class="badge badge-warning">{{ flag.label }}</li>{% endfor %}
+      <ul class="flag-list" aria-label="إشارات الانتباه" x-show="state.flag_labels && state.flag_labels.length"{% if not page_flags %} x-cloak{% endif %}>
+        {% for flag in page_flags %}<li class="badge badge-warning" x-show="!live">{{ flag.label }}</li>{% endfor %}
+        <template x-for="label in live ? (state.flag_labels || []) : []" :key="label"><li class="badge badge-warning" x-text="label"></li></template>
       </ul>
-      {% endif %}
 
-      {% if page.status == 'error' %}
-      <div class="banner banner-danger" role="alert">
+      {# Designed failure: Arabic headline, the stage by its Arabic name, technical detail folded away, retry. #}
+      <div class="banner banner-danger" role="alert" x-show="state.status === 'error'"{% if page.status != 'error' %} x-cloak{% endif %}>
         <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
         <div class="grow stack-sm">
-          <span>{{ error_headline|default:"فشلت معالجة هذه الصفحة." }}</span>
-          {% if page.error_from %}<span class="meta">المرحلة: {{ page.error_from }}</span>{% endif %}
-          {% if error_detail %}<details class="error-details"><summary class="meta">التفاصيل التقنية</summary><pre dir="ltr">{{ error_detail }}</pre></details>{% endif %}
-          {% if retry_stage %}{% if role == 'admin' or role == 'editor' %}
-          <form method="post" action="{% url 'books:rerun' book.pk page.number %}">
+          <span x-text="errorHeadline">{{ error_headline|default:"فشلت معالجة هذه الصفحة." }}</span>
+          <span class="meta" x-show="errorStageLabel"{% if not page.error_from %} x-cloak{% endif %}>المرحلة: <span x-text="errorStageLabel">{{ page.error_from|stage_label }}</span></span>
+          <details class="error-details" x-show="errorDetail"{% if not error_detail %} x-cloak{% endif %}><summary class="meta">التفاصيل</summary><pre dir="ltr" x-text="errorDetail">{{ error_detail }}</pre></details>
+          {% if role == 'admin' or role == 'editor' %}
+          <form method="post" action="{% url 'books:rerun' book.pk page.number %}" x-show="retryStage"{% if not retry_stage %} x-cloak{% endif %}>
             {% csrf_token %}
-            <input type="hidden" name="stage" value="{{ retry_stage }}">
-            <button type="submit" class="btn btn-sm">إعادة المحاولة من هذه المرحلة</button>
+            <input type="hidden" name="stage" value="{{ retry_stage|default:'' }}" :value="retryStage">
+            <button type="submit" class="btn btn-sm">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+              <span>إعادة <span x-text="errorStageLabel">{{ retry_stage|stage_label }}</span></span>
+            </button>
           </form>
-          {% endif %}{% endif %}
+          {% endif %}
         </div>
       </div>
-      {% endif %}
 
       {% if role == 'admin' or role == 'editor' %}
       <div class="action-row">

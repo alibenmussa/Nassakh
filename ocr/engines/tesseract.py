@@ -89,7 +89,8 @@ def parse_image_to_data(data: dict) -> tuple[str, list[dict]]:
     """Turn `pytesseract.image_to_data(..., output_type=DICT)` into `(text, lines)`.
 
     Lines are `{"bbox": [x0, y0, x1, y1], "words": [{"text", "bbox", "conf"}]}` grouped by Tesseract's
-    (block, paragraph, line) numbers in reading order; empty words and layout-only rows are dropped.
+    (block, paragraph, line) numbers, words in Tesseract's `word_num` order (logical reading order,
+    so Latin runs inside Arabic lines stay left to right); empty words and layout-only rows are dropped.
     `text` has one line per detected line and a blank line between paragraphs.
     """
     n = len(data.get("text", []))
@@ -105,15 +106,21 @@ def parse_image_to_data(data: dict) -> tuple[str, list[dict]]:
         x, y = int(data["left"][i]), int(data["top"][i])
         w, h = int(data["width"][i]), int(data["height"][i])
         key = (int(data["block_num"][i]), int(data["par_num"][i]), int(data["line_num"][i]))
-        grouped[key].append({"text": word, "bbox": [x, y, x + w, y + h], "conf": conf})
+        word_num = int(data["word_num"][i]) if "word_num" in data else i
+        grouped[key].append(
+            {"text": word, "bbox": [x, y, x + w, y + h], "conf": conf, "_order": (word_num, i)}
+        )
 
     lines: list[dict] = []
     text_lines: list[str] = []
     previous_par: tuple[int, int] | None = None
     for key in sorted(grouped):
-        words = grouped[key]
-        # Arabic reading order: right to left within a line.
-        words.sort(key=lambda w: -w["bbox"][2])
+        # Tesseract's word_num order is already the logical (bidi) reading order: Arabic words
+        # right to left with embedded Latin runs left to right. Sorting by x would reverse those runs.
+        words = [
+            {k: v for k, v in w.items() if k != "_order"}
+            for w in sorted(grouped[key], key=lambda w: w["_order"])
+        ]
         bbox = [
             min(w["bbox"][0] for w in words),
             min(w["bbox"][1] for w in words),

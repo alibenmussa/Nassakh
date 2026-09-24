@@ -13,12 +13,12 @@ from django.urls import reverse
 import numpy as np
 import pytest
 
-from books.models import Book, Page
+from books.models import ALL_PAGES_FAILED, Book, Page
 from core import arabic, images, storage
 from core.context_processors import nav
 from core.decorators import has_role, role_required, user_role
 from core.templatetags.nassakh import ar_flag, ar_status, percent, status_dot
-from processing.models import Preprocess
+from processing.models import LayoutGuides, Preprocess
 
 # ---------------------------------------------------------------- arabic
 
@@ -342,15 +342,28 @@ def test_book_progress_page_count_and_refresh_status():
     book.status = Book.Status.NEEDS_GUIDES
     assert book.refresh_status() == Book.Status.NEEDS_GUIDES  # waiting for guides is kept
 
+    # one page moved on through a per-page action: the others still wait for the guides (F6)
     Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.LAYOUT_DONE)
+    assert book.refresh_status() == Book.Status.NEEDS_GUIDES
+    LayoutGuides.objects.create(book=book, source=LayoutGuides.Source.MANUAL)
     assert book.refresh_status() == Book.Status.OCR
     assert Book.objects.get(pk=book.pk).status == Book.Status.OCR
 
     Page.objects.filter(pk__in=[p.pk for p in pages[:3]]).update(status=Page.Status.OCR_DONE)
     assert book.refresh_status() == Book.Status.READY_FOR_REVIEW
 
+    # an errored page with nothing else left to run settles the book (it never stays active, F7)
     Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.ERROR)
-    assert book.refresh_status() == Book.Status.OCR  # an errored page keeps the book from completing
+    assert book.refresh_status() == Book.Status.READY_FOR_REVIEW
+    Page.objects.filter(pk=pages[2].pk).update(status=Page.Status.LAYOUT_DONE)
+    assert book.refresh_status() == Book.Status.OCR  # work pending: still in OCR
+
+    # every page failed: `error` with a re-derivable message, left again once a page recovers
+    Page.objects.filter(pk__in=[p.pk for p in pages[:3]]).update(status=Page.Status.ERROR)
+    assert book.refresh_status() == Book.Status.ERROR
+    assert Book.objects.get(pk=book.pk).error_message == ALL_PAGES_FAILED
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.OCR_DONE)
+    assert book.refresh_status() == Book.Status.READY_FOR_REVIEW and book.error_message == ""
 
     Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.REVIEWED)
     assert book.refresh_status() == Book.Status.REVIEWING

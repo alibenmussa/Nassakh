@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% comment %}Rendered by Django's server_error view without a request context: keep it free of user/role data.{% endcomment %}
+{% block head_title %}خطأ في الخادم · نسّاخ{% endblock %}
+{% block body %}
+<main class="auth-screen">
+  {% include "partials/_error_page.html" with code="500" title="حدث خطأ غير متوقّع في الخادم" text="أعد تحميل الصفحة بعد قليل. إن تكرّر الخطأ فراجع سجلّ الخادم." %}
+</main>
+{% endblock %}

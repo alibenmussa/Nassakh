@@ -218,6 +218,58 @@ def test_remove_edge_strips_leaves_a_real_second_column_alone():
     assert strips == []
 
 
+def _two_columns(width: int = 1600) -> np.ndarray:
+    """Two text columns (150 px outer margins) separated by an 80 px gutter."""
+    gray = render_page(width=width, margin=150, n_lines=12)
+    gray[:, width // 2 - 40 : width // 2 + 40] = 255
+    return gray
+
+
+def _glyph_column(gray: np.ndarray, x: int, glyph: str, n: int = 12, size: int = 26) -> np.ndarray:
+    img = Image.fromarray(gray)
+    draw = ImageDraw.Draw(img)
+    font, _ = _font(size)
+    for i in range(n):
+        draw.text((x, 120 + 44 * i), glyph, font=font, fill=0)
+    return np.asarray(img).copy()
+
+
+def test_remove_edge_strips_keeps_narrow_bands_between_two_columns():
+    # a column of verse numbers in the gutter is not at the edge of the scan (F14)
+    gray = _glyph_column(_two_columns(), 790, "7")
+    _, strips = pipeline.remove_edge_strips(pipeline.binarize_clean(gray, min_area=8), gray)
+    assert strips == []
+
+
+def test_remove_edge_strips_removes_a_strip_beyond_the_lighter_second_column():
+    # the heavier column is on the right; the facing-page strip sits beyond the left column (F14)
+    gray = _two_columns()
+    gray[350:, 100:800] = 255
+    gray = _glyph_column(gray, 10, "ك")
+    _, strips = pipeline.remove_edge_strips(pipeline.binarize_clean(gray, min_area=8), gray)
+    assert [(s["side"], s["kind"]) for s in strips] == [("left", pipeline.STRIP_TEXT)]
+    assert strips[0]["x1"] < 40
+
+
+def test_a_page_number_removed_from_the_outer_margin_is_flagged():
+    # a single glyph-sized item is text-like ink: it is removed but never silently (F18)
+    gray = render_page(width=2000, height=2800, margin=250, n_lines=30)
+    img = Image.fromarray(gray)
+    ImageDraw.Draw(img).text((1830, 1400), "217", font=_font(44)[0], fill=0)
+    result = pipeline.run_pipeline(np.asarray(img).copy())
+    assert [s["kind"] for s in result.edge_strips_removed] == [pipeline.STRIP_TEXT]
+    assert pipeline.FLAG_EDGE_STRIP in result.flags
+
+
+def test_a_manual_crop_still_reports_what_the_automatic_run_would_do():
+    gray = render_page(strip="left")
+    auto = pipeline.run_pipeline(gray)
+    manual = pipeline.run_pipeline(gray, pipeline.PreprocessParams(crop_box=[0, 0, 900, 1200]))
+    assert manual.edge_strips_removed == []  # nothing whitened under a manual crop
+    assert manual.auto_params["crop_box"] == auto.crop_box  # F17: auto_params stay truthful
+    assert manual.auto_params["edge_strips"] == auto.edge_strips_removed != []
+
+
 def test_manual_params_override_detection_and_a_manual_crop_disables_strip_removal():
     gray = render_page(strip="left")
     manual = pipeline.PreprocessParams(
@@ -351,14 +403,17 @@ def test_preprocess_page_manual_params_are_stored_and_kept_by_the_task(page_with
     pre = services.preprocess_page(page, {"angle": 0.5, "sauvola_k": 0.3, "bogus": 1})
     assert pre.is_manual is True and pre.angle == 0.5 and pre.sauvola_k == 0.3
     assert abs(pre.auto_params["angle"] - (-1.0)) <= 0.3
-    assert services.stored_manual_params(page)["angle"] == 0.5
+    # only the posted keys are pinned; crop and window stay automatic on chain re-runs (F15)
+    assert services.stored_manual_params(page) == {"angle": 0.5, "sauvola_k": 0.3}
 
     # a chain re-run keeps the user's values; an explicit auto run drops them
     assert tasks.preprocess_page.delay(page.pk).get() == page.pk
     pre.refresh_from_db()
     assert pre.is_manual is True and pre.angle == 0.5
+    assert pre.manual_params == {"angle": 0.5, "sauvola_k": 0.3}
     pre = services.preprocess_page(page, None)
     assert pre.is_manual is False and abs(pre.angle - (-1.0)) <= 0.3
+    assert pre.manual_params == {} and services.stored_manual_params(page) is None
 
     # the task also takes explicit overrides ({} = automatic), which the API uses for queued pages
     assert tasks.preprocess_page.delay(page.pk, {"angle": 0.7}).get() == page.pk
@@ -585,7 +640,7 @@ def test_apply_guides_saves_re_derives_and_enqueues_ocr_only_for_changed_pages(b
         "page_number_height": "0.06",
     }
 
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         guides = services.apply_guides(book, data, users.editor)
     assert guides.source == "manual" and guides.footnote_line == 0.8 and guides.header_cut is None
     assert sorted(call.args[0].pk for call in run_stage.call_args_list) == sorted(p.pk for p in pages)
@@ -599,7 +654,7 @@ def test_apply_guides_saves_re_derives_and_enqueues_ocr_only_for_changed_pages(b
     assert book.status == Book.Status.OCR
 
     # the same guides again: nothing changed, nothing enqueued
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         services.apply_guides(book, data, users.editor)
     assert run_stage.call_count == 0
 
@@ -613,19 +668,19 @@ def test_apply_guides_saves_re_derives_and_enqueues_ocr_only_for_changed_pages(b
 def test_set_page_guides_override_derives_and_resets(book):
     LayoutGuides.objects.create(book=book, footnote_line=0.8)
     page = make_page(book, 1)
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         regions, enqueued = services.set_page_guides_override(page, {"footnote_line": None})
     assert enqueued is True and run_stage.call_args.args == (page, "ocr")
     assert [r.kind for r in regions] == ["body", "page_number"]
     page.refresh_from_db()
     assert page.guides_override == {"footnote_line": None}
 
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         regions, enqueued = services.set_page_guides_override(page, {"reset": True})
     assert enqueued is True and page.guides_override is None
     assert [r.kind for r in regions] == ["body", "footnote", "page_number"]
 
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         _regions, enqueued = services.set_page_guides_override(page, {})
     assert enqueued is False and run_stage.call_count == 0
 
@@ -724,7 +779,7 @@ def test_guides_screen_post_applies_and_redirects(client, book, users, urls):
         "page_number_height": "0.0600",
         "reference_page": str(page.pk),
     }
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         response = client.post(url, data)
     assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/"
     guides = LayoutGuides.objects.get(book=book)
@@ -784,18 +839,31 @@ def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
     assert [r["kind"] for r in data["regions"]] == ["body", "page_number"]
     assert data["regions"][0]["bbox"][2] == data["output"]["width"]
 
+    # Huge originals go through the worker (eager here) as preprocess → layout, so the regions are
+    # re-derived in the new gray-image space exactly like the synchronous path (F4).
     Page.objects.filter(pk=page.pk).update(width=5000, height=5000)
-    with patch("processing.tasks.preprocess_page.delay") as delay:
-        delay.return_value.id = "task-1"
-        queued = client.post(url, json.dumps({"angle": 2.0}), content_type="application/json")
-        reset = client.post(url, json.dumps({"reset": True}), content_type="application/json")
-    assert queued.status_code == 202 and queued.json() == {
-        "queued": True,
-        "task_id": "task-1",
-        "detail": "الصورة كبيرة؛ أُرسلت المعالجة إلى العامل الخلفي.",
-    }
+    old_width = data["output"]["width"]
+    box = [0, 0, old_width // 2, data["output"]["height"]]
+    queued = client.post(url, json.dumps({"crop_box": box}), content_type="application/json")
+    assert queued.status_code == 202 and queued.json()["queued"] is True
+    assert queued.json()["detail"] == "الصورة كبيرة؛ أُرسلت المعالجة إلى العامل الخلفي."
+    page.refresh_from_db()
+    new_width = page.preprocess.output_width
+    assert new_width < old_width
+    assert page.status == Page.Status.LAYOUT_DONE
+    assert all(r.bbox[2] <= new_width for r in page.regions.all())
+    assert page.regions.get(kind="body").bbox[2] == new_width
+
+    reset = client.post(url, json.dumps({"reset": True}), content_type="application/json")
     assert reset.status_code == 202
-    assert [call.args for call in delay.call_args_list] == [(page.pk, {"angle": 2.0}), (page.pk, {})]
+    page.refresh_from_db()
+    assert page.preprocess.is_manual is False
+
+    # an excluded page is refused instead of being turned back into `preprocessed` (F19)
+    Page.objects.filter(pk=page.pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
+    refused = client.post(url, "{}", content_type="application/json")
+    assert refused.status_code == 422 and "مستثناة" in refused.json()["errors"][0]
+    assert Page.objects.get(pk=page.pk).status == Page.Status.EXCLUDED
 
     missing = Page.objects.create(book=page.book, number=7, source_index=6)
     gone = client.post(
@@ -810,7 +878,7 @@ def test_api_page_guides_override(client, book, users):
     page = make_page(book, 1)
     url = reverse("api:page_guides_override", kwargs={"page_id": page.pk})
     client.force_login(users.editor)
-    with patch("books.services.run_stage", create=True) as run_stage:
+    with patch("books.services.run_stage") as run_stage:
         response = client.post(url, json.dumps({"footnote_line": None}), content_type="application/json")
     assert response.status_code == 200, response.content
     data = response.json()
@@ -855,3 +923,69 @@ def test_preprocess_panel_partial_renders_config_for_a_page(book, urls):
     html2 = render_to_string("processing/_preprocess_panel.html", {"page": bare, "book": book})
     config2 = json_block(html2, "preprocess-config")
     assert config2["has_preprocess"] is False and "تشغيل المعالجة" in html2
+
+
+# ---------------------------------------------------------------- review regressions
+
+
+@pytest.mark.django_db
+def test_guides_override_on_an_excluded_page_is_refused_and_keeps_the_status(client, book, users):
+    # F5: no 500 and no `layout_done` on an excluded page
+    LayoutGuides.objects.create(book=book, footnote_line=0.8)
+    page = make_page(book, 1)
+    Page.objects.filter(pk=page.pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
+    client.force_login(users.editor)
+    url = reverse("api:page_guides_override", kwargs={"page_id": page.pk})
+    response = client.post(url, json.dumps({"footnote_line": 0.7}), content_type="application/json")
+    assert response.status_code == 422 and "مستثناة" in response.json()["errors"][0]
+    page.refresh_from_db()
+    assert page.status == Page.Status.EXCLUDED and not page.regions.exists()
+    # the service itself never moves an excluded page to layout_done
+    services.derive_regions(page)
+    assert Page.objects.get(pk=page.pk).status == Page.Status.EXCLUDED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", ["api:page_preprocess", "api:page_guides_override"])
+def test_mutating_json_routes_require_the_editor_role(client, book, users, name):
+    # F56: anonymous and non-editor users are refused before anything runs
+    page = make_page(book, 1)
+    url = reverse(name, kwargs={"page_id": page.pk})
+    with (
+        patch("processing.services.set_page_guides_override") as override,
+        patch("processing.services.rerun_preprocess") as rerun,
+    ):
+        assert client.post(url, "{}", content_type="application/json").status_code == 403
+        client.force_login(users.plain)
+        response = client.post(url, "{}", content_type="application/json")
+        assert response.status_code == 403 and "محرّر" in response.json()["detail"]
+    override.assert_not_called()
+    rerun.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_json_api_enforces_csrf_and_base_layout_exposes_the_token(book, users):
+    # F60: processing.js sends X-CSRFToken read from <meta name="csrf-token"> in base.html
+    from django.test import Client
+
+    page = make_page(book, 1)
+    strict = Client(enforce_csrf_checks=True)
+    strict.force_login(users.editor)
+    url = reverse("api:page_guides_override", kwargs={"page_id": page.pk})
+    with patch("books.services.run_stage"):
+        assert strict.post(url, "{}", content_type="application/json").status_code == 403
+        html = strict.get(reverse("books:detail", args=[book.pk])).content.decode()
+        token = re.search(r'<meta name="csrf-token" content="([^"]+)"', html).group(1)
+        ok = strict.post(url, "{}", content_type="application/json", HTTP_X_CSRFTOKEN=token)
+    assert ok.status_code == 200
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("requested", ["²", "abc", "", None, "٢"])
+def test_guides_reference_page_ignores_non_decimal_page_numbers(book, requested):
+    # F23: "²" passes str.isdigit() but int() rejects it; Arabic-Indic digits are accepted
+    first, second = make_page(book, 1), make_page(book, 2)
+    page = services.guides_reference_page(book, None, requested)
+    assert page == (second if requested == "٢" else first)
+    context = services.guides_context(book, requested)
+    assert context["reference"] == page and len(context["pages"]) == 2

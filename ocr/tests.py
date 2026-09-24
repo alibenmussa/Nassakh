@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 from books.models import Book, Page
+from books.services import run_stage
 from core.storage import save_array
 from ocr import services, tasks
 from ocr.alignment import align_tokens, build_lines, word_f1
@@ -254,8 +255,29 @@ def test_parse_image_to_data_groups_words_into_lines_with_boxes():
     assert text == "قال الأمير\nسنة ١٩٦٦\n\nحاشية"
     assert len(lines) == 3
     assert lines[0]["bbox"] == [10, 0, 100, 20]
-    assert [w["text"] for w in lines[0]["words"]] == ["قال", "الأمير"]  # right to left
+    assert [w["text"] for w in lines[0]["words"]] == ["قال", "الأمير"]  # word_num order
     assert lines[1]["words"][1] == {"text": "١٩٦٦", "bbox": [5, 25, 45, 45], "conf": 55.0}
+
+
+def test_parse_image_to_data_keeps_tesseract_word_order_for_latin_runs():
+    # word_num order is the logical order; sorting by x would reverse "Ibn Khaldun" (F10)
+    rows = [("قال", 300), ("Ibn", 150), ("Khaldun", 220), ("في", 60)]
+    data = {
+        "level": [5] * 4,
+        "block_num": [1] * 4,
+        "par_num": [1] * 4,
+        "line_num": [1] * 4,
+        "word_num": [1, 2, 3, 4],
+        "left": [x for _, x in rows],
+        "top": [0] * 4,
+        "width": [60] * 4,
+        "height": [20] * 4,
+        "conf": [90] * 4,
+        "text": [t for t, _ in rows],
+    }
+    text, lines = parse_image_to_data(data)
+    assert text == "قال Ibn Khaldun في"
+    assert [w["text"] for w in lines[0]["words"]] == ["قال", "Ibn", "Khaldun", "في"]
 
 
 def test_tesseract_engine_recognize_uses_image_to_data(tmp_path, settings):
@@ -349,8 +371,20 @@ REF_20 = " ".join(f"كلمة{i}" for i in range(20))
         (" ".join(f"غريب{i}" for i in range(20)), REF_20, False, (False, "low_overlap")),
         (REF_20, REF_20, False, (True, "ok")),
         ("نص بلا مرجع", "", False, (True, "no_reference")),
+        # an empty reference is inconclusive for anything longer than a few words (F12)
+        ("جملة كاملة متخيلة على منطقة فارغة", "", False, (False, "no_reference")),
         # diacritics and letter variants do not count as differences
-        ("قَالَ الأَمِيرُ إنَّ الكِتَابَ مُفِيدٌ", "قال الامير ان الكتاب مفيد", False, (True, "ok")),
+        ("قَالَ الأَمِيرُ إنَّ الكِتَابَ مُفِيدٌ " * 3, "قال الامير ان الكتاب مفيد " * 3, False, (True, "ok")),
+        # under 15 reference words only runaway output fails (F8): noisy Tesseract footnote
+        (
+            "أ ابن عبد الحكم ، فوج مصر والمغرب ، 149 . Goodchild, 148.",
+            "ال ae ee CT ¥ Goodchild, 148. *",
+            False,
+            (True, "short_reference"),
+        ),
+        (" ".join(f"كلمة{i}" for i in range(14)), "غ1 غ2 غ3 غ4", False, (True, "short_reference")),
+        (" ".join(f"كلمة{i}" for i in range(23)), "غ1 غ2 غ3 غ4", False, (False, "too_long")),
+        (REF_20[:20], REF_20[:20], True, (False, "loop")),
     ],
 )
 def test_sanity_check_cases(text, reference, looped, expected):
@@ -615,7 +649,7 @@ def test_run_full_ocr_builds_lines_final_text_and_statuses(page):
     body_run = next(r for r in by_engine["qari_v03"] if r.region.kind == "body")
     assert foot_run.input_variant == "gray_2x" and body_run.input_variant == "gray"
     assert foot_run.params["max_new_tokens"] == 1000 and body_run.params["max_new_tokens"] == 2500
-    assert body_run.params["sanity"] == {"ok": True, "reason": "ok"}
+    assert body_run.params["sanity"] == {"ok": True, "reason": "short_reference"}  # 12-word reference
     assert body_run.prompt.startswith("Below is the image") is False  # fake engines have no prompt
     assert body_run.backend == "torch" and body_run.model_id == "fake"
     # footnote crops are upscaled 2x with Lanczos before the models see them
@@ -628,7 +662,8 @@ def test_run_full_ocr_builds_lines_final_text_and_statuses(page):
 def test_run_full_ocr_falls_back_to_tesseract_when_both_models_fail(page):
     add_regions(page)
     looping = OcrResult(text=PRIMARY_BODY, duration_s=1.0, output_tokens=2500, finish="length")
-    fakes = engines(primary_body=looping, secondary_body="كلمة")
+    runaway = " ".join(f"كلمة{i}" for i in range(60))
+    fakes = engines(primary_body=looping, secondary_body=runaway)
     with registry.override(fakes):
         services.run_fast_ocr(page)
         services.run_full_ocr(page)
@@ -640,7 +675,7 @@ def test_run_full_ocr_falls_back_to_tesseract_when_both_models_fail(page):
     body_primary = page.ocr_runs.get(engine_name="qari_v03", region__kind="body")
     assert body_primary.looped is True and body_primary.params["sanity"]["reason"] == "loop"
     body_secondary = page.ocr_runs.get(engine_name="qari_v02", region__kind="body")
-    assert body_secondary.params["sanity"]["reason"] == "too_short"
+    assert body_secondary.params["sanity"]["reason"] == "too_long"
     body_lines = page.lines.filter(region__kind="body").order_by("order")
     assert [line.text for line in body_lines] == TESS_BODY.split("\n")
     # only digits are low in fallback text (no alternatives)
@@ -715,7 +750,10 @@ def test_finalize_page_replaces_unreviewed_lines_and_keeps_reviewed_ones(page):
     page.refresh_from_db()
     assert Line.objects.filter(pk=first.pk, text="نص مُراجَع").exists()
     assert not Line.objects.filter(pk=stale.pk).exists()
-    assert page.lines.filter(is_reviewed=False).count() == 3
+    # the reviewed line takes the place of the new line at its order: no duplicate (F54)
+    assert page.lines.count() == 3
+    assert list(page.lines.order_by("order").values_list("order", flat=True)) == [0, 1, 2]
+    assert page.lines.get(order=0).is_reviewed and "نص مُراجَع" in page.final_text
 
 
 def test_finalize_page_uses_the_latest_run_per_engine(page):
@@ -853,9 +891,64 @@ def test_ocr_task_recovers_a_page_from_error(page):
     add_regions(page)
     page.set_error("ocr_full", "فشل سابق")
     with registry.override(engines()):
-        tasks.ocr_page_full.apply(args=[page.pk]).get()
+        run_stage(page, "ocr_full")  # the retry path clears the error, then the task runs
     page.refresh_from_db()
     assert page.status == Page.Status.OCR_DONE and page.error_from == "" and page.error_message == ""
+
+
+def test_ocr_tasks_skip_a_page_that_failed_earlier_in_the_chain(page):
+    # F2: a failure upstream keeps its message; OCR does not overwrite it nor run on stale inputs
+    add_regions(page)
+    page.set_error("preprocess", "فشلت المعالجة الأولية.")
+    with registry.override(engines()):
+        tasks.ocr_page_fast.apply(args=[page.pk]).get()
+        tasks.ocr_page_full.apply(args=[page.pk]).get()
+    page.refresh_from_db()
+    assert (page.status, page.error_from, page.error_message) == (
+        "error",
+        "preprocess",
+        "فشلت المعالجة الأولية.",
+    )
+    assert not page.ocr_runs.exists()
+
+
+def test_run_full_ocr_puts_the_page_in_error_when_every_model_call_crashes(page):
+    # F11: an engine crash on every call is not a finished page with Tesseract text
+    add_regions(page)
+    fakes = engines()
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        for name in ("qari_v03", "qari_v02"):
+            fakes[name].recognize = mock.Mock(side_effect=RuntimeError("MPS backend out of memory"))
+        tasks.ocr_page_full.apply(args=[page.pk]).get()
+    page.refresh_from_db()
+    assert page.status == Page.Status.ERROR and page.error_from == "ocr_full"
+    headline, detail = page.error_message.split("\n", 1)
+    assert "GPU" in headline and "RuntimeError" not in headline and "out of memory" in detail
+
+
+def test_run_fast_ocr_reports_a_missing_tesseract_with_the_install_hint(page):
+    # F13/F25: the actionable headline, the technical part on the following lines
+    add_regions(page)
+    fakes = {k: v for k, v in engines().items() if k != "tesseract"}
+    with registry.override(fakes):
+        tasks.ocr_page_fast.apply(args=[page.pk]).get()
+    page.refresh_from_db()
+    headline = page.error_message.splitlines()[0]
+    assert page.error_from == "ocr_fast" and headline == services.TESSERACT_HEADLINE
+
+
+def test_select_text_accepts_the_primary_when_both_models_agree_against_tesseract():
+    # F8 (2): both Qari readings differ from a garbage reference but agree with each other
+    tess = OcrRun(engine_name="tesseract", parsed_text=" ".join(f"غ{i}" for i in range(20)))
+    reading = " ".join(f"كلمة{i}" for i in range(20))
+    primary = OcrRun(engine_name="qari_v03", parsed_text=reading)
+    secondary = OcrRun(engine_name="qari_v02", parsed_text=reading + " زائدة")
+    text, alt, fallback, reason, source = services.select_text(primary, secondary, tess)
+    assert (text, fallback, reason, source) == (reading, False, "models_agree", "qari_v03")
+    assert alt == secondary.parsed_text
+    looping = OcrRun(engine_name="qari_v03", parsed_text=reading, looped=True)
+    assert services.select_text(looping, secondary, tess)[2] is True  # a loop is never rescued
 
 
 def test_warm_up_engines_loads_the_configured_engines():
@@ -910,7 +1003,7 @@ def test_page_text_and_runs_api_require_login_and_return_lines(client, page, use
     sample = next(r for r in runs if r["engine"] == "qari_v03" and r["region_kind"] == "footnote")
     assert sample["variant"] == "gray_2x" and sample["variant_label"] == "رمادية ×2"
     assert sample["engine_label"] == "Qari v0.3" and sample["region_label"] == "حاشية"
-    assert sample["seconds"] == 0.0 and sample["looped"] is False and sample["check"] == "ok"
+    assert sample["seconds"] == 0.0 and sample["looped"] is False and sample["check"] == "short_reference"
     assert client.get(reverse("api:page_text", args=[999_999])).status_code == 404
 
 
@@ -929,7 +1022,7 @@ def test_text_panel_renders_provisional_state_and_polling_config(page, book):
         services.run_fast_ocr(page)
     html = render_to_string("ocr/_text_panel.html", {"page": page, "book": book})
     assert "نص مبدئي (Tesseract)" in html
-    assert "text-text-3" in html and "bg-highlight" in html
+    assert "text-text-3" in html and "tok-low" in html
     assert f"statusUrl: '/api/pages/{page.pk}/status/'" in html
     assert (
         f"textUrl: '/api/pages/{page.pk}/text/'" in html and f"runsUrl: '/api/pages/{page.pk}/runs/'" in html

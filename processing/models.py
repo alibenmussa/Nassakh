@@ -28,6 +28,7 @@ class Preprocess(models.Model):
     sauvola_k = models.FloatField("معامل Sauvola", default=0.2)
     is_manual = models.BooleanField("معدّلة يدويًا", default=False)
     auto_params = models.JSONField("القيم التلقائية", default=dict, blank=True)
+    manual_params = models.JSONField("القيم اليدوية", default=dict, blank=True)
 
     gray_image = models.FileField("الصورة الرمادية", upload_to=page_derived_path, blank=True)
     bw_image = models.FileField("الصورة بالأبيض والأسود", upload_to=page_derived_path, blank=True)

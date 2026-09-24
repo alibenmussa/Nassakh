@@ -14,7 +14,9 @@ CELERY_RESULT_BACKEND = "cache+memory://"
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
-MEDIA_ROOT = tempfile.mkdtemp(prefix="nassakh-test-media-")
+# Removed when the test process exits (the TemporaryDirectory finaliser runs at interpreter exit).
+_MEDIA_DIR = tempfile.TemporaryDirectory(prefix="nassakh-test-media-")
+MEDIA_ROOT = _MEDIA_DIR.name
 
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 

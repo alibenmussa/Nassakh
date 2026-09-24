@@ -3,7 +3,8 @@
 Tasks call the services and return the `page_id` they received so they chain
 (`layout_page → ocr_page_fast → ocr_page_full`). `OSError` is retried twice (network/storage
 hiccups); every other failure marks the page `error` for its stage and does not re-raise, so a
-broken page never blocks the rest of the book. Engines stay loaded between tasks through the
+broken page never blocks the rest of the book. A page already in `error` (an earlier task of the
+chain failed) is skipped so the original error is kept. Engines stay loaded between tasks through the
 registry cache; the gpu worker runs with `--pool=solo`.
 """
 
@@ -35,6 +36,12 @@ def _run_stage(task, page_id: int, stage: str, action: Callable[[Page], None], h
         log.warning("%s: page %s does not exist", stage, page_id)
         return page_id
     if page.is_excluded:
+        return page_id
+    if page.status == Page.Status.ERROR:
+        # `run_stage` clears errors before enqueuing, so this is a failure earlier in the same
+        # chain: keep its message (the retry button points at that stage) and do not run on stale
+        # or missing inputs.
+        log.info("%s: page %s skipped, it failed in %s", stage, page_id, page.error_from or "?")
         return page_id
 
     task_id = getattr(task.request, "id", None) or ""

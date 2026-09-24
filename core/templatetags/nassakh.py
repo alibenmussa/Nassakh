@@ -86,3 +86,33 @@ def ar_status(obj) -> str:
 def ar_flag(flag: str) -> str:
     """Arabic label for an attention flag; unknown flags are shown as they are."""
     return FLAG_LABELS.get(str(flag), str(flag))
+
+
+def _stage_labels() -> dict[str, str]:
+    # Imported lazily: books.services imports this module (FLAG_LABELS, status_dot).
+    from books.services import STAGE_LABELS
+
+    return dict(STAGE_LABELS)
+
+
+@register.filter
+def stage_label(stage: str) -> str:
+    """Arabic label of a pipeline stage key (e.g. `ocr_full`); unknown keys are shown as they are."""
+    return _stage_labels().get(str(stage), str(stage or ""))
+
+
+@register.simple_tag
+def stage_labels() -> dict[str, str]:
+    """`{stage key: Arabic label}` for the retry buttons that Alpine components render."""
+    return _stage_labels()
+
+
+@register.simple_tag
+def optional_url(name: str, *args) -> str:
+    """`reverse(name, args)` or "" when the route does not exist (lets a template feature-detect it)."""
+    from django.urls import NoReverseMatch, reverse
+
+    try:
+        return reverse(name, args=args)
+    except NoReverseMatch:
+        return ""

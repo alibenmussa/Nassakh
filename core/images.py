@@ -64,6 +64,14 @@ def to_pil(image: np.ndarray | Image.Image) -> Image.Image:
     raise ValueError(f"unsupported image shape {arr.shape}")
 
 
+def fit_width(image: np.ndarray | Image.Image, max_width: int) -> Image.Image:
+    """PIL image no wider than `max_width` (downscaled with Lanczos when needed)."""
+    img = to_pil(image)
+    if img.width > max_width:
+        img = img.resize((max_width, max(1, round(img.height * max_width / img.width))), Image.LANCZOS)
+    return img
+
+
 def to_webp_bytes(
     array: np.ndarray | Image.Image, max_width: int | None = None, quality: int = WEBP_QUALITY
 ) -> bytes:

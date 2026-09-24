@@ -41,6 +41,8 @@ LOW_SKEW_CONFIDENCE = 0.10
 # `kind` of a removed edge strip: fragments of the facing page's text, or a scan-edge sliver.
 STRIP_TEXT = "text"
 STRIP_ARTIFACT = "artifact"
+# A removed band counts as a scan-edge artifact only when its ink runs this share of the height.
+ARTIFACT_MIN_HEIGHT_FRAC = 0.25
 
 
 @dataclass(slots=True)
@@ -382,13 +384,15 @@ def remove_edge_strips(
 
     The vertical projection of the cleaned ink mask is split into bands separated by empty gaps
     of at least `gap_frac` of the width, or `word_gap_factor` × the median inter-word gap when
-    that is smaller. The band with the most ink is the main text block; every band outside it
-    narrower than `max_band_frac` of the width is a strip and is painted white in `gray`. A wide
-    outer band (a second text column) stops the removal on that side.
+    that is smaller. Starting at each scan edge and walking inwards, bands narrower than
+    `max_band_frac` of the width are strips and are painted white in `gray`; the first wide band
+    (the main text block or a second column) stops the walk on that side, so nothing that lies
+    between two text columns is ever removed.
 
     Returns a copy of `gray` and the removed strips as `{"side", "x0", "x1", "kind"}` in its
-    coordinates, `kind` being `text` (fragments of the facing page, worth a look) or `artifact`
-    (a scan-edge sliver). `ink` is not modified; callers blank the same columns in their mask.
+    coordinates, `kind` being `text` (facing-page fragments or any glyph-sized ink such as a
+    page number in the outer margin: worth a look) or `artifact` (a tall continuous scan-edge
+    sliver or fold line). `ink` is not modified; callers blank the same columns in their mask.
     """
     h, w = ink.shape
     out = gray.copy()
@@ -417,16 +421,19 @@ def remove_edge_strips(
     main = int(np.argmax([col_ink[a:b].sum() for a, b in bands]))
     max_band = max_band_frac * w
     strips: list[dict] = []
-    for side, candidates in (("left", reversed(bands[:main])), ("right", bands[main + 1 :])):
+    # From the scan edge inwards on each side; the main band itself always stops the walk.
+    for side, candidates in (("left", bands[:main]), ("right", list(reversed(bands[main + 1 :])))):
         for a, b in candidates:
             if b - a >= max_band:
-                break  # a real column of text: leave that side alone
+                break  # a real column of text: nothing further in is an edge strip
             pad = 2
             x0, x1 = max(0, a - pad), min(w, b + pad)
-            # character fragments from the facing page alternate with the line gaps (many ink
-            # runs down the column); a scan-edge sliver or fold line is one continuous run
-            n_runs = len(_runs((ink[:, a:b] > 0).any(axis=1)))
-            kind = STRIP_TEXT if n_runs >= 4 else STRIP_ARTIFACT
+            # Facing-page fragments alternate with the line gaps (many ink runs down the column)
+            # and a stray page number is a short run; only a tall continuous run (a scan-edge
+            # sliver or fold line) is an artifact. Everything else is flagged for a look.
+            runs = _runs((ink[:, a:b] > 0).any(axis=1))
+            tallest = max((r1 - r0 for r0, r1 in runs), default=0)
+            kind = STRIP_ARTIFACT if len(runs) < 4 and tallest >= ARTIFACT_MIN_HEIGHT_FRAC * h else STRIP_TEXT
             out[:, x0:x1] = 255
             strips.append({"side": side, "x0": int(x0), "x1": int(x1), "kind": kind})
     strips.sort(key=lambda s: s["x0"])
@@ -441,7 +448,9 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
 
     Detection always runs so that `auto_params` reflects what the pipeline would have chosen;
     manual values in `params` then replace the detected angle, crop box, Sauvola window/k and
-    denoise strength. A manual crop box disables edge-strip removal (the user decides the crop).
+    denoise strength. A manual crop box disables edge-strip removal (the user decides the crop);
+    the strips are still detected so `auto_params` (`crop_box`, `edge_strips`) describe the
+    automatic run, while `edge_strips_removed` lists only what was actually whitened.
     """
     p = params or PreprocessParams()
     if gray.ndim != 2:
@@ -461,12 +470,18 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
     frame_h, frame_w = gray4.shape
 
     ink = binarize_clean(gray4, min_area=min_area)
-    strips: list[dict] = []
-    if p.remove_edge_strips and p.crop_box is None:
-        gray4, strips = remove_edge_strips(ink, gray4)
-        for s in strips:
-            ink[:, s["x0"] : s["x1"]] = 0
-    auto_crop = content_bbox(ink, p.crop_margin_frac)
+    auto_strips: list[dict] = []
+    auto_ink = ink
+    if p.remove_edge_strips:
+        stripped, auto_strips = remove_edge_strips(ink, gray4)
+        if auto_strips:
+            auto_ink = ink.copy()
+            for s in auto_strips:
+                auto_ink[:, s["x0"] : s["x1"]] = 0
+        if p.crop_box is None:
+            gray4, ink = stripped, auto_ink
+    strips = auto_strips if p.crop_box is None else []
+    auto_crop = content_bbox(auto_ink, p.crop_margin_frac)
     crop_box = auto_crop
     if p.crop_box is not None:
         try:
@@ -499,6 +514,7 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
         "angle": auto_angle,
         "skew_confidence": skew_conf,
         "crop_box": [int(v) for v in auto_crop],
+        "edge_strips": auto_strips,
         "sauvola_window": int(auto_window),
         "sauvola_k": DEFAULT_SAUVOLA_K,
         "nlm_h": DEFAULT_NLM_H,

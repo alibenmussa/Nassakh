@@ -36,6 +36,11 @@ def page_original_path(page, filename: str) -> str:
     return f"books/{page.book_id}/pages/{page.number:04d}/original.png"
 
 
+def page_scan_thumb_path(page, filename: str) -> str:
+    """`upload_to` for `Page.scan_thumbnail`: books/{book_id}/pages/{number:04d}/scan_thumb.webp."""
+    return f"books/{page.book_id}/pages/{page.number:04d}/scan_thumb.webp"
+
+
 def page_derived_path(preprocess, filename: str) -> str:
     """`upload_to` for Preprocess images: books/{book_id}/pages/{number:04d}/{filename}.
 

@@ -2,6 +2,7 @@
 
 - GET /api/books/<id>/progress/  → `services.book_progress` plus the page tiles (dashboard polling)
 - GET /api/pages/<id>/status/    → `services.page_status` (page detail / text panel polling)
+- GET /api/books/<id>/text/      → `services.book_text` (copy the clean text of the whole book)
 """
 
 from django.shortcuts import get_object_or_404
@@ -25,3 +26,10 @@ def page_status(request: Request, page_id: int) -> Response:
     """Status, text state, provisional/final text, flags and error of one page."""
     page = get_object_or_404(Page.objects.select_related("book"), pk=page_id)
     return Response(services.page_status(page))
+
+
+@api_view(["GET"])
+def book_text(request: Request, book_id: int) -> Response:
+    """Clean text of every non-excluded page in order (`{"text", "pages"}`)."""
+    book = get_object_or_404(Book, pk=book_id)
+    return Response(services.book_text(book))

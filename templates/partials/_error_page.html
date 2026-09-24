@@ -1,0 +1,10 @@
+{# Error screen body (403/404/500). Context: code, title, text; `home` (bool) adds the link back to the books list. #}
+<div class="empty-state error-page" role="alert">
+  <span class="meta num" dir="ltr">{{ code }}</span>
+  <h2 class="empty-title">{{ title }}</h2>
+  <p class="empty-text">{{ text }}</p>
+  <a class="btn" href="{% url 'books:list' %}">
+    <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+    <span>العودة إلى الكتب</span>
+  </a>
+</div>

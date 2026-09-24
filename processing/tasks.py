@@ -21,17 +21,20 @@ RETRY_COUNTDOWN = 5
 
 
 def _load_page(page_id: int) -> Page | None:
+    """The page with its book, or None when it was deleted meanwhile."""
     return Page.objects.select_related("book").filter(pk=page_id).first()
 
 
 def _remember_task(page: Page, task_id: str | None) -> None:
+    """Store the running task's id on the page (the page detail shows it)."""
     page.task_id = task_id or ""
     page.save(update_fields=["task_id"])
 
 
 def _failed_upstream(page: Page) -> bool:
-    """True when the page failed in preprocessing, so layout must not run on stale outputs."""
-    return page.status == Page.Status.ERROR and page.error_from == services.STAGE_PREPROCESS
+    """True when an earlier task of the chain failed (`run_stage` clears errors before enqueuing),
+    so this stage must not run on stale outputs nor overwrite that error."""
+    return page.status == Page.Status.ERROR
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,), retry_backoff=True)

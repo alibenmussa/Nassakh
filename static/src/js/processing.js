@@ -128,14 +128,24 @@
       fullCrop() { this.crop = [0, 0, this.state.frame.width, this.state.frame.height]; },
       autoCrop() { if (this.autoCropBox) this.crop = this.autoCropBox.map(Number); },
 
+      // Only the values that differ from what the pipeline chose automatically are sent as overrides:
+      // posting the stored auto crop/angle back would pin them as manual (the crop would no longer follow
+      // a new angle, edge-strip removal and the deskew-confidence flag would be skipped).
+      manualOverrides() {
+        const auto = this.state.auto_params || {};
+        const differs = (value, autoValue, eps) => autoValue == null || Math.abs(Number(value) - Number(autoValue)) > eps;
+        const out = {};
+        if (differs(this.angle, auto.angle, 0.05)) out.angle = this.angle;
+        const box = this.autoCropBox;
+        if (!box || this.crop.some((v, i) => Math.round(Number(v)) !== Math.round(Number(box[i])))) out.crop_box = this.crop;
+        if (differs(this.k, auto.sauvola_k, 0.0005)) out.sauvola_k = this.k;
+        if (differs(this.window, auto.sauvola_window, 0)) out.sauvola_window = this.window;
+        if (differs(this.nlm, auto.nlm_h, 0)) out.nlm_h = this.nlm;
+        return out;
+      },
       rerun() {
-        return this.post({
-          angle: this.angle,
-          crop_box: this.crop,
-          sauvola_k: this.k,
-          sauvola_window: this.window,
-          nlm_h: this.nlm,
-        });
+        const overrides = this.manualOverrides();
+        return this.post(Object.keys(overrides).length ? overrides : { reset: true });
       },
       reset() { return this.post({ reset: true }); },
 

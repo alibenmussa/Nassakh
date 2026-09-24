@@ -59,6 +59,20 @@ MIN_WORD_RATIO = 0.2
 MAX_WORD_RATIO = 1.8
 WORD_SLACK = 3
 MIN_WORD_F1 = 0.45
+# Decision (Phase 2 review, extends D16): Tesseract is only a reliable yardstick on regions with some
+# text. Below MIN_REF_WORDS_FOR_OVERLAP reference words (two-line footnotes of small type read from
+# the 1x B&W crop) exact-token F1 is dominated by Tesseract's noise, so only a generous length check
+# remains (runaway output: more than SHORT_REF_MAX_RATIO x the reference + SHORT_REF_SLACK words). An
+# empty reference proves nothing: it is inconclusive (`no_reference` fails) unless the output is at
+# most NO_REF_MAX_WORDS words; `select_text` still accepts the primary when the two models agree
+# (word F1 >= MODELS_AGREE_F1), which is D16's own confidence signal. The loop check always applies.
+MIN_REF_WORDS_FOR_OVERLAP = 15
+SHORT_REF_MAX_RATIO = 3
+SHORT_REF_SLACK = 10
+NO_REF_MAX_WORDS = 3
+MODELS_AGREE_F1 = 0.6
+# Failure reasons that only mean "differs from Tesseract" (not a broken run): agreement can override.
+COMPARISON_REASONS: frozenset[str] = frozenset({"no_reference", "too_short", "too_long", "low_overlap"})
 # Below this share of tokens anchored to a Tesseract word the page gets the `alignment_poor` flag.
 MIN_ANCHOR_RATIO = 0.5
 
@@ -136,6 +150,7 @@ def uses_text_layer(page: Page) -> bool:
 
 
 def _preprocess_of(page: Page) -> Preprocess:
+    """The page's Preprocess row; OcrError (Arabic) when the page was never preprocessed."""
     try:
         return page.preprocess
     except ObjectDoesNotExist:
@@ -189,6 +204,7 @@ def _crop_image(array: np.ndarray, bbox: list[int], upscale: int = 1) -> np.ndar
 
 
 def _save_temp(array: np.ndarray, directory: Path, stem: str) -> Path:
+    """Write `array` as `<directory>/<stem>.png` for an engine that reads files; returns the path."""
     path = directory / f"{stem}.png"
     path.write_bytes(to_png_bytes(array))
     return path
@@ -197,7 +213,7 @@ def _save_temp(array: np.ndarray, directory: Path, stem: str) -> Path:
 def _offset_lines(lines: list[dict], dx: int, dy: int, scale: float = 1.0) -> list[dict]:
     """Move Tesseract boxes from crop space into gray-image space (undoing an upscale if any)."""
 
-    def shift(bbox):
+    def shift(bbox: list[int] | None) -> list[int] | None:
         if not bbox:
             return bbox
         x0, y0, x1, y1 = bbox
@@ -215,7 +231,8 @@ def _offset_lines(lines: list[dict], dx: int, dy: int, scale: float = 1.0) -> li
     return out
 
 
-def _json_safe(value):
+def _json_safe(value: object) -> object:
+    """Round-trip through JSON so numpy scalars, Paths and the like become plain JSON types."""
     return json.loads(json.dumps(value, default=str))
 
 
@@ -226,7 +243,7 @@ def run_engine(
     page: Page,
     engine_name: str,
     target: Target,
-    source,
+    source: Path | PdfPageRef,
     input_variant: str,
     max_new_tokens: int | None = None,
     scale: float = 1.0,
@@ -270,6 +287,7 @@ def run_engine(
 def _fill_run(
     run: OcrRun, result: OcrResult, engine: OcrEngine, origin: tuple[int, int], scale: float
 ) -> None:
+    """Copy an engine result onto `run`: parsed text, loop detection, timing and boxes (gray space)."""
     hit_cap = result.finish == "length"
     if engine.kind == "vlm":
         parsed, looped = parse_output(result.text or "", hit_cap=hit_cap)
@@ -290,12 +308,14 @@ def _fill_run(
 
 
 def _run_passes(run: OcrRun, reference: str) -> tuple[bool, str]:
+    """`sanity_check` of a stored run against `reference`; a failed engine call is `error`."""
     if run.status != OcrRun.Status.OK:
         return False, "error"
     return sanity_check(run.parsed_text, reference, run.looped)
 
 
 def _record_check(run: OcrRun, reference: str) -> tuple[bool, str]:
+    """`_run_passes` and store its verdict on the run (`params["sanity"]`, shown in the runs list)."""
     ok, reason = _run_passes(run, reference)
     run.params["sanity"] = {"ok": ok, "reason": reason}
     run.save(update_fields=["params"])
@@ -308,10 +328,14 @@ def _record_check(run: OcrRun, reference: str) -> tuple[bool, str]:
 def sanity_check(text: str, reference: str, looped: bool = False) -> tuple[bool, str]:
     """Does a model output look like a reading of the same region as Tesseract's `reference`?
 
-    Fails when the run looped, is empty, has fewer than 20 % or more than 180 % of the reference's
-    words (plus a slack of a few words), or when the order-insensitive word F1 with the reference is
-    below 0.45 (lenient normalisation). Returns `(ok, reason)` with reason one of
-    `ok`, `no_reference`, `loop`, `empty`, `too_short`, `too_long`, `low_overlap`.
+    Fails when the run looped or is empty. With a reference of at least
+    `MIN_REF_WORDS_FOR_OVERLAP` words it fails when it has fewer than 20 % or more than 180 % of
+    the reference's words (plus a slack of a few words), or when the order-insensitive word F1
+    with the reference is below 0.45 (lenient normalisation). A shorter reference only guards
+    against runaway output (`short_reference` when it passes); an empty one is inconclusive
+    (`no_reference` passes only for at most `NO_REF_MAX_WORDS` words). Returns `(ok, reason)` with
+    reason one of `ok`, `short_reference`, `no_reference`, `loop`, `empty`, `too_short`,
+    `too_long`, `low_overlap`.
     """
     if looped:
         return False, "loop"
@@ -320,7 +344,11 @@ def sanity_check(text: str, reference: str, looped: bool = False) -> tuple[bool,
         return False, "empty"
     ref = normalize(reference or "", "lenient").split()
     if not ref:
-        return True, "no_reference"
+        return len(words) <= NO_REF_MAX_WORDS, "no_reference"
+    if len(ref) < MIN_REF_WORDS_FOR_OVERLAP:
+        if len(words) > SHORT_REF_MAX_RATIO * len(ref) + SHORT_REF_SLACK:
+            return False, "too_long"
+        return True, "short_reference"
     if len(words) < MIN_WORD_RATIO * len(ref):
         return False, "too_short"
     if len(words) > MAX_WORD_RATIO * len(ref) + WORD_SLACK:
@@ -331,6 +359,17 @@ def sanity_check(text: str, reference: str, looped: bool = False) -> tuple[bool,
 
 
 # ---------------------------------------------------------------- fast OCR (default queue)
+
+TESSERACT_HEADLINE = "تعذّر تشغيل Tesseract على هذه الصفحة؛ تحقّق من تثبيت tesseract وحزمة اللغة العربية."
+TESSERACT_HINT = "brew install tesseract tesseract-lang"
+
+
+def _load_fast_engine(name: str) -> None:
+    """Load the fast engine now so a missing install fails with the actionable Arabic headline."""
+    try:
+        registry.get_engine(name)
+    except Exception as exc:  # noqa: BLE001 - configuration problem: stop with an Arabic message
+        raise OcrError(f"{TESSERACT_HEADLINE}\n{TESSERACT_HINT}\n{type(exc).__name__}: {exc}") from exc
 
 
 def run_fast_ocr(page: Page) -> None:
@@ -344,6 +383,7 @@ def run_fast_ocr(page: Page) -> None:
     _, _, fast = engine_names()
     pre = _preprocess_of(page)
     bw = _load_field_image(pre.bw_image, "بالأبيض والأسود")
+    _load_fast_engine(fast)
     targets = _targets(page, bw.shape, ocr_only=False)
     texts: list[tuple[str, str]] = []
     failures: list[str] = []
@@ -358,10 +398,7 @@ def run_fast_ocr(page: Page) -> None:
             if target.kind not in SKIPPED_KINDS:
                 texts.append((target.kind, run.parsed_text))
     if failures and len(failures) == len(targets):
-        raise OcrError(
-            "تعذّر تشغيل Tesseract على هذه الصفحة؛ تحقّق من تثبيت tesseract وحزمة اللغة العربية. "
-            f"({failures[0]})"
-        )
+        raise OcrError(f"{TESSERACT_HEADLINE}\n{failures[0]}")
 
     page.provisional_text = join_region_texts(texts)
     page.text_state = Page.TextState.PROVISIONAL
@@ -434,6 +471,7 @@ def _local_pdf_path(book, tmpdir: Path) -> Path | None:
 
 
 def _latest_text_layer_run(page: Page) -> OcrRun | None:
+    """Newest successful, non-empty page-level `pdf_text` run of the page, if any."""
     return (
         page.ocr_runs.filter(engine_name="pdf_text", region__isnull=True, status=OcrRun.Status.OK)
         .exclude(parsed_text="")
@@ -468,11 +506,13 @@ def run_full_ocr(page: Page) -> None:
             registry.get_engine(name)
         except Exception as exc:  # noqa: BLE001 - configuration problem: stop with an Arabic message
             raise OcrError(
-                f"تعذّر تحميل محرّك التعرّف «{name}»؛ تحقّق من إعدادات OCR_MODELS_DIR وOCR_BACKEND. "
-                f"({type(exc).__name__}: {exc})"
+                f"تعذّر تحميل محرّك التعرّف «{name}»؛ تحقّق من إعدادات OCR_MODELS_DIR وOCR_BACKEND.\n"
+                f"{type(exc).__name__}: {exc}"
             ) from exc
 
     bw: np.ndarray | None = None
+    model_errors: list[str] = []
+    n_model_runs = 0
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-full-") as tmp:
         tmpdir = Path(tmp)
         for i, target in enumerate(targets):
@@ -480,6 +520,7 @@ def run_full_ocr(page: Page) -> None:
             if tess is None or tess.status != OcrRun.Status.OK:
                 if bw is None:
                     bw = _load_field_image(pre.bw_image, "بالأبيض والأسود")
+                    _load_fast_engine(fast)
                 bw_path = _save_temp(_crop_image(bw, target.bbox), tmpdir, f"bw-{i}-{target.kind}")
                 tess = run_engine(page, fast, target, bw_path, "bw")
             reference = tess.parsed_text if tess.status == OcrRun.Status.OK else ""
@@ -497,6 +538,15 @@ def run_full_ocr(page: Page) -> None:
                 log.info("page %s %s: primary %s failed sanity (%s)", page.pk, target.kind, primary, reason)
             secondary_run = run_engine(page, secondary, target, image_path, variant, cap, scale)
             _record_check(secondary_run, reference)
+            n_model_runs += 2
+            model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
+    if n_model_runs and len(model_errors) == n_model_runs:
+        # Every model call crashed (out of memory, broken weights...): this is an engine failure,
+        # not a page to finalise from Tesseract; the page goes to `error` and can be retried.
+        raise OcrError(
+            "تعذّر تشغيل نماذج التعرّف على هذه الصفحة؛ راجع سجل عامل GPU ثم أعد تشغيل المرحلة.\n"
+            f"{model_errors[0]}"
+        )
     finalize_page(page)
 
 
@@ -522,7 +572,8 @@ def select_text(
 
     Returns `(text, alt_text, fallback, reason, source)`: the primary when it passes the sanity
     check (alternatives from the secondary when that passes too), else the secondary when it
-    passes, else Tesseract's text with `fallback=True`.
+    passes, else the primary when both only differ from Tesseract (`COMPARISON_REASONS`) but agree
+    with each other (`models_agree`), else Tesseract's text with `fallback=True`.
     """
     reference = (
         tesseract.parsed_text if tesseract is not None and tesseract.status == OcrRun.Status.OK else ""
@@ -540,11 +591,23 @@ def select_text(
         return primary.parsed_text, alt, False, p_reason, primary.engine_name
     if s_ok:
         return secondary.parsed_text, None, False, f"primary:{p_reason}", secondary.engine_name
+    if (
+        p_reason in COMPARISON_REASONS
+        and s_reason in COMPARISON_REASONS
+        and word_f1(
+            normalize(primary.parsed_text, "lenient").split(),
+            normalize(secondary.parsed_text, "lenient").split(),
+        )
+        >= MODELS_AGREE_F1
+    ):
+        # Both differ from Tesseract only, and agree with each other: trust the models (D16).
+        return primary.parsed_text, secondary.parsed_text, False, "models_agree", primary.engine_name
     source = tesseract.engine_name if tesseract is not None else ""
     return reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source
 
 
 def _collect_region_texts(page: Page) -> list[RegionText]:
+    """Selected text of every OCR-able target (or the text-layer page) with its Tesseract lines."""
     primary, secondary, fast = engine_names()
     h, w = _page_shape(page)
     if uses_text_layer(page):
@@ -589,6 +652,7 @@ def join_region_texts(items: list[tuple[str, str]]) -> str:
 
 
 def _set_flags(flags: list, updates: dict[str, bool]) -> list:
+    """`flags` with every key of `updates` removed, then re-added (at the end) where it is True."""
     out = [f for f in (flags or []) if f not in updates]
     out.extend(flag for flag, on in updates.items() if on)
     return out
@@ -597,12 +661,14 @@ def _set_flags(flags: list, updates: dict[str, bool]) -> list:
 def finalize_page(page: Page) -> None:
     """Build the Line rows and the final text of a page from its stored runs; mark it `ocr_done`.
 
-    Unreviewed lines are replaced (reviewed ones are kept for Phase 3). `final_text` gets Western
+    Unreviewed lines are replaced; a reviewed line (Phase 3) is kept in place of the new line at
+    its `order` and its text goes into `final_text`. `final_text` gets Western
     digits (D6) while `Line.ocr_text` and the tokens keep the raw OCR output. Sets or clears the
     `ocr_fallback` and `alignment_poor` flags, then refreshes the book status (`ready_for_review`
     once every non-excluded page is done).
     """
     region_texts = _collect_region_texts(page)
+    reviewed = {line.order: line for line in page.lines.filter(is_reviewed=True)}
     new_lines: list[Line] = []
     main_parts: list[str] = []
     foot_parts: list[str] = []
@@ -614,6 +680,11 @@ def finalize_page(page: Page) -> None:
         has_geometry = has_geometry or bool(rt.tess_lines)
         texts = []
         for b in built:
+            kept = reviewed.get(order)
+            if kept is not None:  # a reviewed line wins over the new OCR line at its position
+                order += 1
+                texts.append(kept.text)
+                continue
             new_lines.append(
                 Line(
                     page=page,
@@ -671,6 +742,12 @@ def finalize_page(page: Page) -> None:
 # ---------------------------------------------------------------- payloads for the API / panel
 
 
+def _error_headline(message: str | None) -> str:
+    """First line of an error message: the Arabic headline (the rest is technical detail)."""
+    lines = (message or "").splitlines()
+    return lines[0] if lines else ""
+
+
 def page_text_payload(page: Page) -> dict:
     """State and lines of a page for `/api/pages/<id>/text/` and the text panel."""
     lines = [
@@ -697,7 +774,8 @@ def page_text_payload(page: Page) -> dict:
         "provisional_text": page.provisional_text,
         "final_text": page.final_text,
         "flags": list(page.attention_flags or []),
-        "error": page.error_message,
+        "error": _error_headline(page.error_message),
+        "error_detail": "\n".join((page.error_message or "").splitlines()[1:]).strip(),
         "lines": lines,
         "n_low": sum(line["n_low"] for line in lines),
     }

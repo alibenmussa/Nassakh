@@ -13,22 +13,26 @@ inside the functions that enqueue them.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Sequence
 
 from celery import chain
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import UploadedFile
-from django.urls import NoReverseMatch, reverse
+from django.db.models import Count
+from django.urls import reverse
 
 import numpy as np
 import pymupdf
 
 from books.models import Book, Page
-from core.arabic import arabic_ratio
+from core.arabic import arabic_ratio, normalize_ws, to_western_digits
+from core.images import fit_width
+from core.serializers import flag_items, region_items
 from core.storage import book_source_path, save_array
-from core.templatetags.nassakh import FLAG_LABELS, status_dot
+from core.templatetags.nassakh import status_dot
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +75,7 @@ TEXT_LAYER_SAMPLE_PAGES = 40
 # Rendering.
 MIN_NATIVE_DPI = 72.0
 MAX_NATIVE_DPI = 600.0  # bounds memory for absurdly large embedded images
+SCAN_THUMB_MAX_WIDTH = 240  # dashboard tile preview written at ingest (matches the cleaned thumbnail)
 MIN_IMAGE_COVERAGE = (
     0.5  # the largest embedded image must cover this share of the page to count as "the scan"
 )
@@ -89,6 +94,10 @@ _STATUS_WEIGHT: dict[str, int] = {
     Page.Status.ERROR: 0,
     Page.Status.EXCLUDED: 0,
 }
+
+
+class IngestError(ValueError):
+    """Raised by `ingest_book` with an actionable Arabic message (shown as the book's headline)."""
 
 
 # ====================================================================== book creation
@@ -288,6 +297,7 @@ def split_position(gray: np.ndarray, ratio: float) -> tuple[int, float]:
 
 
 def _half_image(gray: np.ndarray, half: str, split_x: int | None) -> np.ndarray:
+    """The right or left part of a sheet cut at `split_x`, or the whole sheet for `full`."""
     if half == Page.SourceHalf.RIGHT:
         return gray[:, split_x:]
     if half == Page.SourceHalf.LEFT:
@@ -320,7 +330,7 @@ def ingest_book(book: Book) -> list[Page]:
     ingest resumes where it stopped and originals are never overwritten. Sheets with two book
     pages are split at the detected gutter (`split_position`), right page first. When the book has
     a text layer, `text_layer_text` is filled per page. New pages start in status `uploaded`.
-    Returns every page of the book in order. Raises ValueError (Arabic message) when the skip
+    Returns every page of the book in order. Raises IngestError (Arabic message) when the skip
     values leave no pages.
     """
     doc = _open_pdf(book)
@@ -332,7 +342,7 @@ def ingest_book(book: Book) -> list[Page]:
 
         indices = selected_indices(book, page_count)
         if not indices:
-            raise ValueError(
+            raise IngestError(
                 "لا تبقى صفحات بعد تجاوز الصفحات الأولى والأخيرة. قلّل قيم التجاوز ثم أعد المحاولة."
             )
 
@@ -413,6 +423,8 @@ def _create_page(
         status=Page.Status.UPLOADED,
     )
     save_array(page.original_image, image, "original.png")
+    # A small scan preview so the dashboard tile shows the page before preprocessing finishes.
+    save_array(page.scan_thumbnail, fit_width(image, SCAN_THUMB_MAX_WIDTH), "scan_thumb.webp")
     page.save()
     return page
 
@@ -459,11 +471,59 @@ def _stage_signatures(page_id: int, stage: str) -> list:
     return [steps[0].s(page_id)] + [task.s() for task in steps[1:]]
 
 
-def run_stage(page: Page, stage: str):
+# Status a page is put back to before a stage re-runs (the stage's input) and its text state.
+_STAGE_INPUT_STATUS: dict[str, str] = {
+    "preprocess": Page.Status.UPLOADED,
+    "layout": Page.Status.PREPROCESSED,
+    "ocr": Page.Status.LAYOUT_DONE,
+    "ocr_full": Page.Status.LAYOUT_DONE,
+}
+_STATUS_RANK: dict[str, int] = {
+    Page.Status.UPLOADED: 0,
+    Page.Status.PREPROCESSED: 1,
+    Page.Status.LAYOUT_DONE: 2,
+    Page.Status.OCR_DONE: 3,
+    Page.Status.REVIEWED: 4,
+    Page.Status.ASSEMBLED: 5,
+}
+# Attention flags written by the OCR stage (recomputed by `ocr.services.finalize_page`).
+_OCR_FLAGS: frozenset[str] = frozenset({"ocr_fallback", "alignment_poor"})
+# Pipeline stage that continues a re-included page from its completed status.
+_NEXT_STAGE: dict[str, str] = {
+    Page.Status.UPLOADED: "preprocess",
+    Page.Status.PREPROCESSED: "layout",
+    Page.Status.LAYOUT_DONE: "ocr",
+}
+
+
+def _reset_to_stage_input(page: Page, stage: str) -> None:
+    """Move a page back to the input state of `stage` so the book and the panels see work pending.
+
+    Only moves backwards (a page that never reached the stage's input keeps its status, and the
+    stage then reports the missing input). The text state drops to `none`, or to `provisional` for
+    `ocr_full`, which keeps the Tesseract text; the OCR attention flags are dropped because the
+    re-run recomputes them. `ocr_fast` alone does not reset: it only refreshes the provisional
+    text and the Tesseract geometry of a page whose final text stays valid.
+    """
+    target = _STAGE_INPUT_STATUS.get(stage)
+    if target is None or _STATUS_RANK.get(page.status, -1) <= _STATUS_RANK[target]:
+        return
+    page.status = target
+    if stage == "ocr_full" and page.provisional_text:
+        page.text_state = Page.TextState.PROVISIONAL
+    else:
+        page.text_state = Page.TextState.NONE
+    page.attention_flags = [f for f in (page.attention_flags or []) if f not in _OCR_FLAGS]
+    page.save(update_fields=["status", "text_state", "attention_flags"])
+
+
+def run_stage(page: Page, stage: str, refresh_book: bool = True):
     """Enqueue the pipeline for one page from `stage` (preprocess | layout | ocr | ocr_fast | ocr_full).
 
-    A page in `error` is cleared first (it falls back to its last completed status). Excluded pages
-    are refused. Stores the chain's task id on the page and returns the AsyncResult.
+    A page in `error` is cleared first (it falls back to its last completed status), then put back
+    to the stage's input state (`_reset_to_stage_input`) and the book status is re-derived so the
+    dashboard polls until the page is through. Excluded pages are refused. Stores the chain's task
+    id on the page and returns the AsyncResult.
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
@@ -471,6 +531,9 @@ def run_stage(page: Page, stage: str):
         raise ValueError("الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا.")
     if page.status == Page.Status.ERROR:
         page.clear_error()
+    _reset_to_stage_input(page, stage)
+    if refresh_book:
+        _refresh_started_book(page.book)
 
     result = chain(*_stage_signatures(page.pk, stage)).apply_async()
     page.task_id = str(getattr(result, "id", "") or "")[:64]
@@ -478,14 +541,33 @@ def run_stage(page: Page, stage: str):
     return result
 
 
-def rerun_book(book: Book, stage: str) -> int:
-    """Re-run every non-excluded page of the book from `stage`; returns how many were enqueued.
+def _refresh_started_book(book: Book) -> None:
+    """Re-derive the status of a book whose processing has started (not `uploaded` or ingest `error`)."""
+    book.refresh_from_db(fields=["status", "error_message"])
+    if book.status != Book.Status.UPLOADED:
+        book.refresh_status()
 
-    The book goes back to `processing` (stage preprocess) or `ocr` (later stages) so the dashboard
-    polls until the pages come through again.
+
+def validate_rerun(book: Book, stage: str) -> None:
+    """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage`.
+
+    A book waiting for its guides is not re-run from preprocessing: that would skip the guides
+    proposal and the `needs_guides` stop, so layout would run on unconfirmed guides.
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
+    if book.status == Book.Status.NEEDS_GUIDES:
+        raise ValueError("اضبط الأدلة أولًا ثم طبّقها على كل الصفحات لتستكمل المعالجة.")
+
+
+def rerun_book(book: Book, stage: str) -> int:
+    """Re-run every non-excluded page of the book from `stage`; returns how many were enqueued.
+
+    Every page is first put back to the stage's input state, then the chains are enqueued and the
+    book status is re-derived (`processing` or `ocr` while work is pending), so the book cannot
+    settle before its last page is through. Raises ValueError (see `validate_rerun`).
+    """
+    validate_rerun(book, stage)
     pages = list(book.pages.filter(is_excluded=False).order_by("number"))
     if not pages:
         return 0
@@ -493,12 +575,23 @@ def rerun_book(book: Book, stage: str) -> int:
     book.error_message = ""
     book.save(update_fields=["status", "error_message", "updated_at"])
     for page in pages:
-        run_stage(page, stage)
+        if page.status == Page.Status.ERROR:
+            page.clear_error()
+        _reset_to_stage_input(page, stage)
+    for page in pages:
+        run_stage(page, stage, refresh_book=False)
+    book.refresh_status()
     return len(pages)
 
 
 def toggle_exclude(page: Page) -> Page:
-    """Flip `is_excluded`; an excluded page shows `excluded`, a re-included one its completed stage."""
+    """Flip `is_excluded`; an excluded page shows `excluded`, a re-included one its completed stage.
+
+    A page re-included into a book whose processing has started continues from its completed
+    stage (preprocess, layout or OCR is enqueued), so the book never waits for work nobody runs.
+    In a book waiting for its guides, a preprocessed page simply joins the waiting pages and an
+    unprocessed one is only preprocessed.
+    """
     page.is_excluded = not page.is_excluded
     if page.is_excluded:
         page.status = Page.Status.EXCLUDED
@@ -507,9 +600,21 @@ def toggle_exclude(page: Page) -> Page:
     else:
         page.status = page._completed_status()
     page.save(update_fields=["is_excluded", "status", "error_from", "error_message"])
+    book = page.book
     # A book that has not started yet stays `uploaded`; otherwise the derived status may change.
-    if page.book.status not in (Book.Status.UPLOADED, Book.Status.ERROR):
-        page.book.refresh_status()
+    if book.status in (Book.Status.UPLOADED, Book.Status.ERROR):
+        return page
+    next_stage = None if page.is_excluded else _NEXT_STAGE.get(page.status)
+    if next_stage is not None and book.status == Book.Status.NEEDS_GUIDES:
+        if next_stage == "preprocess":
+            from processing.tasks import preprocess_page  # other app: lazy import
+
+            preprocess_page.delay(page.pk)
+        next_stage = None
+    if next_stage is not None:
+        run_stage(page, next_stage)
+    else:
+        book.refresh_status()
     return page
 
 
@@ -528,6 +633,7 @@ def _bar_state(status: str) -> str:
 
 
 def _pipeline_percent(by_status: dict[str, int], total: int) -> int:
+    """Share (0-100) of the Phase 2 pipeline the non-excluded pages have gone through."""
     if total <= 0:
         return 0
     weight = sum(_STATUS_WEIGHT.get(status, 0) * count for status, count in by_status.items())
@@ -542,9 +648,14 @@ def book_progress(book: Book) -> dict:
     flags or are in error. `active` is true while the book is processing or in OCR.
     """
     by_status = book.progress()
-    total = sum(by_status.values())
     rows = book.pages.filter(is_excluded=False).values_list("attention_flags", "status")
     flags = sum(1 for page_flags, status in rows if page_flags or status == Page.Status.ERROR)
+    return _progress_payload(book, by_status, flags)
+
+
+def _progress_payload(book: Book, by_status: dict[str, int], flags: int) -> dict:
+    """The `book_progress` dict from already counted pages (shared with `books_overview`)."""
+    total = sum(by_status.values())
     return {
         "total": total,
         "by_status": by_status,
@@ -559,15 +670,24 @@ def book_progress(book: Book) -> dict:
 
 
 def books_overview() -> list[dict]:
-    """Rows for the books list: each book with its page count, progress and status colour."""
-    rows = []
-    for book in Book.objects.all():
-        progress = book_progress(book)
-        rows.append({"book": book, **progress})
-    return rows
+    """Rows for the books list: each book with its page count, progress and status colour.
+
+    Two grouped queries over the pages serve every book (no query per book).
+    """
+    books = list(Book.objects.all())
+    by_book: dict[int, dict[str, int]] = {book.pk: {s: 0 for s in Page.Status.values} for book in books}
+    flags: dict[int, int] = dict.fromkeys(by_book, 0)
+    pages = Page.objects.filter(is_excluded=False, book_id__in=list(by_book))
+    for row in pages.values("book_id", "status").annotate(n=Count("id")):
+        by_book[row["book_id"]][row["status"]] = row["n"]
+    for book_id, page_flags, status in pages.values_list("book_id", "attention_flags", "status"):
+        if page_flags or status == Page.Status.ERROR:
+            flags[book_id] += 1
+    return [{"book": book, **_progress_payload(book, by_book[book.pk], flags[book.pk])} for book in books]
 
 
 def _file_url(field) -> str | None:
+    """URL of a stored file field, None when it is empty."""
     return field.url if field else None
 
 
@@ -583,20 +703,18 @@ def _detail(message: str | None) -> str:
 
 
 def _preprocess_of(page: Page):
+    """The page's `processing.models.Preprocess` row, or None before preprocessing."""
     try:
         return page.preprocess
     except ObjectDoesNotExist:
         return None
 
 
-def flag_labels(flags: Iterable[str]) -> list[dict]:
-    """`[{"code", "label"}]` for a page's attention flags (unknown codes shown as they are)."""
-    return [{"code": str(flag), "label": FLAG_LABELS.get(str(flag), str(flag))} for flag in flags or []]
-
-
 def page_tile(page: Page) -> dict:
     """One thumbnail tile of the dashboard grid (also the per-page item of the progress API)."""
     preprocess = _preprocess_of(page)
+    failed = page.status == Page.Status.ERROR
+    retry_stage = page.error_from if failed and page.error_from in STAGES else ""
     return {
         "id": page.pk,
         "number": page.number,
@@ -605,32 +723,50 @@ def page_tile(page: Page) -> dict:
         "dot": status_dot(page.status),
         "text_state": page.text_state,
         "flags": list(page.attention_flags or []),
-        "flag_labels": [item["label"] for item in flag_labels(page.attention_flags)],
+        "flag_labels": [item["label"] for item in flag_items(page.attention_flags)],
         "n_flags": len(page.attention_flags or []),
         "is_excluded": page.is_excluded,
         "error": page.status == Page.Status.ERROR,
         "error_headline": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
+        # The dashboard's attention list offers a retry from the failed stage (D22 designed failure).
+        "retry_stage": retry_stage,
+        "retry_label": STAGE_LABELS[retry_stage] if retry_stage else "",
+        "rerun_url": reverse("books:rerun", args=[page.book_id, page.number]),
         "thumb_url": _file_url(preprocess.thumbnail) if preprocess else None,
+        "scan_thumb_url": _file_url(page.scan_thumbnail),
         "url": reverse("books:page_detail", args=[page.book_id, page.number]),
     }
 
 
+# Large columns the tiles never read (the progress API polls every two seconds).
+_TILE_DEFERRED: tuple[str, ...] = (
+    "text_layer_text",
+    "provisional_text",
+    "final_text",
+    "guides_override",
+    "preprocess__line_boxes",
+    "preprocess__auto_params",
+    "preprocess__edge_strips_removed",
+)
+
+
 def page_tiles(book: Book) -> list[dict]:
     """Tiles for every page of the book in order (excluded pages included, marked)."""
-    pages = book.pages.select_related("preprocess").order_by("number")
+    pages = book.pages.select_related("preprocess").defer(*_TILE_DEFERRED).order_by("number")
     return [page_tile(page) for page in pages]
 
 
 def attention_pages(book: Book) -> list[dict]:
     """Non-excluded pages that carry attention flags or are in error, for the dashboard list."""
     items = []
-    for page in book.pages.filter(is_excluded=False).order_by("number"):
+    pages = book.pages.filter(is_excluded=False).defer(*_TILE_DEFERRED[:4]).order_by("number")
+    for page in pages:
         if not page.attention_flags and page.status != Page.Status.ERROR:
             continue
         items.append(
             {
                 "page": page,
-                "flags": flag_labels(page.attention_flags),
+                "flags": flag_items(page.attention_flags),
                 "error": page.status == Page.Status.ERROR,
                 "error_headline": _headline(page.error_message),
                 "url": reverse("books:page_detail", args=[book.pk, page.number]),
@@ -639,12 +775,9 @@ def attention_pages(book: Book) -> list[dict]:
     return items
 
 
-def guides_url(book: Book) -> str | None:
-    """URL of the guides screen (processing app) or None while that route does not exist yet."""
-    try:
-        return reverse("processing:guides", args=[book.pk])
-    except NoReverseMatch:
-        return None
+def guides_url(book: Book) -> str:
+    """URL of the guides screen of the processing app."""
+    return reverse("processing:guides", args=[book.pk])
 
 
 def has_guides(book: Book) -> bool:
@@ -726,17 +859,7 @@ def page_images(page: Page) -> dict:
 
 def page_regions(page: Page) -> list[dict]:
     """Regions of the page as plain dicts (bbox in gray-image pixel space) for the overlay."""
-    return [
-        {
-            "id": region.pk,
-            "kind": region.kind,
-            "label": region.get_kind_display(),
-            "bbox": region.bbox,
-            "order": region.order,
-            "source": region.source,
-        }
-        for region in page.regions.all()
-    ]
+    return region_items(page.regions.all())
 
 
 def page_status(page: Page) -> dict:
@@ -753,11 +876,13 @@ def page_status(page: Page) -> dict:
         "provisional_text": page.provisional_text,
         "final_text": page.final_text,
         "flags": list(page.attention_flags or []),
-        "flag_labels": [item["label"] for item in flag_labels(page.attention_flags)],
-        "error": page.error_message if page.status == Page.Status.ERROR else "",
+        "flag_labels": [item["label"] for item in flag_items(page.attention_flags)],
+        "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
+        "error_detail": _detail(page.error_message) if page.status == Page.Status.ERROR else "",
         "error_from": page.error_from if page.status == Page.Status.ERROR else "",
         "is_excluded": page.is_excluded,
         "active": active,
+        "images": page_images(page),
     }
 
 
@@ -783,7 +908,7 @@ def page_detail_context(page: Page) -> dict:
         "next_url": next_url,
         "page_images": images,
         "page_regions": page_regions(page),
-        "page_flags": flag_labels(page.attention_flags),
+        "page_flags": flag_items(page.attention_flags),
         "page_state": page_status(page),
         "error_headline": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
         "error_detail": _detail(page.error_message) if page.status == Page.Status.ERROR else "",
@@ -804,3 +929,25 @@ def page_detail_context(page: Page) -> dict:
             "initialTab": "gray" if images["gray"] else "original",
         },
     }
+
+
+def _clean_text(text: str) -> str:
+    """Western digits, whitespace collapsed per line, paragraphs kept apart by one blank line."""
+    paragraphs = re.split(r"\n\s*\n", to_western_digits(text).replace("\r\n", "\n"))
+    return "\n\n".join(p for p in (normalize_ws(par) for par in paragraphs) if p)
+
+
+def book_text(book: Book) -> dict:
+    """Clean text of the whole book for one-click copy: `{"text", "pages"}`.
+
+    Non-excluded pages in order, each contributing its `final_text` when present, else its
+    `provisional_text`; digits are Western (D6) and whitespace is normalised (line breaks kept).
+    Pages are separated by one blank line; `pages` counts the pages that contributed text.
+    Diacritics are kept as stored.
+    """
+    rows = (
+        book.pages.filter(is_excluded=False).order_by("number").values_list("final_text", "provisional_text")
+    )
+    parts = [_clean_text(final or provisional or "") for final, provisional in rows]
+    parts = [part for part in parts if part]
+    return {"text": "\n\n".join(parts), "pages": len(parts)}

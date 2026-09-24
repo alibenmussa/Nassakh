@@ -8,7 +8,7 @@ Phase 2 integration (2026-09-24); run them from the repository root.
 
 | What | Version | Notes |
 |---|---|---|
-| Python | 3.13 in `.venv` | `uv` installs the dependencies (`make install`) |
+| Python | 3.13 in `.venv` | created with `uv venv --python 3.13 .venv`; `uv` installs the dependencies (`make install`) |
 | **PostgreSQL** | **17** (≥ 15 required) | **Django 6.1 refuses PostgreSQL 14** (`NotSupportedError: PostgreSQL 15 or later is required (found 14.18)`). `postgresql@17` runs on **port 5433** next to the existing `postgresql@14` on 5432, which stays untouched for other projects. |
 | Redis | 7 | `brew services start redis` |
 | Node | 22 | build time only: Tailwind CSS, vendoring Alpine.js and the IBM Plex Sans Arabic fonts |
@@ -19,6 +19,10 @@ Phase 2 integration (2026-09-24); run them from the repository root.
 ## 2. First-time setup
 
 ```sh
+# Tools and services (one-off)
+brew install uv node redis tesseract tesseract-lang
+uv venv --python 3.13 .venv                  # the Makefile targets use .venv/bin/*
+
 # PostgreSQL 17 next to 14 (one-off)
 brew install postgresql@17
 sed -i '' -E 's/^#?port = 5432/port = 5433/' /opt/homebrew/var/postgresql@17/postgresql.conf
@@ -29,7 +33,7 @@ brew services start redis
 # Project
 cp .env.example .env                         # DATABASE_URL=postgres://localhost:5433/nassakh; set SECRET_KEY
 make install                                 # uv pip install (+dev extras) · npm install · npm run build
-make db                                      # createdb nassakh (on the port in DATABASE_URL) + migrate (22 migrations)
+make db                                      # createdb nassakh (on the port in DATABASE_URL) + migrate (24 migrations)
 make seed-groups                             # admin / editor / proofreader groups (also created by a migration)
 make superuser                               # first user; superusers pass every role check
 ```
@@ -49,6 +53,7 @@ create books, start processing, re-run stages, apply guides and change preproces
 | `DEBUG` | `false` | development mode |
 | `SECRET_KEY` | insecure dev key | change it |
 | `ALLOWED_HOSTS` | `localhost,127.0.0.1` | comma separated |
+| `CSRF_TRUSTED_ORIGINS` | (empty) | comma separated origins with scheme, e.g. `https://nassakh.local`; needed only when the site is not served from localhost (a LAN hostname or a tunnel), otherwise every POST, login included, fails the CSRF check |
 | `DATABASE_URL` | `postgres://localhost:5432/nassakh` | use `postgres://localhost:5433/nassakh` for `postgresql@17` |
 | `REDIS_URL` | `redis://localhost:6379/0` | Celery broker and result backend |
 | `CELERY_TASK_ALWAYS_EAGER` | `false` | run tasks inline in the calling process (no workers; see §3) |
@@ -63,7 +68,8 @@ create books, start processing, re-run stages, apply guides and change preproces
 
 ## 3. Running
 
-Three terminals (or `honcho start` / `overmind s` with the `Procfile`):
+Three terminals (or one `honcho start` with the `Procfile`; honcho is not a project dependency:
+`uv pip install --python .venv/bin/python honcho` once, or `brew install overmind` for `overmind s`):
 
 ```sh
 make web          # http://127.0.0.1:8000/  → /accounts/login/ → /books/
@@ -108,13 +114,20 @@ Text:  none → provisional (Tesseract, after ocr_page_fast) → final (after oc
 
 Stages: `preprocess` · `layout` · `ocr` (fast then full) · `ocr_fast` · `ocr_full`. Every re-run overwrites only
 that stage's outputs and continues down the chain; originals are never touched; excluded pages are refused.
+A re-run first puts the page back to the stage's input state (`uploaded`, `preprocessed`, `layout_done`), so the
+book stays `processing`/`ocr` until its last page is through (`ocr_fast` alone keeps the final text and status).
+If a task of the chain fails, the later tasks skip the page and keep that error, so the retry button points at
+the stage that really failed. A book whose remaining pages all failed settles (`ready_for_review` when some pages
+are done, `error` when none is) instead of staying active. A page re-included with «استثناء الصفحة» continues
+from its last completed stage.
 
 | Where | What it does |
 |---|---|
-| Dashboard `/books/<id>/` → «إعادة التشغيل» | all non-excluded pages from the chosen stage (`books.tasks.rerun_book_from`) |
+| Dashboard `/books/<id>/` → «إعادة التشغيل» | all non-excluded pages from the chosen stage (`books.tasks.rerun_book_from`). Runs the per-page chain directly: the guides proposal and the `needs_guides` stop of §4 are **not** repeated, so set the guides on «ضبط الأدلة» first when the book never had manual guides. Refused while the book waits for its guides (`needs_guides`) |
 | Page detail `/books/<id>/pages/<n>/` → «إعادة التشغيل» | this page from the chosen stage (`books.services.run_stage(page, stage)`) |
 | Page detail error banner → «إعادة المحاولة من هذه المرحلة» | the failed stage again |
-| Page detail → panel «المعالجة الأولية» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived, OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
+| Dashboard → «تحتاج انتباهًا» → «إعادة <stage>» on a failed page | the failed stage again, then back to the dashboard (same `books:rerun` with `next`) |
+| Page detail → panel «المعالجة الأولية» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
 | Guides `/books/<id>/guides/` → «تطبيق على كل الصفحات» | regions re-derived for every preprocessed page; OCR re-queued only for pages whose regions changed |
 | Dashboard / page detail → «استثناء الصفحة» | excludes a page from every stage and from the book's progress; toggle again to bring it back |
 
@@ -126,6 +139,7 @@ From a shell: `.venv/bin/python manage.py shell`, then
 ```
 media/books/{book_id}/source.pdf                       the upload, never modified
 media/books/{book_id}/pages/{n:04d}/original.png       never overwritten
+media/books/{book_id}/pages/{n:04d}/scan_thumb.webp    ≤ 240 px scan preview written at ingest (tile before preprocessing)
 media/books/{book_id}/pages/{n:04d}/gray.png           OCR input (Qari), coordinate space of lines, regions and boxes
 media/books/{book_id}/pages/{n:04d}/bw.png             Tesseract input / B&W view
 media/books/{book_id}/pages/{n:04d}/display.webp       ≤ 1400 px, screens
@@ -136,10 +150,15 @@ Media is served by Django at `/media/<path>` to signed-in users only (`core.view
 `DEBUG=false`). Every engine call is an `OcrRun` row (engine, model revision, prompt, raw output, duration,
 sanity-check result) visible on the page detail screen and at `/api/pages/<id>/runs/`.
 
+`/api/pages/<id>/status/` and `/api/pages/<id>/text/` return a failure as `error` (the Arabic headline) plus
+`error_detail` (the technical lines); the status payload also carries `images` (the three image-tab URLs).
+Manual preprocessing values are stored per key (`Preprocess.manual_params`): a chain re-run keeps only the keys
+the user changed and re-detects the rest.
+
 ## 7. Tests and lint
 
 ```sh
-make test                              # .venv/bin/pytest: 198 tests on SQLite in memory, Celery eager (nassakh/settings_test.py)
+make test                              # .venv/bin/pytest: the whole suite on SQLite in memory, Celery eager (nassakh/settings_test.py)
 make lint                              # ruff check . && ruff format --check .
 .venv/bin/pytest books processing      # one or more apps
 .venv/bin/python manage.py check
@@ -152,12 +171,18 @@ No real model is loaded in the tests (the `fake` engine stands in); see §8 for 
 
 On 2026-09-24 `playground/poc/input/sample 2.pdf` (19 landscape sheets with two book pages each, no text
 layer, footnotes under a rule) went through the whole pipeline with the **real engines** (PyTorch on MPS) in
-eager mode, from a script that calls `books.services.create_book(...)` with `pages_per_sheet=2, skip_first=2,
-skip_last=15` (so 2 sheets = 4 pages) and then `books.services.start_processing(book)`:
+eager mode, through `books.services.create_book(...)` with `pages_per_sheet=2, skip_first=2, skip_last=15`
+(so 2 sheets = 4 pages) and then `books.services.start_processing(book)`. The management command
+`smoke_pipeline` does exactly that and prints one row per page:
 
 ```sh
-CELERY_TASK_ALWAYS_EAGER=true LOG_LEVEL=INFO PYTHONPATH=. .venv/bin/python <script>.py
+CELERY_TASK_ALWAYS_EAGER=true LOG_LEVEL=INFO .venv/bin/python manage.py smoke_pipeline \
+    "playground/poc/input/sample 2.pdf" --pages-per-sheet 2 --skip-first 2 --skip-last 15
 ```
+
+The table below predates the Phase 2 review changes to the sanity check: footnotes whose Tesseract reading
+has fewer than 15 words are now only checked for runaway length, so the two footnotes below are expected to keep the
+Qari text.
 
 Result on the M5 Pro, 131 s wall clock for the 4 pages:
 

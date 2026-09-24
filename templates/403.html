@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block head_title %}غير مسموح · نسّاخ{% endblock %}
+{% block title %}غير مسموح{% endblock %}
+{% block body %}{% if user.is_authenticated %}{{ block.super }}{% else %}<main class="auth-screen">{% include "partials/_error_page.html" with code="403" title="لا تملك صلاحية فتح هذه الصفحة" text="سجّل الدخول بحساب له الدور المناسب ثم حاول مرة أخرى." %}</main>{% endif %}{% endblock %}
+{% block content %}
+{% include "partials/_error_page.html" with code="403" title="لا تملك صلاحية فتح هذه الصفحة" text="هذه الصفحة تحتاج دور محرّر أو مدير. اطلب من المدير تعديل دورك إن احتجت إليها." %}
+{% endblock %}

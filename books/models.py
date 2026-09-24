@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from django.db.models import Count
 
-from core.storage import book_source_path, page_original_path
+from core.storage import book_source_path, page_original_path, page_scan_thumb_path
+
+# Book error set by `refresh_status` when every page failed (unlike an ingest error it is re-derived).
+ALL_PAGES_FAILED = (
+    "تعذّرت معالجة كل صفحات الكتاب. افتح إحدى الصفحات لمعرفة السبب ثم أعد تشغيل مرحلتها، "
+    "أو اضغط «بدء المعالجة» للبدء من جديد."
+)
 
 
 class Book(models.Model):
@@ -89,23 +96,36 @@ class Book(models.Model):
     def refresh_status(self, save: bool = True) -> str:
         """Derive the book status from its pages and store it. Returns the (possibly unchanged) status.
 
-        `error` (ingest failure) and an empty book are left alone. `needs_guides` is kept while
-        every page is still waiting after preprocessing; it clears as soon as a page moves on.
-        Pages in error keep the book from being complete but do not make the book itself `error`.
+        An empty book and an ingest failure (`error` with any other message than
+        `ALL_PAGES_FAILED`) are left alone. `needs_guides` is kept while the guides are still the
+        automatic proposal and a page waits at `preprocessed` (only applying the guides moves those
+        pages on). Once no page has pipeline work left (`uploaded`, `preprocessed`, `layout_done`)
+        the book settles: `ready_for_review`/`reviewing`/`assembled` when at least one page is done
+        (pages in error show in the attention list), `error` with `ALL_PAGES_FAILED` when every page
+        failed. It never stays `processing`/`ocr` with nothing left to run.
         """
         counts = self.progress()
         total = sum(counts.values())
-        if total == 0 or self.status == self.Status.ERROR:
+        if total == 0:
+            return self.status
+        if self.status == self.Status.ERROR and self.error_message != ALL_PAGES_FAILED:
             return self.status
 
         ps = Page.Status
         errors = counts[ps.ERROR]
         n_done = counts[ps.OCR_DONE] + counts[ps.REVIEWED] + counts[ps.ASSEMBLED]
+        pending = counts[ps.UPLOADED] + counts[ps.PREPROCESSED] + counts[ps.LAYOUT_DONE]
 
-        if errors == total:
-            return self.status
-        if errors == 0 and n_done == total:
-            if counts[ps.ASSEMBLED] == total:
+        if (
+            self.status == self.Status.NEEDS_GUIDES
+            and counts[ps.PREPROCESSED]
+            and not self._has_manual_guides()
+        ):
+            new_status = self.Status.NEEDS_GUIDES
+        elif pending == 0:
+            if errors == total:
+                new_status = self.Status.ERROR
+            elif counts[ps.ASSEMBLED] == total:
                 new_status = self.Status.ASSEMBLED
             elif counts[ps.REVIEWED] + counts[ps.ASSEMBLED] > 0:
                 new_status = self.Status.REVIEWING
@@ -122,9 +142,17 @@ class Book(models.Model):
 
         if new_status != self.status:
             self.status = new_status
+            self.error_message = ALL_PAGES_FAILED if new_status == self.Status.ERROR else ""
             if save:
-                self.save(update_fields=["status", "updated_at"])
+                self.save(update_fields=["status", "error_message", "updated_at"])
         return self.status
+
+    def _has_manual_guides(self) -> bool:
+        """True when the owner set the layout guides by hand (the guides screen was applied)."""
+        try:
+            return self.guides.source == "manual"  # processing.models.LayoutGuides.Source.MANUAL
+        except ObjectDoesNotExist:
+            return False
 
 
 class Page(models.Model):
@@ -158,6 +186,7 @@ class Page(models.Model):
     )
     split_ratio_override = models.FloatField("موضع القص لهذه الصفحة", null=True, blank=True)
     original_image = models.FileField("الصورة الأصلية", upload_to=page_original_path, blank=True)
+    scan_thumbnail = models.FileField("مصغّرة المسح", upload_to=page_scan_thumb_path, blank=True)
     width = models.PositiveIntegerField("العرض", default=0)
     height = models.PositiveIntegerField("الارتفاع", default=0)
     dpi = models.FloatField("الدقة", default=0)

@@ -4,6 +4,7 @@
 document.addEventListener('alpine:init', () => {
   const POLL_INTERVAL = 2000;
   const POLL_MAX_INTERVAL = 15000;
+  const FAILURES_BEFORE_NOTICE = 3;
 
   // ---------------------------------------------------------------- new book form
   Alpine.data('bookForm', (cfg = {}) => ({
@@ -34,9 +35,13 @@ document.addEventListener('alpine:init', () => {
     byStatus: cfg.byStatus || {},
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     pages: {},
+    initialIds: new Set((cfg.pages || []).map((p) => String(p.id))),
     timer: null,
     failures: 0,
     stopped: false,
+    fetchFailed: false, // shown after a few consecutive failed polls
+    authLost: false,
+    copying: false,
 
     init() {
       (cfg.pages || []).forEach((p) => { this.pages[p.id] = p; });
@@ -60,16 +65,21 @@ document.addEventListener('alpine:init', () => {
           credentials: 'same-origin',
           cache: 'no-store',
         });
-        if (res.status === 401 || res.status === 403) { // session ended: stop quietly
+        if (res.status === 401 || res.status === 403) { // session ended: stop for good
           this.stopped = true;
           this.active = false;
+          this.wasActive = false;
+          this.authLost = true;
+          this.fetchFailed = true;
           return;
         }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         this.apply(await res.json());
         this.failures = 0;
+        this.fetchFailed = false;
       } catch (err) {
         this.failures += 1;
+        this.fetchFailed = this.failures >= FAILURES_BEFORE_NOTICE;
       }
       if (this.active) {
         this.schedule(Math.min(POLL_INTERVAL * (1 + this.failures), POLL_MAX_INTERVAL));
@@ -93,6 +103,35 @@ document.addEventListener('alpine:init', () => {
     tile(id) {
       return this.pages[id] || {};
     },
+    // Pages that were not in the server-rendered first paint (ingested while the dashboard is open).
+    get laterPages() {
+      return Object.values(this.pages)
+        .filter((p) => !this.initialIds.has(String(p.id)))
+        .sort((a, b) => a.number - b.number);
+    },
+    get hasPages() {
+      return Object.keys(this.pages).length > 0;
+    },
+    // Pages whose text is recognised (the plain "X من Y صفحة" progress).
+    get done() {
+      return this.count('ocr_done');
+    },
+    // The request starts inside the click so the clipboard write keeps the user gesture.
+    async copyBook(url) {
+      if (!url || this.copying) return;
+      this.copying = true;
+      const text = fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data) => (data && data.text) || '');
+      try {
+        await window.Nassakh.copyText(text);
+      } finally {
+        this.copying = false;
+      }
+    },
     count(key) {
       const statuses = this.stageMap[key] || [key];
       return statuses.reduce((n, s) => n + (this.byStatus[s] || 0), 0);
@@ -108,6 +147,12 @@ document.addEventListener('alpine:init', () => {
     },
   }));
 
+  const readJson = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    try { return JSON.parse(el.textContent); } catch (e) { return null; }
+  };
+
   // ---------------------------------------------------------------- page detail viewer
   const TAB_LABELS = { original: 'الأصل', gray: 'المعالَجة', bw: 'أبيض وأسود' };
   const TAB_KEYS = { 1: 'original', 2: 'gray', 3: 'bw' };
@@ -120,10 +165,45 @@ document.addEventListener('alpine:init', () => {
     nextUrl: cfg.nextUrl || null,
     tab: 'original',
     showRegions: true,
+    state: readJson('page-state') || {}, // /api/pages/<id>/status/ payload, kept live by the text panel poll
+    stageLabels: readJson('page-stage-labels') || {},
+    live: false, // true once a status poll has arrived (the server-rendered flags step aside)
 
     init() {
       const wanted = cfg.initialTab || 'gray';
       this.tab = this.has(wanted) ? wanted : (this.has('original') ? 'original' : wanted);
+    },
+    // Designed failure: `error` = Arabic headline, `error_detail` = technical detail.
+    get errorLines() {
+      return String(this.state.error || '').split('\n');
+    },
+    get errorHeadline() {
+      return this.errorLines[0].trim() || 'فشلت معالجة هذه الصفحة.';
+    },
+    get errorDetail() {
+      // The status API sends the detail in `error_detail`; older payloads carried it after line 1.
+      if (this.state.error_detail) return String(this.state.error_detail).trim();
+      return this.errorLines.slice(1).join('\n').trim();
+    },
+    get retryStage() {
+      const stage = this.state.error_from || '';
+      return this.stageLabels[stage] ? stage : '';
+    },
+    get errorStageLabel() {
+      return this.stageLabels[this.state.error_from] || this.state.error_from || '';
+    },
+    // The text panel re-broadcasts each status poll, so the state card never contradicts it.
+    onPageState(detail) {
+      if (!detail || String(detail.id) !== String(cfg.pageId)) return;
+      const before = this.state.status;
+      this.state = { ...this.state, ...detail };
+      this.live = true;
+      const hadGray = this.has('gray');
+      if (detail.images) this.onPageUpdated({ pageId: cfg.pageId, images: detail.images });
+      if (before === 'uploaded' && detail.status !== 'uploaded' && detail.status !== 'error' && !hadGray) {
+        // Preprocessing just finished: reload once so the gray-image size and regions arrive too.
+        window.location.reload();
+      }
     },
     has(key) {
       return Boolean(this.images[key]);

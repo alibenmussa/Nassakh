@@ -510,6 +510,8 @@
     box-shadow: var(--shadow-sm);
   }
   .segmented input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+  /* the real radio is hidden, so its label carries the keyboard focus ring */
+  .segmented > label:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
   /* toasts and banners */
   .toast {

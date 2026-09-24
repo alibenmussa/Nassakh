@@ -99,6 +99,12 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
 
     label = services.STAGE_LABELS[stage]
     if number is None:
+        try:
+            services.validate_rerun(book, stage)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("books:detail", book.pk)
+
         from books.tasks import rerun_book_from
 
         rerun_book_from.delay(book.pk, stage)
@@ -112,7 +118,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
         messages.error(request, str(exc))
     else:
         messages.success(request, f"أُعيد تشغيل الصفحة {page.number} من مرحلة «{label}».")
-    return redirect("books:page_detail", book.pk, page.number)
+    return _redirect_back(request, book.pk, page.number)
 
 
 def _redirect_back(request: HttpRequest, book_id: int, number: int | None = None) -> HttpResponse:

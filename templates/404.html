@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block head_title %}الصفحة غير موجودة · نسّاخ{% endblock %}
+{% block title %}الصفحة غير موجودة{% endblock %}
+{% block body %}{% if user.is_authenticated %}{{ block.super }}{% else %}<main class="auth-screen">{% include "partials/_error_page.html" with code="404" title="لم نجد هذه الصفحة" text="ربما حُذف الكتاب أو تغيّر الرابط." %}</main>{% endif %}{% endblock %}
+{% block content %}
+{% include "partials/_error_page.html" with code="404" title="لم نجد هذه الصفحة" text="ربما حُذف الكتاب أو الصفحة، أو تغيّر الرابط. ارجع إلى قائمة الكتب وافتحه من هناك." %}
+{% endblock %}

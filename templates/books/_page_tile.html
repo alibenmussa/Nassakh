@@ -1,0 +1,37 @@
+{% comment %}One dashboard tile, used twice: server first paint (`t` = the tile dict) and the live
+x-for for pages ingested after load. Context: js = Alpine expression of the live tile ("tile(12)" or "p"),
+t = server tile (optional), book, role, request. The cleaned thumbnail fades in over the scan (no spinner).{% endcomment %}
+<div{% if not t %} data-live-tile{% endif %} class="page-tile{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"
+     :class="{ 'is-excluded': {{ js }}.is_excluded, 'is-error': {{ js }}.error }">
+  <a class="page-tile-link"{% if t %} href="{{ t.url }}" aria-label="الصفحة {{ t.number }} — {{ t.status_label }}"{% endif %}
+     :href="{{ js }}.url" :aria-label="`الصفحة ${ {{ js }}.number } — ${ {{ js }}.status_label }`">
+    <span class="page-tile-thumb">
+      <span class="page-tile-placeholder" x-show="!{{ js }}.scan_thumb_url && !{{ js }}.thumb_url"{% if t.thumb_url or t.scan_thumb_url %} x-cloak{% endif %} aria-hidden="true">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-image"/></svg>
+      </span>
+      <template x-if="{{ js }}.scan_thumb_url"><img class="page-tile-img page-tile-scan" :src="{{ js }}.scan_thumb_url" alt="" loading="lazy" decoding="async"></template>
+      <template x-if="{{ js }}.thumb_url"><img class="page-tile-img page-tile-clean" :src="{{ js }}.thumb_url" alt="" loading="lazy" decoding="async" x-init="$el.complete && $el.naturalWidth && $el.classList.add('is-ready')" @load="$el.classList.add('is-ready')"></template>
+      <span class="page-tile-flag badge badge-dark num" x-show="{{ js }}.n_flags > 0"{% if not t.n_flags %} x-cloak{% endif %} :title="({{ js }}.flag_labels || []).join('، ')">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-flag"/></svg>
+        <span x-text="{{ js }}.n_flags">{{ t.n_flags }}</span>
+      </span>
+      <span class="page-tile-excluded badge badge-dark" x-show="{{ js }}.is_excluded"{% if not t.is_excluded %} x-cloak{% endif %}>مستثناة</span>
+    </span>
+    <span class="page-tile-footer">
+      <span class="status"><span class="dot{% if t %} {{ t.dot }}{% endif %}" :class="{{ js }}.dot" aria-hidden="true"></span><span class="num" x-text="{{ js }}.number">{{ t.number }}</span></span>
+      <span class="meta page-tile-status" x-text="{{ js }}.status_label">{{ t.status_label }}</span>
+    </span>
+  </a>
+  {% if role == 'admin' or role == 'editor' %}
+  <form method="post"{% if t %} action="{% url 'books:toggle_exclude' book.pk t.number %}"{% endif %} :action="{{ js }}.url + 'exclude/'" class="page-tile-toggle">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.path }}">
+    <button type="submit" class="btn-icon btn-icon-sm"
+            :title="{{ js }}.is_excluded ? 'إعادة الصفحة إلى الكتاب' : 'استثناء الصفحة من الكتاب'"
+            :aria-label="{{ js }}.is_excluded ? `إعادة الصفحة ${ {{ js }}.number } إلى الكتاب` : `استثناء الصفحة ${ {{ js }}.number } من الكتاب`">
+      <svg class="icon" x-show="!{{ js }}.is_excluded"{% if t.is_excluded %} x-cloak{% endif %} aria-hidden="true"><use href="#i-eye-off"/></svg>
+      <svg class="icon" x-show="{{ js }}.is_excluded"{% if not t.is_excluded %} x-cloak{% endif %} aria-hidden="true"><use href="#i-eye"/></svg>
+    </button>
+  </form>
+  {% endif %}
+</div>

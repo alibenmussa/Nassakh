@@ -3,7 +3,8 @@
 PDFs are built with PyMuPDF: born-digital pages with Arabic text (a system Arabic font when one is
 available, else PyMuPDF's HTML box with its built-in fallback fonts) and "scanned" pages that are a
 single full-page image, including landscape sheets holding two book pages. Tasks and services of the
-other apps are mocked so this suite passes independently of them.
+other apps are mostly mocked (without `create=True`, so a rename there fails here); one test runs the
+real chain end to end.
 """
 
 from __future__ import annotations
@@ -213,6 +214,17 @@ def test_ingest_book_renders_scans_at_native_dpi_in_order():
     assert (array < 128).mean() > 0.05  # the drawn lines survived the round trip
 
 
+def test_ingest_writes_a_scan_thumbnail_the_tile_shows_before_preprocessing():
+    # F34: the dashboard tile has a scan preview under the cleaned thumbnail
+    book = make_book(make_scan_pdf(1))
+    (page,) = services.ingest_book(book)
+    assert page.scan_thumbnail.name == f"books/{book.pk}/pages/0001/scan_thumb.webp"
+    with page.scan_thumbnail.open("rb") as handle:
+        assert Image.open(handle).width <= services.SCAN_THUMB_MAX_WIDTH
+    tile = services.page_tile(page)
+    assert tile["scan_thumb_url"] == page.scan_thumbnail.url and tile["thumb_url"] is None
+
+
 def test_ingest_book_renders_born_digital_pages_at_render_dpi_with_text_layer():
     book = make_book(make_text_pdf(2))
     pages = services.ingest_book(book)
@@ -284,25 +296,6 @@ def test_toggle_exclude_keeps_an_unstarted_book_uploaded():
     assert book.status == Book.Status.UPLOADED
 
 
-def test_after_preprocess_computes_the_rule_fraction_when_no_confidence_is_returned():
-    book, pages = _book_with_pages(4, status=Page.Status.PREPROCESSED)
-    for page, rule in zip(pages, (100, 110, None, None), strict=True):
-        Preprocess.objects.create(page=page, footnote_rule_y=rule)
-    with (
-        patch(
-            "processing.services.propose_guides",
-            MagicMock(side_effect=lambda b: LayoutGuides.objects.create(book=b)),
-            create=True,
-        ),
-        patch("books.services.run_stage") as run_stage,
-    ):
-        tasks.after_preprocess([], book.pk)
-    assert run_stage.call_count == 4  # 2 of 4 pages have a rule → 0.5 ≥ 0.4
-    assert tasks.rule_fraction(book) == 0.5
-    book.refresh_from_db()
-    assert book.status == Book.Status.OCR
-
-
 def test_find_gutter_and_split_position_fall_back_to_the_ratio():
     gray = np.full((400, 1000), 255, np.uint8)
     gray[:, :] = 0  # solid ink: no gutter anywhere
@@ -366,12 +359,12 @@ def test_start_processing_refuses_when_not_startable(status):
 
 
 def _mock_pipeline_tasks():
-    """Patch the four pipeline tasks of the other apps (they may not exist yet) and `chain`."""
+    """Patch the four pipeline tasks of the other apps and `chain` (a renamed task fails loudly)."""
     return (
-        patch("processing.tasks.preprocess_page", create=True),
-        patch("processing.tasks.layout_page", create=True),
-        patch("ocr.tasks.ocr_page_fast", create=True),
-        patch("ocr.tasks.ocr_page_full", create=True),
+        patch("processing.tasks.preprocess_page"),
+        patch("processing.tasks.layout_page"),
+        patch("ocr.tasks.ocr_page_fast"),
+        patch("ocr.tasks.ocr_page_full"),
         patch("books.services.chain"),
     )
 
@@ -492,7 +485,7 @@ def test_ingest_book_task_ingests_and_fans_out_preprocessing():
     book.status = Book.Status.PROCESSING
     book.save()
     with (
-        patch("processing.tasks.preprocess_page", create=True) as preprocess_page,
+        patch("processing.tasks.preprocess_page") as preprocess_page,
         patch("books.tasks.group") as group,
         patch("books.tasks.chord") as chord,
     ):
@@ -526,7 +519,7 @@ def test_after_preprocess_with_low_confidence_waits_for_guides():
     book.save()
     propose = MagicMock(side_effect=lambda b: (LayoutGuides.objects.create(book=b), 0.2))
     with (
-        patch("processing.services.propose_guides", propose, create=True),
+        patch("processing.services.propose_guides", propose),
         patch("books.services.run_stage") as run_stage,
     ):
         assert tasks.after_preprocess([p.pk for p in pages], book.pk) == book.pk
@@ -546,7 +539,7 @@ def test_after_preprocess_with_confident_guides_enqueues_layout_for_preprocessed
     book.save()
     propose = MagicMock(side_effect=lambda b: (LayoutGuides.objects.create(book=b), 0.9))
     with (
-        patch("processing.services.propose_guides", propose, create=True),
+        patch("processing.services.propose_guides", propose),
         patch("books.services.run_stage") as run_stage,
     ):
         tasks.after_preprocess([p.pk for p in pages], book.pk)
@@ -560,7 +553,7 @@ def test_after_preprocess_skips_the_proposal_when_guides_exist():
     LayoutGuides.objects.create(book=book, footnote_line=0.8, source=LayoutGuides.Source.MANUAL)
     propose = MagicMock()
     with (
-        patch("processing.services.propose_guides", propose, create=True),
+        patch("processing.services.propose_guides", propose),
         patch("books.services.run_stage") as run_stage,
     ):
         tasks.after_preprocess([], book.pk)
@@ -568,18 +561,166 @@ def test_after_preprocess_skips_the_proposal_when_guides_exist():
     assert run_stage.call_count == 2
 
 
-def test_after_preprocess_accepts_a_guides_object_with_a_confidence_attribute():
-    book, _ = _book_with_pages(1, status=Page.Status.PREPROCESSED)
-    guides = LayoutGuides(book=book)
-    guides.confidence = 0.1
-    with (
-        patch("processing.services.propose_guides", MagicMock(return_value=guides), create=True),
-        patch("books.services.run_stage") as run_stage,
-    ):
-        tasks.after_preprocess([], book.pk)
-    run_stage.assert_not_called()
+def test_ingest_book_task_shows_the_actionable_skip_message_as_the_headline():
+    # F57: the Arabic reason is the headline, not the generic "corrupt file" message
+    book = make_book(make_scan_pdf(2), skip_first=1, skip_last=1)
+    with patch("books.tasks.chord") as chord:
+        tasks.ingest_book_task(book.pk)
+    chord.assert_not_called()
     book.refresh_from_db()
-    assert book.status == Book.Status.NEEDS_GUIDES
+    assert book.status == Book.Status.ERROR
+    assert book.error_message.splitlines()[0].startswith("لا تبقى صفحات")
+
+
+def _done_book(n: int = 2) -> tuple[Book, list[Page]]:
+    book, pages = _book_with_pages(
+        n, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL, provisional_text="مبدئي"
+    )
+    for page in pages:
+        Preprocess.objects.create(page=page, output_width=100, output_height=100)
+        Region.objects.create(page=page, kind=Region.Kind.BODY, bbox=[0, 0, 100, 100], order=0)
+    book.status = Book.Status.READY_FOR_REVIEW
+    book.save()
+    return book, pages
+
+
+def test_rerun_book_resets_pages_so_the_book_waits_for_its_last_page():
+    # F1: a re-run from OCR must not conclude when the first page is through
+    book, pages = _done_book(2)
+    Page.objects.filter(pk=pages[0].pk).update(attention_flags=["ocr_fallback", "large_skew"])
+    with patch("books.services.chain"):
+        assert services.rerun_book(book, "ocr") == 2
+    pages = list(book.pages.order_by("number"))
+    assert [(p.status, p.text_state) for p in pages] == [("layout_done", "none")] * 2
+    assert pages[0].attention_flags == ["large_skew"]  # the OCR flag is recomputed by the re-run
+    book.refresh_from_db()
+    assert book.status == Book.Status.OCR and services.book_progress(book)["active"]
+
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.OCR_DONE)  # page 1 finalised
+    assert book.refresh_status() == Book.Status.OCR  # page 2 is still queued
+
+    Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    pages[1].refresh_from_db()
+    with patch("books.services.chain"):
+        services.run_stage(pages[1], "ocr_full")
+    pages[1].refresh_from_db()
+    assert (pages[1].status, pages[1].text_state) == ("layout_done", "provisional")
+    assert services.page_status(pages[1])["active"] is True
+
+
+def test_rerun_book_refuses_a_book_waiting_for_guides():
+    # F62: a book-level re-run would skip the guides proposal and the needs_guides stop
+    book, _ = _book_with_pages(2, status=Page.Status.PREPROCESSED)
+    book.status = Book.Status.NEEDS_GUIDES
+    book.save()
+    with patch("books.services.chain") as chain, pytest.raises(ValueError, match="اضبط الأدلة"):
+        services.rerun_book(book, "preprocess")
+    chain.assert_not_called()
+
+
+def test_re_including_an_unprocessed_page_enqueues_its_pipeline():
+    # F3: the book goes back to work only when work is actually enqueued
+    book, pages = _done_book(2)
+    extra = Page.objects.create(
+        book=book, number=3, source_index=2, is_excluded=True, status=Page.Status.EXCLUDED
+    )
+    with patch("books.services.chain") as chain:
+        chain.return_value.apply_async.return_value.id = "task-9"
+        services.toggle_exclude(extra)
+    chain.assert_called_once()
+    extra.refresh_from_db()
+    assert extra.status == Page.Status.UPLOADED and extra.task_id == "task-9"
+    book.refresh_from_db()
+    assert book.status == Book.Status.OCR
+
+    # a page that already has its text simply rejoins: nothing to run, the book stays done
+    services.toggle_exclude(pages[0])
+    with patch("books.services.chain") as chain:
+        services.toggle_exclude(pages[0])
+    chain.assert_not_called()
+
+
+def test_page_status_returns_the_headline_and_the_detail_apart():
+    # F26: the banner shows the Arabic headline only
+    _, pages = _book_with_pages(1)
+    pages[0].set_error("ocr_full", "تعذّر التعرّف على النص.\nOSError: [Errno 2] No such file")
+    state = services.page_status(pages[0])
+    assert state["error"] == "تعذّر التعرّف على النص."
+    assert state["error_detail"] == "OSError: [Errno 2] No such file"
+    # F43: the page detail enables its image tabs live from the same payload
+    assert state["images"] == {"original": None, "gray": None, "bw": None}
+
+
+def test_books_overview_uses_a_constant_number_of_queries(django_assert_max_num_queries):
+    for _ in range(5):
+        book, pages = _book_with_pages(2)
+        Page.objects.filter(pk=pages[0].pk).update(attention_flags=["large_skew"])
+    with django_assert_max_num_queries(3):
+        rows = services.books_overview()
+    assert len(rows) == 5 and all(row["total"] == 2 and row["flags"] == 1 for row in rows)
+
+
+def test_book_text_joins_the_clean_text_of_included_pages(client, editor):
+    book, pages = _book_with_pages(4)
+    Page.objects.filter(pk=pages[0].pk).update(
+        final_text="سطر  أول   ١٢٣\n\n\n(١) حاشية", provisional_text="قديم"
+    )
+    Page.objects.filter(pk=pages[1].pk).update(provisional_text="نصٌّ مبدئيّ ٤٥")
+    Page.objects.filter(pk=pages[2].pk).update(final_text="مستثناة", is_excluded=True)
+    # pages[3] has no text yet
+    expected = "سطر أول 123\n\n(1) حاشية\n\nنصٌّ مبدئيّ 45"
+    assert services.book_text(book) == {"text": expected, "pages": 2}
+
+    url = reverse("api:book_text", args=[book.pk])
+    assert url == f"/api/books/{book.pk}/text/"
+    assert client.get(url).status_code == 403  # login required
+    client.force_login(editor)
+    assert client.get(url).json() == {"text": expected, "pages": 2}
+
+
+def test_run_stage_runs_the_real_chain_on_a_page_with_a_rule_and_a_strip():
+    # F55: real Celery chain (eager) from preprocessing to the final text, then a guides re-run
+    from django.core.files.base import ContentFile
+
+    from ocr.engines import registry
+    from ocr.tests import engines
+    from processing import services as proc
+    from processing.tests import png_bytes, render_page
+
+    book = Book.objects.create(title="ك", status=Book.Status.PROCESSING)
+    page = Page.objects.create(book=book, number=1, source_index=0, width=900, height=1200)
+    gray = render_page(n_lines=14, rule_y=800, footnote_lines=3, strip="left")
+    page.original_image.save("original.png", ContentFile(png_bytes(gray)), save=True)
+    with registry.override(engines()):
+        services.run_stage(page, "preprocess")
+        page.refresh_from_db()
+        assert page.status == Page.Status.OCR_DONE and page.text_state == Page.TextState.FINAL
+        pre = page.preprocess
+        assert pre.edge_strips_removed and pre.footnote_rule_y is not None
+        proc.apply_guides(book, {"footnote_line": pre.footnote_rule_y / pre.output_height})
+    page.refresh_from_db()
+    assert page.status == Page.Status.OCR_DONE and page.error_message == ""
+    assert "footnote" in set(page.regions.values_list("kind", flat=True))
+    assert "\n\n" in page.final_text  # footnotes after a blank line
+    book.refresh_from_db()
+    assert book.status == Book.Status.READY_FOR_REVIEW
+
+
+def test_smoke_pipeline_command_runs_a_pdf_through_the_pipeline(tmp_path):
+    # F65: the RUNBOOK §8 smoke test is repeatable (fake engines stand in for the real ones here)
+    from django.core.management import call_command
+
+    from ocr.engines import registry
+    from ocr.tests import engines
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(make_scan_pdf(1))
+    out = io.StringIO()
+    with registry.override(engines()):
+        call_command("smoke_pipeline", str(pdf), stdout=out)
+    book = Book.objects.get()
+    assert book.pages.get().status in (Page.Status.OCR_DONE, Page.Status.PREPROCESSED)
+    assert f"book {book.pk}: {book.status}" in out.getvalue()
 
 
 # ====================================================================== views
@@ -854,6 +995,26 @@ def test_rerun_view_for_the_book_and_for_one_page(editor_client):
         response = editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "nope"}, follow=True)
     delay.assert_not_called()
     assert "اختر مرحلة صحيحة" in response.content.decode()
+
+
+def test_dashboard_attention_list_offers_a_retry_for_a_failed_page(editor_client):
+    # D22: a failed page shows its Arabic headline and a retry from the failed stage on the dashboard
+    book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
+    pages[1].set_error("ocr_full", "تعذّر التعرّف على النص.\nRuntimeError: boom")
+    tile = services.page_tile(pages[1])
+    assert tile["retry_stage"] == "ocr_full" and tile["retry_label"] == services.STAGE_LABELS["ocr_full"]
+    assert tile["rerun_url"] == reverse("books:rerun", args=[book.pk, 2])
+    assert services.page_tile(pages[0])["retry_stage"] == ""
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    assert ':action="item.rerun_url"' in body and 'x-text="item.retry_label"' in body
+
+    # the retry comes back to the dashboard it was sent from
+    with patch("books.services.run_stage"):
+        response = editor_client.post(
+            reverse("books:rerun", args=[book.pk, 2]),
+            {"stage": "ocr_full", "next": reverse("books:detail", args=[book.pk])},
+        )
+    assert response["Location"] == reverse("books:detail", args=[book.pk])
 
 
 def test_api_progress_and_page_status(editor_client):

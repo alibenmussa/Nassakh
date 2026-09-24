@@ -1,15 +1,16 @@
-{% load ocr_tags %}{% comment %}Text panel of the page detail screen. Context: page, book.
+{% load ocr_tags nassakh %}{% comment %}Text panel of the page detail screen. Context: page, book.
    Shows the provisional Tesseract text (faded) while `text_state == provisional`, then the final lines with
-   low-confidence tokens highlighted, plus the list of engine runs. The Alpine component `textPanel`
-   (static/src/js/ocr.js) polls /api/pages/<id>/status/ every 2 s while the page is still processing and then
+   low-confidence tokens underlined in amber, plus the list of engine runs. The Alpine component `textPanel`
+   (static/src/js/ocr.js) polls /api/pages/<id>/status/ (one request at a time) while the page is still processing and then
    loads /api/pages/<id>/text/ and /api/pages/<id>/runs/. The status route belongs to the books app
    (`api:page_status`); the runs list here is the live one for the page detail screen.{% endcomment %}
 {% if page and page.pk %}
-{% text_panel_data page as panel %}
+{% text_panel_data page as panel %}{% stage_labels as panel_stage_labels %}
 <section class="card text-panel"
-         x-data="textPanel({ statusUrl: '{% url 'api:page_status' page.pk %}', textUrl: '{% url 'api:page_text' page.pk %}', runsUrl: '{% url 'api:page_runs' page.pk %}' })"
+         x-data="textPanel({ statusUrl: '{% url 'api:page_status' page.pk %}', textUrl: '{% url 'api:page_text' page.pk %}', runsUrl: '{% url 'api:page_runs' page.pk %}', pageId: {{ page.pk }}, errorFrom: '{% if page.status == 'error' %}{{ page.error_from|escapejs }}{% endif %}' })"
          aria-labelledby="text-panel-title">
   {{ panel|json_script }}
+  {{ panel_stage_labels|json_script:"text-panel-stages" }}
 
   <header class="card-header">
     <div class="flex items-center gap-2 min-w-0">
@@ -20,49 +21,66 @@
       <span class="badge badge-warning" x-show="flags.includes('alignment_poor')" x-cloak title="لم يُربط كثير من الكلمات بأسطر الصورة">ربط الأسطر ضعيف</span>
     </div>
     <div class="flex items-center gap-3 flex-none">
-      <span class="status" x-show="polling" x-cloak>
-        <span class="spinner spinner-sm" aria-hidden="true"></span>
-        <span>قيد المعالجة…</span>
+      <span class="status meta" x-show="polling" x-cloak>
+        <span class="dot dot-accent" aria-hidden="true"></span>
+        <span>قيد المعالجة</span>
       </span>
       <span class="meta" x-show="textState === 'final' && lines.length" x-cloak>
-        الأسطر: <span x-text="lines.length"></span> · منخفضة الثقة: <span x-text="nLow"></span>
+        الأسطر: <bdi class="num" x-text="lines.length"></bdi> · منخفضة الثقة: <bdi class="num" x-text="nLow"></bdi>
       </span>
+      <button type="button" class="btn btn-ghost btn-sm" x-show="copyable" x-cloak @click="copy()" aria-label="نسخ نص الصفحة">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+        <span>نسخ النص</span>
+      </button>
     </div>
   </header>
 
-  <div class="banner banner-danger" role="alert" x-show="error" x-cloak>
+  {# designed failure: Arabic headline, technical detail folded away, retry of the failed stage #}
+  <div class="banner banner-danger" role="alert" x-show="errorHeadline" x-cloak>
     <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
-    <span class="grow" x-text="error"></span>
+    <div class="grow stack-sm">
+      <span x-text="errorHeadline"></span>
+      <details class="error-details" x-show="errorDetail"><summary class="meta">التفاصيل</summary><pre dir="ltr" x-text="errorDetail"></pre></details>
+      {% if role == 'admin' or role == 'editor' %}
+      <form method="post" action="{% url 'books:rerun' book.pk page.number %}" x-show="errorStageLabel">
+        {% csrf_token %}
+        <input type="hidden" name="stage" :value="errorFrom">
+        <button type="submit" class="btn btn-sm">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+          <span>إعادة <span x-text="errorStageLabel"></span></span>
+        </button>
+      </form>
+      {% endif %}
+    </div>
   </div>
 
   <div class="banner banner-info" x-show="fetchFailed" x-cloak>
     <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-    <span class="grow">تعذّر تحديث الحالة من الخادم. أعد تحميل الصفحة إن استمرّت المشكلة.</span>
+    <span class="grow" x-text="authLost ? 'انتهت الجلسة. سجّل الدخول من جديد لمتابعة الحالة.' : 'تعذّر تحديث الحالة من الخادم. أعد تحميل الصفحة إن استمرّت المشكلة.'"></span>
   </div>
 
-  {# no text yet #}
-  <p class="text-empty meta" x-show="textState === 'none'" x-cloak
-     x-text="isActive ? 'تجري المعالجة… سيظهر النص المبدئي خلال ثوانٍ.' : 'لم يُستخرج نص لهذه الصفحة بعد. شغّل مرحلة التعرّف على النص من قائمة إعادة التشغيل.'"></p>
+  {# The three text states share one cell so provisional → final is a soft crossfade, not a swap. #}
+  <div class="text-stage">
+    {# no text yet #}
+    <p class="text-empty meta" x-show="textState === 'none'" x-cloak x-transition.opacity.duration.200ms
+       x-text="isActive ? 'يظهر النص المبدئي هنا بعد التعرّف السريع.' : 'لم يُستخرج نص لهذه الصفحة بعد. شغّل مرحلة التعرّف على النص من قائمة إعادة التشغيل.'"></p>
 
-  {# provisional (Tesseract), faded #}
-  <div class="text-body text-text-3" dir="rtl" x-show="textState === 'provisional'" x-cloak x-text="provisional"></div>
+    {# provisional (Tesseract), faded #}
+    <div class="text-body text-text-3" dir="rtl" x-show="textState === 'provisional'" x-cloak x-transition.opacity.duration.200ms x-text="provisional"></div>
 
-  {# final lines with low-confidence tokens #}
-  <div class="stack" x-show="textState === 'final'" x-cloak>
-    <ol class="text-lines" dir="rtl" x-show="lines.length">
-      <template x-for="line in lines" :key="line.id">
-        <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order">
-          <template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i">
-            <span class="tok" :class="tok.conf === 'low' ? 'tok-low bg-highlight' : ''" :title="tokenTitle(tok)" x-text="tok.t"></span>
-          </template>
-        </li>
-      </template>
-    </ol>
-    <div class="text-body" dir="rtl" x-show="!lines.length" x-text="finalText || 'لا نص في هذه الصفحة.'"></div>
-    <p class="legend meta" x-show="lines.length">
-      <span class="legend-swatch bg-highlight" aria-hidden="true"></span>
-      <span>كلمة منخفضة الثقة: اختلف المحرّكان عليها أو تحوي رقمًا. مرّر المؤشر فوقها لرؤية القراءة البديلة.</span>
-    </p>
+    {# final lines; low-confidence tokens get a thin amber underline. Tokens are separated by real spaces so selection copies words. #}
+    <div class="stack" x-show="textState === 'final'" x-cloak x-transition.opacity.duration.200ms>
+      <ol class="text-lines" dir="rtl" x-show="lines.length">
+        <template x-for="line in lines" :key="line.id">
+          <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span><span class="tok" :class="tok.conf === 'low' && 'tok-low'" :title="tokenTitle(tok)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template></li>
+        </template>
+      </ol>
+      <div class="text-body" dir="rtl" x-show="!lines.length" x-text="finalText || 'لا نص في هذه الصفحة.'"></div>
+      <p class="legend meta" x-show="nLow > 0">
+        <span class="legend-swatch" aria-hidden="true">أ</span>
+        <span>تحتها خط: كلمة غير مؤكَّدة (اختلف المحرّكان عليها أو تحوي رقمًا). مرّر المؤشر فوقها لرؤية القراءة البديلة.</span>
+      </p>
+    </div>
   </div>
 
   {# engine runs #}
