@@ -122,3 +122,30 @@ essentials: the reveal on upload (thumbnails crossfade from scan to cleaned page
 that settles into the final text, one-click copy of clean text per page and per book, plain progress
 ("X من Y صفحة", no persona, no time estimates), and failures that look designed (Arabic headline, fallback
 text, retry). Rejected: a reading view, time-remaining estimates.
+
+## D23 — Provisional text is shown as a "decode" effect, not as plain text (2026-09-24)
+Owner decision. Tesseract's first pass is inaccurate; shown plainly it makes a poor first impression. While a
+page is provisional its words oscillate between noise glyphs and Tesseract's letters (never fully settling), and
+a right-to-left resolve wave lands them on the final text when the models finish. Words are mutated as whole
+strings, never split into per-letter elements, so Arabic letters keep joining. Spec: PHASE3_SPEC §2.
+
+## D24 — Motion exception for content being processed (2026-09-24)
+DESIGN.md §8 ("no looping decoration") still governs the chrome. The owner explicitly asked for continuous
+motion on content in a processing state (decode effect, scan sweep, line-reading shimmer). It stops when the
+state ends, runs only near the viewport from one shared rAF loop, and is replaced by static states under
+`prefers-reduced-motion`. Resolution moments are short transitions (≤ 600 ms).
+
+## D25 — Two book views: stacked sheets (default) and a grid of processing cards (2026-09-24)
+Owner decision. The default dashboard view stacks pages like a PDF viewer, each sheet showing the scan and its
+text generating; the grid shows small animated processing cards without text. Sheets are lazily mounted and
+fetched in batches (`/api/books/<id>/sheets/`) so an 800-page book stays smooth.
+
+## D26 — Word-chooser hook for uncertain words (2026-09-24)
+Owner decision. A future small classifier may pick the best candidate (primary / secondary / Tesseract) for
+uncertain words as part of processing, with no UI. Phase 3 adds `ocr/chooser.py:choose_word()` returning None,
+called from `finalize_page`; a chosen word keeps `conf = "low"` so it stays reviewable.
+
+## D27 — Review defaults (2026-09-24)
+Reviewers may edit a whole line and insert a missing line (models sometimes drop a phrase). A page is approved
+only when every uncertain word is resolved, or with an explicit confirmation. Every review action is stored as a
+`LineRevision`, which powers server-side undo.

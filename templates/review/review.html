@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% comment %}
+Placeholder (Phase 3). Context: book, page, prev_url, next_url, and the JSON config rendered with
+{{ config|json_script:"review-config" }} (shape: docs/PHASE3_SPEC.md §4). The review-UI agent replaces this file.
+{% endcomment %}
+{% block title %}مراجعة الصفحة {{ page.number }}{% endblock %}
+{% block content %}{{ config|json_script:"review-config" }}{% endblock %}

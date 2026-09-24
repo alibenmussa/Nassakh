@@ -4,6 +4,8 @@
 @import "./components/books.css";
 @import "./components/processing.css";
 @import "./components/ocr.css";
+@import "./components/theatre.css";
+@import "./components/review.css";
 
 @source "../../templates";
 @source "./js";
@@ -12,6 +14,7 @@
 @source "../../books";
 @source "../../processing";
 @source "../../ocr";
+@source "../../review";
 
 /* ------------------------------------------------------------------ tokens (DESIGN.md §2–4) */
 @theme {
