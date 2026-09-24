@@ -61,6 +61,17 @@
 
   {# The three text states share one cell so provisional → final is a soft crossfade, not a swap. #}
   <div class="text-stage">
+    {# readings of the word under the cursor: view only, nothing is changed from here #}
+    <div id="tok-pop" class="tok-pop" role="tooltip" x-show="hover.tok" x-cloak :style="hover.style"
+         @mouseenter="keepTok()" @mouseleave="hideTok()">
+      <div class="tok-pop-title">قراءات هذه الكلمة</div>
+      <ul class="tok-pop-list">
+        <template x-for="row in tokenOptions(hover.tok)" :key="row.label">
+          <li><span class="tok-pop-label" x-text="row.label"></span><bdi class="tok-pop-value" x-text="row.value"></bdi></li>
+        </template>
+      </ul>
+      <p class="tok-pop-note" x-show="hover.tok && hover.tok.digit">رقم: تحقّق منه على الصورة</p>
+    </div>
     {# no text yet #}
     <p class="text-empty meta" x-show="textState === 'none'" x-cloak x-transition.opacity.duration.200ms
        x-text="isActive ? 'يظهر النص المبدئي هنا بعد التعرّف السريع.' : 'لم يُستخرج نص لهذه الصفحة بعد. شغّل مرحلة التعرّف على النص من قائمة إعادة التشغيل.'"></p>
@@ -72,7 +83,7 @@
     <div class="stack" x-show="textState === 'final'" x-cloak x-transition.opacity.duration.200ms>
       <ol class="text-lines" dir="rtl" x-show="lines.length">
         <template x-for="line in lines" :key="line.id">
-          <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span><span class="tok" :class="tok.conf === 'low' && 'tok-low'" :title="tokenTitle(tok)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template></li>
+          <li class="text-line" :class="{ 'is-reviewed': line.is_reviewed }" :data-order="line.order"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span><span class="tok" :class="tok.conf === 'low' && 'tok-low'" :tabindex="tok.conf === 'low' ? 0 : null" :aria-describedby="tok.conf === 'low' ? 'tok-pop' : null" @mouseenter="tok.conf === 'low' && showTok($event, tok)" @mouseleave="hideTok()" @focus="tok.conf === 'low' && showTok($event, tok)" @blur="hideTok()" @keydown.escape="hideTok(true)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template></li>
         </template>
       </ol>
       <div class="text-body" dir="rtl" x-show="!lines.length" x-text="finalText || 'لا نص في هذه الصفحة.'"></div>

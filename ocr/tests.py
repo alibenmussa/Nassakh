@@ -442,6 +442,7 @@ def test_build_lines_puts_tokens_on_the_matching_tesseract_lines():
         "conf": "low",
         "digit": False,
         "bbox": tokens["الكتاب"]["bbox"],
+        "tess": tokens["الكتاب"]["tess"],
     }
     assert tokens["الكتاب"]["bbox"] is not None
     assert (
@@ -1082,6 +1083,9 @@ def test_text_panel_renders_provisional_state_and_polling_config(page, book):
     html = render_to_string("ocr/_text_panel.html", {"page": page, "book": book})
     assert "نص مبدئي (Tesseract)" in html
     assert "text-text-3" in html and "tok-low" in html
+    # readings popover on uncertain words: present, view-only (no form controls inside it)
+    assert 'class="tok-pop"' in html and "قراءات هذه الكلمة" in html and "tokenOptions(hover.tok)" in html
+    assert "showTok($event, tok)" in html and 'role="tooltip"' in html
     assert f"statusUrl: '/api/pages/{page.pk}/status/'" in html
     assert (
         f"textUrl: '/api/pages/{page.pk}/text/'" in html and f"runsUrl: '/api/pages/{page.pk}/runs/'" in html
@@ -1178,3 +1182,23 @@ def test_printed_number_is_cleared_when_the_three_readers_disagree(page):
         services.run_full_ocr(page)
     page.refresh_from_db()
     assert page.printed_number == ""  # 8 / 7 / 6: no two voters agree -> unknown, not wrong
+
+
+def test_build_lines_keeps_tesseract_reading_only_when_it_differs():
+    from ocr.alignment import build_lines
+
+    tess = [
+        {
+            "bbox": [0, 0, 100, 20],
+            "words": [
+                {"text": "قال", "bbox": [70, 0, 100, 20], "conf": 90},
+                {"text": "الأمبر", "bbox": [30, 0, 68, 20], "conf": 60},  # Tesseract misread of الأمير
+                {"text": "1966", "bbox": [0, 0, 28, 20], "conf": 80},
+            ],
+        }
+    ]
+    lines = build_lines("قال الأمير ١٩٦٦", "قال الأمير ١٩٦٦", tess)
+    toks = {t["t"]: t for t in lines[0]["tokens"]}
+    assert toks["قال"]["tess"] is None  # same reading: nothing to show
+    assert toks["الأمير"]["tess"] == "الأمبر"  # Tesseract's differing word travels with the token
+    assert toks["١٩٦٦"]["tess"] is None  # digits compare equal after lenient normalisation

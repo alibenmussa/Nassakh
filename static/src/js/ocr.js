@@ -213,6 +213,39 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    hover: { tok: null, style: '' },
+    hideTimer: null,
+
+    showTok(ev, tok) {
+      clearTimeout(this.hideTimer);
+      const host = this.$root.querySelector('.text-stage');
+      const box = ev.currentTarget.getBoundingClientRect();
+      const ref = host ? host.getBoundingClientRect() : { top: 0, right: box.right };
+      // anchored under the word, aligned to its right edge (RTL start)
+      const top = Math.round(box.bottom - ref.top + 6);
+      const right = Math.max(0, Math.round(ref.right - box.right));
+      this.hover = { tok, style: `top:${top}px; right:${right}px;` };
+    },
+
+    keepTok() {
+      clearTimeout(this.hideTimer);
+    },
+
+    hideTok(now = false) {
+      clearTimeout(this.hideTimer);
+      if (now) { this.hover = { tok: null, style: '' }; return; }
+      this.hideTimer = setTimeout(() => { this.hover = { tok: null, style: '' }; }, 120);
+    },
+
+    tokenOptions(tok) {
+      if (!tok) return [];
+      const rows = [{ label: config.primaryLabel || 'النموذج الأول', value: tok.t }];
+      if (tok.alt) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: tok.alt });
+      else if (!tok.digit) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: '— لا مقابل' });
+      if (tok.tess) rows.push({ label: 'Tesseract', value: tok.tess });
+      return rows;
+    },
+
     tokenTitle(tok) {
       const parts = [];
       if (tok.alt) parts.push(`القراءة البديلة: ${tok.alt}`);

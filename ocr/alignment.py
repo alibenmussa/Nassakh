@@ -107,7 +107,7 @@ def build_lines(primary_text: str, secondary_text: str | None, tesseract_lines: 
     when the secondary has no counterpart for the token, or when the token is a number (D17).
 
     Returns `[{order, bbox, text, tokens, n_low, n_anchored, confidence}]` with tokens
-    `{"t", "alt", "conf", "digit", "bbox"}`.
+    `{"t", "alt", "conf", "digit", "bbox", "tess"}` (`tess` = Tesseract's word when it differs).
     """
     p_tokens = primary_text.split()
     if not p_tokens:
@@ -129,12 +129,16 @@ def build_lines(primary_text: str, secondary_text: str | None, tesseract_lines: 
 
     line_of: list[int | None] = [None] * n
     bbox_of: list[list | None] = [None] * n
+    tess_of: list[str | None] = [None] * n  # Tesseract's reading when it differs from the primary
     words = [(k, w) for k, line in enumerate(tesseract_lines or []) for w in line.get("words", [])]
     if words:
         for i, j in align_tokens(p_tokens, [w["text"] for _, w in words]):
             if i is not None and j is not None:
                 line_of[i] = words[j][0]
                 bbox_of[i] = words[j][1].get("bbox")
+                word = str(words[j][1].get("text") or "")
+                if word and norm_token(word) != norm_token(p_tokens[i]):
+                    tess_of[i] = word
     anchored_any = any(k is not None for k in line_of)
     if anchored_any:
         current = next(k for k in line_of if k is not None)
@@ -172,6 +176,7 @@ def build_lines(primary_text: str, secondary_text: str | None, tesseract_lines: 
                     "conf": "low" if low else "high",
                     "digit": digit,
                     "bbox": bbox_of[i],
+                    "tess": tess_of[i],
                 }
             )
         n_low = sum(1 for t in tokens if t["conf"] == "low")
