@@ -39,8 +39,14 @@ class OcrEngine:
     def load(self) -> None:
         """Load weights / check binaries. Idempotent; cheap for classic engines."""
 
-    def recognize(self, image_path: str | Path, max_new_tokens: int | None = None) -> OcrResult:
-        """Recognise the text of one image file (or, for the pdf engine, one PDF page reference)."""
+    def recognize(
+        self, image_path: str | Path, max_new_tokens: int | None = None, hints: dict | None = None
+    ) -> OcrResult:
+        """Recognise the text of one image file (or, for the pdf engine, one PDF page reference).
+
+        `hints` are optional engine-specific knobs for one call (e.g. `{"psm": 7}` for Tesseract on a
+        single-line crop); engines ignore hints they do not understand.
+        """
         raise NotImplementedError
 
     def unload(self) -> None:

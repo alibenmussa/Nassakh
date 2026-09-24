@@ -52,7 +52,9 @@ class QariMlxEngine(QariEngine):
         self.config = load_config(str(self.model_dir))
         log.info("loaded %s (mlx) in %.0fs", self.model_dir.name, time.time() - t0)
 
-    def recognize(self, image_path: str | Path, max_new_tokens: int | None = None) -> OcrResult:
+    def recognize(
+        self, image_path: str | Path, max_new_tokens: int | None = None, hints: dict | None = None
+    ) -> OcrResult:
         if self.model is None:
             self.load()
         from mlx_vlm import generate

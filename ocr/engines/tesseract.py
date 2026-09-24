@@ -58,16 +58,20 @@ class TesseractEngine(OcrEngine):
     def model_revision(self) -> str:
         return self._version
 
-    def recognize(self, image_path: str | Path, max_new_tokens: int | None = None) -> OcrResult:
+    def recognize(
+        self, image_path: str | Path, max_new_tokens: int | None = None, hints: dict | None = None
+    ) -> OcrResult:
         import pytesseract
         from PIL import Image
 
+        psm = int((hints or {}).get("psm") or self.psm)
+        config = f"--oem {self.oem} --psm {psm}"
         with Image.open(image_path) as img:
             img.load()
             size = img.size
             t0 = time.time()
             data = pytesseract.image_to_data(
-                img, lang=self.langs, config=self.config, output_type=pytesseract.Output.DICT
+                img, lang=self.langs, config=config, output_type=pytesseract.Output.DICT
             )
             duration = time.time() - t0
         text, lines = parse_image_to_data(data)
@@ -77,7 +81,7 @@ class TesseractEngine(OcrEngine):
             finish="n/a",
             extra={
                 "lines": lines,
-                "psm": self.psm,
+                "psm": psm,
                 "oem": self.oem,
                 "langs": self.langs,
                 "image_size": list(size),

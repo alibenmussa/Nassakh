@@ -67,7 +67,9 @@ class QariTorchEngine(QariEngine):
         if isinstance(getattr(ip, "size", None), dict):
             ip.size = {**ip.size, "shortest_edge": self.min_pixels, "longest_edge": self.max_pixels}
 
-    def recognize(self, image_path: str | Path, max_new_tokens: int | None = None) -> OcrResult:
+    def recognize(
+        self, image_path: str | Path, max_new_tokens: int | None = None, hints: dict | None = None
+    ) -> OcrResult:
         if self.model is None:
             self.load()
         import torch

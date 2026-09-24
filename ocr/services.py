@@ -198,6 +198,18 @@ def _page_shape(page: Page) -> tuple[int, int]:
 # ---------------------------------------------------------------- images
 
 
+PAGE_NUMBER_UPSCALE = 4  # Lanczos factor for the page-number crop before Tesseract
+PAGE_NUMBER_PAD = 8  # pixels of white kept around the digits (gray-image space)
+PAGE_NUMBER_PSM = 7  # Tesseract "single text line"
+
+
+def _pad_bbox(bbox: list[int], pad: int, shape: tuple[int, ...]) -> list[int]:
+    """Grow `bbox` by `pad` pixels on every side, clamped to an image of `shape` (h, w, ...)."""
+    h, w = int(shape[0]), int(shape[1])
+    x0, y0, x1, y1 = (int(v) for v in bbox)
+    return [max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)]
+
+
 def _crop_image(array: np.ndarray, bbox: list[int], upscale: int = 1) -> np.ndarray:
     """Crop `bbox` out of `array`; upscale with Lanczos when `upscale > 1` (footnotes, D11)."""
     part = crop(array, bbox)
@@ -254,6 +266,7 @@ def run_engine(
     input_variant: str,
     max_new_tokens: int | None = None,
     scale: float = 1.0,
+    hints: dict | None = None,
 ) -> OcrRun:
     """Call `engine_name` on `source` (image path or PdfPageRef) and store the call as an OcrRun.
 
@@ -264,6 +277,8 @@ def run_engine(
     params: dict = {"scope": target.scope, "kind": target.kind}
     if max_new_tokens:
         params["max_new_tokens"] = max_new_tokens
+    if hints:
+        params["hints"] = dict(hints)
     generation_params = getattr(engine, "generation_params", None)
     if callable(generation_params):
         params.update(generation_params(max_new_tokens or getattr(engine, "default_max_new_tokens", 0)))
@@ -279,7 +294,7 @@ def run_engine(
         params=params,
     )
     try:
-        result = engine.recognize(source, max_new_tokens)
+        result = engine.recognize(source, max_new_tokens, hints=hints)
     except Exception as exc:  # noqa: BLE001 - recorded on the run, the page decides what to do
         log.exception("%s failed on page %s (%s)", engine_name, page.pk, target.kind)
         run.status = OcrRun.Status.ERROR
@@ -399,8 +414,24 @@ def run_fast_ocr(page: Page) -> None:
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-fast-") as tmp:
         tmpdir = Path(tmp)
         for i, target in enumerate(targets):
-            path = _save_temp(_crop_image(bw, target.bbox), tmpdir, f"bw-{i}-{target.kind}")
-            run = run_engine(page, fast, target, path, "bw")
+            if target.kind == Region.Kind.PAGE_NUMBER:
+                # A printed page number is a few digits ~30 px tall: Tesseract needs the crop padded,
+                # enlarged and read as a single line to return anything at all.
+                target = Target(target.region, _pad_bbox(target.bbox, PAGE_NUMBER_PAD, bw.shape))
+                crop_img = _crop_image(bw, target.bbox, upscale=PAGE_NUMBER_UPSCALE)
+                path = _save_temp(crop_img, tmpdir, f"bw-{i}-{target.kind}")
+                run = run_engine(
+                    page,
+                    fast,
+                    target,
+                    path,
+                    f"bw_{PAGE_NUMBER_UPSCALE}x",
+                    scale=PAGE_NUMBER_UPSCALE,
+                    hints={"psm": PAGE_NUMBER_PSM},
+                )
+            else:
+                path = _save_temp(_crop_image(bw, target.bbox), tmpdir, f"bw-{i}-{target.kind}")
+                run = run_engine(page, fast, target, path, "bw")
             if run.status != OcrRun.Status.OK:
                 failures.append(run.error)
                 continue

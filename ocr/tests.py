@@ -216,7 +216,7 @@ def test_fake_engine_records_calls_and_supports_errors(tmp_path):
     engine = FakeEngine(text="نص", lines=[{"bbox": [0, 0, 1, 1], "words": []}], output_tokens=5)
     result = engine.recognize(img, 42)
     assert result.text == "نص" and result.output_tokens == 5 and result.extra["lines"]
-    assert engine.calls == [{"path": str(img), "max_new_tokens": 42, "image_size": [30, 10]}]
+    assert engine.calls == [{"path": str(img), "max_new_tokens": 42, "image_size": [30, 10], "hints": None}]
     with pytest.raises(RuntimeError):
         FakeEngine(error=RuntimeError("boom")).recognize(img)
 
@@ -1107,3 +1107,23 @@ def test_text_panel_embeds_final_lines(page, book):
 def test_text_panel_renders_nothing_without_a_page():
     html = render_to_string("ocr/_text_panel.html", {"page": None, "book": None})
     assert html.strip() == ""
+
+
+def test_run_fast_ocr_reads_the_page_number_padded_upscaled_single_line(page):
+    """The page-number crop is padded, enlarged 4x and read with Tesseract psm 7; digits -> printed_number."""
+    regions = add_regions(page)
+    fakes = engines()
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == "8"
+    run = page.ocr_runs.get(region=regions["page_number"])
+    assert run.input_variant == f"bw_{services.PAGE_NUMBER_UPSCALE}x"
+    assert run.params["hints"] == {"psm": services.PAGE_NUMBER_PSM}
+    call = next(c for c in fakes["tesseract"].calls if c["hints"] == {"psm": services.PAGE_NUMBER_PSM})
+    x0, y0, x1, y1 = regions["page_number"].bbox
+    pad, up = services.PAGE_NUMBER_PAD, services.PAGE_NUMBER_UPSCALE
+    expected = [(min(W, x1 + pad) - max(0, x0 - pad)) * up, (min(H, y1 + pad) - max(0, y0 - pad)) * up]
+    assert call["image_size"] == expected
+    # every other region is still read at 1x with the engine's default mode
+    assert all(c["hints"] is None for c in fakes["tesseract"].calls if c is not call)

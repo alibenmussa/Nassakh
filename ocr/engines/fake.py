@@ -72,8 +72,10 @@ class FakeEngine(OcrEngine):
         self.text = text
         self.lines = lines
 
-    def recognize(self, image_path: str | Path, max_new_tokens: int | None = None) -> OcrResult:
-        call = {"path": str(image_path), "max_new_tokens": max_new_tokens, "image_size": None}
+    def recognize(
+        self, image_path: str | Path, max_new_tokens: int | None = None, hints: dict | None = None
+    ) -> OcrResult:
+        call = {"path": str(image_path), "max_new_tokens": max_new_tokens, "image_size": None, "hints": hints}
         try:
             from PIL import Image
 

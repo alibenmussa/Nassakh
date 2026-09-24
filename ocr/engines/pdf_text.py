@@ -203,7 +203,12 @@ class PdfTextEngine(OcrEngine):
         except Exception:  # noqa: BLE001
             return ""
 
-    def recognize(self, image_path: str | Path | PdfPageRef, max_new_tokens: int | None = None) -> OcrResult:
+    def recognize(
+        self,
+        image_path: str | Path | PdfPageRef,
+        max_new_tokens: int | None = None,
+        hints: dict | None = None,
+    ) -> OcrResult:
         """`image_path` is a `PdfPageRef`, a `path.pdf` (page 0) or `path.pdf#<index>`."""
         import pymupdf
 
