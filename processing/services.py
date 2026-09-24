@@ -4,8 +4,13 @@ Views, API functions and Celery tasks stay thin and call these. Everything that 
 database or storage lives here; the image maths is in `processing.pipeline`.
 
 Coordinates: `Preprocess.crop_box` and `edge_strips_removed` are in the rotated, uncropped frame;
-`line_boxes`, `footnote_rule_y` and `Region.bbox` are in `gray_image` pixel space. Guide values
-(`header_cut`, `footnote_line`, `page_number_height`) are ratios of the gray-image height.
+`line_boxes`, `footnote_rule_y`, `footnote_block_y`, `page_number_box` and `Region.bbox` are in
+`gray_image` pixel space. Guide values (`header_cut`, `footnote_line`, `page_number_height`) are
+ratios of the gray-image height.
+
+Regions are derived per page (`page_layout`): footnotes and the page number come from what was
+detected on that page; the book's guide lines are a manual fallback (D4) used only when the owner
+set them by hand and nothing was detected, and a page override always wins.
 """
 
 from __future__ import annotations
@@ -47,6 +52,8 @@ DEFAULT_GUIDES: dict[str, Any] = {
 }
 # A footnote line is proposed only when at least this fraction of the pages shows a rule.
 MIN_RULE_FRACTION = 0.4
+# Pixels added around a detected page number to form its region.
+PAGE_NUMBER_PAD = 6
 
 Spec = tuple[str, list[int]]
 
@@ -146,9 +153,9 @@ def preprocess_page(page: Page, manual: dict | None = None) -> Preprocess:
 
     `manual` may hold `angle`, `crop_box`, `sauvola_window`, `sauvola_k`, `nlm_h`; the pipeline
     detects the rest. Writes gray.png, bw.png, display.webp (≤ 1400 px wide) and thumb.webp
-    (≤ 240 px), the line boxes, footnote rule and flags, clears any earlier error and sets the
-    page status to `preprocessed` (an excluded page keeps `excluded`). Idempotent: files are
-    replaced in place.
+    (≤ 240 px), the line boxes, footnote rule / block, page-number box and flags, clears any
+    earlier error and sets the page status to `preprocessed` (an excluded page keeps
+    `excluded`). Idempotent: files are replaced in place.
     """
     gray = _load_original(page)
     overrides = {k: v for k, v in (manual or {}).items() if k in MANUAL_KEYS and v is not None}
@@ -173,11 +180,13 @@ def preprocess_page(page: Page, manual: dict | None = None) -> Preprocess:
     page.error_message = ""
     page.save(update_fields=["status", "error_from", "error_message", "attention_flags"])
     logger.info(
-        "preprocessed page %s: angle=%s lines=%s rule=%s flags=%s manual=%s",
+        "preprocessed page %s: angle=%s lines=%s rule=%s block=%s page_number=%s flags=%s manual=%s",
         page.pk,
         result.angle,
         result.n_lines,
         result.footnote_rule_y,
+        result.footnote_block_y,
+        result.page_number_box,
         result.flags,
         pre.is_manual,
     )
@@ -274,6 +283,8 @@ def preprocess_payload(page: Page, pre: Preprocess | None = None) -> dict:
                 "n_lines": pre.n_lines,
                 "median_line_height": pre.median_line_height,
                 "footnote_rule_y": pre.footnote_rule_y,
+                "footnote_block_y": pre.footnote_block_y,
+                "page_number_box": pre.page_number_box,
                 "edge_strips_removed": pre.edge_strips_removed or [],
                 "border_crop": pre.border_crop or [],
             },
@@ -330,12 +341,14 @@ def guides_stats(book: Book) -> GuideProposal:
 
 
 def propose_guides(book: Book) -> tuple[LayoutGuides, float]:
-    """Create or refresh the book's automatic guides from the preprocessed pages.
+    """Create or refresh the book's automatic guides from the preprocessed pages (display only).
 
     `footnote_line` is the median `footnote_rule_y / output_height` when at least 40% of the pages
     show a rule, else None; `header_cut` stays None (running-header detection is manual in Phase
-    2); the page-number zone is the bottom. Guides the user already set by hand are left alone.
-    Returns `(guides, confidence)` where confidence is the fraction of pages with a rule.
+    2). The proposal is shown on the guides screen as a starting point; automatic guides are never
+    applied to a page (`page_layout`), so processing never waits for them. Guides the user already
+    set by hand are left alone. Returns `(guides, confidence)` where confidence is the fraction of
+    pages with a rule.
     """
     stats = _rule_stats(book)
     guides, created = LayoutGuides.objects.get_or_create(book=book)
@@ -452,12 +465,22 @@ def clean_guides(data: Mapping | None, partial: bool = False) -> dict:
 # ---------------------------------------------------------------- regions
 
 
-def guide_regions(guides: Mapping, width: int, height: int) -> list[Spec]:
-    """Region specs `(kind, [x0, y0, x1, y1])` for a page of `width × height` from guide ratios.
+def guide_regions(
+    guides: Mapping,
+    width: int,
+    height: int,
+    footnote_y: int | None = None,
+    page_number_box: list[int] | None = None,
+) -> list[Spec]:
+    """Region specs `(kind, [x0, y0, x1, y1])` for a page of `width × height`.
 
-    Reading order top to bottom: page number (top zone), running header above `header_cut`, body,
-    footnote below `footnote_line`, page number (bottom zone). Empty slices are dropped; a
-    footnote line that is not strictly between the header and the page-number zone is ignored.
+    `guides` holds ratios (`header_cut`, `footnote_line`, `page_number_zone`, `page_number_height`).
+    `footnote_y` (pixels), when given, replaces the `footnote_line` ratio; `page_number_box`
+    (pixels), when given, replaces the page-number zone: the region is that box expanded by
+    `PAGE_NUMBER_PAD` and the body / footnote stop above (bottom number) or start below (top
+    number) it. Reading order top to bottom: page number (top), running header above
+    `header_cut`, body, footnote, page number (bottom). Empty slices are dropped; a footnote top
+    that is not strictly between the header and the page number is ignored.
     """
     w, h = int(width), int(height)
     if w <= 0 or h <= 0:
@@ -465,30 +488,119 @@ def guide_regions(guides: Mapping, width: int, height: int) -> list[Spec]:
     header = guides.get("header_cut")
     footnote = guides.get("footnote_line")
     zone = guides.get("page_number_zone") or "none"
-    pn_height = guides.get("page_number_height") or DEFAULT_GUIDES["page_number_height"]
-    pn = int(round(pn_height * h)) if zone in ("top", "bottom") else 0
     header_y = int(round(header * h)) if header is not None else 0
-    foot_y = int(round(footnote * h)) if footnote is not None else None
+    if footnote_y is not None:
+        foot_y: int | None = int(footnote_y)
+    else:
+        foot_y = int(round(footnote * h)) if footnote is not None else None
+
+    pn_top: list[int] | None = None
+    pn_bottom: list[int] | None = None
+    top, bottom = 0, h
+    if page_number_box:
+        pad = PAGE_NUMBER_PAD
+        x0, y0, x1, y1 = (int(v) for v in page_number_box[:4])
+        box = [max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)]
+        if (y0 + y1) / 2 < h / 2:
+            pn_top, top = box, box[3]
+        else:
+            pn_bottom, bottom = box, box[1]
+    elif zone in ("top", "bottom"):
+        pn_height = guides.get("page_number_height") or DEFAULT_GUIDES["page_number_height"]
+        pn = int(round(pn_height * h))
+        if pn > 0 and zone == "top":
+            pn_top, top = [0, 0, w, pn], pn
+        elif pn > 0:
+            pn_bottom, bottom = [0, h - pn, w, h], h - pn
 
     specs: list[Spec] = []
-    top, bottom = 0, h
-    if zone == "top" and pn > 0:
-        specs.append((Region.Kind.PAGE_NUMBER, [0, 0, w, pn]))
-        top = pn
+    if pn_top is not None:
+        specs.append((Region.Kind.PAGE_NUMBER, pn_top))
     if header_y > top:
         specs.append((Region.Kind.RUNNING_HEADER, [0, top, w, header_y]))
         top = header_y
-    if zone == "bottom" and pn > 0:
-        bottom = h - pn
     has_footnote = foot_y is not None and top < foot_y < bottom
     body_bottom = foot_y if has_footnote else bottom
     if body_bottom > top:
         specs.append((Region.Kind.BODY, [0, top, w, body_bottom]))
     if has_footnote:
         specs.append((Region.Kind.FOOTNOTE, [0, foot_y, w, bottom]))
-    if zone == "bottom" and pn > 0:
-        specs.append((Region.Kind.PAGE_NUMBER, [0, bottom, w, h]))
-    return [(str(kind), box) for kind, box in specs if box[3] > box[1]]
+    if pn_bottom is not None:
+        specs.append((Region.Kind.PAGE_NUMBER, pn_bottom))
+    return [(str(kind), box) for kind, box in specs if box[3] > box[1] and box[2] > box[0]]
+
+
+@dataclass(slots=True)
+class PageLayout:
+    """Where a page's footnotes and page number come from, resolved per page (see `page_layout`)."""
+
+    guides: dict
+    footnote_y: int | None
+    footnote_source: str
+    page_number_box: list[int] | None
+    page_number_source: str
+
+
+def page_layout(page: Page, pre: Preprocess) -> PageLayout:
+    """Resolve the footnote top and the page-number region of one page.
+
+    Footnote top, first match wins: the page override's `footnote_line` (an explicit null means
+    "no footnotes on this page"), the detected rule, the detected smaller-type block, the book's
+    `footnote_line` only when the book guides are manual, else none (the body runs to the bottom).
+    An automatically proposed book line is never applied to a page.
+
+    Page number: the page override's zone (`none` switches it off), else the detected box, else
+    the book's zone only when the book guides are manual, else none. The running-header cut comes
+    from the book guides and the page override as before.
+    """
+    book_guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    manual_book = book_guides is not None and book_guides.source == LayoutGuides.Source.MANUAL
+    values = effective_guides(page)
+    override = page.guides_override or {}
+    h = int(pre.output_height or 0)
+
+    footnote_y: int | None = None
+    if "footnote_line" in override:
+        ratio = override.get("footnote_line")
+        footnote_y = int(round(ratio * h)) if ratio is not None else None
+        footnote_source = "override" if ratio is not None else "none"
+    elif pre.footnote_rule_y is not None:
+        footnote_y, footnote_source = int(pre.footnote_rule_y), "rule"
+    elif pre.footnote_block_y is not None:
+        footnote_y, footnote_source = int(pre.footnote_block_y), "block"
+    elif manual_book and book_guides.footnote_line is not None:
+        footnote_y, footnote_source = int(round(book_guides.footnote_line * h)), "book"
+    else:
+        footnote_source = "none"
+
+    detected = (pre.page_number_box or {}).get("bbox") if isinstance(pre.page_number_box, dict) else None
+    box: list[int] | None = None
+    if "page_number_zone" in override:
+        zone = override.get("page_number_zone") or "none"
+        page_number_source = "override" if zone != "none" else "none"
+    elif detected:
+        zone, box, page_number_source = "none", [int(v) for v in detected], "detected"
+    elif manual_book and values.get("page_number_zone") in ("top", "bottom"):
+        zone, page_number_source = values["page_number_zone"], "book"
+    else:
+        zone, page_number_source = "none", "none"
+
+    resolved = dict(values)
+    resolved["footnote_line"] = None
+    resolved["page_number_zone"] = zone
+    return PageLayout(resolved, footnote_y, footnote_source, box, page_number_source)
+
+
+def page_region_specs(page: Page, pre: Preprocess) -> list[Spec]:
+    """Region specs of a page from `page_layout` (gray-image coordinates)."""
+    layout = page_layout(page, pre)
+    return guide_regions(
+        layout.guides,
+        pre.output_width,
+        pre.output_height,
+        footnote_y=layout.footnote_y,
+        page_number_box=layout.page_number_box,
+    )
 
 
 def _derive_regions(page: Page) -> tuple[list[Region], bool]:
@@ -501,7 +613,7 @@ def _derive_regions(page: Page) -> tuple[list[Region], bool]:
     pre = Preprocess.objects.filter(page=page).first()
     if pre is None or not pre.output_height:
         raise ProcessingError("لم تُعالَج الصفحة بعد؛ شغّل المعالجة الأولية قبل تخطيط الصفحة.")
-    specs = guide_regions(effective_guides(page), pre.output_width, pre.output_height)
+    specs = page_region_specs(page, pre)
     existing = list(page.regions.filter(source=Region.Source.GUIDES).order_by("order", "pk"))
     changed = [(r.kind, [int(v) for v in r.bbox]) for r in existing] != specs
 
@@ -532,7 +644,7 @@ def _derive_regions(page: Page) -> tuple[list[Region], bool]:
 
 
 def derive_regions(page: Page) -> list[Region]:
-    """Regions of a page from its effective guides (gray-image coordinates); status `layout_done`."""
+    """Regions of a page from its own detection and the manual guides (`page_layout`); `layout_done`."""
     regions, _changed = _derive_regions(page)
     return regions
 
@@ -639,8 +751,8 @@ def guides_context(book: Book, requested_page: str | None) -> dict:
     """Everything the guides screen renders: guide values, detection stats and the reference page.
 
     `config` feeds the Alpine component (guide ratios, the proposal, the reference page's detected
-    rule, line boxes and output size); `pages` lists every preprocessed page with whether a
-    footnote rule was detected on it.
+    footnote top (rule, else block), line boxes and output size); `pages` lists every preprocessed
+    page with whether a footnote rule, a footnote block and a page number were detected on it.
     """
     guides = LayoutGuides.objects.filter(book=book).first()
     stats = guides_stats(book)
@@ -649,14 +761,24 @@ def guides_context(book: Book, requested_page: str | None) -> dict:
 
     pre: Preprocess | None = reference.preprocess if reference is not None else None
     detected_rule = None
-    if pre is not None and pre.footnote_rule_y is not None and pre.output_height:
-        detected_rule = round(pre.footnote_rule_y / pre.output_height, 4)
+    if pre is not None and pre.output_height:
+        detected_y = pre.footnote_rule_y if pre.footnote_rule_y is not None else pre.footnote_block_y
+        if detected_y is not None:
+            detected_rule = round(detected_y / pre.output_height, 4)
 
-    pages = (
-        Preprocess.objects.filter(page__book=book, page__is_excluded=False, output_height__gt=0)
+    pages = [
+        {
+            "number": n,
+            "has_rule": rule is not None,
+            "has_block": block is not None,
+            "has_number": bool(number),
+        }
+        for n, rule, block, number in Preprocess.objects.filter(
+            page__book=book, page__is_excluded=False, output_height__gt=0
+        )
         .order_by("page__number")
-        .values_list("page__number", "footnote_rule_y")
-    )
+        .values_list("page__number", "footnote_rule_y", "footnote_block_y", "page_number_box")
+    ]
     config = {
         "header_cut": values["header_cut"],
         "footnote_line": values["footnote_line"],
@@ -675,6 +797,8 @@ def guides_context(book: Book, requested_page: str | None) -> dict:
         "proposal_percent": ratio_percent(stats.footnote_line),
         "reference": reference,
         "reference_image": pre.display_image.url if pre is not None and pre.display_image else "",
-        "pages": [{"number": n, "has_rule": rule is not None} for n, rule in pages],
+        "pages": pages,
+        "n_with_block": sum(1 for p in pages if p["has_block"] and not p["has_rule"]),
+        "n_with_number": sum(1 for p in pages if p["has_number"]),
         "zones": LayoutGuides.PageNumberZone.choices,
     }

@@ -5,12 +5,18 @@ stage can be unit-tested on synthetic pages. `run_pipeline` is the single entry 
 `processing.services`; the order of the steps is fixed and matches the PoC:
 
     dark borders → background flattening → denoise → skew (on the cleaned ink mask) → rotate
-    → edge strips (D18) → crop → text lines → footnote rule → Sauvola binarisation
+    → edge strips (D18) → crop → text lines → page number → footnote rule / footnote block
+    → Sauvola binarisation
 
 Conventions: grayscale images are 2-D `uint8` arrays (255 = paper); ink masks are `uint8`
 with 255 = ink. Boxes are `[x0, y0, x1, y1]` with exclusive upper bounds. `crop_box` and
-`edge_strips_removed` are in the coordinates of the rotated (still uncropped) image; line boxes
-and the footnote rule are in the coordinates of the cropped output (`gray_image` pixel space).
+`edge_strips_removed` are in the coordinates of the rotated (still uncropped) image; line boxes,
+the footnote rule / block and the page-number box are in the coordinates of the cropped output
+(`gray_image` pixel space).
+
+Footnotes and page numbers are detected per page: a separator rule (solid, dotted, dashed or
+short) or, without one, a block of smaller type at the bottom; a page number is a short, isolated
+first or last line. Nothing here is applied from other pages of the book.
 """
 
 from __future__ import annotations
@@ -43,6 +49,23 @@ STRIP_TEXT = "text"
 STRIP_ARTIFACT = "artifact"
 # A removed band counts as a scan-edge artifact only when its ink runs this share of the height.
 ARTIFACT_MIN_HEIGHT_FRAC = 0.25
+
+# Footnote rule: horizontal closing kernel and minimum width (of the text block).
+RULE_CLOSE_FRAC = 0.03
+RULE_MIN_WIDTH_FRAC = 0.12
+# Footnote block without a rule: smaller type at the bottom of the page.
+BLOCK_MAX_SIZE_RATIO = 0.8
+BLOCK_MIN_LINES = 2
+BLOCK_MIN_GAP_PITCH = 1.2
+BLOCK_LOWER_FRAC = 0.45
+# Page number: a short isolated first/last line near the top or bottom edge.
+PN_MAX_WIDTH_FRAC = 0.15
+PN_MAX_HEIGHT_RATIO = 1.4
+PN_MIN_GAP_RATIO = 0.8
+PN_TOP_FRAC = 0.12
+PN_BOTTOM_FRAC = 0.15
+# Candidate rows beyond the text are split where the ink leaves this many type sizes of gap.
+CLUSTER_GAP_RATIO = 3.0
 
 
 @dataclass(slots=True)
@@ -92,6 +115,8 @@ class PreprocessResult:
     median_line_height: float
     n_lines: int
     footnote_rule_y: int | None
+    footnote_block_y: int | None
+    page_number_box: dict | None
     edge_strips_removed: list[dict]
     flags: list[str]
     auto_params: dict = field(default_factory=dict)
@@ -305,38 +330,308 @@ def detect_lines(ink: np.ndarray) -> tuple[list[LineBox], float]:
     return lines, round(med, 1)
 
 
-def detect_footnote_rule(gray: np.ndarray, lines: list[LineBox], med_h: float) -> int | None:
+def _text_block_width(lines: list[LineBox], fallback: int) -> int:
+    """Width of the text block spanned by `lines` (`fallback` when there are none)."""
+    if not lines:
+        return int(fallback)
+    return int(max(ln["x1"] for ln in lines) - min(ln["x0"] for ln in lines)) or int(fallback)
+
+
+def detect_footnote_rule(
+    gray: np.ndarray, lines: list[LineBox], med_h: float, extra_rows: list[LineBox] | None = None
+) -> int | None:
     """y of a footnote separator rule in `gray`, or None.
 
     Connected components of the raw Otsu ink mask (not the speck-cleaned one) after a horizontal
-    closing that bridges dotted rules. A rule is a component in the lower 60% of the page that is
-    at least 18% of the width wide and thin: its mean stroke thickness (area / width) is a few
-    pixels, while a closed text line is ~0.7 × the line height thick. Text lines must exist both
-    above and below. The widest candidate wins.
+    closing of about 3% of the width, which bridges the gaps of dotted and dashed rules. A rule is
+    a component in the lower 60% of the page that is at least 12% of the text-block width wide
+    (short rules at the start of the line count) and thin: its mean stroke thickness
+    (area / width) is a few pixels, while a closed text line is ~0.7 × the line height thick.
+    Text lines must exist both above and below; `extra_rows` (short rows that `detect_lines`
+    dropped, such as a single short footnote, without the page number) count for that check but
+    not for the text-block width. The widest candidate wins.
     """
     h, w = gray.shape
     if h == 0 or w == 0:
         return None
     _, ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    kx = max(15, int(0.02 * w)) | 1
+    kx = max(15, int(RULE_CLOSE_FRAC * w)) | 1
     closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1)))
     n, _, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
-    max_thickness = max(3.0, 0.25 * med_h) if med_h else 3.0
+    max_thickness = max(3.0, 0.3 * med_h) if med_h else 3.0
+    min_width = max(20, int(RULE_MIN_WIDTH_FRAC * _text_block_width(lines, w)))
+    text = list(lines) + list(extra_rows or [])
     best = None
     for i in range(1, n):
         x, y, cw, ch, area = (int(v) for v in stats[i])
-        if cw < 0.18 * w or y < 0.4 * h or ch > max(12, 0.06 * h):
+        if cw < min_width or y < 0.4 * h or ch > max(12, 0.06 * h):
             continue
         if area / cw > max_thickness:
             continue
         y0, y1 = y, y + ch
-        below = [ln for ln in lines if ln["y0"] >= y1 - 2]
-        above = [ln for ln in lines if ln["y1"] <= y0 + 2]
+        below = [ln for ln in text if ln["y0"] >= y1 - 2]
+        above = [ln for ln in text if ln["y1"] <= y0 + 2]
         if not (below and above) or y1 >= 0.97 * h:
             continue
         if best is None or cw > best[1]:
             best = ((y0 + y1) // 2, cw)
     return None if best is None else int(best[0])
+
+
+def measure_line_sizes(ink: np.ndarray, lines: list[LineBox]) -> list[LineBox]:
+    """Copies of `lines` with a `size` key: the type size of each line, from its glyphs.
+
+    The projection-profile boxes of `detect_lines` only cover the dense core of a line, whose
+    height barely changes with the type size; the 75th percentile of the heights of the connected
+    components whose centre lies nearest to a line (within half a line pitch) follows the type
+    size, so smaller footnote type shows up. A line without components keeps its box height.
+    """
+    out = [dict(ln) for ln in lines]
+    if not lines:
+        return out
+    centres = np.array([(ln["y0"] + ln["y1"]) / 2 for ln in lines], dtype=np.float32)
+    if len(lines) > 1:
+        pitch = float(np.median(np.diff(centres)))
+    else:
+        pitch = 3.0 * float(lines[0]["y1"] - lines[0]["y0"])
+    n, _, stats, _ = cv2.connectedComponentsWithStats((ink > 0).astype(np.uint8), connectivity=8)
+    heights: list[list[int]] = [[] for _ in lines]
+    for i in range(1, n):
+        cy = stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] / 2
+        j = int(np.argmin(np.abs(centres - cy)))
+        if abs(centres[j] - cy) < 0.5 * pitch:
+            heights[j].append(int(stats[i, cv2.CC_STAT_HEIGHT]))
+    for ln, hs in zip(out, heights, strict=True):
+        ln["size"] = int(round(float(np.percentile(hs, 75)))) if hs else int(ln["y1"] - ln["y0"])
+    return out
+
+
+def _line_size(ln: LineBox) -> float:
+    return float(ln.get("size", ln["y1"] - ln["y0"]))
+
+
+def median_line_size(lines: list[LineBox]) -> float:
+    """Median `size` (type size) of `lines`, falling back to the box heights; 0 without lines."""
+    return float(np.median([_line_size(ln) for ln in lines])) if lines else 0.0
+
+
+def detect_footnote_block(lines: list[LineBox], median_h: float, height: int) -> int | None:
+    """Top y of a block of smaller type at the bottom of the page (footnotes without a rule), or None.
+
+    Scanning from the last line upwards, the block is the run of lines whose height (their
+    `size` when `measure_line_sizes` set it, else the box height) is at most 0.8 × the body
+    median `median_h`. It counts when it has at least two lines, is separated from the line above
+    by a gap of at least 1.2 × the median line pitch and starts in the lower 45% of the page.
+    Returns the block top minus a small pad (never above the previous line). The page number, if
+    one was found, must already be removed from `lines`.
+    """
+    if len(lines) < 3 or not median_h or height <= 0:
+        return None
+    ordered = sorted(lines, key=lambda ln: ln["y0"])
+    pitch = float(np.median(np.diff([ln["y0"] for ln in ordered])))
+    limit = BLOCK_MAX_SIZE_RATIO * median_h
+    i = len(ordered)
+    while i > 0 and _line_size(ordered[i - 1]) <= limit:
+        i -= 1
+    block = ordered[i:]
+    if len(block) < BLOCK_MIN_LINES or i == 0:
+        return None
+    top, above = block[0], ordered[i - 1]
+    if top["y0"] - above["y1"] < BLOCK_MIN_GAP_PITCH * pitch:
+        return None
+    if top["y0"] < (1.0 - BLOCK_LOWER_FRAC) * height:
+        return None
+    pad = max(2, int(round(0.5 * median_h)))
+    return int(max(above["y1"] + 1, top["y0"] - pad))
+
+
+def text_rows(ink: np.ndarray, type_size: float) -> list[LineBox]:
+    """Every horizontal band that holds glyph-sized ink (a low-threshold profile), merged over small gaps.
+
+    Unlike `detect_lines` this keeps short, sparse rows such as a centred page number; it is only
+    used to look for such rows beyond the detected lines. Components taller than three type sizes
+    (page borders, fold lines, scan-edge slivers) are ignored so they do not join every row into
+    one. A band is split where its ink leaves a horizontal gap of more than three type sizes, so a
+    number in a corner is not joined to a margin note or a stamp at the other end of the row.
+    Each row carries its `area` (ink pixels), `glyph_w`: the extent of the columns that hold a
+    glyph-high stroke, which leaves out the dashes of «— ٨ —», and `glyphs`: how many
+    digit-shaped components (at least 0.3 type size high, at most 1.5 type sizes wide) it
+    holds, which a scan-edge smear or a stain does not.
+    """
+    h, w = ink.shape
+    if h == 0 or w == 0 or not type_size:
+        return []
+    n, labels, stats, _ = cv2.connectedComponentsWithStats((ink > 0).astype(np.uint8), connectivity=8)
+    keep = np.zeros(n, dtype=bool)
+    keep[1:] = stats[1:, cv2.CC_STAT_HEIGHT] <= 3 * type_size
+    mask = keep[labels]
+    prof = mask.sum(axis=1)
+    merge_gap = max(2.0, 0.25 * type_size)
+    merged: list[list[int]] = []
+    for a, b in _runs(prof >= 2):
+        if merged and a - merged[-1][1] < merge_gap:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    stroke = max(2, int(round(0.25 * type_size)))
+    centres = stats[:, cv2.CC_STAT_TOP] + stats[:, cv2.CC_STAT_HEIGHT] / 2
+    glyph_like = (
+        keep
+        & (stats[:, cv2.CC_STAT_HEIGHT] >= 0.3 * type_size)
+        & (stats[:, cv2.CC_STAT_WIDTH] <= 1.5 * type_size)
+    )
+    lefts = stats[:, cv2.CC_STAT_LEFT]
+    split_gap = CLUSTER_GAP_RATIO * type_size
+    rows: list[LineBox] = []
+    for a, b in merged:
+        band = mask[a:b]
+        col_all = band.sum(axis=0)
+        in_band = glyph_like & (centres >= a) & (centres < b)
+        for c0, c1 in _clusters(np.where(col_all > 0)[0], split_gap):
+            # the cluster's own vertical runs: ink elsewhere in the band (a tall mark) must not
+            # stretch a small number up to the specks under the last line
+            for r0, r1 in _clusters(np.where(band[:, c0:c1].any(axis=1))[0], merge_gap):
+                sub = band[r0:r1]
+                cols = np.where(sub.any(axis=0))[0]
+                cols = cols[(cols >= c0) & (cols < c1)]
+                if cols.size == 0:
+                    continue
+                x0, x1 = int(cols[0]), int(cols[-1]) + 1
+                col = sub[:, x0:x1].sum(axis=0)
+                tall = np.where(col >= stroke)[0]
+                glyph_w = int(tall[-1] - tall[0] + 1) if tall.size else int(x1 - x0)
+                ya, yb = a + r0, a + r1
+                inside = in_band & (lefts >= x0) & (lefts < x1) & (centres >= ya) & (centres < yb)
+                rows.append(
+                    {
+                        "x0": x0,
+                        "y0": int(ya),
+                        "x1": x1,
+                        "y1": int(yb),
+                        "area": int(col.sum()),
+                        "glyph_w": glyph_w,
+                        "glyphs": int(inside.sum()),
+                    }
+                )
+    return rows
+
+
+def _clusters(idx: np.ndarray, gap: float) -> list[tuple[int, int]]:
+    """Runs `(start, end_exclusive)` of the sorted indices `idx`, split where they jump by more than `gap`."""
+    if idx.size == 0:
+        return []
+    breaks = np.where(np.diff(idx) > gap)[0]
+    starts = [int(idx[0])] + [int(idx[i + 1]) for i in breaks]
+    ends = [int(idx[i]) + 1 for i in breaks] + [int(idx[-1]) + 1]
+    return list(zip(starts, ends, strict=True))
+
+
+def page_number_candidates(ink: np.ndarray, lines: list[LineBox], type_size: float) -> list[LineBox]:
+    """`lines` plus the ink rows above the first and below the last detected line, in page order.
+
+    `detect_lines` drops rows whose profile is weak, which is exactly what a short page number
+    such as «— ٨ —» is; this adds them back for `detect_page_number` (the stored line boxes stay
+    as they are). `type_size` is `median_line_size` of the page.
+    """
+    if not lines:
+        return []
+    return sorted([dict(ln) for ln in lines] + edge_rows(ink, lines, type_size), key=lambda ln: ln["y0"])
+
+
+def edge_rows(ink: np.ndarray, lines: list[LineBox], type_size: float) -> list[LineBox]:
+    """`text_rows` of the page strips above the first and below the last detected line.
+
+    Each strip is scanned on its own, so ink that touches the outermost line (a stray dot, a
+    handwritten mark) cannot join a page number to that line. Boxes are in page coordinates.
+    """
+    if not lines:
+        return []
+    first = min(ln["y0"] for ln in lines)
+    last = max(ln["y1"] for ln in lines)
+    rows = text_rows(ink[:first], type_size)
+    for r in text_rows(ink[last:], type_size):
+        rows.append({**r, "y0": r["y0"] + last, "y1": r["y1"] + last})
+    return rows
+
+
+def _is_page_number(ln: LineBox, block_w: int, median_h: float) -> bool:
+    """Shape test of a page-number line: short, not taller than type, not a solid blob, not a speck."""
+    lw, lh = ln["x1"] - ln["x0"], ln["y1"] - ln["y0"]
+    if ln.get("glyph_w", lw) > PN_MAX_WIDTH_FRAC * block_w:
+        return False
+    if lh > PN_MAX_HEIGHT_RATIO * median_h or lh < 0.3 * median_h:
+        return False
+    if ln.get("glyphs", 1) < 1:  # a smear or a lone dash: no digit-shaped component
+        return False
+    area = ln.get("area")
+    # a filled blob (a punched hole, a stain) is not a number; digits and dashes are sparse
+    return area is None or area / max(1, lw * lh) < 0.6
+
+
+def _is_text_line(ln: LineBox, block_w: int, median_h: float) -> bool:
+    """A full text line: stops the walk from the page edge (nothing beyond it is a page number)."""
+    return (ln["x1"] - ln["x0"]) >= 0.5 * block_w and (ln["y1"] - ln["y0"]) >= 0.5 * median_h
+
+
+def detect_page_number(lines: list[LineBox], width: int, height: int, median_h: float) -> dict | None:
+    """The printed page number: `{"bbox": [x0, y0, x1, y1], "position": "top"|"bottom"}` or None.
+
+    Candidate is the last line (bottom, checked first) or the first line (top): short (at most 15%
+    of the text-block width), not taller than 1.4 × `median_h`, separated from its neighbour
+    towards the text by at least 0.8 × `median_h`, and inside the bottom 15% / top 12% of the
+    page. Walking in from the page edge, specks and scan-edge smears (rows that are neither a
+    page number nor a full text line) are skipped; the first full text line ends the search.
+    """
+    if not lines or not median_h or height <= 0:
+        return None
+    ordered = sorted(lines, key=lambda ln: ln["y0"])
+    text_lines = [ln for ln in ordered if _is_text_line(ln, width, median_h)]
+    block_w = _text_block_width(text_lines or ordered, width)
+    gap_min = PN_MIN_GAP_RATIO * median_h
+
+    def search(indices: list[int], position: str) -> dict | None:
+        for k, i in enumerate(indices):
+            ln = ordered[i]
+            in_zone = (
+                ln["y0"] >= (1.0 - PN_BOTTOM_FRAC) * height
+                if position == "bottom"
+                else ln["y1"] <= PN_TOP_FRAC * height
+            )
+            if not in_zone or _is_text_line(ln, block_w, median_h):
+                return None
+            if _is_page_number(ln, block_w, median_h):
+                # the neighbour towards the text: the next row that does not share ln's band
+                beyond = [
+                    ordered[j]
+                    for j in indices[k + 1 :]
+                    if ordered[j]["y1"] <= ln["y0"] or ordered[j]["y0"] >= ln["y1"]
+                ]
+                if not beyond:
+                    return None
+                neighbour = beyond[0]
+                gap = ln["y0"] - neighbour["y1"] if position == "bottom" else neighbour["y0"] - ln["y1"]
+                if gap >= gap_min:
+                    bbox = [int(ln["x0"]), int(ln["y0"]), int(ln["x1"]), int(ln["y1"])]
+                    return {"bbox": bbox, "position": position}
+        return None
+
+    idx = list(range(len(ordered)))
+    return search(idx[::-1], "bottom") or search(idx, "top")
+
+
+def _is_short_text_row(row: LineBox, lines: list[LineBox], type_size: float) -> bool:
+    """A row beyond the detected lines that is text (a short last line), not a number or a speck."""
+    width = row["x1"] - row["x0"]
+    height = row["y1"] - row["y0"]
+    return (
+        width > PN_MAX_WIDTH_FRAC * _text_block_width(lines, width)
+        and row.get("glyphs", 0) >= 3
+        and 0.5 * type_size <= height <= 3 * type_size
+    )
+
+
+def _overlaps(ln: LineBox, box: Box) -> bool:
+    return ln["y0"] < box[3] and ln["y1"] > box[1] and ln["x0"] < box[2] and ln["x1"] > box[0]
 
 
 def binarize_sauvola(gray: np.ndarray, window: int, k: float) -> np.ndarray:
@@ -493,7 +788,19 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
     ink_c = ink[y0:y1, x0:x1]
 
     lines, med_h = detect_lines(ink_c)
-    rule_y = detect_footnote_rule(gray_c, lines, med_h)
+    sized = measure_line_sizes(ink_c, lines)
+    type_size = median_line_size(sized)
+    candidates = page_number_candidates(ink_c, lines, type_size)
+    page_number = detect_page_number(candidates, gray_c.shape[1], gray_c.shape[0], type_size)
+    pn_box = page_number["bbox"] if page_number else None
+    short_text = [
+        r
+        for r in candidates
+        if "glyphs" in r and _is_short_text_row(r, lines, type_size) and not (pn_box and _overlaps(r, pn_box))
+    ]
+    rule_y = detect_footnote_rule(gray_c, lines, med_h, extra_rows=short_text)
+    body_lines = [ln for ln in sized if not (pn_box and _overlaps(ln, pn_box))]
+    block_y = None if rule_y is not None else detect_footnote_block(body_lines, type_size, gray_c.shape[0])
 
     auto_window = sauvola_window_for(med_h)
     window = _odd(p.sauvola_window) if p.sauvola_window else auto_window
@@ -538,6 +845,8 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
         median_line_height=float(med_h),
         n_lines=len(lines),
         footnote_rule_y=rule_y,
+        footnote_block_y=block_y,
+        page_number_box=page_number,
         edge_strips_removed=strips,
         flags=flags,
         auto_params=auto_params,

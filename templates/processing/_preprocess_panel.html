@@ -1,7 +1,7 @@
 {% load processing_tags %}
-{# Preprocessing controls for the page-detail side panel. Context: `page`, `book`.
-   After a re-run the component sets `src` on every element with `data-page-image="display|gray|bw|thumb"`
-   and dispatches `nassakh:page-updated` on `window` with {pageId, images, output, regions, status, flags}. #}
+{% comment %}Preprocessing controls for the page-detail side panel. Context: `page`, `book`.
+After a re-run the component sets `src` on every element with `data-page-image="display|gray|bw|thumb"`
+and dispatches `nassakh:page-updated` on `window` with {pageId, images, output, regions, status, flags}.{% endcomment %}
 {% if page %}
 {% preprocess_panel_config page "preprocess-config" %}
 <section class="pp-panel" x-data="preprocessPanel(JSON.parse(document.getElementById('preprocess-config').textContent))" aria-labelledby="pp-title">

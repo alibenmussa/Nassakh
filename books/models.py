@@ -200,6 +200,8 @@ class Page(models.Model):
 
     text_layer_text = models.TextField("نص الطبقة النصية", blank=True)
     guides_override = models.JSONField("أدلة خاصة بالصفحة", null=True, blank=True)
+    # The number printed on the page (Western digits), read by OCR; metadata only, never in the text.
+    printed_number = models.CharField("الرقم المطبوع", max_length=20, blank=True)
 
     provisional_text = models.TextField("النص المبدئي", blank=True)
     final_text = models.TextField("النص النهائي", blank=True)

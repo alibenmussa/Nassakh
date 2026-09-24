@@ -1,6 +1,7 @@
 """Preprocessing results, book-level layout guides and the regions derived from them.
 
-All coordinates (`line_boxes`, `footnote_rule_y`, `Region.bbox`) are in gray-image pixel space.
+All coordinates (`line_boxes`, `footnote_rule_y`, `footnote_block_y`, `page_number_box`, `Region.bbox`)
+are in gray-image pixel space.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ class Preprocess(models.Model):
     median_line_height = models.FloatField("ارتفاع السطر الوسيط", default=0)
     n_lines = models.PositiveIntegerField("عدد الأسطر", default=0)
     footnote_rule_y = models.IntegerField("موضع خط الحاشية", null=True, blank=True)
+    footnote_block_y = models.IntegerField("بداية كتلة الحاشية", null=True, blank=True)
+    page_number_box = models.JSONField("موضع رقم الصفحة المكتشف", null=True, blank=True)
     edge_strips_removed = models.JSONField("أشرطة الحافة المُزالة", default=list, blank=True)
 
     created_at = models.DateTimeField("أُنشئت في", auto_now_add=True)
@@ -55,7 +58,12 @@ class Preprocess(models.Model):
 
 
 class LayoutGuides(models.Model):
-    """Book-level guide lines (ratios of the gray image height) applied to every page."""
+    """Book-level guide lines (ratios of the gray image height).
+
+    Footnotes and page numbers are detected per page; the book's footnote line and page-number
+    zone are a manual fallback, applied only when `source` is `manual` and nothing was detected on
+    the page. The running-header cut is always manual.
+    """
 
     class PageNumberZone(models.TextChoices):
         NONE = "none", "بدون"

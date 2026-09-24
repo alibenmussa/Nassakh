@@ -441,7 +441,7 @@ def start_processing(book: Book) -> None:
     if book.status in ACTIVE_BOOK_STATUSES:
         raise ValueError("المعالجة جارية بالفعل.")
     if book.status == Book.Status.NEEDS_GUIDES:
-        raise ValueError("اضبط الأدلة أولًا ثم طبّقها على كل الصفحات لتستكمل المعالجة.")
+        raise ValueError("هذا الكتاب متوقف من إصدار سابق. استخدم «إعادة التشغيل» من مرحلة التخطيط لمتابعته.")
     if book.status not in (Book.Status.UPLOADED, Book.Status.ERROR):
         raise ValueError("انتهت معالجة هذا الكتاب. استخدم «إعادة التشغيل» لإعادة مرحلة معيّنة.")
     if not book.source_pdf:
@@ -551,13 +551,11 @@ def _refresh_started_book(book: Book) -> None:
 def validate_rerun(book: Book, stage: str) -> None:
     """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage`.
 
-    A book waiting for its guides is not re-run from preprocessing: that would skip the guides
-    proposal and the `needs_guides` stop, so layout would run on unconfirmed guides.
+    Every stage can be re-run, including on a book that an earlier version parked in
+    `needs_guides` (regions are now derived per page, so nothing waits for the guides).
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
-    if book.status == Book.Status.NEEDS_GUIDES:
-        raise ValueError("اضبط الأدلة أولًا ثم طبّقها على كل الصفحات لتستكمل المعالجة.")
 
 
 def rerun_book(book: Book, stage: str) -> int:
@@ -710,8 +708,38 @@ def _preprocess_of(page: Page):
         return None
 
 
-def page_tile(page: Page) -> dict:
-    """One thumbnail tile of the dashboard grid (also the per-page item of the progress API)."""
+def page_sequence_issues(book: Book) -> dict[int, str]:
+    """Printed page numbers that do not follow the scan order: `{page_id: Arabic label}`.
+
+    Only non-excluded pages with a `printed_number` take part. Of two consecutive numbered pages
+    (in scan order) the later number must be larger by at least 1 and at most the number of
+    scan positions between them, so pages whose number was not read (or unnumbered plates) do
+    not raise a false gap. A repeated number is a duplicate scan, any other difference a missing
+    (or misplaced) scan; the later page of the pair carries the label. Digits in the labels are
+    Western (D6).
+    """
+    rows = book.pages.filter(is_excluded=False).order_by("number").values_list("pk", "printed_number")
+    issues: dict[int, str] = {}
+    previous: tuple[int, int] | None = None  # (position, printed number)
+    for position, (page_id, printed) in enumerate(rows):
+        if not printed or not printed.isdigit():
+            continue
+        current = int(printed)
+        if previous is not None:
+            prev_pos, prev_num = previous
+            if current == prev_num:
+                issues[page_id] = f"ترقيم مكرّر: بعد {prev_num} جاءت {current} مرة أخرى"
+            elif not prev_num < current <= prev_num + (position - prev_pos):
+                issues[page_id] = f"ترقيم غير متسلسل: بعد {prev_num} جاءت {current}"
+        previous = (position, current)
+    return issues
+
+
+def page_tile(page: Page, sequence_issue: str = "") -> dict:
+    """One thumbnail tile of the dashboard grid (also the per-page item of the progress API).
+
+    `sequence_issue` is the page's label from `page_sequence_issues` ('' when in order).
+    """
     preprocess = _preprocess_of(page)
     failed = page.status == Page.Status.ERROR
     retry_stage = page.error_from if failed and page.error_from in STAGES else ""
@@ -725,6 +753,8 @@ def page_tile(page: Page) -> dict:
         "flags": list(page.attention_flags or []),
         "flag_labels": [item["label"] for item in flag_items(page.attention_flags)],
         "n_flags": len(page.attention_flags or []),
+        "printed_number": page.printed_number,
+        "sequence_issue": sequence_issue,
         "is_excluded": page.is_excluded,
         "error": page.status == Page.Status.ERROR,
         "error_headline": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
@@ -753,20 +783,23 @@ _TILE_DEFERRED: tuple[str, ...] = (
 def page_tiles(book: Book) -> list[dict]:
     """Tiles for every page of the book in order (excluded pages included, marked)."""
     pages = book.pages.select_related("preprocess").defer(*_TILE_DEFERRED).order_by("number")
-    return [page_tile(page) for page in pages]
+    issues = page_sequence_issues(book)
+    return [page_tile(page, issues.get(page.pk, "")) for page in pages]
 
 
 def attention_pages(book: Book) -> list[dict]:
-    """Non-excluded pages that carry attention flags or are in error, for the dashboard list."""
+    """Non-excluded pages with attention flags, an error or a page-numbering issue, for the dashboard."""
     items = []
+    issues = page_sequence_issues(book)
     pages = book.pages.filter(is_excluded=False).defer(*_TILE_DEFERRED[:4]).order_by("number")
     for page in pages:
-        if not page.attention_flags and page.status != Page.Status.ERROR:
+        if not page.attention_flags and page.status != Page.Status.ERROR and page.pk not in issues:
             continue
         items.append(
             {
                 "page": page,
                 "flags": flag_items(page.attention_flags),
+                "sequence_issue": issues.get(page.pk, ""),
                 "error": page.status == Page.Status.ERROR,
                 "error_headline": _headline(page.error_message),
                 "url": reverse("books:page_detail", args=[book.pk, page.number]),
@@ -877,6 +910,7 @@ def page_status(page: Page) -> dict:
         "final_text": page.final_text,
         "flags": list(page.attention_flags or []),
         "flag_labels": [item["label"] for item in flag_items(page.attention_flags)],
+        "printed_number": page.printed_number,
         "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
         "error_detail": _detail(page.error_message) if page.status == Page.Status.ERROR else "",
         "error_from": page.error_from if page.status == Page.Status.ERROR else "",

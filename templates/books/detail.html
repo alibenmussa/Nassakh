@@ -163,6 +163,9 @@
                 </form>
               </template>
               {% endif %}
+              <template x-if="item.sequence_issue">
+                <span class="badge badge-warning num" x-text="item.sequence_issue"></span>
+              </template>
               <template x-for="label in item.flag_labels" :key="label">
                 <span class="badge badge-warning" x-text="label"></span>
               </template>

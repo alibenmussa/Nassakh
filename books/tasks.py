@@ -63,9 +63,10 @@ def ingest_book_task(self, book_id: int) -> int:
 def after_preprocess(self, results, book_id: int) -> int:
     """Chord callback once every page is preprocessed.
 
-    Proposes layout guides when the book has none (`processing.services.propose_guides`). A low
-    confidence parks the book in `needs_guides` for the guides screen; otherwise the book moves to
-    `ocr` and every preprocessed page gets the chain layout → ocr_fast → ocr_full.
+    Proposes layout guides when the book has none (`processing.services.propose_guides`; the
+    proposal is only shown on the guides screen), then moves the book to `ocr` and gives every
+    preprocessed page the chain layout → ocr_fast → ocr_full. Footnotes and page numbers are
+    detected per page, so the book never waits for guides (`needs_guides` is not set here).
     """
     book = Book.objects.get(pk=book_id)
     if not book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED).exists():
@@ -73,15 +74,10 @@ def after_preprocess(self, results, book_id: int) -> int:
         return book_id
 
     if not services.has_guides(book):
-        # Below MIN_RULE_FRACTION of pages with a detected footnote rule the proposal is not trusted.
-        from processing.services import MIN_RULE_FRACTION, propose_guides
+        from processing.services import propose_guides
 
         _guides, confidence = propose_guides(book)
-        log.info("book %s: guides proposed with confidence %.2f", book_id, confidence)
-        if confidence < MIN_RULE_FRACTION:
-            book.status = Book.Status.NEEDS_GUIDES
-            book.save(update_fields=["status", "updated_at"])
-            return book_id
+        log.info("book %s: guides proposed with confidence %.2f (display only)", book_id, confidence)
 
     _enqueue_layout(book)
     return book_id

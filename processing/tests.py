@@ -78,8 +78,18 @@ def render_page(
     footnote_lines: int = 0,
     strip: str | None = None,
     angle: float = 0.0,
+    rule_style: str = "solid",
+    rule_frac: float = 0.45,
+    footnote_scale: float = 0.75,
+    page_number: str | None = None,
+    page_number_at: str = "bottom",
 ) -> np.ndarray:
-    """A white page with text lines; optional footnote rule, facing-page strip and rotation."""
+    """A white page with text lines; optional footnote rule / block, page number, strip and rotation.
+
+    `rule_style` is solid, dotted or dashed; `rule_frac` its length as a share of the text width.
+    With `footnote_lines` and no `rule_y`, the smaller-type footnote block starts two line pitches
+    below the body. `page_number_at` is `bottom` (centred) or `top` (at the right margin).
+    """
     img = Image.new("L", (width, height), 255)
     draw = ImageDraw.Draw(img)
     font, arabic = _font(font_size)
@@ -90,14 +100,27 @@ def render_page(
         draw.text((margin, y), _line_text(words, font, text_width, i * 3), font=font, fill=0)
         y += line_gap
     if rule_y is not None:
-        # footnote rule on the start side of an RTL page (right), a third of the text width
+        # footnote rule on the start side of an RTL page (right)
         x1 = width - margin
-        draw.line([(x1 - int(text_width * 0.45), rule_y), (x1, rule_y)], fill=0, width=3)
-        small, _ = _font(int(font_size * 0.75))
-        fy = rule_y + 24
+        x0 = x1 - int(text_width * rule_frac)
+        if rule_style == "solid":
+            draw.line([(x0, rule_y), (x1, rule_y)], fill=0, width=3)
+        else:
+            dash, gap = (3, 5) if rule_style == "dotted" else (12, 8)
+            for x in range(x0, x1, dash + gap):
+                draw.rectangle([x, rule_y - 1, min(x + dash, x1), rule_y + 1], fill=0)
+    if footnote_lines:
+        small, _ = _font(int(font_size * footnote_scale))
+        fy = rule_y + 24 if rule_y is not None else y + line_gap
         for i in range(footnote_lines):
             draw.text((margin, fy), _line_text(words, small, text_width, 7 + i * 2), font=small, fill=0)
-            fy += int(line_gap * 0.8)
+            fy += int(line_gap * footnote_scale)
+    if page_number:
+        tw = int(font.getlength(page_number))
+        if page_number_at == "bottom":
+            draw.text(((width - tw) // 2, height - 90), page_number, font=font, fill=0)
+        else:
+            draw.text((width - margin - tw, 40), page_number, font=font, fill=0)
     if strip:
         # a column of glyph fragments from the neighbouring page, 20 px from the scan edge
         glyph = "ك" if arabic else "k"
@@ -170,6 +193,98 @@ def test_pipeline_detects_a_drawn_footnote_rule():
     # footnote_rule_y is in the cropped output; add the crop offset to compare with the drawing
     assert abs(result.footnote_rule_y + result.crop_box[1] - rule_y) <= 6
     assert result.n_lines >= 16  # body lines + footnote lines; the rule itself is not a line
+
+
+@pytest.mark.parametrize(
+    ("style", "frac"), [("solid", 0.45), ("dotted", 0.45), ("dashed", 0.45), ("solid", 0.15)]
+)
+def test_pipeline_detects_solid_dotted_dashed_and_short_rules(style, frac):
+    rule_y = 820
+    gray = render_page(n_lines=14, rule_y=rule_y, footnote_lines=3, rule_style=style, rule_frac=frac)
+    result = pipeline.run_pipeline(gray)
+    assert result.footnote_rule_y is not None, style
+    assert abs(result.footnote_rule_y + result.crop_box[1] - rule_y) <= 6
+    assert result.footnote_block_y is None  # the rule wins; no block fallback
+
+
+def test_pipeline_page_without_footnotes_has_neither_rule_nor_block():
+    result = pipeline.run_pipeline(render_page(n_lines=20))
+    assert result.footnote_rule_y is None and result.footnote_block_y is None
+
+
+def test_pipeline_detects_a_smaller_type_block_without_a_rule():
+    gray = render_page(n_lines=14, footnote_lines=3, footnote_scale=0.6)
+    result = pipeline.run_pipeline(gray)
+    assert result.footnote_rule_y is None
+    assert result.footnote_block_y is not None
+    body_bottom = 120 + 13 * 44 + 26  # last body line of the drawing (text origin + font size)
+    block_top = 120 + 15 * 44  # text origin of the first footnote line
+    y = result.footnote_block_y + result.crop_box[1]  # back to page coordinates
+    assert body_bottom <= y <= block_top + 22  # between the body and the first footnote glyphs
+
+
+def test_detect_footnote_block_needs_two_small_lines_a_gap_and_the_lower_page():
+    body = [{"x0": 0, "y0": 100 + 50 * i, "x1": 800, "y1": 125 + 50 * i, "size": 25} for i in range(14)]
+    small = [{"x0": 0, "y0": 900 + 30 * i, "x1": 800, "y1": 915 + 30 * i, "size": 15} for i in range(2)]
+    y = pipeline.detect_footnote_block(body + small, 25, 1200)
+    assert y is not None and body[-1]["y1"] < y <= 900
+    assert pipeline.detect_footnote_block(body + small[:1], 25, 1200) is None  # one line only
+    close = [dict(ln, y0=ln["y0"] - 130, y1=ln["y1"] - 130) for ln in small]  # no gap above
+    assert pipeline.detect_footnote_block(body[:-1] + close, 25, 1200) is None
+    assert pipeline.detect_footnote_block(body + small, 25, 3000) is None  # not in the lower 45%
+
+
+@pytest.mark.parametrize(("text", "at"), [("— ٢٢ —", "bottom"), ("٢٢", "top")])
+def test_pipeline_detects_the_page_number_at_the_bottom_centre_and_the_top_right(text, at):
+    gray = render_page(n_lines=18, top=160, page_number=text, page_number_at=at)
+    result = pipeline.run_pipeline(gray)
+    box = result.page_number_box
+    assert box is not None and box["position"] == at
+    x0, y0, x1, y1 = box["bbox"]
+    width, height = result.output_width, result.output_height
+    if at == "bottom":
+        assert y0 >= 0.85 * height and abs((x0 + x1) / 2 - width / 2) < 0.1 * width
+    else:
+        assert y1 <= 0.12 * height and x0 > width / 2
+    # the number is metadata of the page, not a line of text: the stored line boxes are unchanged
+    plain = pipeline.run_pipeline(render_page(n_lines=18, top=160))
+    assert result.n_lines in (plain.n_lines, plain.n_lines + 1)
+    assert result.footnote_block_y is None
+
+
+def test_pipeline_finds_a_rule_whose_only_footnote_is_a_short_line():
+    # a short footnote line is too weak for `detect_lines`; it still counts as text below the rule
+    img = Image.fromarray(render_page(n_lines=14, rule_y=820, rule_style="dotted", rule_frac=0.3))
+    font, arabic = _font(20)
+    draw = ImageDraw.Draw(img)
+    words = " ".join((ARABIC_WORDS if arabic else LATIN_WORDS)[:6])
+    draw.text((900 - 110 - int(font.getlength(words)), 850), words, font=font, fill=0)
+    result = pipeline.run_pipeline(np.asarray(img, dtype=np.uint8).copy())
+    assert result.footnote_rule_y is not None
+    assert abs(result.footnote_rule_y + result.crop_box[1] - 820) <= 6
+
+
+def test_pipeline_page_number_is_not_joined_to_a_mark_at_the_other_end_of_its_row():
+    img = Image.fromarray(render_page(n_lines=18, top=160, page_number="٣٥", page_number_at="bottom"))
+    ImageDraw.Draw(img).rectangle([760, 1080, 766, 1140], fill=0)  # a tall handwritten stroke
+    result = pipeline.run_pipeline(np.asarray(img, dtype=np.uint8).copy())
+    box = result.page_number_box
+    assert box is not None and box["position"] == "bottom"
+    x0, _y0, x1, _y1 = box["bbox"]
+    assert abs((x0 + x1) / 2 - result.output_width / 2) < 0.1 * result.output_width
+
+
+def test_detect_page_number_ignores_a_normal_width_line():
+    lines = [{"x0": 50, "y0": 100 + 50 * i, "x1": 850, "y1": 125 + 50 * i} for i in range(20)]
+    last = {"x0": 50, "y0": 1120, "x1": 850, "y1": 1145}  # a full text line at the bottom
+    assert pipeline.detect_page_number(lines + [last], 900, 1200, 25) is None
+    short = {"x0": 430, "y0": 1120, "x1": 470, "y1": 1145}
+    assert pipeline.detect_page_number(lines + [short], 900, 1200, 25) == {
+        "bbox": [430, 1120, 470, 1145],
+        "position": "bottom",
+    }
+    touching = {"x0": 430, "y0": 1080, "x1": 470, "y1": 1105}  # no gap to the line above
+    assert pipeline.detect_page_number(lines + [touching], 900, 1200, 25) is None
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
@@ -570,7 +685,7 @@ def test_guide_regions_geometry():
 
 @pytest.mark.django_db
 def test_derive_regions_creates_ordered_regions_and_keeps_manual_ones(book):
-    LayoutGuides.objects.create(book=book, header_cut=0.1, footnote_line=0.8)
+    LayoutGuides.objects.create(book=book, header_cut=0.1, footnote_line=0.8, source="manual")
     page = make_page(book, 1)
     manual = Region.objects.create(
         page=page, kind="heading", bbox=[0, 200, 1000, 260], order=9, source="manual"
@@ -599,7 +714,7 @@ def test_derive_regions_creates_ordered_regions_and_keeps_manual_ones(book):
 
 @pytest.mark.django_db
 def test_derive_regions_unchanged_geometry_does_not_regress_a_finished_page(book):
-    LayoutGuides.objects.create(book=book, footnote_line=0.8)
+    LayoutGuides.objects.create(book=book, footnote_line=0.8, source="manual")
     page = make_page(book, 1)
     first = services.derive_regions(page)
     Page.objects.filter(pk=page.pk).update(status=Page.Status.OCR_DONE)
@@ -616,6 +731,77 @@ def test_derive_regions_unchanged_geometry_does_not_regress_a_finished_page(book
     assert changed is True
     page.refresh_from_db()
     assert page.status == Page.Status.LAYOUT_DONE
+
+
+def _kinds_and_boxes(page: Page) -> list[tuple[str, list[int]]]:
+    return [(r.kind, r.bbox) for r in services.derive_regions(page)]
+
+
+@pytest.mark.django_db
+def test_derive_regions_per_page_from_rule_block_or_nothing(book):
+    with_rule = make_page(book, 1, rule_y=1100)
+    with_block = make_page(book, 2)
+    Preprocess.objects.filter(page=with_block).update(footnote_block_y=1250)
+    plain = make_page(book, 3)
+    assert _kinds_and_boxes(with_rule) == [("body", [0, 0, 1000, 1100]), ("footnote", [0, 1100, 1000, 1500])]
+    assert _kinds_and_boxes(with_block) == [("body", [0, 0, 1000, 1250]), ("footnote", [0, 1250, 1000, 1500])]
+    # no footnotes detected: the body runs to the bottom, and no automatic page-number zone
+    assert _kinds_and_boxes(plain) == [("body", [0, 0, 1000, 1500])]
+
+
+@pytest.mark.django_db
+def test_derive_regions_uses_the_detected_page_number_box(book):
+    bottom = make_page(book, 1, rule_y=1100)
+    Preprocess.objects.filter(page=bottom).update(
+        page_number_box={"bbox": [480, 1440, 520, 1470], "position": "bottom"}
+    )
+    pad = services.PAGE_NUMBER_PAD
+    assert _kinds_and_boxes(bottom) == [
+        ("body", [0, 0, 1000, 1100]),
+        ("footnote", [0, 1100, 1000, 1440 - pad]),
+        ("page_number", [480 - pad, 1440 - pad, 520 + pad, 1470 + pad]),
+    ]
+    top = make_page(book, 2)
+    Preprocess.objects.filter(page=top).update(
+        page_number_box={"bbox": [900, 10, 950, 40], "position": "top"}
+    )
+    assert _kinds_and_boxes(top) == [
+        ("page_number", [900 - pad, 10 - pad, 950 + pad, 40 + pad]),
+        ("body", [0, 40 + pad, 1000, 1500]),
+    ]
+    # a page override of the zone wins over the detection ("none" switches it off)
+    top.guides_override = {"page_number_zone": "none"}
+    top.save()
+    assert _kinds_and_boxes(top) == [("body", [0, 0, 1000, 1500])]
+
+
+@pytest.mark.django_db
+def test_derive_regions_never_applies_an_automatic_book_line(book):
+    # an automatic proposal (propose_guides) is display only: no footnote, no 6% zone on a page
+    LayoutGuides.objects.create(book=book, footnote_line=0.8, page_number_zone="bottom", source="auto")
+    page = make_page(book, 1)
+    assert _kinds_and_boxes(page) == [("body", [0, 0, 1000, 1500])]
+    # once the owner applies the guides by hand they are the fallback for pages without detection
+    LayoutGuides.objects.filter(book=book).update(source="manual")
+    assert _kinds_and_boxes(page) == [
+        ("body", [0, 0, 1000, 1200]),
+        ("footnote", [0, 1200, 1000, 1410]),
+        ("page_number", [0, 1410, 1000, 1500]),
+    ]
+    # ... but what was detected on a page wins over the manual book line
+    Preprocess.objects.filter(page=page).update(footnote_rule_y=1000)
+    assert [box for kind, box in _kinds_and_boxes(page) if kind == "footnote"] == [[0, 1000, 1000, 1410]]
+
+
+@pytest.mark.django_db
+def test_derive_regions_page_override_wins_over_detection(book):
+    page = make_page(book, 1, rule_y=1100)
+    page.guides_override = {"footnote_line": 0.9}
+    page.save()
+    assert _kinds_and_boxes(page) == [("body", [0, 0, 1000, 1350]), ("footnote", [0, 1350, 1000, 1500])]
+    page.guides_override = {"footnote_line": None}  # "this page has no footnotes", even with a rule
+    page.save()
+    assert _kinds_and_boxes(page) == [("body", [0, 0, 1000, 1500])]
 
 
 @pytest.mark.django_db
@@ -666,7 +852,7 @@ def test_apply_guides_saves_re_derives_and_enqueues_ocr_only_for_changed_pages(b
 
 @pytest.mark.django_db
 def test_set_page_guides_override_derives_and_resets(book):
-    LayoutGuides.objects.create(book=book, footnote_line=0.8)
+    LayoutGuides.objects.create(book=book, footnote_line=0.8, source="manual")
     page = make_page(book, 1)
     with patch("books.services.run_stage") as run_stage:
         regions, enqueued = services.set_page_guides_override(page, {"footnote_line": None})
@@ -698,7 +884,8 @@ def test_tasks_run_the_chain_and_record_errors(page_with_original):
     assert tasks.layout_page.delay(page.pk).get() == page.pk
     page.refresh_from_db()
     assert page.status == Page.Status.LAYOUT_DONE
-    assert [r.kind for r in page.regions.all()] == ["body", "page_number"]
+    # no guides, no detected rule / block / page number: one body region
+    assert [r.kind for r in page.regions.all()] == ["body"]
 
     broken = Page.objects.create(book=page.book, number=9, source_index=8)
     assert tasks.preprocess_page.delay(broken.pk).get() == broken.pk
@@ -836,7 +1023,7 @@ def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
     services.derive_regions(page)
     url = reverse("api:page_preprocess", kwargs={"page_id": page.pk})
     data = client.post(url, json.dumps({"angle": 0.0}), content_type="application/json").json()
-    assert [r["kind"] for r in data["regions"]] == ["body", "page_number"]
+    assert [r["kind"] for r in data["regions"]] == ["body"]
     assert data["regions"][0]["bbox"][2] == data["output"]["width"]
 
     # Huge originals go through the worker (eager here) as preprocess → layout, so the regions are
@@ -874,7 +1061,7 @@ def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
 
 @pytest.mark.django_db
 def test_api_page_guides_override(client, book, users):
-    LayoutGuides.objects.create(book=book, footnote_line=0.8)
+    LayoutGuides.objects.create(book=book, footnote_line=0.8, source="manual")
     page = make_page(book, 1)
     url = reverse("api:page_guides_override", kwargs={"page_id": page.pk})
     client.force_login(users.editor)

@@ -513,20 +513,22 @@ def test_ingest_book_task_reports_failures_on_the_book_instead_of_raising():
     assert book.error_message.splitlines()[0] == tasks.INGEST_ERROR
 
 
-def test_after_preprocess_with_low_confidence_waits_for_guides():
+@pytest.mark.parametrize("confidence", [0.0, 0.2])
+def test_after_preprocess_never_waits_for_guides_even_with_low_confidence(confidence):
+    # footnotes and page numbers are detected per page: no `needs_guides` stop
     book, pages = _book_with_pages(3, status=Page.Status.PREPROCESSED)
     book.status = Book.Status.PROCESSING
     book.save()
-    propose = MagicMock(side_effect=lambda b: (LayoutGuides.objects.create(book=b), 0.2))
+    propose = MagicMock(side_effect=lambda b: (LayoutGuides.objects.create(book=b), confidence))
     with (
         patch("processing.services.propose_guides", propose),
         patch("books.services.run_stage") as run_stage,
     ):
         assert tasks.after_preprocess([p.pk for p in pages], book.pk) == book.pk
     propose.assert_called_once_with(book)
-    run_stage.assert_not_called()
+    assert [call.args for call in run_stage.call_args_list] == [(p, "layout") for p in pages]
     book.refresh_from_db()
-    assert book.status == Book.Status.NEEDS_GUIDES
+    assert book.status == Book.Status.OCR
 
 
 def test_after_preprocess_with_confident_guides_enqueues_layout_for_preprocessed_pages():
@@ -608,14 +610,16 @@ def test_rerun_book_resets_pages_so_the_book_waits_for_its_last_page():
     assert services.page_status(pages[1])["active"] is True
 
 
-def test_rerun_book_refuses_a_book_waiting_for_guides():
-    # F62: a book-level re-run would skip the guides proposal and the needs_guides stop
-    book, _ = _book_with_pages(2, status=Page.Status.PREPROCESSED)
+def test_rerun_book_resumes_a_book_parked_in_needs_guides_by_an_earlier_version():
+    # regions are derived per page now: a legacy `needs_guides` book is re-run from layout
+    book, pages = _book_with_pages(2, status=Page.Status.PREPROCESSED)
     book.status = Book.Status.NEEDS_GUIDES
     book.save()
-    with patch("books.services.chain") as chain, pytest.raises(ValueError, match="اضبط الأدلة"):
-        services.rerun_book(book, "preprocess")
-    chain.assert_not_called()
+    with patch("books.services.chain") as chain:
+        assert services.rerun_book(book, "layout") == 2
+    assert chain.call_count == 2
+    book.refresh_from_db()
+    assert book.status == Book.Status.PROCESSING  # pages queued (the chain is mocked here)
 
 
 def test_re_including_an_unprocessed_page_enqueues_its_pipeline():
@@ -1049,3 +1053,49 @@ def test_api_progress_and_page_status(editor_client):
     status = editor_client.get(reverse("api:page_status", args=[pages[2].pk])).json()
     assert status["active"] is True  # uploaded page in an active book
     assert editor_client.get(reverse("api:page_status", args=[99999])).status_code == 404
+
+
+# ---------------------------------------------------------------- printed page numbers
+
+
+def _numbered(numbers: list[str], excluded: tuple[int, ...] = ()) -> tuple[Book, list[Page]]:
+    book, pages = _book_with_pages(len(numbers), status=Page.Status.OCR_DONE)
+    for page, printed in zip(pages, numbers, strict=True):
+        page.printed_number = printed
+        page.is_excluded = page.number in excluded
+        page.save()
+    return book, pages
+
+
+def test_page_sequence_issues_flags_a_gap_and_a_duplicate():
+    book, pages = _numbered(["40", "41", "43", "43", "44"])
+    issues = services.page_sequence_issues(book)
+    assert issues == {
+        pages[2].pk: "ترقيم غير متسلسل: بعد 41 جاءت 43",
+        pages[3].pk: "ترقيم مكرّر: بعد 43 جاءت 43 مرة أخرى",
+    }
+    items = services.attention_pages(book)
+    assert [(i["page"].number, i["sequence_issue"]) for i in items] == [
+        (3, "ترقيم غير متسلسل: بعد 41 جاءت 43"),
+        (4, "ترقيم مكرّر: بعد 43 جاءت 43 مرة أخرى"),
+    ]
+    tiles = {t["number"]: t for t in services.page_tiles(book)}
+    assert tiles[3]["sequence_issue"].startswith("ترقيم غير متسلسل") and tiles[5]["sequence_issue"] == ""
+    assert tiles[1]["printed_number"] == "40"
+
+
+def test_page_sequence_issues_tolerates_unread_numbers_and_ignores_excluded_pages():
+    # page 2 has no number (not read, or an unnumbered plate); page 4 is an excluded duplicate scan
+    book, _pages = _numbered(["10", "", "12", "12", "13", "15"], excluded=(4,))
+    book_2, _ = _numbered(["10", "", "11"])
+    issues = services.page_sequence_issues(book)
+    assert list(issues.values()) == ["ترقيم غير متسلسل: بعد 13 جاءت 15"]
+    assert services.page_sequence_issues(book_2) == {}
+
+
+def test_page_detail_shows_the_printed_number(editor_client):
+    book = make_book(make_scan_pdf(1))
+    page = services.ingest_book(book)[0]
+    Page.objects.filter(pk=page.pk).update(printed_number="41")
+    body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
+    assert "الرقم المطبوع:" in body and ">41</bdi>" in body

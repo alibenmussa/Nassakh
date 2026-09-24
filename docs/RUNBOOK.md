@@ -90,7 +90,7 @@ which is committed; `npm run build` also re-vendors Alpine and the fonts).
 
 ```
 ingest_book_task  →  group(preprocess_page × N)  →  after_preprocess  →  per page: layout_page → ocr_page_fast → ocr_page_full
-Book:  uploaded → processing → (needs_guides) → ocr → ready_for_review        (error when the PDF cannot be read)
+Book:  uploaded → processing → ocr → ready_for_review                         (error when the PDF cannot be read)
 Page:  uploaded → preprocessed → layout_done → ocr_done                       (error keeps error_from; excluded pages are skipped)
 Text:  none → provisional (Tesseract, after ocr_page_fast) → final (after ocr_page_full)
 ```
@@ -98,13 +98,26 @@ Text:  none → provisional (Tesseract, after ocr_page_fast) → final (after oc
 - **Ingest** renders the selected PDF pages `[skip_first, N − skip_last)` at the scan's native DPI (D2), splits
   two-page sheets at the detected gutter, right page first (D3), and stores `original.png` per page.
 - **Preprocess** deskews, flattens, removes dark borders and facing-page strips (D18), crops, binarises, detects lines
-  and the footnote rule; flags `large_skew`, `deskew_low_confidence`, `no_lines_detected`, `edge_strip_removed`.
-- **Guides**: when fewer than 40 % of the pages show a footnote rule the book stops in `needs_guides`; open
-  «ضبط الأدلة», place the header cut and the footnote line on a reference page and press «تطبيق على كل الصفحات».
-  Otherwise the median rule position becomes the book's footnote line automatically and layout + OCR continue.
-- **Layout** derives the regions (running header, body, footnote, page number) from the guides; a page can
-  override the guides from its detail screen (`POST /api/pages/<id>/guides/`).
-- **Fast OCR** (Tesseract `ara+eng` on the B&W crops) gives the provisional text and the word boxes.
+  and, **on each page separately**: the footnote separator (solid, dotted, dashed or short rule;
+  `Preprocess.footnote_rule_y`), else a block of smaller type at the bottom (`footnote_block_y`), and the printed
+  page number (a short isolated first/last line in the top 12 % / bottom 15 %; `page_number_box`). Flags
+  `large_skew`, `deskew_low_confidence`, `no_lines_detected`, `edge_strip_removed`.
+- **Guides**: the book-level proposal (median rule position and its confidence) is computed for the guides screen
+  only. Processing never stops for guides: every book goes straight on to layout + OCR (`needs_guides` is kept as a
+  status value but is no longer set). The lines on «ضبط الأدلة» are a manual fallback: the header cut applies to
+  every page; the footnote line and page-number zone apply only after «تطبيق على كل الصفحات» (guides become
+  `manual`) and only on pages where nothing was detected.
+- **Layout** derives the regions per page (`processing.services.page_layout`). Footnote top: page override →
+  detected rule → detected smaller-type block → manual book footnote line → none (the body runs to the bottom; an
+  automatically proposed book line is never applied). Page number: page override → detected box (+6 px) → manual
+  book zone → none (no automatic bottom zone). A page can override from its detail screen
+  (`POST /api/pages/<id>/guides/`).
+- **Fast OCR** (Tesseract `ara+eng` on the B&W crops) gives the provisional text and the word boxes. Page numbers
+  never reach the text: the page-number region is not transcribed, and as a safety net a first or last line that is
+  only digits / dashes / dots / brackets is dropped from `provisional_text`, `final_text` and the `Line` rows. Its
+  number (Western digits) is stored in `Page.printed_number` as metadata; page order always comes from the scan
+  order. The dashboard's «تحتاج انتباهًا» lists pages whose printed numbers are not consecutive in scan order
+  (a gap = missing scan, a repeat = duplicate scan); pages whose number was not read do not raise a gap.
 - **Full OCR** (gpu queue) runs Qari v0.3 then v0.2 on the grayscale crops (footnotes at 2×), checks each
   against Tesseract (D16), builds the lines with low-confidence tokens (digits always low, D17), converts digits
   in `final_text` to Western (D6) and marks the page `ocr_done`; the book becomes `ready_for_review` when every
@@ -123,13 +136,21 @@ from its last completed stage.
 
 | Where | What it does |
 |---|---|
-| Dashboard `/books/<id>/` → «إعادة التشغيل» | all non-excluded pages from the chosen stage (`books.tasks.rerun_book_from`). Runs the per-page chain directly: the guides proposal and the `needs_guides` stop of §4 are **not** repeated, so set the guides on «ضبط الأدلة» first when the book never had manual guides. Refused while the book waits for its guides (`needs_guides`) |
+| Dashboard `/books/<id>/` → «إعادة التشغيل» | all non-excluded pages from the chosen stage (`books.tasks.rerun_book_from`). Runs the per-page chain directly (the guides proposal of §4 is not repeated; nothing waits for it). Also resumes a book an earlier version parked in `needs_guides` |
 | Page detail `/books/<id>/pages/<n>/` → «إعادة التشغيل» | this page from the chosen stage (`books.services.run_stage(page, stage)`) |
 | Page detail error banner → «إعادة المحاولة من هذه المرحلة» | the failed stage again |
 | Dashboard → «تحتاج انتباهًا» → «إعادة <stage>» on a failed page | the failed stage again, then back to the dashboard (same `books:rerun` with `next`) |
 | Page detail → panel «المعالجة الأولية» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
 | Guides `/books/<id>/guides/` → «تطبيق على كل الصفحات» | regions re-derived for every preprocessed page; OCR re-queued only for pages whose regions changed |
 | Dashboard / page detail → «استثناء الصفحة» | excludes a page from every stage and from the book's progress; toggle again to bring it back |
+
+**After upgrading to per-page footnote / page-number detection** (migrations `processing/0003`, `books/0003`):
+existing books still carry regions from the old book-level guides and no detection results. Re-run each book from
+«المعالجة الأولية» (`preprocess`) so the rule / block / page number are detected, which continues through layout and
+OCR; for a book whose preprocessing is otherwise fine a re-run from «التخطيط» (`layout`) re-derives the regions
+from the stored detection, but pages preprocessed before the upgrade have no `footnote_block_y` / `page_number_box`
+yet, so `preprocess` is the complete path. `printed_number` is filled by the OCR stages. A book left in
+`needs_guides` by the old version is resumed the same way.
 
 From a shell: `.venv/bin/python manage.py shell`, then
 `from books.models import Page; from books.services import run_stage; run_stage(Page.objects.get(book_id=1, number=3), "ocr")`.
@@ -213,7 +234,15 @@ so a 400-page scanned book takes 3–4 hours unattended; `OCR_BACKEND=mlx` was a
 - Users and roles are managed in Django admin (`/admin/`), linked from the sidebar for admins.
 - Tables in born-digital books are not extracted (deferred).
 - Running-header detection is manual: set the header cut on the guides screen. Headings and poetry inside the
-  body are not detected yet (regions are purely geometric from the guides).
+  body are not detected yet (regions are geometric: per-page footnote top and page-number box, manual header cut).
+- Footnote detection needs a separator rule at least 12 % of the text width, or at least two lines of clearly
+  smaller type (≤ 0.8 × the body size) after a visible gap; a single small-type footnote without a rule, or a
+  footnote set in the body size without a rule, is not detected (use a page override). Footnotes that continue from
+  the previous page are treated like any other footnote block.
+- Page numbers are found only as a short, isolated first or last line (top 12 % / bottom 15 %); a number printed
+  inside the running header line, or in the outer margin beside the text, is not detected. The OCR safety net only
+  removes a first/last line made of digits and punctuation; a number fused with other text on the same line stays.
+- The printed-number sequence check assumes plain numerals; Roman or letter-numbered front matter is ignored.
 - The «الأصل» tab shows the grayscale render of the page (the pipeline consumes grayscale); there is no colour original.
 - The crop box in the preprocessing panel is numeric (x0, y0, x1, y1 in the rotated frame), not drag handles.
 - A manual preprocessing re-run does not re-run OCR by itself (see §5).

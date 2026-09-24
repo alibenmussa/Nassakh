@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -52,6 +53,12 @@ PAGE_SCOPE = "page"
 REGION_SCOPE = "region"
 FLAG_FALLBACK = "ocr_fallback"
 FLAG_ALIGNMENT = "alignment_poor"
+
+# A page-number line: only digits (Western, Arabic-Indic, Persian), dashes, dots, brackets, spaces.
+_PN_CHARS = r"\s0-9٠-٩۰-۹\-‐‑‒–—―ـ.·•…()\[\]{}﴾﴿<>«»"
+_PAGE_NUMBER_LINE = re.compile(rf"^[{_PN_CHARS}]*[0-9٠-٩۰-۹][{_PN_CHARS}]*$")
+_DIGITS = re.compile(r"[0-9٠-٩۰-۹]+")
+PRINTED_NUMBER_MAX = 20
 
 # Sanity thresholds (D16). A small absolute slack on the upper bound keeps tiny regions (a two-word
 # heading read as five words) from failing on the ratio check alone.
@@ -377,8 +384,9 @@ def run_fast_ocr(page: Page) -> None:
 
     Every region gets an OcrRun with word/line boxes in `params["lines"]`. `provisional_text` joins
     the body-like regions in order, then a blank line, then the footnotes; running header and page
-    number are omitted. Born-digital pages with `use_text_layer` are finalised right away from the
-    repaired text layer.
+    number are omitted, and a leading / trailing line that is only a page number is dropped. The
+    page-number region's digits (else the dropped line's) are stored in `printed_number`.
+    Born-digital pages with `use_text_layer` are finalised right away from the repaired text layer.
     """
     _, _, fast = engine_names()
     pre = _preprocess_of(page)
@@ -387,6 +395,7 @@ def run_fast_ocr(page: Page) -> None:
     targets = _targets(page, bw.shape, ocr_only=False)
     texts: list[tuple[str, str]] = []
     failures: list[str] = []
+    printed = ""
     with tempfile.TemporaryDirectory(prefix="nassakh-ocr-fast-") as tmp:
         tmpdir = Path(tmp)
         for i, target in enumerate(targets):
@@ -395,14 +404,18 @@ def run_fast_ocr(page: Page) -> None:
             if run.status != OcrRun.Status.OK:
                 failures.append(run.error)
                 continue
-            if target.kind not in SKIPPED_KINDS:
+            if target.kind == Region.Kind.PAGE_NUMBER:
+                printed = printed or printed_number_of(run.parsed_text)
+            elif target.kind not in SKIPPED_KINDS:
                 texts.append((target.kind, run.parsed_text))
     if failures and len(failures) == len(targets):
         raise OcrError(f"{TESSERACT_HEADLINE}\n{failures[0]}")
 
-    page.provisional_text = join_region_texts(texts)
+    provisional, stripped = strip_page_number_lines(join_region_texts(texts))
+    page.provisional_text = provisional
+    page.printed_number = printed or stripped
     page.text_state = Page.TextState.PROVISIONAL
-    page.save(update_fields=["provisional_text", "text_state"])
+    page.save(update_fields=["provisional_text", "printed_number", "text_state"])
 
     if uses_text_layer(page):
         if _run_text_layer(page) is not None:
@@ -429,7 +442,7 @@ def _run_text_layer(page: Page) -> OcrRun | None:
             )
             run = run_engine(page, "pdf_text", target, ref, "pdf")
     if run is not None and run.status == OcrRun.Status.OK and run.parsed_text.strip():
-        page.provisional_text = run.parsed_text
+        page.provisional_text, _number = strip_page_number_lines(run.parsed_text)
         page.save(update_fields=["provisional_text"])
         return run
     fallback_text = normalize_ws(page.text_layer_text or "")
@@ -447,7 +460,7 @@ def _run_text_layer(page: Page) -> OcrRun | None:
         params={"scope": PAGE_SCOPE, "kind": PAGE_KIND, "source": "text_layer_text"},
         finish="n/a",
     )
-    page.provisional_text = fallback_text
+    page.provisional_text, _number = strip_page_number_lines(fallback_text)
     page.save(update_fields=["provisional_text"])
     return run
 
@@ -651,6 +664,52 @@ def join_region_texts(items: list[tuple[str, str]]) -> str:
     return "\n\n".join(parts)
 
 
+def page_number_digits(line: str) -> str | None:
+    """Western digits of `line` when it is only a page number («— ٢٢ —», «(20)», «٢٠»), else None."""
+    text = (line or "").strip()
+    if not text or not _PAGE_NUMBER_LINE.match(text):
+        return None
+    digits = to_western_digits("".join(_DIGITS.findall(text)))
+    return digits[:PRINTED_NUMBER_MAX] or None
+
+
+def page_number_edges(lines: list[str]) -> tuple[set[int], str]:
+    """Indices of the first / last non-empty lines that are only a page number, and the number.
+
+    `digits` is the Western number of a dropped line (the last one when both are numbers), ''
+    when none. A page with a single line is never emptied. Nothing between the first and the last
+    non-empty line is looked at.
+    """
+    filled = [i for i, line in enumerate(lines) if line.strip()]
+    if len(filled) < 2:
+        return set(), ""
+    first = page_number_digits(lines[filled[0]])
+    last = page_number_digits(lines[filled[-1]])
+    drop = ({filled[0]} if first else set()) | ({filled[-1]} if last else set())
+    return drop, last or first or ""
+
+
+def strip_page_number_lines(text: str) -> tuple[str, str]:
+    """`text` without a leading / trailing page-number line, and that number ('' when none).
+
+    The safety net for page numbers that reached the text (page order comes from the scan order;
+    the printed number is kept as metadata only). Only the first and last non-empty lines are
+    candidates; the body is left exactly as it is.
+    """
+    lines = (text or "").split("\n")
+    drop, digits = page_number_edges(lines)
+    if not drop:
+        return text, ""
+    kept = "\n".join(line for i, line in enumerate(lines) if i not in drop)
+    return re.sub(r"\n{3,}", "\n\n", kept).strip("\n"), digits
+
+
+def printed_number_of(text: str) -> str:
+    """Western digits of a page-number region's OCR text ('' when it holds no number)."""
+    digits = page_number_digits(" ".join((text or "").split()))
+    return digits or ""
+
+
 def _set_flags(flags: list, updates: dict[str, bool]) -> list:
     """`flags` with every key of `updates` removed, then re-added (at the end) where it is True."""
     out = [f for f in (flags or []) if f not in updates]
@@ -665,7 +724,8 @@ def finalize_page(page: Page) -> None:
     its `order` and its text goes into `final_text`. `final_text` gets Western
     digits (D6) while `Line.ocr_text` and the tokens keep the raw OCR output. Sets or clears the
     `ocr_fallback` and `alignment_poor` flags, then refreshes the book status (`ready_for_review`
-    once every non-excluded page is done).
+    once every non-excluded page is done). A first or last line of the page that is only a page
+    number is dropped (no Line row, not in the text) and its digits go to `printed_number`.
     """
     region_texts = _collect_region_texts(page)
     reviewed = {line.order: line for line in page.lines.filter(is_reviewed=True)}
@@ -675,11 +735,18 @@ def finalize_page(page: Page) -> None:
     total_tokens = anchored = 0
     has_geometry = False
     order = 0
-    for rt in region_texts:
-        built = build_lines(rt.text, rt.alt_text, rt.tess_lines)
+    built_per_region = [build_lines(rt.text, rt.alt_text, rt.tess_lines) for rt in region_texts]
+    # Safety net: a first / last line of the page that is only a page number is dropped from the
+    # lines and the text; its number is kept as metadata (`printed_number`).
+    flat = [(r, k) for r, built in enumerate(built_per_region) for k in range(len(built))]
+    drop, printed = page_number_edges([built_per_region[r][k]["text"] for r, k in flat])
+    dropped = {flat[i] for i in drop}
+    for r, (rt, built) in enumerate(zip(region_texts, built_per_region, strict=True)):
         has_geometry = has_geometry or bool(rt.tess_lines)
         texts = []
-        for b in built:
+        for k, b in enumerate(built):
+            if (r, k) in dropped:
+                continue
             kept = reviewed.get(order)
             if kept is not None:  # a reviewed line wins over the new OCR line at its position
                 order += 1
@@ -718,6 +785,9 @@ def finalize_page(page: Page) -> None:
             page.attention_flags, {FLAG_FALLBACK: fallback, FLAG_ALIGNMENT: poor}
         )
         fields = ["final_text", "text_state", "attention_flags"]
+        if printed:
+            page.printed_number = printed
+            fields.append("printed_number")
         if not page.is_excluded:
             page.status = Page.Status.OCR_DONE
             page.error_from = ""

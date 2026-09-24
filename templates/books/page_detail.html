@@ -85,6 +85,7 @@
         <dd class="num">الصفحة {{ source_page }}{% if page.source_half != 'full' %} · {{ page.get_source_half_display }}{% endif %}</dd>
         {% if page.is_excluded %}<dt>الضمّ</dt><dd>مستثناة من الكتاب</dd>{% endif %}
       </dl>
+      <p class="meta num" x-show="state.printed_number"{% if not page.printed_number %} x-cloak{% endif %}>الرقم المطبوع: <bdi x-text="state.printed_number">{{ page.printed_number }}</bdi></p>
 
       <ul class="flag-list" aria-label="إشارات الانتباه" x-show="state.flag_labels && state.flag_labels.length"{% if not page_flags %} x-cloak{% endif %}>
         {% for flag in page_flags %}<li class="badge badge-warning" x-show="!live">{{ flag.label }}</li>{% endfor %}

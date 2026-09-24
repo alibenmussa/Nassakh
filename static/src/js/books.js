@@ -142,7 +142,7 @@ document.addEventListener('alpine:init', () => {
     },
     get attention() {
       return Object.values(this.pages)
-        .filter((p) => !p.is_excluded && (p.error || p.n_flags > 0))
+        .filter((p) => !p.is_excluded && (p.error || p.n_flags > 0 || p.sequence_issue))
         .sort((a, b) => a.number - b.number);
     },
   }));

@@ -29,7 +29,7 @@
       <label class="guides-ref">
         <span class="meta">الصفحة المرجعية</span>
         <select class="select" aria-label="اختيار الصفحة المرجعية" @change="window.location.search = '?page=' + $event.target.value">
-          {% for p in pages %}<option value="{{ p.number }}"{% if p.number == reference.number %} selected{% endif %}>{{ p.number }}{% if p.has_rule %} · خط حاشية{% endif %}</option>{% endfor %}
+          {% for p in pages %}<option value="{{ p.number }}"{% if p.number == reference.number %} selected{% endif %}>{{ p.number }}{% if p.has_rule %} · خط حاشية{% elif p.has_block %} · كتلة حاشية{% endif %}{% if p.has_number %} · رقم صفحة{% endif %}</option>{% endfor %}
         </select>
       </label>
     </div>
@@ -54,18 +54,24 @@
         <span class="guide-handle">الحاشية <b x-text="pctText(footnote.ratio) + '%'"></b></span>
       </div>
     </div>
-    <p class="help">اسحب الخطين إلى موضعيهما على الصفحة المرجعية (أو استخدم الأسهم ↑ ↓ بعد التركيز عليهما). ما فوق خط الترويسة يُعدّ ترويسة، وما تحت خط الحاشية يُعدّ حاشية. الخط الأحمر المنقّط هو خط الحاشية المكتشف تلقائيًا في هذه الصفحة.</p>
+    <p class="help">اسحب الخطين إلى موضعيهما على الصفحة المرجعية (أو استخدم الأسهم ↑ ↓ بعد التركيز عليهما). ما فوق خط الترويسة يُعدّ ترويسة، وما تحت خط الحاشية يُعدّ حاشية في الصفحات التي لم تُكتشف فيها حاشية. الخط الأحمر المنقّط هو بداية الحاشية المكتشفة في هذه الصفحة.</p>
   </section>
 
   <aside class="guides-panel">
     <div class="card stack">
+      <h2 class="section-title">الاكتشاف في كل صفحة</h2>
+      <p>تُكتشف الحواشي ورقم الصفحة في كل صفحة على حدة: الحاشية من خطها الفاصل (متصلًا أو منقّطًا أو متقطّعًا أو قصيرًا)، أو من كتلة أسطر بخط أصغر أسفل الصفحة، ورقم الصفحة من سطر قصير منفصل في أعلاها أو أسفلها.</p>
+      <p class="meta">الخطوط في هذه الشاشة بديل يدوي: لا تُطبَّق إلا بعد الضغط على «تطبيق على كل الصفحات»، وعلى الصفحات التي لم يُكتشف فيها شيء فقط. المعالجة لا تنتظرها.</p>
+    </div>
+
+    <div class="card stack">
       <h2 class="section-title">الاكتشاف التلقائي</h2>
-      <p>اكتُشف خط حاشية في <b class="tabular-nums">{{ stats.n_with_rule }}</b> من <b class="tabular-nums">{{ stats.n_pages }}</b> صفحة معالَجة (<span class="tabular-nums">{{ stats.percent }}</span>%).</p>
+      <p>اكتُشف خط حاشية في <b class="tabular-nums">{{ stats.n_with_rule }}</b> من <b class="tabular-nums">{{ stats.n_pages }}</b> صفحة معالَجة (<span class="tabular-nums">{{ stats.percent }}</span>%)، وكتلة حاشية بلا خط في <b class="tabular-nums">{{ n_with_block }}</b>، ورقم صفحة في <b class="tabular-nums">{{ n_with_number }}</b>.</p>
       {% if stats.footnote_line %}
-      <p class="meta">النسبة المقترحة لخط الحاشية: <span class="tabular-nums">{{ proposal_percent }}</span>% من ارتفاع الصفحة.</p>
+      <p class="meta">الموضع الوسيط لخط الحاشية: <span class="tabular-nums">{{ proposal_percent }}</span>% من ارتفاع الصفحة، للاستعمال بديلًا يدويًا.</p>
       <div><button type="button" class="btn btn-sm" @click="useProposal()">استخدام الاقتراح</button></div>
       {% else %}
-      <p class="meta">أقل من 40% من الصفحات تحوي خطًا، فلم يُقترح خط حاشية. فعّله يدويًا إن كان الكتاب يحوي حواشي.</p>
+      <p class="meta">أقل من 40% من الصفحات تحوي خطًا، فلم يُقترح موضع. لا يلزم شيء: كل صفحة تُعالَج بما اكتُشف فيها.</p>
       {% endif %}
     </div>
 
@@ -89,7 +95,7 @@
                  :value="pctText(footnote.ratio)" @change="setPercent('footnote', $event.target.value)">
           <span class="meta">% من الأعلى</span>
         </div>
-        <p class="help" x-show="!footnote.enabled">لا حواشي في هذا الكتاب.</p>
+        <p class="help" x-show="!footnote.enabled">بلا خط يدوي: تُستخدم الحاشية المكتشفة في كل صفحة، والصفحة التي لم تُكتشف فيها حاشية يمتدّ متنها إلى الأسفل.</p>
       </div>
 
       <div class="field">
@@ -104,6 +110,7 @@
                  :value="pctText(zoneHeight)" @change="setZoneHeight($event.target.value)">
           <span class="meta">% ارتفاع المنطقة</span>
         </div>
+        <p class="help">يُستخدم فقط للصفحات التي لم يُكتشف فيها رقم الصفحة.</p>
       </div>
     </div>
 
@@ -115,7 +122,7 @@
 
     <div class="stack">
       <button type="submit" class="btn btn-primary w-full">تطبيق على كل الصفحات</button>
-      <p class="help">تُشتقّ المناطق من جديد لكل صفحات الكتاب، ويُعاد التعرّف على النص للصفحات التي تغيّرت مناطقها فقط. يمكن تعديل الأدلة لصفحة بعينها من صفحة تفاصيلها.</p>
+      <p class="help">تُشتقّ المناطق من جديد لكل صفحات الكتاب (ما اكتُشف في الصفحة يتقدّم على هذه الخطوط)، ويُعاد التعرّف على النص للصفحات التي تغيّرت مناطقها فقط. يمكن تعديل الأدلة لصفحة بعينها من صفحة تفاصيلها.</p>
     </div>
   </aside>
 </form>

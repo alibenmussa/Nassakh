@@ -495,6 +495,29 @@ def test_join_region_texts_orders_body_then_footnotes_and_skips_header_and_numbe
     assert services.join_region_texts([("body", "  ")]) == ""
 
 
+@pytest.mark.parametrize(
+    ("text", "expected", "number"),
+    [
+        ("متن سنة ١٩٦٦ هنا\nسطر 22 ثان\n— 22 —", "متن سنة ١٩٦٦ هنا\nسطر 22 ثان", "22"),
+        ("٢٠\nمتن فيه ٢٠ و1966\nآخر سطر", "متن فيه ٢٠ و1966\nآخر سطر", "20"),
+        ("(١٥)\n\nمتن\n\nحاشية (١)", "متن\n\nحاشية (١)", "15"),
+        ("متن\n12\nآخر", "متن\n12\nآخر", ""),  # a number inside the body is left alone
+        ("٢٢", "٢٢", ""),  # a single line is never emptied
+    ],
+)
+def test_strip_page_number_lines_drops_only_a_first_or_last_number_line(text, expected, number):
+    assert services.strip_page_number_lines(text) == (expected, number)
+
+
+def test_page_number_digits_accepts_only_number_lines():
+    assert services.page_number_digits("— ٢٢ —") == "22"
+    assert services.page_number_digits("[٣٤]") == "34"
+    assert services.page_number_digits("۱۲") == "12"
+    assert services.page_number_digits("- - -") is None
+    assert services.page_number_digits("صفحة ٢٢") is None
+    assert services.printed_number_of(" ٨ ") == "8"
+
+
 # ---------------------------------------------------------------- fast OCR
 
 
@@ -733,6 +756,42 @@ def test_run_full_ocr_page_level_without_regions_uses_the_page_cap(page):
     primary = page.ocr_runs.get(engine_name="qari_v03")
     assert primary.region is None and primary.params["scope"] == "page"
     assert primary.params["max_new_tokens"] == 3000
+
+
+def test_fast_ocr_drops_a_trailing_page_number_line_and_stores_it(page):
+    # no page-number region (nothing detected): the number reached the footnote text
+    Region.objects.create(page=page, kind="body", bbox=[0, 0, W, 120], order=0)
+    Region.objects.create(page=page, kind="footnote", bbox=[0, 130, W, H], order=1)
+    fakes = engines()
+    fakes["tesseract"] = FakeEngine(
+        name="tesseract",
+        responder=by_kind({"body": tess_result(TESS_BODY), "footnote": tess_result(TESS_FOOT + "\n— 22 —")}),
+    )
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+    page.refresh_from_db()
+    assert page.provisional_text == TESS_BODY + "\n\n" + TESS_FOOT  # body digits ١٩٦٦ untouched
+    assert page.printed_number == "22"
+
+
+def test_full_ocr_drops_a_leading_page_number_line_from_lines_and_final_text(page):
+    Region.objects.create(page=page, kind="body", bbox=[0, 0, W, 120], order=0)
+    fakes = engines(primary_body="٢٠\n" + PRIMARY_BODY, secondary_body="٢٠\n" + SECONDARY_BODY)
+    fakes["tesseract"] = FakeEngine(
+        name="tesseract", responder=by_kind({"body": tess_result("٢٠\n" + TESS_BODY)})
+    )
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.printed_number == "20"
+    assert page.provisional_text == TESS_BODY
+    assert not page.final_text.startswith("20")
+    assert "1966" in page.final_text  # body digits kept (converted to Western as usual)
+    texts = list(page.lines.order_by("order").values_list("text", flat=True))
+    assert texts and all(services.page_number_digits(t) is None for t in texts)
+    assert "١٩٦٦" in texts[0]
+    assert list(page.lines.order_by("order").values_list("order", flat=True)) == list(range(len(texts)))
 
 
 def test_finalize_page_replaces_unreviewed_lines_and_keeps_reviewed_ones(page):
