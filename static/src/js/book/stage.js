@@ -698,6 +698,13 @@
         if (n > 0 && m) U.toast('لا صفحة بهذا الرقم');
         this.landFirst();
       },
+      // a #page-N link opened in this tab (the address the page itself writes goes through replaceState,
+      // which fires no hashchange)
+      onHashChange() {
+        const m = /^#page-(\d+)$/.exec(typeof window !== 'undefined' && window.location ? window.location.hash || '' : '');
+        if (!m || Number(m[1]) === this.current) return;
+        if (!this.showPage(Number(m[1]), { manual: true }) && this.pages.length) U.toast('لا صفحة بهذا الرقم');
+      },
       // a trackpad or wheel gesture turns one page (RTL: a swipe to the right and scrolling down go forward);
       // the gesture must pause before the next one counts, so inertia never flips two pages
       onStageWheel(e) {

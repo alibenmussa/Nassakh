@@ -221,7 +221,7 @@ class PageSetup:
     h2_scale: float = 1.25
     footnote_size_pt: float = 10.0
     footnote_numbering: str = "page"
-    running_header: str = "chapter"
+    running_header: str = "none"  # owner, 2026-09-25: no running header unless chosen
     page_number: str = "bottom_center"
     chapter_opening: str = "any"
     title_page: bool = True

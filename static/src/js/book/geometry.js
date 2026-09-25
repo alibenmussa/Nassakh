@@ -216,7 +216,11 @@
     const inserts = o.marks ? (o.marks(line.block) || []).filter((m) => m.offset >= line.start && m.offset < line.end).map((m) => ({ offset: m.offset, html: `<span class="lp-pb" data-page="${esc(m.page)}"></span>` })) : null;
     const runs = (line.runs || []).map((run, r) => runHtml(run, r, plain, own, inserts)).join('');
     const target = line.target ? ` data-target="${esc(line.target)}"` : '';
-    return `<div class="${cls.join(' ')}" data-i="${i}" data-b="${esc(line.block || '')}"${target} dir="${line.dir === 'ltr' ? 'ltr' : 'rtl'}" style="${style}">${runs}</div>`;
+    // a scan page mark on this line: its «ص N» label sits in the margin beside the line, like the original page
+    // numbers of a scholarly edition (above the mark it would land on the previous line's letters)
+    const pb = inserts && inserts.length ? ` data-pb="${esc(inserts.map((m) => m.html.match(/data-page="([^"]*)"/)[1]).join('، '))}"` : '';
+    if (pb) cls.push('has-pb');
+    return `<div class="${cls.join(' ')}" data-i="${i}" data-b="${esc(line.block || '')}"${target}${pb} dir="${line.dir === 'ltr' ? 'ltr' : 'rtl'}" style="${style}">${runs}</div>`;
   }
 
   // A header or a page number: its box, the text kept at the side it is anchored to (`align`).

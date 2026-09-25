@@ -184,7 +184,7 @@ class StyleSheet(models.Model):
         "ترقيم الحواشي", max_length=10, choices=FootnoteNumbering.choices, default=FootnoteNumbering.PAGE
     )
     running_header = models.CharField(
-        "الترويسة", max_length=10, choices=RunningHeader.choices, default=RunningHeader.CHAPTER
+        "الترويسة", max_length=10, choices=RunningHeader.choices, default=RunningHeader.NONE
     )
     page_number = models.CharField(
         "رقم الصفحة", max_length=15, choices=PageNumber.choices, default=PageNumber.BOTTOM_CENTER

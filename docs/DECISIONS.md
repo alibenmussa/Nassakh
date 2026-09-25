@@ -275,3 +275,11 @@ books without chapter breaks re-lay-out forward until the pages converge; the wh
 One side panel with icon tabs: الفصول, الصفحات, بحث, التنسيق, الفقرة, الأصل (unchanged), غير المؤكَّدة. Also: page break
 before a paragraph and keep-with-next, widows/orphans and headings kept with the next line by default, book details
 (title and copyright pages), page checks. `/books/<id>/editor/` redirects to the book page. Spell check: not wanted.
+
+## D48 — No running header by default; a note prints on its call's page (2026-09-25, amends D46 and D47)
+Owner decision: a new book has no running header («بلا ترويسة») until one is chosen in التنسيق. Found while testing
+the book page: WeasyPrint can drop a note to the next page when it steps back for widows/orphans at the page foot, so
+the renderer finds each note printed after its call's page, relaxes widows/orphans at that page break and lays out
+again (at most two passes). A footnote call is 0.62 of the body text size (it had come out 0.62 of the note size), and
+the page editor draws calls and scan-page marks exactly as the engine lays them out, so the paragraph being edited
+breaks its lines where the export does. `ENGINE_VERSION` is `nk-print-4`: every book lays out again when next opened.

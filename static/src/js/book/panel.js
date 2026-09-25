@@ -118,7 +118,7 @@
         const i = TABS.indexOf(this.tab);
         const next = TABS[(i + dir + TABS.length) % TABS.length];
         this.setTab(next);
-        const focus = () => U.focus(U.q(this.$el, `[data-tab="${next}"]`));
+        const focus = () => U.focus(U.q(ctx.dom.root || (U.hasDOM ? document.querySelector('[data-book]') : null), `[data-tab="${next}"]`));
         if (this.$nextTick) this.$nextTick(focus); else focus();
         return next;
       },
@@ -180,7 +180,10 @@
         return this.footprint.rows;
       },
       renderChapters() {
-        if (!listHost) listHost = U.q(this.$el || (U.hasDOM ? document.querySelector('[data-book]') : null), '[data-chapter-list]');
+        // the component root saved by bindStage: `this.$el` is whichever element triggered the call (the tab button,
+        // the list's own x-effect), so a lookup inside it finds nothing
+        if (!listHost || !listHost.isConnected) listHost = U.q(ctx.dom.root || (U.hasDOM ? document.querySelector('[data-book]') : null), '[data-chapter-list]');
+        if (listHost && listHost.childElementCount === 0) listKey = null; // emptied (re-rendered): paint again
         if (!listHost) return;
         const rows = this.chapterRows();
         const key = JSON.stringify(rows.map((r) => [r.id, r.first, r.last, r.delta, r.drift, r.current, r.title]));
@@ -597,7 +600,13 @@
       },
 
       // ------------------------------------------------------------ dialogs: snapshots, digits, shortcuts
-      rememberTrigger() { lastTrigger = U.hasDOM ? document.activeElement : null; },
+      // a menu item hides with its menu: focus goes back to the button that opened the menu
+      rememberTrigger() {
+        const el = U.hasDOM ? document.activeElement : null;
+        const menu = el ? U.closest(el, '[role="menu"]') : null;
+        const opener = menu && menu.parentElement ? menu.parentElement.querySelector('[aria-haspopup="menu"]') : null;
+        lastTrigger = opener || el;
+      },
       restoreTrigger() { const el = lastTrigger; lastTrigger = null; if (el && el.isConnected !== false) U.focus(el); },
       async openSnapshots() {
         this.closePop();

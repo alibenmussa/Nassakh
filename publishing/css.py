@@ -34,6 +34,10 @@ def _mm(value: float) -> str:
     return f"{round(float(value), 2):g}mm"
 
 
+# a footnote call's size, as a share of the body text (the page editor mirrors it: book/edit.js `boxLook`)
+FOOTNOTE_CALL_SCALE = 0.62
+
+
 def _pt(value: float) -> str:
     return f"{round(float(value), 2):g}pt"
 
@@ -179,7 +183,10 @@ def stylesheet_css(
         f" font-family: {body_font}; font-size: {_pt(s.footnote_size_pt)}; line-height: 1.5;"
         " font-weight: normal; font-style: normal;"
         " text-align: justify; text-indent: 0; }",
-        '.nk-fn::footnote-call { content: "(" attr(data-n) ")"; font-size: 0.62em; vertical-align: super;'
+        # the call is sized from the body text (`em` would be the note's own smaller size: the call inherits
+        # from the note)
+        '.nk-fn::footnote-call { content: "(" attr(data-n) ")";'
+        f" font-size: {_pt(s.body_size_pt * FOOTNOTE_CALL_SCALE)}; vertical-align: super;"
         " line-height: 0; font-weight: normal; font-style: normal; }",
         '.nk-fn::footnote-marker { content: "(" attr(data-n) ")\\00a0"; }',
     ]

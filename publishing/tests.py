@@ -341,7 +341,8 @@ def test_page_rules_size_mirrored_margins_and_page_numbers():
         "@page :left { margin-left: 18mm; margin-right: 22mm;" in css
     )  # recto (odd, RTL): inner on the right
     assert "@page :right { margin-left: 22mm; margin-right: 18mm;" in css
-    assert "@top-center { content: string(running, first-except);" in css
+    assert "string(running" not in css  # no running header by default (owner, 2026-09-25)
+    assert "@top-center { content: string(running, first-except);" in css_of(running_header="chapter")
     assert "@bottom-center { content: counter(page);" in css
     assert "@footnote { border-top: 0.4pt solid #000;" in css
     assert ".nk-chapter.is-chapter, .nk-chapter.is-front { break-before: page; }" in css
@@ -371,7 +372,9 @@ def test_type_rules_follow_the_stylesheet():
         ".nk-fn { float: footnote; footnote-display: block;" in css
         and "font-size: 9pt; line-height: 1.5;" in css
     )
-    assert '.nk-fn::footnote-call { content: "(" attr(data-n) ")";' in css
+    # the call is 0.62 of the body text (7.75pt), not of the note's own 9pt
+    call = '.nk-fn::footnote-call { content: "(" attr(data-n) ")"; font-size: 7.75pt; vertical-align: super;'
+    assert call in css
     assert ".nk-chapter-title { string-set: running attr(data-running);" in css
     assert ".nk-src" not in css and ".nk-src" in css_of(print_source_pages=True)
 
@@ -427,6 +430,24 @@ def bracketed(page: pymupdf.Page) -> list[int]:
 
 def job(source, **sheet) -> engine.RenderJob:
     return engine.RenderJob(document=source, stylesheet=sheet, title="كتاب", author="")
+
+
+def test_a_note_stays_on_the_page_of_its_call_under_widows_and_orphans():
+    """WeasyPrint drops a note to the next page when it steps back for widows / orphans at the page foot
+    (the call stays behind, the page is full or has room left): the renderer relaxes widows / orphans at
+    that page break and lays out again, so the note prints on its call's page."""
+    blocks = []
+    for i, k in enumerate((1, 2, 3, 3, 2)):
+        content: list = [(LOREM + " ") * k]
+        if i == 0:
+            content += [note("nx", "حاشية طويلة للاختبار", number=1), " ثم يكمل النص بعد الحاشية."]
+        blocks.append(para(f"p{i}", *content))
+    rendered = engine.get_engine().render(job(document(*blocks), trim="a5", widows=2, orphans=2))
+    pages = [page.get_text() for page in pdf_pages(rendered.pdf)]
+    call_page = next(i for i, page in enumerate(pages, start=1) if "ثم يكمل النص بعد الحاشية" in page)
+    assert rendered.footnotes["fn-nx"] == call_page
+    assert "حاشية طويلة للاختبار" in pages[call_page - 1]
+    assert rendered.passes >= 2  # the relaxing pass ran
 
 
 def test_footnotes_sit_at_the_page_foot_numbered_per_page_across_pages():
@@ -787,14 +808,15 @@ def test_the_book_pdf_export_uses_the_same_engine(book):
 
 
 def calls_and_markers(page: pymupdf.Page) -> tuple[list[int], list[int]]:
-    """The footnote numbers of a page: the calls in the text (set small) and the markers at its foot."""
+    """The footnote numbers of a page: the calls in the text (0.62 of the 13pt body) and the markers at its
+    foot (the 10pt notes)."""
     calls: list[int] = []
     markers: list[int] = []
     for block in page.get_text("dict")["blocks"]:
         for line in block.get("lines", []):
             for span in line["spans"]:
                 found = [int(n) for n in re.findall(r"[()]\s*(\d{1,2})\s*[()]", span["text"])]
-                (calls if span["size"] < 8 else markers).extend(found)
+                (calls if span["size"] < 9 else markers).extend(found)
     return sorted(calls), sorted(markers)
 
 

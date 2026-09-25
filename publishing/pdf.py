@@ -11,6 +11,13 @@ One `FontConfiguration` serves the `CSS` object and every `render` of a job (Wea
 instance for `@font-face` rules to apply). With `reuse`, the pair is kept for the next job with the same
 CSS (the re-layout worker saves the ~0.1 s the CSS and its fonts take to load; one job at a time uses it).
 
+**Notes kept with their calls.** WeasyPrint drops a footnote to the next page when it steps back to honour
+`widows` / `orphans` at the foot of a page, although its call stays (seen on real books: a call at the foot
+of page 4, its note on page 5, room left on page 4). After the numbering passes the calls are located in the
+box tree; for every note printed on a later page than its call, `widows` and `orphans` are relaxed to 1 on
+the paragraph holding the call, on the paragraphs either side of that page break and on the one after each,
+and the book is laid out again (at most twice).
+
 **Layout (D47).** Given the markup's `texts`, the last pass's box tree is exported as the page layout
 (`publishing.layout`); `pdf=False` stops there (the fast re-layout writes no PDF). `seed` (element id →
 number) starts pass 1 with the numbers of the last layout: when no note changed page, one pass is enough.
@@ -31,6 +38,7 @@ from .html import note_order, with_numbers
 log = logging.getLogger(__name__)
 
 MAX_PASSES = 3
+MAX_RELAX_PASSES = 2
 
 
 class RenderCancelled(Exception):  # noqa: N818 - a signal, not an error
@@ -89,6 +97,63 @@ def first_pages(document) -> dict[str, int]:
     return out
 
 
+def call_pages(document) -> tuple[dict[str, tuple[int, str | None]], list[tuple[str | None, str | None]]]:
+    """Footnote element id → (the page, 1-based, of its call, the block holding the call), and for every
+    page its first and last body blocks (the blocks at its page breaks)."""
+    calls: dict[str, tuple[int, str | None]] = {}
+    ends: list[tuple[str | None, str | None]] = []
+    for index, page in enumerate(document.pages, start=1):
+        first = last = None
+        stack = [(page._page_box, None)]
+        while stack:
+            box, block = stack.pop()
+            element = getattr(box, "element", None)
+            tag = getattr(box, "element_tag", "") or ""
+            if element is not None and hasattr(element, "get"):
+                if tag.endswith("::footnote-call"):
+                    element_id = element.get("id")
+                    if element_id:
+                        calls.setdefault(element_id, (index, block))
+                elif "::" not in tag and element.get("data-block") and element.get("data-kind") != "note":
+                    block = element.get("data-block")
+                    if first is None:
+                        first = block
+            if block is not None and getattr(box, "children", None) is None:
+                last = block
+            children = list(getattr(box, "children", None) or ())
+            stack.extend((child, block) for child in reversed(children))  # document order
+        ends.append((first, last))
+    return calls, ends
+
+
+def displaced_blocks(order: list[str], note_pages: dict[str, int], found) -> set[str]:
+    """The blocks at the page break after every call whose note is printed on a later page: the last block
+    of the call's page and the first of the next (WeasyPrint loses the note when it steps back there for
+    `widows` / `orphans`), and the block holding the call."""
+    calls, ends = found
+    blocks: set[str] = set()
+    for element_id in order:
+        call = calls.get(element_id)
+        note = note_pages.get(element_id)
+        if not call or not note or note <= call[0]:
+            continue
+        page = call[0]
+        if call[1]:
+            blocks.add(call[1])
+        if 0 < page <= len(ends) and ends[page - 1][1]:
+            blocks.add(ends[page - 1][1])
+        if page < len(ends) and ends[page][0]:
+            blocks.add(ends[page][0])
+    return blocks
+
+
+def relax_css(blocks: set[str]) -> str:
+    """`widows` / `orphans` 1 on these blocks and on the block after each."""
+    names = [str(block).replace("\\", "\\\\").replace('"', '\\"') for block in sorted(blocks)]
+    selectors = ", ".join(f'[data-block="{name}"], [data-block="{name}"] + *' for name in names)
+    return f"{selectors} {{ widows: 1 !important; orphans: 1 !important; }}"
+
+
 def per_page_numbers(order: list[str], pages: dict[str, int]) -> dict[str, str]:
     """Each footnote's rank on its page (`order` is the document order of the footnote ids)."""
     counts: dict[int, int] = {}
@@ -139,10 +204,13 @@ def _render(
     started = time.monotonic()
     sheet, font_config = _sheet(css, fonts, reuse)
 
+    extra: list = []  # the relaxed widows / orphans around a displaced note, when needed
+
     def layout(markup: str):
         if cancelled is not None and cancelled():
             raise RenderCancelled
-        return HTML(string=markup, base_url=base_url).render(stylesheets=[sheet], font_config=font_config)
+        document = HTML(string=markup, base_url=base_url)
+        return document.render(stylesheets=[sheet, *extra], font_config=font_config)
 
     order = note_order(html)
     numbers: dict[str, str] = {}
@@ -179,6 +247,30 @@ def _render(
                 break  # some notes moved, but every rank shown is still right
         if wanted != numbers:  # pragma: no cover - a note still moving after the third pass
             log.warning("footnote numbers may be off on some pages after %s passes", passes)
+    if order:
+        from weasyprint import CSS
+
+        relaxed: set[str] = set()
+        for _ in range(MAX_RELAX_PASSES):
+            blocks = displaced_blocks(order, note_pages, call_pages(document)) - relaxed
+            if not blocks:
+                break
+            relaxed |= blocks
+            extra[:] = [CSS(string=relax_css(relaxed), font_config=font_config)]
+            markup = with_numbers(html, numbers) if numbering == "page" and numbers else html
+            document = layout(markup)
+            passes += 1
+            anchors = first_pages(document)
+            note_pages = {element_id: anchors[element_id] for element_id in order if element_id in anchors}
+            if numbering == "page":
+                wanted = per_page_numbers(order, note_pages)
+                if wanted != numbers:
+                    document = layout(with_numbers(html, wanted))
+                    passes += 1
+                    numbers = wanted
+                    anchors = first_pages(document)
+                    note_pages = {key: anchors[key] for key in order if key in anchors}
+                patched = False
     if cancelled is not None and cancelled():
         raise RenderCancelled
     pages = misses = None

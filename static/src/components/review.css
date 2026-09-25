@@ -484,6 +484,10 @@
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-pop);
     animation: rv-modal-in 180ms ease-out both;
+    /* a tall sheet (the shortcuts) scrolls inside the window instead of running past its foot */
+    max-height: calc(88dvh - 16px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .rv-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .rv-modal-title { font-size: 15px; font-weight: 600; line-height: 1.45; }

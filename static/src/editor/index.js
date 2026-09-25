@@ -169,10 +169,18 @@ export function createBlock(element, options = {}) {
     destroy() { ready = false; if (editor) editor.destroy(); editor = null; },
 
     // ---------------------------------------------------------- geometry (viewport pixels)
-    // The top of the line holding `offset`, from the editor's top edge (the page anchors the paragraph there).
+    // The top of the line box holding `offset`, from the editor's top edge (the page anchors the paragraph
+    // there). The caret's own rect starts below its line box by the half-leading (about 3 pt at 13 pt on a
+    // 22 pt line), so the line index is taken from the caret's middle and turned back into a line-box top.
     lineTop(offset) {
-      const top = editor.view.dom.getBoundingClientRect().top;
-      try { return editor.view.coordsAtPos(posAt(offset)).top - top; } catch (_) { return 0; }
+      try {
+        const dom = editor.view.dom;
+        const top = dom.getBoundingClientRect().top;
+        const c = editor.view.coordsAtPos(posAt(offset));
+        const lh = typeof getComputedStyle === 'function' ? parseFloat(getComputedStyle(dom).lineHeight) || 0 : 0;
+        if (!(lh > 0)) return c.top - top;
+        return Math.max(0, Math.floor(((c.top + c.bottom) / 2 - top) / lh)) * lh;
+      } catch (_) { return 0; }
     },
     caretRect() { return coords(); },
     // The caret on the first or the last line, as near `x` as the line allows (↑ / ↓ from a neighbour).

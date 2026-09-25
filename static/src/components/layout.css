@@ -261,7 +261,9 @@
   /* scan page marks (edit mode, «فواصل الصفحات الأصلية»): a hairline and a tiny «ص 13» above the line, no width */
   .lp-pb { position: relative; }
   .lp-pb::before { content: ""; position: absolute; top: 0.05em; height: 1.1em; inset-inline-start: 0; border-inline-start: 1px solid rgba(138, 138, 147, 0.7); }
-  .lp-pb::after { content: "ص " attr(data-page); position: absolute; bottom: 1.05em; inset-inline-start: 0; translate: 50% 0; font: 500 max(9px, calc(6 * var(--u)))/1 var(--font-sans); color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* the label goes in the margin at the line's start (RTL: right), clear of every letter and of the open
+     paragraph's bar */
+  .lp-line.has-pb::after { content: "ص " attr(data-pb); position: absolute; top: 50%; translate: 0 -50%; inset-inline-end: calc(100% + 12 * var(--u)); font: 500 max(9px, calc(6 * var(--u)))/1 var(--font-sans); color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; }
   .lo-screen:not(.is-edit) .lp-line { cursor: text; }
   .lo-screen.is-edit .lp-line:not(.is-front):not(.k-source) { cursor: text; }
   .lo-screen.is-edit .lp-line.is-front { cursor: default; }
@@ -286,7 +288,10 @@
     overflow-wrap: break-word;
   }
   .lp-patch.is-static { cursor: text; }
-  .lp-patch.is-open { box-shadow: 0 0 0 calc(4 * var(--u)) #fff, 0 0 0 calc(4 * var(--u) + 1px) rgba(37, 99, 235, 0.28); border-radius: 1px; }
+  /* the open paragraph is marked by a bar in the margin at its start (RTL: right), never by a frame: a frame
+     spreading outside the paragraph covered the descenders of the line above and the ascenders below */
+  .lp-patch.is-open { box-shadow: none; }
+  .lp-patch.is-open::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: calc(-7 * var(--u)); width: 2px; border-radius: 1px; background: var(--color-accent); opacity: 0.55; pointer-events: none; }
   .lp-patch.is-h1, .lp-patch.is-h2, .lp-patch.is-title { font-family: "nk-heading", "nk-latin", serif; font-weight: 700; text-align: center; text-align-last: center; }
   .lp-patch.is-verse, .lp-patch.is-center { text-align: center; text-align-last: center; }
   .lp-patch .ed-doc { outline: none; white-space: pre-wrap; caret-color: var(--color-accent); font-variant-numeric: lining-nums; }
@@ -303,16 +308,20 @@
   .lp-patch .ed-match { background: var(--color-highlight); }
   .lp-patch .ed-match.is-current { box-shadow: 0 0 0 1.5px var(--color-warning); }
   /* a footnote call: its printed number as a superscript (the note's own text stays hidden inside) */
-  .lp-patch .ed-fn { display: inline; vertical-align: super; line-height: 0; font-size: 0.62em; color: var(--color-accent-text); cursor: pointer; user-select: none; text-indent: 0; }
+  .lp-patch .ed-fn { display: inline; vertical-align: super; line-height: 0; font-size: calc(var(--call-fs, 8) * var(--u)); color: var(--color-accent-text); cursor: pointer; user-select: none; text-indent: 0; }
   .lp-patch .ed-fn::before { content: "(" attr(data-seq) ")"; }
   .lp-patch .ed-fn:hover { background: var(--color-accent-soft); }
   .lp-patch .ed-fn[data-orphan="true"] { color: var(--color-warning-text); }
   .lp-patch .ed-fn-body { display: none; }
   .lp-patch .ed-fn.ProseMirror-selectednode, .lp-patch .ed-pb.ProseMirror-selectednode { background: var(--color-accent-soft); outline: 2px solid var(--color-accent); outline-offset: 1px; }
   /* a scan page mark takes no room in the text (the engine does not print it): a hairline and «ص 13» above */
-  .lp-patch .ed-pb { position: relative; display: inline; user-select: none; }
-  .lp-patch .ed-pb::before { content: ""; position: absolute; top: 0.05em; height: 1.1em; inset-inline-start: 0; border-inline-start: 1px solid rgba(138, 138, 147, 0.7); }
-  .lp-patch .ed-pb::after { content: "ص " attr(data-page); position: absolute; bottom: 1.05em; inset-inline-start: 0; translate: 50% 0; font: 500 max(9px, calc(6 * var(--u)))/1 var(--font-sans); color: var(--color-text-3); white-space: nowrap; }
+  /* in the open paragraph too the label sits in the margin beside its line (above the mark it covered the
+     previous line's letters): the mark is static, so its absolutely placed label keeps the line's height (its
+     static position) while its side is the paragraph box's; the hairline is an in-flow zero-width stroke */
+  .lp-patch .ed-pb { position: static; display: inline; user-select: none; }
+  /* the hairline takes no room in the line (the engine lays the text out without it) */
+  .lp-patch .ed-pb::before { content: ""; display: inline-block; width: 0; height: 1.1em; vertical-align: -0.2em; border-inline-start: 1px solid rgba(138, 138, 147, 0.7); margin-inline-end: -1px; }
+  .lp-patch .ed-pb::after { content: "ص " attr(data-page); position: absolute; inset-inline-end: calc(100% + 12 * var(--u)); translate: 0 0.45em; font: 500 max(9px, calc(6 * var(--u)))/1 var(--font-sans); color: var(--color-text-3); white-space: nowrap; pointer-events: none; }
   .lp-patch .hide-marks .ed-pb, .lp-patch .ed-doc.hide-marks .ed-pb { display: none; }
   .lo-screen:not(.has-marks) .lp-patch.is-static .ed-pb { display: none; }
 

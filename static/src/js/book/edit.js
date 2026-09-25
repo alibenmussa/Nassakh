@@ -77,6 +77,13 @@
     });
     return { regions: list, lines };
   }
+  // The editing layer is a clipped box, and a browser scrolls even a clipped box to show the caret: the open
+  // paragraph then slid over its neighbours. The layer never scrolls; the page turns instead (followCaret).
+  function pinHost(host) {
+    if (!host || host._nkPinned || typeof host.addEventListener !== 'function') return;
+    host._nkPinned = true;
+    host.addEventListener('scroll', () => { if (host.scrollTop || host.scrollLeft) { host.scrollTop = 0; host.scrollLeft = 0; } });
+  }
   NS.editFlow = { flow, placeAgainst };
 
   NS.parts.edit = function edit(ctx) {
@@ -386,6 +393,7 @@
         const box = document.createElement('div');
         box.className = 'lp-patch is-open';
         box.dataset.block = block;
+        pinHost(host);
         host.appendChild(box);
         ctx.box = box;
         ctx.openId = block;
@@ -446,7 +454,8 @@
         }
         if (lead && Number(lead.size_pt)) fs = Number(lead.size_pt);
         if (lines.length && Number(lines[0].h)) lh = Number(lines[0].h);
-        return { cls, x: m.x + inset, w: Math.max(40, m.w - 2 * inset), fs, lh, indent };
+        // a footnote call is FOOTNOTE_CALL_SCALE of the body text, whatever the block (publishing/css.py)
+        return { cls, x: m.x + inset, w: Math.max(40, m.w - 2 * inset), fs, lh, indent, call: body * 0.62 };
       },
       styleBox(el, node, page) {
         const box = el || ctx.box;
@@ -462,6 +471,7 @@
         set('--fs', look.fs);
         set('--lh', look.lh);
         set('--indent', look.indent);
+        set('--call-fs', look.call);
       },
       // Where the open paragraph sits: the line of the caret (in the layout) under the same line of the editor.
       anchorOpen(first) {
@@ -568,13 +578,23 @@
             }
           }
           const clipTop = this.clipTop(page);
+          const bottom = G.bodyBottom(page);
+          const out = flow(page, regions, bottom);
+          // and the foot of the body: an open paragraph that runs on to the next page never covers the
+          // footnotes or the page number (its lines past the body are the next page's, as in the PDF). The cut
+          // falls on a whole line of the open paragraph: cut at the rule itself it showed half a line.
+          let visibleBottom = bottom;
+          const openR = out.regions.find((r) => r.key === ctx.openId && r.el);
+          if (openR) {
+            const lh = parseFloat((openR.el.style && openR.el.style.getPropertyValue && openR.el.style.getPropertyValue('--lh')) || '') || 0;
+            if (lh > 0 && openR.screenTop + openR.height > bottom + 0.5) {
+              visibleBottom = openR.screenTop + Math.max(1, Math.floor((bottom - openR.screenTop + 0.5) / lh)) * lh;
+            }
+          }
           if (host.host.style && host.host.style.setProperty) {
             host.host.style.setProperty('--clip', G.num(clipTop));
-            // and the foot of the body: an open paragraph that runs on to the next page never covers the
-            // footnotes or the page number (its lines past the body are the next page's, as in the PDF)
-            host.host.style.setProperty('--clip-b', G.num(Math.max(0, (Number(page.height_pt) || 0) - G.bodyBottom(page))));
+            host.host.style.setProperty('--clip-b', G.num(Math.max(0, (Number(page.height_pt) || 0) - visibleBottom)));
           }
-          const out = flow(page, regions, G.bodyBottom(page));
           out.regions.forEach((r) => { if (r.el && r.el.style && r.el.style.setProperty) r.el.style.setProperty('--top', G.num(r.screenTop - clipTop)); });
           const lines = host.lines && host.lines.children ? Array.from(host.lines.children) : [];
           lines.forEach((el) => {
@@ -622,6 +642,7 @@
         if (!host || !ctx.box) return;
         const focused = ctx.ed && ctx.ed.isFocused;
         const offset = ctx.ed ? ctx.ed.offset() : 0;
+        pinHost(host);
         host.appendChild(ctx.box);
         if (ctx.anchor) ctx.anchor.side = side;
         if (focused && ctx.ed) { ctx.ed.setOffset(offset); ctx.ed.focus(); }
@@ -682,6 +703,29 @@
         const node = ctx.ed.getNode() || {};
         const a = node.attrs || {};
         this.flags = { breakBefore: a.breakBefore === true, keepWithNext: a.keepWithNext === true };
+        this.followCaret();
+      },
+      // The caret moved (arrows, a click, Home / End) onto text the layout put on another page: the view turns
+      // there and the paragraph is anchored on that line, as after a re-layout. Only while the layout shows
+      // exactly this text (while typing the offsets run ahead of it; the re-layout then turns the page).
+      followCaret() {
+        if (!ctx.ed || !ctx.box || !ctx.anchor || !ctx.openId) return;
+        if (ctx.box.parentNode && ctx.box.parentNode.scrollTop) ctx.box.parentNode.scrollTop = 0;
+        if (ctx.nodes !== ctx.laid || jsonOf(ctx.ed.getNode()) !== ctx.base) return;
+        const caret = ctx.ed.offset();
+        const c = G.caretLine(ctx.pages, ctx.openId, caret);
+        if (!c || c.n === ctx.anchor.n) return;
+        if (!this.sideOf(c.n)) this.showPage(c.n, { instant: true, keepOpen: true });
+        const side = this.sideOf(c.n) || 'right';
+        ctx.anchor = Object.assign(ctx.anchor, { n: c.n, side, after: null });
+        if (ctx.dom.sheets && ctx.dom.sheets[side] && ctx.box.parentNode !== ctx.dom.sheets[side].host) this.moveBox(side);
+        const page = ctx.pages.get(c.n);
+        const scale = this.scale(side);
+        const line = page && page.lines ? page.lines[c.i] : null;
+        if (line && scale) ctx.anchor.top = line.y - ctx.ed.lineTop(caret) / scale;
+        this.styleBox();
+        this.open = Object.assign({}, this.open || {}, { n: c.n });
+        this.paint();
       },
       pause() {
         clearTimeout(T.pause);
@@ -1072,9 +1116,17 @@
         const { content, version } = this.conflict;
         this.conflict = { open: false, version: '', content: null };
         this.dropEditor();
-        if (!content) return this.loadChapter(this.editChapterId, { force: true });
+        if (!content) {
+          return Promise.resolve(this.loadChapter(this.editChapterId, { force: true })).then((r) => {
+            if (typeof this.refetchShown === 'function') this.refetchShown();
+            return r;
+          });
+        }
         this.applyChapter({ ...this.chapter, source_pages: this.chapter.sourcePages, id: this.editChapterId, version, content }, { force: true });
         this.requestRelayout(this.editChapterId);
+        // the other window's save already laid its text out on the server (the request above is then a
+        // no-op that raises no revision): the pages on screen are fetched again, or they keep the old text
+        if (typeof this.refetchShown === 'function') this.refetchShown();
         U.toast('أُعيد تحميل الفصل من الخادم');
         this.paint();
         return true;

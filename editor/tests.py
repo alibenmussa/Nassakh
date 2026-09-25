@@ -634,8 +634,9 @@ def test_stylesheet_defaults_without_a_row(book, reader_user):
     }
     assert (sheet["widows"], sheet["orphans"], sheet["keep_headings"]) == (2, 2, True)  # D47
     assert data["field_defaults"] == {"title": book.title, "author": book.author}
+    # owner, 2026-09-25: no running header unless chosen
     assert (sheet["running_header"], sheet["page_number"], sheet["chapter_opening"]) == (
-        "chapter",
+        "none",
         "bottom_center",
         "any",
     )

@@ -92,7 +92,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 {% else %}
 <div class="lo-screen bp-screen" data-book x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
      :class="{ 'is-spread': spreadOn, 'is-edit': mode === 'edit', 'is-open': Boolean(open), 'has-marks': pageMarks }" :data-fit="fit" :data-mode="mode"
-     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @visibilitychange.document="onVisible()">
+     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @hashchange.window="onHashChange()" @visibilitychange.document="onVisible()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
   {# the render's faces for the live pages (publishing.fonts.browser_font_css): the same families as the PDF #}
   <style data-font-css x-text="fontCss">{{ config.fontCss }}</style>

@@ -1164,9 +1164,10 @@ def test_live_page_geometry_under_node(tmp_path):
         assert f"k-{line['kind']}" in cls and ("is-j" in cls) == line["justify"]
     heading_cls = next(c for c, _i, b, _s in drawn if b == "h10")
     assert "is-c" in heading_cls and "f-h" in heading_cls
-    # the call: a superscript run of the note, its one position; the note at the foot; the rule; the number
+    # the call: a superscript run of the note (0.62 of the 13pt body), its one position; the note at the
+    # foot; the rule; the number
     assert re.search(
-        r'<span class="lp-run f-b is-sup" data-r="1" data-s="23" data-e="24" data-note="n1" style="--fs:6.2">\(1\)</span>',  # noqa: E501
+        r'<span class="lp-run f-b is-sup" data-r="1" data-s="23" data-e="24" data-note="n1" style="--fs:8.06">\(1\)</span>',  # noqa: E501
         html,
     )
     note_cls = next(c for c, _i, b, _s in drawn if b == "n1")
@@ -2465,3 +2466,150 @@ def test_book_page_review_fixes_under_node(tmp_path):
         "revision": 4,
         "held": [1, 2, 3, 4, 5],
     }
+
+
+# ---------------------------------------------------------------- fixes found testing the page in Chrome
+# (2026-09-25, book 18): the chapters list painted from the component root, the scan page label in the margin,
+# the open paragraph cut on a whole line at the body's foot, the caret followed onto the next page, the edit
+# layer never scrolled, and a conflict reload fetching the pages again.
+
+CHROME_SCENARIO = r"""
+const out = {};
+(async () => {
+  // ---- «الفصول»: the list is painted although the call comes from the tab button (Alpine's `$el` there)
+  const c = mk();
+  await settle();
+  c.$el = el('button', 'bp-tab');
+  c.setTab('chapters');
+  out.chapterList = c._dom.list.innerHTML.includes('bp-ch');
+  drop();
+
+  // ---- a scan page mark: the hairline stays in the text, its «ص N» label goes on the line (the margin)
+  const G = globalThis.NassakhBook.geo;
+  const page2 = fixture.pages[1];
+  const line = page2.lines[5];
+  const html = G.lineHtml(line, 5, { marks: (b) => (b === line.block ? [{ offset: line.start + 3, page: 7 }] : []) });
+  out.pbLine = { hasClass: /class="[^"]*has-pb/.test(html), attr: /data-pb="7"/.test(html), mark: html.includes('class="lp-pb"') };
+  out.pbNone = /has-pb|data-pb/.test(G.lineHtml(line, 5, {}));
+
+  // ---- p13 runs from page 2 onto page 3: open it on page 2
+  const v = mk();
+  await settle();
+  v.showPage(2, { instant: true });
+  v.setMode('edit'); await settle();
+  v.onSheetClick(lineTarget(v, 'right', 5, 0, 10), 'right'); await settle();
+  const ed = editors[editors.length - 1];
+  const host = v._dom.sheets.right.host;
+  // the edit layer never scrolls (a browser scrolls even a clipped box to show the caret)
+  host.scrollTop = 40;
+  if (host.listeners.scroll) host.listeners.scroll();
+  out.pinned = { listener: typeof host.listeners.scroll, scrollTop: host.scrollTop };
+  // taller than the body: the cut falls on a whole line of the paragraph, above the footnote rule
+  ed.grow(24);
+  v.paint();
+  const box = v.ctx().box;
+  const clipB = Number(host.style['--clip-b']);
+  const visibleBottom = page2.height_pt - clipB;
+  const top = Number(box.style['--top']) + Number(host.style['--clip']);
+  const lh = Number(box.style['--lh']);
+  out.cut = { visibleBottom, rule: page2.footnote_rule.y, lines: (visibleBottom - top) / lh, lh };
+  // a footnote call is drawn at the book stylesheet's size: 0.62 of the body text
+  out.call = { fs: Number(box.style['--call-fs']), body: Number((v.sheet || {}).body_size_pt) || 13 };
+  ed.grow(3); v.paint();
+  out.cutShort = Number(host.style['--clip-b']);
+  // the caret moved (↓) onto the part the engine put on page 3: the view turns there, anchored on that line
+  ed.at = 160;
+  ed.opts.onSelection(); await settle();
+  out.follow = { current: v.current, anchor: v.ctx().anchor && v.ctx().anchor.n, open: v.open && v.open.block };
+  // while typing, the offsets run ahead of the layout: no turn (the re-layout turns the page)
+  v.showPage(2, { instant: true, keepOpen: true }); await settle();
+  ed.at = 10; ed.opts.onSelection(); await settle();
+  const before = v.current;
+  ed.type('نص مكتوب الآن لم تُرتَّب صفحاته بعد');
+  ed.at = 20; ed.opts.onSelection(); await settle();
+  out.typing = { before, after: v.current };
+  drop();
+
+  // ---- a conflict answered with the other window's text: the pages on screen are fetched again
+  const w = mk();
+  await settle();
+  w.showPage(2, { instant: true });
+  w.setMode('edit'); await settle();
+  let refetched = 0;
+  const realRefetch = w.refetchShown;
+  w.refetchShown = function () { refetched += 1; return realRefetch.call(this); };
+  w.conflict = { open: true, version: 'v9', content: { type: 'doc', content: clone(server.docs.h10) } };
+  w.reloadConflict(); await settle();
+  out.reload = { refetched, open: w.conflict.open, version: w.version };
+  drop();
+
+  // ---- a #page-N link opened in the same tab turns to that page; an unknown page says so
+  const h = mk();
+  await settle();
+  h.showPage(1, { instant: true });
+  location.hash = '#page-3'; h.onHashChange(); await fire(200); await settle();
+  const turned = h.current;
+  const toastsBefore = toasts.length;
+  location.hash = '#page-99'; h.onHashChange(); await fire(200); await settle();
+  out.hash = { turned, stayed: h.current, toast: toasts.slice(toastsBefore).pop() || null };
+  location.hash = '';
+
+  // ---- a dialog opened from the «⋯» menu gives the focus back to the menu's button (its item is hidden)
+  const anchor = el('div', 'menu-anchor');
+  const opener = anchor.appendChild(el('button', 'btn-icon', { name: 'more' }));
+  opener.setAttribute('aria-haspopup', 'menu');
+  const menu = anchor.appendChild(el('div', 'menu'));
+  menu.setAttribute('role', 'menu');
+  const item = menu.appendChild(el('button', 'menu-item', { name: 'digits-item' }));
+  document.activeElement = item;
+  h.openDigits(); await settle();
+  h.closeDigits(); await settle();
+  out.trigger = focused[focused.length - 1];
+  document.activeElement = null;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_book_page_chrome_fixes_under_node(tmp_path):
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    base = COMPONENT_HARNESS.split("\nconst out = {};\n")[0]
+    out = _run_node(folder, "chrome.mjs", base + CHROME_SCENARIO, str(ROOT), str(folder / "fixture.json"))
+    assert out["chapterList"] is True
+    assert out["pbLine"] == {"hasClass": True, "attr": True, "mark": True} and out["pbNone"] is False
+    assert out["pinned"] == {"listener": "function", "scrollTop": 0}
+    # the open paragraph shows whole lines only, ending above the footnote rule, less than a line above it
+    cut = out["cut"]
+    assert cut["visibleBottom"] <= cut["rule"] + 1e-6 and cut["rule"] - cut["visibleBottom"] < cut["lh"]
+    assert abs(cut["lines"] - round(cut["lines"])) < 1e-6 and round(cut["lines"]) >= 1
+    # a paragraph that fits cuts at the body's foot as before
+    page2 = fixture["pages"][1]
+    assert out["cutShort"] == pytest.approx(page2["height_pt"] - page2["footnote_rule"]["y"], abs=0.01)
+    assert out["call"]["fs"] == pytest.approx(out["call"]["body"] * 0.62, abs=0.01)
+    assert out["follow"] == {"current": 3, "anchor": 3, "open": "p13"}
+    assert out["typing"]["after"] == out["typing"]["before"]
+    assert (
+        out["reload"]["refetched"] >= 1
+        and out["reload"]["open"] is False
+        and out["reload"]["version"] == "v9"
+    )
+    assert out["hash"] == {"turned": 3, "stayed": 3, "toast": "لا صفحة بهذا الرقم"}
+    assert out["trigger"] == "more"
+
+
+def test_compiled_css_modal_scrolls_page_labels_and_open_bar():
+    css = (ROOT / "static" / "dist" / "app.css").read_text(encoding="utf-8")
+    modal = re.search(r"\.rv-modal\{([^}]*)\}", css)
+    assert modal and "max-height:calc(88dvh - 16px)" in modal.group(1) and "overflow-y:auto" in modal.group(1)
+    label = re.search(r"\.lp-line\.has-pb:after\{([^}]*)\}", css)
+    assert label and "attr(data-pb)" in label.group(1) and "inset-inline-end" in label.group(1)
+    bar = re.search(r"\.lp-patch\.is-open:before\{([^}]*)\}", css)
+    assert bar and "width:2px" in bar.group(1)
+    # the editor sets a footnote call and a page hairline as the engine does (a call's size, no hairline room)
+    call = re.search(r"\.lp-patch \.ed-fn\{([^}]*)\}", css)
+    assert call and "font-size:calc(var(--call-fs,8) * var(--u))" in call.group(1)
+    hairline = re.search(r"\.lp-patch \.ed-pb:before\{([^}]*)\}", css)
+    assert hairline and "margin-inline-end:-1px" in hairline.group(1)
+    assert not re.search(r"\.lp-patch\.is-open\{[^}]*box-shadow:0 0 0 calc", css)
