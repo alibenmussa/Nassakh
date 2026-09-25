@@ -99,12 +99,12 @@
   .bk-manuscript-open, .bk-manuscript-convert { font-size: 12.5px; font-weight: 500; }
   .bk-manuscript-convert { padding: 0; border: 0; background: none; cursor: pointer; }
   .bk-manuscript-convert:hover { text-decoration: underline; }
-  /* Phase 5 (PHASE5_SPEC §5): the «الكتاب» block, trim and page count, the drift line, the layout and editor links */
+  /* Phase 5 (PHASE5_SPEC §5, §9): the «الكتاب» block, trim and page count, the drift line, the link to the book page */
   .bk-book { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
   .bk-book .bk-side-head { align-self: stretch; }
   .bk-book-line { color: var(--color-text); font-weight: 500; white-space: normal; font-variant-numeric: tabular-nums; }
   .bk-book-drift { color: var(--color-warning-text); white-space: normal; }
-  .bk-book-layout, .bk-book-edit { font-size: 12.5px; font-weight: 500; }
+  .bk-book-open { font-size: 12.5px; font-weight: 500; }
 
   /* ------------------------------------------------------------ sticky toolbar (§2.2) */
   .bk-toolbar {

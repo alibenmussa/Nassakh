@@ -1,73 +1,56 @@
-"""Layout page (Phase 5, PHASE5_SPEC §5): the rendered template in every state through the Django test client
-(no manuscript, nothing rendered yet, a render queued, a finished render painted on first paint, a failed
-render, a missing font, a proofreader), the compiled CSS, and — under Node with a tiny DOM and a fetch stub —
-the `bookLayout` Alpine component: the first GET and the polling until the pages arrive, a stylesheet change
-→ one debounced PUT → polling → the pages swapped in place with the current page kept (the chapter's own
-render standing in for its range first, D44), the footprint delta, the 400 / network paths of the save, the
-spread pairing (recto on the left), the fit modes, the keyboard map, the turn motion, wheel and touch, the
-stale and error pills with the one automatic request, the filmstrip thumbs, jump and the chapter list."""
+"""The book page (PHASE5_SPEC §9, D47): `/books/<id>/layout/`, live pages with preview and edit.
+
+- the rendered template in every state through the Django test client (no manuscript, nothing laid out yet,
+  a real render's first live pages embedded, edit mode asked for, a proofreader), the redirect of the old
+  editor address, the compiled CSS
+- the esbuild bundle (built and current) and its pure modules under Node: the document ↔ editor conversion
+  and the find matcher against the server's own (`editor.document`), the D47 block helpers by plain offsets
+  (split, merge, paste, the chapter's nodes by block id, replace, unmark) against `inline_text`, the offsets ↔
+  positions of the one-block editor's schema, the ProseMirror plugins on a state without a DOM
+- `static/src/js/book/geometry.js` under Node: a layout page drawn as positioned text (geometry, justify,
+  runs, the page furniture), clicks mapped to offsets through collapsed white space, the flow around an open
+  paragraph, a re-layout spliced in (renumbering, the side swap on an odd delta), the virtualisation window,
+  the keyboard maps of both modes, the side panel's lists
+- the `bookPage` Alpine component under Node with a tiny DOM, a fetch stub and a stub one-block editor: the
+  first paint and the layout windows, the mode switch, a click opening a paragraph in place at the offset, the
+  lines below moving with it, the pause → PUT → re-layout → pages swapped keeping the caret, the delta and the
+  side flip, the 409 banner, Enter / Backspace / the chapter's undo, the tabs per mode and their memory, the
+  uncertain words' actions, find navigating pages, the stylesheet's change laying the book out again, the
+  keyboard, a proofreader."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
-from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.test import Client
 from django.urls import reverse
-from django.utils import timezone
 
 import pytest
 
 from books.models import Book
-from editor.models import Manuscript, StyleSheet
-from publishing import preview
-from publishing.models import PreviewRender
+from editor import document as doc
+from editor.models import Manuscript
+from editor.tests import heading, note, para, sample_document
 
 pytestmark = pytest.mark.django_db
 
 ROOT = Path(__file__).resolve().parent.parent
 JS = ROOT / "static" / "src" / "js"
+BOOK_JS = JS / "book"
+SRC = ROOT / "static" / "src" / "editor"
+BUNDLE = ROOT / "static" / "dist" / "editor.js"
 CSS = ROOT / "static" / "dist" / "app.css"
+BOOK_FILES = ("geometry.js", "stage.js", "style.js", "edit.js", "panel.js", "page.js")
+NODE = shutil.which("node")
 
 
-# ---------------------------------------------------------------- a book with a manuscript of three chapters
-
-
-def _text(value):
-    return {"type": "text", "text": value}
-
-
-def _block(kind, block_id, value, page, level=None):
-    attrs = {"id": block_id, "sourcePages": [page], "sourceLineIds": [], "reviewed": True}
-    if level:
-        attrs["level"] = level
-    return {"type": kind, "attrs": attrs, "content": [_text(value)]}
-
-
-def _document():
-    return {
-        "type": "doc",
-        "attrs": {"bookId": 1},
-        "content": [
-            {"type": "title", "attrs": {"text": "كتاب التنسيق", "author": "المؤلف"}},
-            _block("paragraph", "p1", "تمهيد قبل الفصول", 1),
-            _block("heading", "h10", "الفصل الأول", 2, level=1),
-            _block("paragraph", "p11", "نص الفصل الأول", 2),
-            _block("heading", "h20", "الفصل الثاني", 4, level=1),
-            _block("paragraph", "p22", "نص الفصل الثاني", 4),
-        ],
-    }
-
-
-def _book(title="كتاب التنسيق"):
-    book = Book.objects.create(title=title, author="المؤلف", status=Book.Status.REVIEWING)
-    Manuscript.objects.create(book=book, document=_document(), version=1)
-    return book
+# ---------------------------------------------------------------- users, books
 
 
 def _user(name: str, role: str | None) -> User:
@@ -93,6 +76,12 @@ def proofreader(db):
     return _user("reader", "proofreader")
 
 
+def _book(title="كتاب التنسيق"):
+    book = Book.objects.create(title=title, author="المؤلف", status=Book.Status.REVIEWING)
+    Manuscript.objects.create(book=book, document=sample_document(), version=1)
+    return book
+
+
 def _json_script(body: str, element_id: str):
     match = re.search(rf'<script id="{element_id}" type="application/json">(.*?)</script>', body, re.S)
     assert match, element_id
@@ -101,810 +90,1219 @@ def _json_script(body: str, element_id: str):
 
 def _page(client, book, query="") -> tuple[str, dict]:
     body = client.get(reverse("editor:layout", args=[book.pk]) + query).content.decode()
-    return body, _json_script(body, "layout-config")
+    return body, _json_script(body, "book-config")
 
 
-def _digest(book, scope="book", chapter_id=None) -> str:
-    return preview.job_hash(preview.job_for(book, scope, chapter_id))
-
-
-def _render(book, status="done", pages=3, chapters=None, scope="book", chapter_id=None, error=""):
-    """A render row of the book's current content; a finished one gets its page files on disk."""
-    digest = _digest(book, scope, chapter_id)
-    folder = preview.preview_folder(book.pk, digest)
-    if status == "done":
-        target = Path(settings.MEDIA_ROOT) / folder
-        target.mkdir(parents=True, exist_ok=True)
-        for index in range(1, pages + 1):
-            for retina in (False, True):
-                (target / preview.page_file(index, retina)).write_bytes(b"RIFF")
-        (target / ("chapter.pdf" if scope == "chapter" else "book.pdf")).write_bytes(b"%PDF")
-    return PreviewRender.objects.create(
-        book=book,
-        scope=scope,
-        chapter_id=chapter_id or "",
-        content_hash=digest,
-        status=status,
-        page_count=pages if status == "done" else 0,
-        first_page=1,
-        chapters=chapters
-        if chapters is not None
-        else [
-            {"id": "p1", "title": "قبل الفصل الأول", "first": 1, "last": 1},
-            {"id": "h10", "title": "الفصل الأول", "first": 2, "last": 2},
-            {"id": "h20", "title": "الفصل الثاني", "first": 3, "last": pages},
-        ],
-        folder=folder if status == "done" else "",
-        error=error,
-        finished_at=timezone.now() if status in ("done", "error") else None,
-    )
+def _between(body: str, start: str, end: str) -> str:
+    i = body.index(start)
+    return body[i : body.index(end, i)]
 
 
 # ---------------------------------------------------------------- the template: every state
 
 
-def test_layout_page_without_a_manuscript_shows_the_empty_state(editor):
+def test_book_page_without_a_manuscript_shows_the_empty_state(editor):
     book = Book.objects.create(title="بلا مخطوطة")
     body, config = _page(_logged(editor), book)
-    assert "لا توجد مخطوطة بعد" in body and "data-layout" not in body and "lo-bar" not in body
-    assert reverse("assembly:manuscript", args=[book.pk]) in body and "src/js/layout.js" in body
+    assert "لا توجد مخطوطة بعد" in body and "data-book " not in body and "lo-bar" not in body
+    assert reverse("assembly:manuscript", args=[book.pk]) in body
     assert config["exists"] is False and config["initial"]["preview"] is None
-    assert config["initial"]["stylesheet"]["saved"] is False
+    # the book page's scripts come with every page; the editor bundle with this one
+    for name in BOOK_FILES:
+        assert f"src/js/book/{name}" in body, name
+    assert "dist/editor.js" in body and "src/js/editor.js" not in body and "src/js/layout.js" not in body
     assert Client().get(reverse("editor:layout", args=[book.pk])).status_code == 302
 
 
-def test_layout_page_first_paint_before_any_stylesheet_or_render(editor):
+def test_book_page_first_paint_before_any_layout(editor):
     book = _book()
     body, config = _page(_logged(editor), book)
-    # the config: the page, the chapters, every URL, the embedded stylesheet payload and the cached preview
-    assert config["page"] == "layout" and config["canEdit"] is True and config["exists"] is True
-    assert [c["id"] for c in config["chapters"]] == ["p1", "h10", "h20"]
-    initial = config["initial"]
-    assert initial["stylesheet"]["saved"] is False and initial["stylesheet"]["stylesheet"]["trim"] == "17x24"
-    assert [t["key"] for t in initial["stylesheet"]["trims"]][-1] == "custom"
-    assert initial["preview"]["status"] == "none" and initial["preview"]["pages"] == []
-    assert initial["preview"]["stale"] is True and initial["chapterPreview"] is None
-    assert not PreviewRender.objects.exists()  # opening the page never queues a render by itself
-    assert config["urls"]["preview"] == reverse("api:preview", args=[book.pk])
-    # the top bar: the dashboard link, the save pill, the one primary, the «⋯» menu
-    assert 'x-data="layoutBar"' in body and "لوحة الكتاب" in body
-    assert "data-save-pill" in body and 'x-text="v.savePill.text"' in body
-    # changes still waiting for the debounce go out when the page is left; the tab's return polls at once
-    assert '@beforeunload.window="onUnload()"' in body and '@pagehide.window="onUnload()"' in body
-    assert '@visibilitychange.document="onVisible()"' in body
-    assert "data-layout-editor" in body and ':href="v.editorHref"' in body and "فتح المحرّر" in body
-    menu = body[
-        body.index('class="menu menu-popover lo-menu"') : body.index("</template>", body.index("lo-menu"))
-    ]
-    assert "المخطوطة" in menu and "فتح PDF المعاينة" in menu and "اختصارات" in menu and "لوحة الكتاب" in menu
-    # the toolbar: the spread and fit segmented controls, the quiet pills, the counter, the jump field with G
-    assert "data-spread-toggle" in body and "صفحتان" in body and '@click="setSpread(true)"' in body
-    assert "data-fit-toggle" in body and "ملء الارتفاع" in body and "ملء العرض" in body and "100 %" in body
-    assert "data-render-pill" in body and 'x-text="renderPill.text"' in body
-    assert "تعذّر التحديث · إعادة المحاولة" in body and "انتهت الجلسة · تسجيل الدخول" in body
-    assert 'class="bk-counter lo-counter"' in body and 'x-text="counterText"' in body
-    assert 'inputmode="numeric" dir="ltr" placeholder="إلى صفحة…"' in body and ">G</kbd>" in body
-    # the stage: skeleton sheets while nothing is cached, the two sheets, the designed error state, the turns
-    assert 'class="lo-stage" x-ref="stage"' in body and '@wheel="onStageWheel($event)"' in body
-    assert "data-skeleton" in body and "x-if=\"phase === 'skeleton'\"" in body
-    assert 'data-sheet="right"' in body and 'data-sheet="left"' in body
-    assert 'x-show="phase === \'pages\'" x-cloak data-sheet="right"' in body  # nothing to paint yet
-    assert "data-error-state" in body and "إعادة المحاولة" in body and "لم تُخرَج صفحات." in body
-    assert 'class="bk-turn bk-turn-prev lo-turn"' in body and 'aria-label="الصفحة التالية"' in body
-    # the side panel: the footprint, the two tabs, the five sections in order, the filmstrip (empty)
-    side = body[body.index('<aside class="bk-side lo-side"') :]
-    assert "data-footprint" in side and "يُحسب…" in side and "لم تُخرَج الصفحات بعد" in side
-    assert "data-chapters" in side and '@click="goToChapter(row.id)"' in side
-    assert "data-panel-tabs" in side and "التنسيق" in side and "الصفحات" in side
-    heads = [
-        m.group(1)
-        for m in re.finditer(r'<div class="bk-side-head"><span id="lo-head-\w+">([^<]+)</span>', side)
-    ]
-    assert heads == ["القطع", "الهوامش", "الخطوط", "النص", "الصفحة"]
-    assert "data-trims" in side and "lo-trim-glyph" in side and '@click="setTrim(t.key)"' in side
-    assert "data-diagram" in side and ':data-focus="focusMargin"' in side and "is-recto" in side
-    for field in (
-        "top_mm",
-        "bottom_mm",
-        "inner_mm",
-        "outer_mm",
-        "body_size_pt",
-        "line_height",
-        "indent_em",
-        "footnote_size_pt",
-        "heading_scale.h1",
-        "width_mm",
+    assert "<title>الكتاب · كتاب التنسيق · نسّاخ</title>" in body
+    assert '<span class="title-page">الكتاب</span>' in body
+    assert config["page"] == "layout" and config["mode"] == "preview" and config["canEdit"] is True
+    assert config["initial"]["layout"] is None and config["initial"]["preview"]["status"] == "none"
+    assert config["relayoutMs"] == 500 and '@font-face { font-family: "nk-body"' in config["fontCss"]
+    urls = config["urls"]
+    for key in (
+        "pageLayout",
+        "relayout",
+        "relayoutStatus",
+        "chapter",
+        "chapters",
+        "findReplace",
+        "uncertain",
     ):
-        assert f'data-field="{field}"' in side, field
-    assert side.count("lo-stepper-box") == 12 and "@click=\"step('top_mm', -1)\"" in side
-    for role in ("body", "latin", "heading"):
-        assert f'data-font-role="{role}"' in side, role
-    assert "lo-font-sample" in side and "غير مثبّت" in side and "data-missing-fonts" in side
+        assert urls[key], key
+    # the root: live pages in both modes, the window's events, the render's faces in a <style>
     assert (
-        side.count('@click="above = fontMenuAbove($el); open = !open"') == 3
-    )  # the menus flip up when clipped
-    assert (
-        'id="lo-page-number"' in side
-        and "صفحة المحتويات" in side
-        and "أرقام الصفحات الأصلية في الهامش" in side
+        "data-book x-data=\"bookPage(JSON.parse(document.getElementById('book-config').textContent))\""
+        in body
     )
-    assert 'class="lo-film-track" x-ref="film" data-film-track></div>' in side
-    assert 'class="lo-panel"' in side and 'class="lo-panel" disabled' not in side  # editors: live controls
-    assert "src/js/layout.js" in body
+    assert "'is-edit': mode === 'edit'" in body and ':data-mode="mode"' in body
+    assert '@keydown.window="onKey($event)"' in body and '@beforeunload.window="guardUnload($event)"' in body
+    assert '<style data-font-css x-text="fontCss">@font-face { font-family: &quot;nk-body&quot;' in body or (
+        '<style data-font-css x-text="fontCss">@font-face { font-family: "nk-body"' in body
+    )
+    # the top bar: the save pill, the render pill, the poll pills, the «⋯» menu (snapshots, digits, drift,
+    # the PDF, the shortcuts, the manuscript, the dashboard)
+    assert 'x-data="bookBar"' in body and "data-save-pill" in body and "data-render-pill" in body
+    assert "تعذّر التحديث · إعادة المحاولة" in body and "انتهت الجلسة · تسجيل الدخول" in body
+    menu = _between(body, "data-book-menu", "</template>")
+    for label in (
+        "نسخة محفوظة…",
+        "تحويل الأرقام…",
+        "إعادة تجميع الفصل من المراجعة",
+        "إخراج PDF",
+        "اختصارات لوحة المفاتيح",
+        "المخطوطة",
+        "لوحة الكتاب",
+    ):
+        assert label in menu, label
+    assert 'x-show="v.driftChapter"' in menu and ':href="v.pdfUrl' in menu
+    # the toolbar: «معاينة | تحرير» first, preview's spread and fit, edit's history, style picker, B / I,
+    # «حاشية», the scan page marks, the counter, the jump field (preview), the primary «تم» (edit)
+    toolbar = _between(body, 'class="lo-toolbar bp-toolbar"', 'class="lo-banners"')
+    assert (
+        toolbar.index("data-mode-toggle")
+        < toolbar.index("data-preview-tools")
+        < toolbar.index("data-edit-tools")
+    )
+    assert ">معاينة</button>" in toolbar and ">تحرير</button>" in toolbar and "setMode('edit')" in toolbar
+    assert "data-spread-toggle" in toolbar and "data-fit-toggle" in toolbar and "<bdi>100 %</bdi>" in toolbar
+    edit_tools = _between(toolbar, "data-edit-tools", "lo-toolbar-end")
+    for needle in (
+        'aria-label="تراجع"',
+        'aria-label="إعادة"',
+        "data-style-picker",
+        'aria-label="غامق"',
+        'aria-label="مائل"',
+        "data-footnote-button",
+        "فواصل الصفحات الأصلية",
+    ):
+        assert needle in edit_tools, needle
+    assert "x-transition.opacity.duration.200ms" in toolbar  # the groups swap with a 200 ms fade
+    assert (
+        "data-counter" in toolbar
+        and 'placeholder="إلى صفحة…"' in toolbar
+        and "data-done" in toolbar
+        and ">تم</button>" in toolbar
+    )
+    # the stage: skeleton, two sheets, each a live page (lines + the paragraph editor's host), the error state
+    for side in ("right", "left"):
+        sheet = _between(body, f'data-sheet="{side}"', "</figure>")
+        assert f"onSheetClick($event, '{side}')" in sheet and f"onSheetDblClick($event, '{side}')" in sheet
+        assert 'class="lp-lines" data-lines' in sheet and 'class="lp-edit" data-edit-host' in sheet
+    assert (
+        "data-skeleton" in body
+        and "data-error-state" in body
+        and 'class="bk-turn bk-turn-prev lo-turn"' in body
+    )
+    # the one side panel: seven icon tabs in order, each with its icon and name, one panel each
+    side = _between(body, '<aside class="bk-side lo-side bp-side"', "</aside>")
+    tabs = re.findall(r'data-tab="(\w+)" title="([^"]+)"', side)
+    assert tabs == [
+        ("chapters", "الفصول"),
+        ("pages", "الصفحات"),
+        ("find", "بحث"),
+        ("format", "التنسيق"),
+        ("block", "الفقرة"),
+        ("source", "الأصل"),
+        ("uncertain", "غير المؤكَّدة"),
+    ]
+    icons = re.findall(
+        r'class="bp-tab"[^>]*>\s*<svg class="icon" aria-hidden="true"><use href="#(i-[\w-]+)"/>', side
+    )
+    assert icons == ["i-list", "i-pages", "i-search", "i-sliders", "i-pilcrow", "i-image", "i-uncertain"]
+    for key in ("chapters", "pages", "find", "format", "block", "source", "uncertain"):
+        assert f'data-panel="{key}"' in side and f"x-show=\"tab === '{key}'\"" in side, key
+    assert 'x-text="uncertain.count"' in side and "bp-badge is-warn" in side
+    # «التنسيق»: six accordions in order, with the book details and the D47 fields
+    sections = re.findall(r'data-section="(\w+)"', side)
+    assert sections == ["trim", "margins", "fonts", "text", "page", "details"]
+    for needle in (
+        'field="widows"',
+        'field="orphans"',
+        "keep_headings",
+        "front_matter.copyright_page",
+        "data-book-details",
+        "بيانات الكتاب",
+    ):
+        assert needle in side, needle
+    # «الأصل»: exactly the editor page's pane (the scan with its bands, the pager, «عرض الأصل», the review
+    # link)
+    source = _between(side, 'data-panel="source"', "</section>")
+    for needle in (
+        "ed-scan ed-scan-thumb",
+        "sourceBoxes()",
+        "ed-band",
+        "sourceStep(-1)",
+        "عرض الأصل <kbd",
+        "فتح في المراجعة",
+    ):
+        assert needle in source, needle
+    # «غير المؤكَّدة»: groups by chapter and page, readings, the typed correction, accept
+    unc = _between(side, 'data-panel="uncertain"', "</section>")
+    for needle in (
+        "uncertainGroups",
+        "g.pages",
+        "resolveUncertain(w, r.current ? 'accept' : 'choose'",
+        "resolveUncertain(w, 'type'",
+        "قبول الكلمة كما هي",
+    ):
+        assert needle in unc, needle
+    # «بحث»: the options, the scopes, the matches with their pages; «الفقرة»: the flags
+    find = _between(side, 'data-panel="find"', "</section>")
+    for needle in (
+        "مطابقة التشكيل",
+        "توحيد الألف",
+        "كلمة كاملة",
+        "هذا الفصل",
+        "الكتاب كلّه",
+        "data-find-results",
+        "m.page",
+        "استبدال الكل",
+    ):
+        assert needle in find, needle
+    block = _between(side, 'data-panel="block"', "</section>")
+    assert "ابدأ صفحة جديدة" in block and "مع التالية" in block and "toggleFlag('breakBefore')" in block
+    # the layers: the one overlay, the drawer, the dialogs, the undo toast
+    for needle in (
+        "data-pop",
+        "data-drawer",
+        "النسخ المحفوظة",
+        "تحويل الأرقام",
+        "data-shortcuts",
+        "data-undo-toast",
+    ):
+        assert needle in body, needle
+    # the app's sidebar folds to an icon rail on this page (base.html + layout.css), with its toggle
+    assert 'class="btn-icon rail-toggle"' in body and "'is-rail-open': railOpen" in body
+    for icon in ("i-list", "i-pages", "i-pilcrow", "i-uncertain", "i-sidebar"):
+        assert f'<symbol id="{icon}"' in body, icon
 
 
-def test_layout_page_for_a_proofreader_is_read_only(proofreader):
+def test_book_page_in_edit_mode_on_a_chapter(editor):
     book = _book()
-    body, config = _page(_logged(proofreader), book)
-    assert config["canEdit"] is False
-    assert 'class="lo-panel" disabled data-layout-panel' in body and "التنسيق يغيّره محرّر الكتاب" in body
-    assert "data-layout-editor" not in body and "المخطوطة" in body
-    assert '@click="retry()"' not in body.split("data-render-pill")[1]  # no retry buttons in the states
+    body, config = _page(_logged(editor), book, "?chapter=h20&mode=edit")
+    assert config["mode"] == "edit" and config["requestedChapter"] == "h20" and config["chapter"] == "h20"
+    # the old editor address sends to the book page in edit mode on the chapter
+    response = _logged(editor).get(reverse("editor:edit", args=[book.pk]) + "?chapter=h20")
+    assert response.status_code == 302
+    assert response["Location"] == reverse("editor:layout", args=[book.pk]) + "?chapter=h20&mode=edit"
+    # an editor's sections are enabled; the uncertain words are buttons (the keyboard reaches each), their
+    # page number isolated; the PDF item stays inert before the first render; the style menu and the
+    # popover never show together
+    assert re.search(r'<fieldset class="lo-section[^"]*"[^>]*\sdisabled>', body) is None
+    assert '<button type="button" class="bp-unc-context"' in body and 'ص <bdi x-text="p.page"></bdi>' in body
+    assert '@click="if (!v.pdfUrl) $event.preventDefault(); else open = false" data-pdf-link' in body
+    assert '@click="closePop(); styleMenu = !styleMenu"' in body
 
 
-def test_layout_page_rendering_state(editor):
+def test_book_page_for_a_proofreader_is_read_only(proofreader):
     book = _book()
-    _render(book, status="queued")
-    body, config = _page(_logged(editor), book)
-    p = config["initial"]["preview"]
-    assert p["status"] == "queued" and p["rendering"] is True and p["pages"] == [] and p["stale"] is True
-    assert 'class="lo-page"' in body and 'src="/media' not in body  # nothing painted: the skeleton shows
-    assert 'x-show="phase === \'pages\'" x-cloak data-sheet="right"' in body
+    body, config = _page(_logged(proofreader), book, "?mode=edit")
+    assert config["canEdit"] is False and config["mode"] == "edit"  # the component refuses it (canEdit)
+    assert "data-mode-toggle" not in body and "data-edit-tools" not in body and "data-done" not in body
+    # every section's fields are disabled, its head still opens and closes (the reader sees every value)
+    assert '<fieldset class="lo-panel is-readonly"' in body and "التنسيق يغيّره محرّر الكتاب" in body
+    assert body.count('x-show="sections.') == 6 and body.count("{% if") == 0
+    assert all(
+        f'x-show="sections.{k}"' in body for k in ("trim", "margins", "fonts", "text", "page", "details")
+    )
+    assert len(re.findall(r'<fieldset class="lo-section[^"]*"[^>]*\sdisabled>', body)) == 6
+    assert re.search(r'<button type="button" class="bp-acc-head"[^>]*disabled', body) is None
+    assert (
+        "تحويل الأرقام…" not in body
+        and "استبدال الكل" not in body
+        and "resolveUncertain(w, 'type'" not in body
+    )
+    assert "data-preview-tools" in body and "data-spread-toggle" in body
 
 
-def test_layout_page_ready_state_paints_the_first_page_and_the_filmstrip(editor):
+def test_book_page_embeds_the_first_live_pages_of_a_real_render(editor):
+    from publishing import preview
+
     book = _book()
-    row = _render(book, pages=4)
-    body, config = _page(_logged(editor), book)
-    p = config["initial"]["preview"]
-    assert p["status"] == "done" and p["stale"] is False and p["render_id"] == row.pk and p["page_count"] == 4
-    assert [page["n"] for page in p["pages"]] == [1, 2, 3, 4]
-    first = p["pages"][0]
-    assert first["url"].endswith("page-0001.webp") and first["url2x"].endswith("page-0001-2x.webp")
-    assert p["pdf_url"].endswith("book.pdf") and p["chapters"][2] == {
-        "id": "h20",
-        "title": "الفصل الثاني",
-        "first": 3,
-        "last": 4,
-    }
-    # the first page is painted by the server (no skeleton flash), with its 2× source and an Arabic alt
-    assert f'src="{first["url"]}" srcset="{first["url"]} 1x, {first["url2x"]} 2x" alt="صفحة 1"' in body
-    assert 'x-show="phase === \'pages\'" data-sheet="right"' in body  # not cloaked
-    # one static thumb per page, adopted by the component
-    assert body.count('class="lo-thumb"') == 4
-    assert 'data-index="2" data-number="3" title="صفحة 3" aria-label="صفحة 3"' in body
-    assert 'loading="lazy"' in body
-    # opened on a chapter: the chapter's first page is painted and its own render is looked up (none yet)
+    preview.render_preview(book, "book")
     body, config = _page(_logged(editor), book, "?chapter=h20")
-    assert config["requestedChapter"] == "h20"
-    assert f'src="{p["pages"][2]["url"]}"' in body and 'alt="صفحة 3"' in body
-    assert config["initial"]["chapterPreview"]["scope"] == "chapter"
-    assert config["initial"]["chapterPreview"]["chapter"] == "h20"
-    assert config["initial"]["chapterPreview"]["status"] == "none"
-    assert config["initial"]["chapterPreview"]["first_page"] == 3
-    assert PreviewRender.objects.filter(scope="chapter").count() == 0  # never queued by the page
-    # an unknown chapter falls back to the first page
-    body, config = _page(_logged(editor), book, "?chapter=zz")
-    assert config["requestedChapter"] == "zz" and config["initial"]["chapterPreview"] is None
-    assert 'alt="صفحة 1"' in body
+    layout = config["initial"]["layout"]
+    assert layout and layout["revision"] == 1 and layout["pages"]
+    first = layout["pages"][0]
+    h20 = next(c for c in layout["chapters"] if c["id"] == "h20")
+    assert first["n"] == h20["first"]
+    # a page as the stage draws it: its size, margins, lines with boxes, runs and ranges
+    assert first["width_pt"] > 0 and set(first["margins"]) == {"top", "right", "bottom", "left"}
+    line = next(line for line in first["lines"] if line["block"] == "h20")
+    assert (
+        line["kind"] == "heading" and line["runs"][0]["font"] == "nk-heading" and line["end"] > line["start"]
+    )
+    assert {"x", "y", "w", "h", "baseline", "dir", "justify", "first"} <= set(line)
+    assert (
+        layout["geometry"]["side_shift_pt"] is not None
+        and '@font-face { font-family: "nk-body"' in layout["font_css"]
+    )
 
 
-def test_layout_page_error_state(editor):
-    book = _book()
-    _render(book, status="error", error="تعذّر إخراج صفحات المعاينة.\nOSError: boom")
-    body, config = _page(_logged(editor), book)
-    p = config["initial"]["preview"]
-    assert p["status"] == "error" and p["error"] == "تعذّر إخراج صفحات المعاينة." and p["pages"] == []
-    assert "OSError" not in body  # the technical line stays in the log
-    assert "data-error-state" in body and 'x-text="errorText"' in body and '@click="retry()"' in body
+def _rule(css: str, selector: str) -> set[str]:
+    """The declarations of every rule with exactly this selector (the minifier reorders them)."""
+    out: set[str] = set()
+    for match in re.finditer(r"(?:^|[}\s])" + re.escape(selector) + r"\{([^{}]*)\}", css):
+        out |= {d.strip() for d in match.group(1).split(";") if d.strip()}
+    assert out, selector
+    return out
 
 
-def test_layout_page_reports_a_missing_font(editor, settings, tmp_path):
-    book = _book()
-    StyleSheet.objects.create(book=book, body_font="simplified_arabic")
-    settings.NASSAKH = {**settings.NASSAKH, "FONT_DIRS": [str(tmp_path)]}
-    body, config = _page(_logged(editor), book)
-    sheet = config["initial"]["stylesheet"]
-    assert sheet["saved"] is True and sheet["stylesheet"]["body_font"] == "simplified_arabic"
-    missing = sheet["missing_fonts"]  # the body face, and Times New Roman (the Latin default) with it
-    assert [m["field"] for m in missing] == ["body_font", "latin_font"] and missing[0][
-        "key"
-    ] == "simplified_arabic"
-    assert missing[0]["message"] == "الخط غير مثبّت على هذا الجهاز" and missing[0]["fallback"] == "Amiri"
-    fonts = {f["key"]: f for f in sheet["fonts"]}
-    assert fonts["simplified_arabic"]["installed"] is False and fonts["amiri"]["installed"] is True
-    assert "lotus" not in sheet["latin_fonts"]
-    assert config["initial"]["preview"]["missing_fonts"][0]["key"] == "simplified_arabic"
-    assert "data-missing-fonts" in body and 'x-text="missingFontText"' in body
-
-
-# ---------------------------------------------------------------- the compiled CSS
-
-
-def test_compiled_css_has_the_layout_states_and_their_static_fallbacks():
+def test_compiled_css_draws_live_pages_and_the_panel():
     css = CSS.read_text(encoding="utf-8")
-    # the screen takes the window like the dashboard viewer; the side panel scrolls as one column
-    assert re.search(r"\.main:has\(>\.lo-screen\)\{[^}]*height:calc\(100dvh - var\(--topbar-height\)\)", css)
-    assert re.search(r"\.main:has\(>\.lo-screen\)\{[^}]*flex:none", css)
-    assert re.search(r"\.lo-side\{[^}]*overflow-y:auto", css)
-    # one sheet fitted both ways at the trim's aspect; a spread halves it; the fit modes
-    assert re.search(r"\.lo-sheet\{[^}]*aspect-ratio:var\(--lo-ar,\.7083\)", css)
-    assert re.search(r"\.lo-sheet\{[^}]*width:min\(calc\(\(100cqh - 24px\) \* var\(--lo-ar,\.7083\)\)", css)
-    assert re.search(r"\.lo-screen\.is-spread \.lo-sheet\{[^}]*/ 2\)\)", css)
-    assert re.search(
-        r"\.lo-screen\[data-fit=width\] \.lo-sheet\{[^}]*width:calc\(100cqw - 2 \* var\(--lo-gutter\)\)", css
+    # the screen takes the window; the sidebar folds to an icon rail on this page, unfolds over it
+    assert "height:calc(100dvh - var(--topbar-height))" in _rule(css, ".main:has(>.lo-screen)")
+    assert "grid-template-columns:56px minmax(0,1fr)" in _rule(css, ".app-shell:has(.bp-screen)")
+    assert {"position:fixed", "width:var(--sidebar-width)", "box-shadow:var(--shadow-pop)"} <= _rule(
+        css, ".app-shell:has(.bp-screen).is-rail-open .sidebar"
     )
-    assert re.search(
-        r"\.lo-screen\[data-fit=actual\] \.lo-sheet\{[^}]*width:calc\(var\(--lo-w,170\) \* 1mm\)", css
+    # a live page: an inline-size container; one point = 100cqw / its width in points; lines placed in points
+    assert {
+        "--u:calc(100cqw / var(--pw,481.89))",
+        "container-type:inline-size",
+        "background:#fff",
+        "overflow:hidden",
+    } <= _rule(css, ".lp-page")
+    line = _rule(css, ".lp-line")
+    assert {
+        "position:absolute",
+        "left:calc(var(--x) * var(--u))",
+        "top:calc(var(--y) * var(--u))",
+        "width:calc(var(--w) * var(--u))",
+    } <= line
+    assert {
+        "height:calc(var(--h) * var(--u))",
+        "line-height:calc(var(--h) * var(--u))",
+        "white-space:nowrap",
+    } <= line
+    assert "transform:translateY(calc(var(--dy,0) * var(--u)))" in line
+    assert {"text-align:justify", "text-align-last:justify"} <= _rule(css, ".lp-line.is-j")
+    assert "font-family:nk-body,nk-latin,serif" in _rule(
+        css, ".f-b"
+    ) and "font-family:nk-heading,nk-latin,serif" in _rule(css, ".f-h")
+    assert {"vertical-align:super", "line-height:0"} <= _rule(css, ".lp-run.is-sup")
+    assert "justify-content:center" in _rule(
+        css, ".lp-header[data-align=center],.lp-number[data-align=center]"
     )
-    assert re.search(r"\.lo-canvas\{[^}]*container-type:size", css)
-    assert re.search(r"\.lo-sheet\.is-empty\{visibility:hidden\}", css)
-    # the turn (= bk-stage.is-out-next): out to the right, in from the left
-    assert re.search(r"\.lo-stage\.is-out-next \.lo-spread\{[^}]*transform:translate\(3%\)", css)
-    assert re.search(
-        r"\.lo-stage\.is-in-next \.lo-spread\{[^}]*transition:none[^}]*translate\(-3%\)", css
-    ) or re.search(r"\.lo-stage\.is-in-next \.lo-spread\{[^}]*translate\(-3%\)", css)
-    # skeleton pages and loading sheets shimmer; pills pulse; the delta reads LTR
-    assert re.search(r"\.lo-sheet\.is-skeleton>span\{[^}]*lo-shimmer", css)
-    assert re.search(r"\.lo-sheet\.is-loading:after\{[^}]*lo-shimmer", css)
-    assert re.search(r"\.lo-pill\.is-saving \.lo-pill-dot\{[^}]*lo-pulse", css)
-    assert re.search(r"\.lo-pill\.is-warn[^{]*\{[^}]*background:var\(--color-warning-bg\)", css)
-    assert re.search(r"\.lo-delta\{[^}]*direction:ltr", css)
-    # the diagram: the block inset by the margins, inner at the spine on both pages, the focused band lit
-    assert re.search(r"\.is-verso \.lo-diagram-block\{[^}]*left:calc\(var\(--lo-i,\.13\) \* 100%\)", css)
-    assert re.search(r"\.is-recto \.lo-diagram-block\{[^}]*right:calc\(var\(--lo-i,\.13\) \* 100%\)", css)
-    assert re.search(r"\.lo-diagram\[data-focus=top\] \.lo-diagram-page:before\{[^}]*display:block", css)
-    # steppers look like the jump field; the trims like a segmented list; thumbs like the dashboard's
-    assert re.search(r"\.lo-stepper-box\{[^}]*background:var\(--color-bg-muted\)", css)
-    assert re.search(r"\.lo-trim\[aria-checked=true\]\{[^}]*background:var\(--color-accent-soft\)", css)
-    assert re.search(r"\.lo-thumb\.is-current\{box-shadow:0 0 0 2px var\(--color-accent\)\}", css)
-    assert re.search(r"\.lo-font-menu\.is-above\{[^}]*bottom:calc\(100% - 22px\)", css)
-    # narrow windows: the panel under the page, the filmstrip a row
-    narrow = css[css.index(".lo-screen{--lo-gutter:44px}") :]  # the layout page's narrow-window block
-    assert re.search(r"\.lo-layout\{[^}]*grid-template-columns:minmax\(0,1fr\)", narrow)
-    assert re.search(r"\.lo-film-track\{[^}]*overflow:auto hidden", narrow)
-    # reduced motion: no turn transition, no pulse, no shimmer
-    reduced = css[css.rfind("prefers-reduced-motion:reduce") :]
-    assert re.search(r"[^{}]*\.lo-stage\.is-out-next \.lo-spread[^{}]*\{transition:none\}", reduced)
-    assert re.search(r"[^{}]*\.lo-pill\.is-saving \.lo-pill-dot[^{}]*\{animation:none\}", reduced)
-    assert re.search(r"[^{}]*\.lo-sheet\.is-skeleton>span[^{}]*\{animation:none\}", reduced)
-    # no rv- / ms- class is referenced by the layout styles
-    layout = (ROOT / "static" / "src" / "components" / "layout.css").read_text(encoding="utf-8")
-    assert not re.search(r"\.(rv|ms)-", layout)
+    assert "visibility:hidden" in _rule(css, ".lp-line.is-hidden,.lp-line.is-over")
+    # the paragraph opened in place: the page's measure, face, size and leading in points
+    patch = _rule(css, ".lp-patch")
+    assert {
+        "position:absolute",
+        "left:calc(var(--x) * var(--u))",
+        "top:calc(var(--top,0) * var(--u))",
+        "width:calc(var(--w) * var(--u))",
+    } <= patch
+    assert {
+        "line-height:calc(var(--lh,22.1) * var(--u))",
+        "font-size:calc(var(--fs,13) * var(--u))",
+        "text-align:justify",
+    } <= patch
+    assert "text-indent:calc(var(--indent,0) * var(--u))" in _rule(css, ".lp-patch.is-body .ed-p")
+    # the icon tab bar: the active tab labelled, badges; one scrolling body
+    assert "display:inline" in _rule(css, ".bp-tab.is-active .bp-tab-label")
+    assert "overflow-y:auto" in _rule(css, ".bp-tab-body")
+    # reduced motion drops the turns, the fades, the shimmer
+    assert "@media (prefers-reduced-motion:reduce)" in css
+    assert "animation:none" in _rule(css, ".bp-panel,.ed-pop,.ed-drawer,.lp-line.is-flash")
+    # the old editor page's styles are gone
+    assert ".ed-sheet{" not in css and ".ed-toolbar{" not in css
 
 
-# ---------------------------------------------------------------- Node: the bookLayout component
+# ---------------------------------------------------------------- the bundle
 
-HARNESS = r"""
-class ClassList { constructor(){ this.s = new Set(); } add(...c){ c.forEach(x => this.s.add(x)); } remove(...c){ c.forEach(x => this.s.delete(x)); }
-  toggle(c, f){ if (f === undefined) f = !this.s.has(c); f ? this.s.add(c) : this.s.delete(c); return f; } contains(c){ return this.s.has(c); } toString(){ return [...this.s].join(' '); } }
-class Element {
-  constructor(tag){ this.tagName = String(tag).toUpperCase(); this.classList = new ClassList(); this.attrs = {}; this.dataset = {}; this.childNodes = []; this.parentNode = null; this.hidden = false; this.listeners = {};
-    this.style = { setProperty: (k, v) => { this.style[k] = v; }, getPropertyValue: (k) => this.style[k] || '' }; }
-  set className(v){ this.classList = new ClassList(); v.split(/\s+/).filter(Boolean).forEach(c => this.classList.add(c)); } get className(){ return this.classList.toString(); }
-  setAttribute(k, v){ this.attrs[k] = String(v); } getAttribute(k){ return k in this.attrs ? this.attrs[k] : null; } removeAttribute(k){ delete this.attrs[k]; }
-  appendChild(n){ if (n.parentNode) n.parentNode.removeChild(n); n.parentNode = this; this.childNodes.push(n); return n; }
-  removeChild(n){ const i = this.childNodes.indexOf(n); if (i >= 0) this.childNodes.splice(i, 1); n.parentNode = null; return n; }
-  remove(){ if (this.parentNode) this.parentNode.removeChild(this); }
-  get children(){ return this.childNodes.slice(); }
-  set textContent(v){ this._text = String(v); } get textContent(){ return this._text || ''; }
-  addEventListener(ev, fn){ this.listeners[ev] = fn; }
-  querySelector(sel){ const m = /^\[data-index="(\d+)"\]$/.exec(sel); if (m) return this.childNodes.find(c => c.dataset.index === m[1]) || null; return null; }
-  closest(sel){ return sel === '.lo-thumb' && this.classList.contains('lo-thumb') ? this : null; }
-}
-const reg = {}; const inits = []; const stores = {}; const toasts = []; const assigned = []; const replaced = [];
-globalThis.window = globalThis;
-globalThis.document = { hidden: false, createElement: (t) => new Element(t), addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); }, getElementById: () => null, querySelector: () => ({ content: 'tok' }), querySelectorAll: () => [] };
-globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
-globalThis.location = { hash: '', pathname: '/books/1/layout/', search: '', assign: (u) => assigned.push(u) };
-globalThis.history = { replaceState: (a, b, url) => replaced.push(url) };
-globalThis.addEventListener = () => {};
-let reducedFlag = false; globalThis.matchMedia = () => ({ matches: reducedFlag });
-globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
-const timers = []; let timerId = 0;
-globalThis.setTimeout = (fn, ms) => { timerId += 1; timers.push({ id: timerId, fn, ms, cleared: false }); return timerId; };
-globalThis.clearTimeout = (id) => { const t = timers.find((x) => x.id === id); if (t) t.cleared = true; };
-const local = {}; globalThis.localStorage = { getItem: (k) => (k in local ? local[k] : null), setItem: (k, v) => { local[k] = String(v); } };
-const session = {}; globalThis.sessionStorage = { getItem: (k) => (k in session ? session[k] : null), setItem: (k, v) => { session[k] = String(v); } };
-const prefetched = []; globalThis.Image = class { set src(v) { prefetched.push(v); } };
-globalThis.Nassakh = { toast: (m) => toasts.push(m) };
-const fs = require('fs');
-eval(fs.readFileSync(process.argv[2], 'utf8'));
-inits.forEach((fn) => fn());
 
-// ---- fetch stub: GET previews answered from per-scope queues (the last answer sticks), PUT / POST from hooks
-const calls = [];
-const queue = { book: [], chapter: [] };
-let putReply = null; let postReply = null;
-const reply = (status, data) => ({ ok: status < 300, status, json: async () => JSON.parse(JSON.stringify(data)) });
-globalThis.fetch = async (url, init = {}) => {
-  const method = init.method || 'GET';
-  const body = init.body ? JSON.parse(init.body) : null;
-  calls.push([method, url, body, init.headers && init.headers['X-CSRFToken'], Boolean(init.keepalive)]);
-  if (method === 'GET') {
-    const q = queue[/scope=chapter/.test(url) ? 'chapter' : 'book'];
-    const next = q.length > 1 ? q.shift() : q[0];
-    if (!next) return reply(500, {});
-    return typeof next === 'function' ? next() : reply(200, next);
-  }
-  if (method === 'PUT') return typeof putReply === 'function' ? putReply(body) : putReply;
-  return typeof postReply === 'function' ? postReply(body) : postReply;
+def test_editor_bundle_is_built_and_current():
+    assert BUNDLE.is_file(), "run npm run build:editor"
+    head = BUNDLE.read_bytes()[:120]
+    assert b"Nassakh chapter editor bundle" in head
+    if NODE is None:
+        pytest.skip("node is not installed")
+    check = subprocess.run([NODE, "--check", str(BUNDLE)], capture_output=True, text=True, timeout=60)
+    assert check.returncode == 0, check.stderr
+    for path in [
+        *(SRC / name for name in ("convert.js", "schema.js", "index.js")),
+        *(BOOK_JS / name for name in BOOK_FILES),
+    ]:
+        check = subprocess.run([NODE, "--check", str(path)], capture_output=True, text=True, timeout=60)
+        assert check.returncode == 0, (path, check.stderr)
+    if not (ROOT / "node_modules" / "esbuild").is_dir():
+        pytest.skip("node_modules not installed")
+    before = BUNDLE.read_bytes()
+    build = subprocess.run(
+        ["npm", "run", "-s", "build:editor"], cwd=ROOT, capture_output=True, text=True, timeout=120
+    )
+    assert build.returncode == 0, build.stderr
+    assert BUNDLE.read_bytes() == before, (
+        "static/dist/editor.js is stale: run npm run build:editor and commit it"
+    )
+    assert b"createBlock" in before and b"createNote" in before
+
+
+def _node_tmp(tmp_path: Path) -> Path:
+    """A folder whose bare imports resolve through the repo's node_modules (one copy of every package)."""
+    if NODE is None:
+        pytest.skip("node is not installed")
+    if not (ROOT / "node_modules" / "@tiptap" / "core").is_dir():
+        pytest.skip("node_modules not installed")
+    os.symlink(ROOT / "node_modules", tmp_path / "node_modules", target_is_directory=True)
+    return tmp_path
+
+
+def _run_node(tmp_path: Path, name: str, source: str, *args: str) -> dict:
+    harness = tmp_path / name
+    harness.write_text(source, encoding="utf-8")
+    run = subprocess.run(
+        [NODE, str(harness), *args], capture_output=True, text=True, timeout=120, cwd=tmp_path
+    )
+    assert run.returncode == 0, run.stderr[-6000:]
+    return json.loads(run.stdout.strip().splitlines()[-1])
+
+
+# ---------------------------------------------------------------- the schema module under Node
+
+
+def _chapter_nodes() -> list:
+    """The sample document's blocks after the title (what a chapter save carries), plus every node kind and
+    the D47 page-break flags."""
+    nodes = sample_document()["content"][1:]
+    nodes[1] = dict(nodes[1], attrs=dict(nodes[1]["attrs"], breakBefore=True))
+    nodes[2] = dict(nodes[2], attrs=dict(nodes[2]["attrs"], keepWithNext=False))
+    nodes.append(
+        {
+            "type": "paragraph",
+            "attrs": {
+                "id": "p30",
+                "sourcePages": [5, 6],
+                "sourceLineIds": [50, 51],
+                "reviewed": False,
+                "style": "verse",
+            },
+            "content": [
+                {"type": "text", "text": "شطر أول"},
+                {"type": "hardBreak"},
+                {"type": "text", "text": "شطر ثانٍ ", "marks": [{"type": "italic"}]},
+                {"type": "pageBreak", "attrs": {"page": 6, "printed": "6"}},
+                {"type": "text", "text": "مليتية", "marks": [{"type": "uncertain"}]},
+                {"type": "text", "text": " وبرقة", "marks": [{"type": "bold"}]},
+            ],
+        }
+    )
+    nodes.append(
+        {
+            "type": "separator",
+            "attrs": {"id": "s1", "sourcePages": [6], "sourceLineIds": [], "reviewed": True},
+        }
+    )
+    return nodes
+
+
+QUERIES = [
+    ("برقة", {}),
+    ("بَرقَة", {}),
+    ("برقة", {"whole_word": True}),
+    ("ابراهيم", {}),
+    ("ابراهيم", {"fold_alef": False}),
+    ("مدينة", {"match_tashkeel": True}),
+    ("مَدِينَةُ", {"match_tashkeel": True}),
+    ("شطر", {"whole_word": True}),
+]
+
+SCHEMA_HARNESS = r"""
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [, , root, fixturePath] = process.argv;
+const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
+const convert = await import(pathToFileURL(`${root}/static/src/editor/convert.js`));
+const schema = await import(pathToFileURL(`${root}/static/src/editor/schema.js`));
+const core = await import('@tiptap/core');
+const { EditorState, TextSelection } = await import('@tiptap/pm/state');
+const out = {};
+// ---- conversion: a chapter round-trips unchanged (the page-break flags too), the odd shapes are folded
+const editorJson = convert.toEditor({ type: 'doc', content: fixture.nodes });
+out.roundTrip = convert.fromEditor(editorJson);
+out.editorTypes = editorJson.content.map((n) => n.type + (n.attrs.style ? ':' + n.attrs.style : n.attrs.level ? ':' + n.attrs.level : ''));
+const odd = convert.toEditor([
+  { type: 'blockquote', content: [{ type: 'paragraph', attrs: { id: 'q1' }, content: [{ type: 'text', text: 'اقتباس' }] }, { type: 'paragraph', attrs: { id: 'q2', style: 'verse' }, content: [{ type: 'text', text: 'بيت' }] }] },
+  { type: 'horizontalRule', attrs: { id: 'r1' } },
+  { type: 'heading', attrs: { level: 4, id: 'h4' }, content: [{ type: 'text', text: '' }, { type: 'text', text: 'عنوان', marks: [{ type: 'strike' }, { type: 'bold' }, { type: 'bold' }] }] },
+  { type: 'title', attrs: { text: 'الكتاب', author: 'فلان' } },
+  { type: 'paragraph', attrs: { id: 'p9' }, content: [{ type: 'footnote', attrs: { id: 'n9' }, content: [{ type: 'pageBreak', attrs: { page: 3 } }, { type: 'text', text: 'ملاحظة' }] }, { type: 'unknown' }] },
+  { type: 'weird' },
+]);
+out.odd = odd.content.map((n) => [n.type, n.attrs.style || n.attrs.level || n.attrs.id, JSON.stringify(n.content)]);
+out.empty = convert.toEditor([]).content.length;
+out.emptySaved = convert.fromEditor(convert.toEditor([]));
+const ids = new Set(Array.from({ length: 200 }, () => convert.newId('e')));
+out.ids = { unique: ids.size, shape: [...ids].every((id) => /^ek[0-9a-z]+$/.test(id) && !/^e\d+$/.test(id)), note: /^nek/.test(convert.newId('ne')) };
+// ---- find: the same matches as the server; by plain offsets too
+out.matches = fixture.queries.map(([query, opts]) => convert.findMatches(fixture.nodes, query, { matchTashkeel: Boolean(opts.match_tashkeel), foldAlef: opts.fold_alef !== false, wholeWord: Boolean(opts.whole_word) }));
+out.plainMatches = fixture.queries.map(([query, opts]) => convert.findPlain(fixture.nodes, query, { matchTashkeel: Boolean(opts.match_tashkeel), foldAlef: opts.fold_alef !== false, wholeWord: Boolean(opts.whole_word) }));
+out.words = convert.wordCount(fixture.nodes);
+out.fold = [convert.fold('مَدِينَةُ', {}).text, convert.fold('أإآ', {}).text, convert.fold('Aب', {}).text, convert.foldQuery('  ', {})];
+out.format = [convert.formatCount(2184), convert.formatCount(999), convert.pageRange({ first: 31, last: 58 }), convert.pageRange({ first: 4, last: 4 }), convert.pageRange(null)];
+out.styles = convert.STYLES.map((s) => s.key);
+out.styleOf = [convert.styleOf({ type: 'heading', attrs: { level: 2 } }), convert.styleOf({ type: 'paragraph', attrs: { style: 'quote' } }), convert.styleOf({ type: 'separator' }), convert.styleOf({ type: 'paragraph', attrs: {} })];
+out.stepIndex = [convert.stepIndex(1, 0, 3), convert.stepIndex(2, 1, 3), convert.stepIndex(0, -1, 3), convert.stepIndex(-1, 1, 3), convert.stepIndex(-1, -1, 3), convert.stepIndex(0, 1, 0)];
+// ---- D47: plain text (= editor.document.inline_text), offsets in UTF-16
+const p30 = fixture.nodes.find((n) => n.attrs && n.attrs.id === 'p30');
+const p11 = fixture.nodes.find((n) => n.attrs && n.attrs.id === 'p11');
+out.plain = fixture.nodes.map((n) => convert.plainText(n));
+out.marks = convert.pageMarks(p30);
+// Enter: the split halves (the page break stays with the first, «مع التالية» moves to the second), a heading
+// cut at its end continues with a paragraph
+const [a, b] = convert.splitNode({ ...p11, attrs: { ...p11.attrs, breakBefore: true, keepWithNext: true } }, 5);
+out.split = { a, b: { ...b, attrs: { ...b.attrs, id: b.attrs.id.startsWith('ek') ? 'NEW' : b.attrs.id } }, plainA: convert.plainText(a), plainB: convert.plainText(b) };
+const h = fixture.nodes.find((n) => n.type === 'heading');
+const [ha, hb] = convert.splitNode(h, convert.plainText(h).length);
+out.headingSplit = [ha.type, hb.type, hb.attrs.level === undefined, hb.content.length];
+out.midHeading = convert.splitNode(h, 3).map((n) => [n.type, n.attrs.level]);
+// Backspace at the start: the texts joined, the caret at the seam; nothing to join to a separator
+out.merge = convert.mergeNodes(a, b);
+out.mergeSeparator = convert.mergeNodes({ type: 'separator', attrs: {} }, b);
+// a paste of three paragraphs inside the text
+const pasted = [{ type: 'paragraph', content: [{ type: 'text', text: 'أ' }] }, { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'ب' }] }, { type: 'paragraph', attrs: { style: 'quote' }, content: [{ type: 'text', text: 'ج' }] }];
+const ins = convert.insertBlocks(p11, 3, 6, pasted);
+out.paste = { types: ins.blocks.map((n) => n.type + (n.attrs.style ? ':' + n.attrs.style : '') + (n.attrs.level ? ':' + n.attrs.level : '')), plain: ins.blocks.map((n) => convert.plainText(n)), caret: ins.caret, firstId: ins.blocks[0].attrs.id };
+// the chapter's nodes by block id: never mutated; a blockquote's paragraphs stay in it, others lift out
+const frozen = JSON.stringify(fixture.nodes);
+const replaced = convert.replaceBlock(fixture.nodes, 'p12', [a, b]);
+out.replace = { ids: convert.flatBlocks(replaced).map((x) => x.id.startsWith('ek') ? 'NEW' : x.id), unchanged: JSON.stringify(fixture.nodes) === frozen, removed: convert.flatBlocks(convert.replaceBlock(fixture.nodes, 'p12', [])).length };
+const bq = [{ type: 'blockquote', attrs: { id: 'bq' }, content: [{ type: 'paragraph', attrs: { id: 'q1' }, content: [] }, { type: 'paragraph', attrs: { id: 'q2' }, content: [] }, { type: 'paragraph', attrs: { id: 'q3' }, content: [] }] }];
+out.quote = {
+  kept: convert.replaceBlock(bq, 'q2', [{ type: 'paragraph', attrs: { id: 'q2', style: 'quote' }, content: [] }]),
+  lifted: convert.replaceBlock(bq, 'q2', [{ type: 'paragraph', attrs: { id: 'q2' }, content: [] }]),
+  emptied: convert.replaceBlock([{ type: 'blockquote', content: [{ type: 'paragraph', attrs: { id: 'q9' }, content: [] }] }], 'q9', []),
 };
-const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise((r) => setImmediate(r)); };
-const pending = (ms) => timers.filter((t) => !t.cleared && (ms === undefined || t.ms === ms));
-const fire = async (ms) => { const list = pending(ms); const t = list[list.length - 1]; if (!t) return false; t.cleared = true; await t.fn(); await settle(); return true; };
-const drop = () => { timers.forEach((t) => { t.cleared = true; }); };
-const getCalls = () => calls.filter((c) => c[0] === 'GET').map((c) => c[1]);
-
-// ---- payloads
-const page = (n, tag = 'a', chapter) => ({ n, url: `/m/${tag}/page-${n}.webp`, url2x: `/m/${tag}/page-${n}-2x.webp`, chapter: chapter || (n === 1 ? 'p1' : n < 4 ? 'h10' : 'h20') });
-const ranges5 = [{ id: 'p1', title: 'قبل الفصل الأول', first: 1, last: 1 }, { id: 'h10', title: 'الفصل الأول', first: 2, last: 3 }, { id: 'h20', title: 'الفصل الثاني', first: 4, last: 5 }];
-const bookPayload = (over = {}) => ({ scope: 'book', chapter: null, status: 'done', hash: 'h1', stale: false, rendering: false, page_count: 5, first_page: 1, chapters: ranges5,
-  pages: [1, 2, 3, 4, 5].map((n) => page(n)), render_id: 1, rendered_at: 't1', duration_ms: 300, pdf_url: '/m/a/book.pdf', error: '', missing_fonts: [], ...over });
-const queued = (over = {}) => bookPayload({ status: 'queued', hash: 'h0', stale: true, rendering: true, page_count: 0, first_page: 1, chapters: [], pages: [], render_id: null, pdf_url: null, ...over });
-const fonts = [
-  { key: 'amiri', name: 'Amiri', label: 'أميري', family: 'Amiri', installed: true, latin: true },
-  { key: 'simplified_arabic', name: 'Simplified Arabic', label: 'Simplified Arabic', family: 'Simplified Arabic', installed: false, latin: true },
-  { key: 'times', name: 'Times New Roman', label: 'Times New Roman', family: 'Times New Roman', installed: true, latin: true },
-  { key: 'lotus', name: 'Lotus', label: 'Lotus', family: 'Lotus Linotype Exnd', installed: true, latin: false },
-];
-const sheetPayload = (over = {}) => ({
-  stylesheet: { trim: '17x24', width_mm: 170, height_mm: 240, top_mm: 20, bottom_mm: 22, inner_mm: 22, outer_mm: 18, bleed_mm: 0, body_font: 'amiri', latin_font: 'times', heading_font: 'amiri',
-    body_size_pt: 13, line_height: 1.7, indent_em: 1.5, heading_scale: { h1: 1.6, h2: 1.25 }, footnote_size_pt: 10, footnote_numbering: 'page', running_header: 'chapter', page_number: 'bottom_center',
-    chapter_opening: 'any', front_matter: { title_page: true, contents: true }, print_source_pages: false, updated_at: null, ...(over.stylesheet || {}) },
-  saved: Boolean(over.saved),
-  trims: [{ key: '17x24', label: '17×24 سم', width_mm: 170, height_mm: 240 }, { key: 'a5', label: 'A5', width_mm: 148, height_mm: 210 }, { key: 'custom', label: 'مقاس مخصّص', width_mm: null, height_mm: null }],
-  fonts, latin_fonts: ['amiri', 'simplified_arabic', 'times'],
-  choices: { running_header: [{ value: 'none', label: 'بلا ترويسة' }, { value: 'chapter', label: 'عنوان الفصل' }], page_number: [{ value: 'none', label: 'بلا ترقيم' }, { value: 'bottom_center', label: 'أسفل الصفحة في الوسط' }] },
-  limits: { top_mm: [0, 80], inner_mm: [0, 80], body_size_pt: [7, 24], line_height: [1, 3], indent_em: [0, 6], 'heading_scale.h1': [1, 3] },
-  missing_fonts: over.missing_fonts || [],
-});
-const chapters = [{ id: 'p1', number: 1, kind: 'front', title: 'قبل الفصل الأول' }, { id: 'h10', number: 2, kind: 'chapter', title: 'الفصل الأول' }, { id: 'h20', number: 3, kind: 'chapter', title: 'الفصل الثاني' }];
-const urls = { stylesheet: '/api/books/1/stylesheet/', preview: '/api/books/1/preview/', editor: '/books/1/editor/', layout: '/books/1/layout/' };
-const dom = () => {
-  const film = new Element('div'); const canvas = new Element('div'); canvas.clientWidth = 1000;
-  const root = new Element('div'); root.querySelector = (sel) => (sel === '[data-film-track]' ? film : sel === '[data-canvas]' ? canvas : null);
-  return { root, film, canvas };
-};
-const mk = (extra = {}, initial = {}) => {
-  const d = dom();
-  const v = reg.bookLayout({ bookId: 1, title: 'كتاب', canEdit: true, chapters, urls, requestedChapter: null, initial: { stylesheet: sheetPayload(), preview: null, chapterPreview: null, ...initial }, ...extra });
-  v.$el = d.root; v.$refs = {}; v.init();
-  return Object.assign(v, { _dom: d });
-};
-const thumbsOf = (v) => v._dom.film.children.map((t) => [Number(t.dataset.number), t.getAttribute('src') || (t.childNodes[0] && t.childNodes[0].childNodes[0].getAttribute('src')), t.classList.contains('is-current'), t.classList.contains('is-fresh')]);
-
-(async () => {
-  const out = {};
-
-  // --- init: nothing cached → the first GET, the skeleton, polling every second until the pages arrive
-  queue.book = [queued(), queued({ status: 'running' }), bookPayload()];
-  const v = mk();
-  await settle();
-  out.init = { phase: v.phase, gets: getCalls().length, firstGet: getCalls()[0], status: v.book.status, active: v.active, polling: pending(1000).length, pill: v.renderPill, footprint: { count: v.footprint.count, computing: v.footprint.computing, rows: v.footprint.rows.map((r) => [r.id, r.pages]) }, store: stores.layout.view === v };
-  await fire(1000);
-  const running = { status: v.book.status, phase: v.phase, polling: pending(1000).length };
-  await fire(1000);
-  out.ready = { running, status: v.book.status, phase: v.phase, pages: v.pageCount, current: v.current, cursor: v.cursor, active: v.active, polling: pending(1000).length, pill: v.renderPill.text,
-    counter: v.counterText, chapter: v.counterChapter, thumbs: thumbsOf(v), footprint: { count: v.footprint.count, text: v.footprint.text, delta: v.footprint.deltaText, rows: v.footprint.rows.map((r) => [r.id, r.first, r.last, r.pages, r.current]) },
-    editorHref: v.editorHref, pdf: v.pdfUrl, prefetched: prefetched.slice(), replaced: replaced.slice(-1)[0], session: session['nassakh.layout.page.1'], live: v.liveMessage };
-
-  // --- a change: the value shows at once, one debounced PUT with the chapter under the eyes, the server's
-  // values win, the preview payload of the answer starts the polling; the chapter's fresh render stands in
-  // for its range while the book is stale; the book's new render swaps every page keeping the current one
-  v.showPage(3, { instant: true });
-  v.setTrim('a5'); v.step('top_mm', 1); v.step('top_mm', 1);
-  const localNow = { trim: v.sheet.trim, width: v.sheet.width_mm, height: v.sheet.height_mm, top: v.sheet.top_mm, dirty: { ...v.dirty }, puts: calls.filter((c) => c[0] === 'PUT').length, debounce: pending(400).length };
-  const stale5 = bookPayload({ status: 'queued', hash: 'h2', stale: true, rendering: true });
-  putReply = (body) => reply(200, { ...sheetPayload({ saved: true, stylesheet: { trim: 'a5', width_mm: 148, height_mm: 210, top_mm: 22 } }), preview: stale5 });
-  queue.book = [stale5];
-  const chapterFresh = { scope: 'chapter', chapter: 'h10', status: 'done', hash: 'c1', stale: false, rendering: false, page_count: 3, first_page: 2, chapters: [{ id: 'h10', title: 'الفصل الأول', first: 2, last: 4 }], pages: [2, 3, 4].map((n) => page(n, 'c', 'h10')), render_id: 9, rendered_at: 't2', pdf_url: '/m/c/chapter.pdf', error: '', missing_fonts: [] };
-  queue.chapter = [{ ...chapterFresh, status: 'running', rendering: true, pages: [], render_id: null, chapters: [], page_count: 0 }, chapterFresh];
-  await fire(400);
-  const put = calls.filter((c) => c[0] === 'PUT').pop();
-  out.saved = { body: put[2], csrf: put[3], state: v.save.state, message: v.save.message, sheet: { trim: v.sheet.trim, top: v.sheet.top_mm, saved: v.saved }, tracked: v.chapterId, stale: v.stale, rendering: v.rendering, pill: v.renderPill.text, current: v.current, pages: v.pageCount, gets: getCalls().slice(-2), polling: pending(1000).length, savedTimer: pending(2000).length, ratio: v.sheetStyle.split(';')[0] };
-  await fire(2000);
-  out.savedCleared = v.save.state;
-  await fire(1000); // the chapter render arrived (the book is still on its way): its pages stand in
-  out.overlay = { current: v.current, pages: v.pageCount, scopes: v.pages.map((p) => p.scope), numbers: v.pages.map((p) => p.n), urls: v.pages.map((p) => p.url.split('/')[2]), range: v.ranges.find((r) => r.id === 'h10'), fresh: v.footprint.rows.map((r) => [r.id, r.fresh, r.pages]), pill: v.renderPill.text, thumbs: thumbsOf(v).map((t) => [t[0], t[3]]), counter: v.counterText };
-  const book7 = bookPayload({ hash: 'h2', page_count: 7, chapters: [{ id: 'p1', title: 'قبل الفصل الأول', first: 1, last: 1 }, { id: 'h10', title: 'الفصل الأول', first: 2, last: 4 }, { id: 'h20', title: 'الفصل الثاني', first: 5, last: 7 }], pages: [1, 2, 3, 4, 5, 6, 7].map((n) => page(n, 'b', n === 1 ? 'p1' : n < 5 ? 'h10' : 'h20')), render_id: 2 });
-  queue.book = [book7];
-  await fire(1000);
-  out.swapped = { current: v.current, pages: v.pageCount, scopes: [...new Set(v.pages.map((p) => p.scope))], urls: [...new Set(v.pages.map((p) => p.url.split('/')[2]))], delta: v.footprint.deltaText, chapterDeltas: { ...v.chapterDeltas }, rows: v.footprint.rows.map((r) => [r.id, r.pages, r.delta]), active: v.active, polling: pending(1000).length, pill: v.renderPill.text, thumbs: thumbsOf(v).length, counter: v.counterText, editorHref: v.editorHref, ratio: v.sheetStyle.split(';')[0] };
-
-  // --- steppers and fields: parsing, clamping, formatting; a change while a PUT is on the wire waits for it
-  out.fields = [];
-  v.setField('body_size_pt', '٤٠'); out.fields.push(['clamp-eastern', v.sheet.body_size_pt]);
-  v.setField('line_height', 'abc'); out.fields.push(['nan-kept', v.sheet.line_height]);
-  v.setField('line_height', '1,75'); out.fields.push(['comma', v.sheet.line_height, v.fmt(v.sheet.line_height)]);
-  v.step('heading_scale.h1', -1); out.fields.push(['nested', v.sheet.heading_scale.h1, v.dirty['heading_scale.h1']]);
-  v.setField('front_matter.contents', false); out.fields.push(['bool', v.sheet.front_matter.contents]);
-  out.fields.push(['fmt', v.fmt(20), v.fmt(1.7), v.fmt(12.5), v.fmt('x')]);
-  out.fields.push(['takeDirty', v.takeDirty()]);
-  out.fields.push(['trimLabel', v.trimLabel, v.textAreaText]);
-  v.setTrim('custom'); v.setField('width_mm', 160); out.fields.push(['custom', v.sheet.trim, v.sheet.width_mm, { ...v.dirty }, v.trimLabel]);
-  v.dirty = {}; drop();
-  out.diagram = v.diagramStyle; v.focusField('inner_mm'); out.focus = v.focusMargin; v.focusField('');
-  // a 400: the refused field keeps its message, the valid fields of the same PUT are sent again
-  v.setField('inner_mm', 70); v.setField('top_mm', 25);
-  putReply = (body) => reply(400, { detail: 'قيم غير صالحة.', errors: { inner_mm: 'الهوامش الجانبية أعرض من أن يبقى للنص مكان.' } });
-  await fire(400);
-  const invalid = { state: v.save.state, errors: { ...v.errors }, dirty: { ...v.dirty }, retryQueued: pending(400).length };
-  putReply = (body) => reply(200, { ...sheetPayload({ saved: true, stylesheet: { top_mm: 25 } }), preview: bookPayload({ hash: 'h3', render_id: 2, page_count: 7 }) });
-  await fire(400);
-  const resent = calls.filter((c) => c[0] === 'PUT').pop()[2];
-  out.invalid = { ...invalid, resent, after: { state: v.save.state, errors: { ...v.errors }, inner: v.sheet.inner_mm, top: v.sheet.top_mm } };
-  // a network failure keeps the change for «إعادة المحاولة»; a 403 names the role; the corrected field clears
-  v.setField('inner_mm', 22); v.setField('outer_mm', 19);
-  putReply = () => { throw new Error('down'); };
-  await fire(400);
-  const failed = { state: v.save.state, message: v.save.message, dirty: { ...v.dirty } };
-  putReply = () => reply(403, { detail: 'هذا الإجراء يتطلب صلاحية محرّر.' });
-  const ok403 = await v.flush();
-  const refused = { ok: ok403, message: v.save.message, dirty: { ...v.dirty } };
-  putReply = () => reply(200, { ...sheetPayload({ saved: true, stylesheet: { outer_mm: 19 } }), preview: null });
-  const okAgain = await v.flush();
-  out.failure = { failed, refused, okAgain, state: v.save.state, dirty: { ...v.dirty } };
-  drop();
-  // leaving the page with changes still waiting for the debounce: one PUT the browser keeps alive
-  v.setField('top_mm', 21); putReply = () => reply(200, { ...sheetPayload({ saved: true, stylesheet: { top_mm: 21 } }), preview: null });
-  const unloaded = v.onUnload(); const unloadPut = calls.filter((c) => c[0] === 'PUT').pop(); await settle();
-  out.unload = { sent: unloaded, keepalive: unloadPut[4], body: unloadPut[2], dirty: { ...v.dirty }, top: v.sheet.top_mm, idle: v.onUnload() };
-  drop();
-  // a change while a PUT is on the wire keeps its value on screen when the answer lands (the next PUT carries it)
-  let resolvePut = null; putReply = () => new Promise((res) => { resolvePut = res; });
-  v.setField('outer_mm', 20);
-  const debounce = pending(400).pop(); debounce.cleared = true; const inflightPut = debounce.fn(); await settle(); // the PUT is on the wire
-  v.setField('outer_mm', 24); const during = { value: v.sheet.outer_mm, saving: v.saving, armed: pending(400).length };
-  resolvePut(reply(200, { ...sheetPayload({ saved: true, stylesheet: { outer_mm: 20 } }), preview: null })); await inflightPut; await settle();
-  const landed = { value: v.sheet.outer_mm, dirty: { ...v.dirty }, state: v.save.state };
-  putReply = () => reply(200, { ...sheetPayload({ saved: true, stylesheet: { outer_mm: 24 } }), preview: null });
-  await fire(400);
-  out.midflight = { during, landed, final: v.sheet.outer_mm, dirty: { ...v.dirty }, puts: calls.filter((c) => c[0] === 'PUT').length };
-  drop();
-  // a face menu low in the scrolling panel opens upwards (the panel would clip it); high up it opens down
-  out.menuAbove = [v.menuAbove({ top: 600, bottom: 634 }, { top: 100, bottom: 700 }, 300), v.menuAbove({ top: 200, bottom: 234 }, { top: 100, bottom: 700 }, 300), v.menuAbove({ top: 300, bottom: 334 }, { top: 100, bottom: 500 }, 300), v.fontMenuAbove(null)];
-
-  // --- spread mode: (even n, odd n + 1) with the recto on the left; page 1 alone; narrow stages show one page
-  v.showPage(3, { instant: true });
-  v.setSpread(true);
-  const s23 = { cursor: v.cursor, right: v.rightPage && v.rightPage.n, left: v.leftPage && v.leftPage.n, counter: v.counterText, stored: local['nassakh.layout.spread'], marked: thumbsOf(v).filter((t) => t[2]).map((t) => t[0]) };
-  v.turn(1); await fire(200);
-  const s45 = { right: v.rightPage.n, left: v.leftPage.n, prev: v.neighbour(-1), next: v.neighbour(1) };
-  v.showPage(1, { instant: true });
-  const s1 = { right: v.rightPage, left: v.leftPage && v.leftPage.n, canPrev: v.canTurn(-1), turned: v.turn(-1) };
-  v.showPage(7, { instant: true });
-  const s67 = { right: v.rightPage.n, left: v.leftPage.n, canNext: v.canTurn(1) };
-  v._dom.canvas.clientWidth = 500; v.onResize();
-  const narrow = { spreadOn: v.spreadOn, spread: v.spread, right: v.rightPage.n, left: v.leftPage };
-  v._dom.canvas.clientWidth = 1000; v.onResize();
-  const wideAgain = { spreadOn: v.spreadOn, right: v.rightPage.n, left: v.leftPage.n };
-  v.setSpread(false);
-  out.spread = { s23, s45, s1, s67, narrow, wideAgain, single: [v.rightPage.n, v.leftPage] };
-
-  // --- fit modes, the side panel's tabs, the keyboard map
-  v.setFit('width'); const fitW = [v.fit, local['nassakh.layout.fit']]; v.setFit('bogus'); const fitBogus = v.fit; v.setFit('actual');
-  v.setPanel('pages'); const panel = [v.panel, local['nassakh.layout.panel']]; v.setPanel('style');
-  out.modes = { fitW, fitBogus, fitActual: v.fit, panel, sheetStyle: v.sheetStyle };
-  out.keys = ['ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp', 'Home', 'End'].map((key) => v.keyAction({ key }, false));
-  out.keys.push(v.keyAction({ key: 'g', code: 'KeyG' }, false), v.keyAction({ key: 's', code: 'KeyS' }, false), v.keyAction({ key: 'e', code: 'KeyE' }, false), v.keyAction({ key: '1' }, false), v.keyAction({ key: '3' }, false),
-    v.keyAction({ key: 'Escape' }, true), v.keyAction({ key: 'g', code: 'KeyG' }, true), v.keyAction({ key: 'g', code: 'KeyG', metaKey: true }, false), v.keyAction({ key: 'Escape' }, false));
-  v.onKey({ key: 'e', code: 'KeyE', target: {} }); out.keyEditor = assigned.slice(-1)[0];
-  v.onKey({ key: '1', target: {} }); out.keyFit = v.fit;
-  v.onKey({ key: 's', code: 'KeyS', target: {} }); out.keySpread = v.spread; v.setSpread(false);
-  v.onKey({ key: 'Home', target: {}, preventDefault: () => {} }); await fire(200); out.keyHome = v.current;
-
-  // --- the turn: out for 200 ms, a second press mid-turn moves the target, the sheet lands once; reduced
-  // motion is instant; wheel and touch (RTL) as on the dashboard
-  drop(); v.showPage(1, { instant: true });
-  v.turn(1);
-  const midTurn = { turning: v.turning, current: v.current, timer: pending(200).length };
-  v.turn(1);
-  await fire(200);
-  out.turn = { midTurn, after: { turning: v.turning, current: v.current, marked: thumbsOf(v).filter((t) => t[2]).map((t) => t[0]), replaced: replaced.slice(-1)[0] } };
-  reducedFlag = true; v.turn(1); out.reduced = { current: v.current, turning: v.turning }; reducedFlag = false;
-  v.showPage(1, { instant: true }); drop();
-  const wheel = (dx, dy) => v.onStageWheel({ deltaX: dx, deltaY: dy, cancelable: true, preventDefault: () => {} });
-  wheel(-30, 0); const afterOne = v.current; wheel(-30, 0); await fire(200);
-  const afterSwipe = v.current; wheel(-80, 0); const inertia = v.current;
-  await fire(260); wheel(0, 100); await fire(200);
-  const wheelDown = v.current;
-  v.onStagePointerDown({ pointerType: 'touch', clientX: 100, clientY: 100 }); v.onStagePointerUp({ pointerType: 'touch', clientX: 30, clientY: 104 }); await fire(200);
-  const touchBack = v.current;
-  v.onStagePointerDown({ pointerType: 'mouse', clientX: 100, clientY: 100 }); v.onStagePointerUp({ pointerType: 'mouse', clientX: 300, clientY: 100 });
-  const mouseIgnored = v.current;
-  v.setFit('width'); wheel(0, 200); const scrollingStage = v.current; v.setFit('height');
-  out.wheel = { afterOne, afterSwipe, inertia, wheelDown, touchBack, mouseIgnored, scrollingStage };
-  // a click on a thumb (delegated on the track) turns to that page
-  v._dom.film.listeners.click({ target: v._dom.film.children[4] }); await fire(200);
-  out.thumbClick = { current: v.current, marked: thumbsOf(v).filter((t) => t[2]).map((t) => t[0]) };
-
-  // --- jump, the chapter list, the fonts
-  out.jump = [v.jumpTarget('٣'), v.jumpTarget(' 7 '), v.jumpTarget('99'), v.jump('99'), toasts.slice(-1)[0]];
-  v.goToChapter('h20'); await fire(200);
-  out.chapter = { current: v.current, focus: v.focusChapter, editorHref: v.editorHref, unknown: v.goToChapter('zz'), toast: toasts.slice(-1)[0] };
-  out.fonts = { latin: v.fontChoices('latin').map((f) => f.key), all: v.fontChoices('body').length, label: v.fontLabel('amiri'), installed: [v.fontInstalled('amiri'), v.fontInstalled('simplified_arabic')], style: v.faceStyle('lotus'), field: v.fontField('latin'), sample: v.sample('latin'), missing: v.missingFontText };
-  v.missingFonts = [{ field: 'body_font', key: 'simplified_arabic', name: 'Simplified Arabic', message: 'الخط غير مثبّت على هذا الجهاز', fallback: 'Amiri' }];
-  out.missingText = v.missingFontText;
-
-  // --- the stale pill: a stale content with nothing running is asked for once (POST), never twice
-  postReply = (body) => reply(202, queued({ hash: 'h9', scope: body.scope }));
-  const stalePayload = bookPayload({ status: 'none', hash: 'h9', stale: true, rendering: false });
-  v.applyPreview('book', stalePayload);
-  await settle();
-  const posts1 = calls.filter((c) => c[0] === 'POST');
-  v.applyPreview('book', stalePayload);
-  await settle();
-  out.stale = { pill: (v.book = { ...stalePayload }, v.renderPill), posts: posts1.length, body: posts1[0] && posts1[0][2], postsAfterRepeat: calls.filter((c) => c[0] === 'POST').length, pagesKept: v.pageCount };
-  v.book = { ...stalePayload, rendering: true, status: 'queued' }; out.updatingPill = v.renderPill.text;
-
-  // --- the error state: nothing cached → the designed state; with pages → the banner and the pill; retry POSTs
-  // (the tracked chapter's fresh render is let go first: it would stand in for the missing pages)
-  drop(); v.chapterId = null; v.chapter = null;
-  const errPayload = bookPayload({ status: 'error', hash: 'h10', stale: true, error: 'تعذّر إخراج صفحات المعاينة.', pages: [], chapters: [], page_count: 0, render_id: null });
-  v.applyPreview('book', errPayload, { quiet: true });
-  const noPages = { phase: v.phase, error: v.errorText, pill: v.renderPill.text, posts: calls.filter((c) => c[0] === 'POST').length };
-  postReply = () => reply(500, {}); // the one automatic request after a failure; refused here, so the state stays
-  v.applyPreview('book', errPayload); await settle();
-  v.applyPreview('book', errPayload); await settle();
-  const autoOnce = { posts: calls.filter((c) => c[0] === 'POST').length - noPages.posts, phase: v.phase };
-  v.applyPreview('book', bookPayload({ status: 'error', hash: 'h11', stale: true, error: 'فشل' }), { quiet: true });
-  const withPages = { phase: v.phase, error: v.errorText, pill: v.renderPill, pages: v.pageCount };
-  postReply = (body) => reply(202, queued({ hash: 'h11' }));
-  const retried = await v.retry();
-  out.error = { noPages, autoOnce, withPages, retried, afterRetry: { status: v.book.status, phase: v.phase, polling: pending(1000).length, pill: v.renderPill.text } };
-  // the tab back in front while a render runs: polled at once; nothing to wait for → nothing polled
-  drop(); calls.length = 0; queue.book = [bookPayload({ hash: 'h11', render_id: 3 })];
-  const polledBack = v.onVisible(); await settle();
-  out.visible = { polled: polledBack, gets: getCalls().length, phase: v.phase, idle: (drop(), v.onVisible()) };
-  // a swap that loses the page's number lands on the nearest position: the address and the counter follow
-  drop(); v.showPage(5, { instant: true }); v.applyPreview('book', bookPayload({ hash: 'h11', render_id: 4, page_count: 3, chapters: [{ id: 'p1', title: 'قبل الفصل الأول', first: 1, last: 1 }, { id: 'h10', title: 'الفصل الأول', first: 2, last: 3 }], pages: [1, 2, 3].map((n) => page(n, 'z')) }), { quiet: true });
-  out.swapLost = { current: v.current, replaced: replaced.slice(-1)[0], session: session['nassakh.layout.page.1'], live: v.liveMessage };
-
-  // --- a page painted by the server is drawn already; the address opens the page it names
-  drop(); calls.length = 0;
-  queue.book = [bookPayload()];
-  globalThis.location.hash = '#page-4';
-  const v2 = mk({}, { preview: bookPayload() });
-  await settle();
-  out.fromHash = { current: v2.current, phase: v2.phase, gets: getCalls().length, replaced: replaced.slice(-1)[0], loading: [v2.isLoading(v2.rightPage)], polling: pending(1000).length };
-  v2.onLoad('right'); out.loaded = v2.isLoading(v2.rightPage);
-  globalThis.location.hash = '';
-
-  // --- opened from the editor on a chapter: the chapter's first page, its own render tracked and polled
-  drop(); calls.length = 0;
-  queue.book = [bookPayload()]; queue.chapter = [{ ...chapterFresh, chapter: 'h20', status: 'running', rendering: true, pages: [], render_id: null, chapters: [], page_count: 0, first_page: 4 }];
-  const v3 = mk({ requestedChapter: 'h20' }, { preview: bookPayload(), chapterPreview: { ...chapterFresh, chapter: 'h20', status: 'none', rendering: false, stale: true, pages: [], render_id: null, chapters: [], page_count: 0, first_page: 4 } });
-  await settle();
-  out.fromEditor = { current: v3.current, tracked: v3.chapterId, gets: getCalls(), active: v3.active, polling: pending(1000).length, focus: v3.focusChapter };
-
-  // --- a proofreader: no PUT, no automatic request; the session's end stops the polling; failures back off
-  drop(); calls.length = 0;
-  queue.book = [bookPayload({ status: 'none', stale: true, hash: 'h12' })];
-  const r = mk({ canEdit: false });
-  await settle();
-  r.setField('top_mm', 30); await fire(400);
-  out.reader = { puts: calls.filter((c) => c[0] === 'PUT').length, posts: calls.filter((c) => c[0] === 'POST').length, pill: r.renderPill, value: r.sheet.top_mm };
-  drop(); calls.length = 0;
-  queue.book = [() => reply(403, {})];
-  const a = mk();
-  await settle();
-  out.auth = { state: a.pollState, stopped: a.stopped, polling: pending(1000).length };
-  drop(); calls.length = 0;
-  queue.book = [() => { throw new Error('down'); }];
-  const f = mk();
-  await settle();
-  const backoff = [pending().map((t) => t.ms)];
-  await fire(); backoff.push(pending().map((t) => t.ms)); await fire(); backoff.push(pending().map((t) => t.ms));
-  out.backoff = { state: f.pollState, failures: f.failures, timers: backoff };
-  queue.book = [bookPayload()]; await fire();
-  out.recovered = { state: f.pollState, phase: f.phase, polling: pending().length };
-  console.log(JSON.stringify(out));
-})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+out.flags = convert.locate(convert.setBlockAttrs(fixture.nodes, 'p12', { breakBefore: true, keepWithNext: null }), 'p12').node.attrs;
+out.note = [convert.noteOwner(fixture.nodes, 'n1'), convert.noteIds(p11), convert.findNote(fixture.nodes, 'zz')];
+// find & replace by plain offsets, an uncertain word accepted (the mark leaves only that range)
+out.replacePlain = convert.replacePlain(p30.content, 18, 24, 'مدينة');
+out.unmark = convert.unmarkPlain(p30.content, 18, 21);
+out.inNote = convert.replaceInBlock(p11, 'n1', 0, 5, 'ملاحظة').content[1];
+out.html = [convert.nodeHtml(p30, { numberOf: () => '' }), convert.nodeHtml(p11, { numberOf: (id) => (id === 'n1' ? '3' : '') }), convert.nodeHtml(h), convert.nodeHtml({ type: 'paragraph', content: [{ type: 'text', text: '<b>' }] })];
+// ---- the schemas: the chapter's and the one-block editor's (exactly one block); offsets ↔ positions
+const s = core.getSchema(schema.extensions({}));
+out.schema = { nodes: Object.keys(s.nodes), marks: Object.keys(s.marks), noteContent: s.nodes.footnote.spec.content, flags: Object.keys(s.nodes.paragraph.spec.attrs).filter((k) => ['breakBefore', 'keepWithNext'].includes(k)) };
+const one = core.getSchema(schema.blockExtensions({}));
+out.blockDoc = one.topNodeType.spec.content;
+const pm = one.nodeFromJSON(convert.toEditor([p11]).content[0]);
+out.positions = [0, 5, 23, 24, 25, 31].map((off) => [off, schema.posOfOffset(pm, off), schema.offsetOfPos(pm, schema.posOfOffset(pm, off))]);
+out.insideNote = schema.offsetOfPos(pm, 26);
+const pmDoc = s.nodeFromJSON(editorJson);
+pmDoc.check();
+out.docChildren = pmDoc.childCount;
+// ---- the plugins on a state without a DOM
+const plugins = [schema.uniqueIdsPlugin(), schema.footnoteNumbersPlugin(), schema.caretBlockPlugin(), schema.findPlugin(), schema.resolveOnTypePlugin()];
+let state = EditorState.create({ doc: pmDoc, plugins });
+const blockIds = (st) => { const o = []; st.doc.forEach((n) => o.push(n.attrs.id)); return o; };
+const at11 = (() => { let pos = null; state.doc.forEach((n, offset) => { if (n.attrs.id === 'p11') pos = offset; }); return pos; })();
+state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, at11 + 5)).split(at11 + 5));
+out.split2 = { unique: new Set(blockIds(state)).size === blockIds(state).length, second: state.doc.child(3).attrs.id.startsWith('ek'), kept: state.doc.child(2).attrs.id };
+// a pasted copy of a block: the duplicate id is replaced
+state = state.apply(state.tr.insert(state.doc.content.size, s.nodeFromJSON(state.doc.child(2).toJSON())));
+out.dup = { unique: new Set(blockIds(state)).size === blockIds(state).length, last: blockIds(state).slice(-1)[0] };
+// find highlights through the plugin meta (the one-block editor's), mapped through an edit before them
+state = state.apply(state.tr.setMeta(schema.findKey, { ranges: [{ from: 20, to: 24, block: 'x', note: null }], current: 0 }));
+const findState = (st) => schema.findKey.getState(st);
+out.find1 = { n: findState(state).decos.find().length, cls: findState(state).decos.find()[0].type.attrs.class };
+state = state.apply(state.tr.insertText('ab', 2));
+out.find2 = findState(state).ranges[0];
+const uncertain = (st) => { const o = []; st.doc.descendants((n) => { if (n.isText && n.marks.some((m) => m.type.name === 'uncertain')) o.push(n.text); }); return o; };
+const posOf = (st, t) => { let at = null; st.doc.descendants((n, pos) => { if (n.isText && n.text === t) at = pos; }); return at; };
+out.uncertainBefore = uncertain(state);
+state = state.apply(state.tr.insertText('ك', posOf(state, 'مليتية') + 2));
+out.uncertainAfterTyping = uncertain(state);
+// the mark stays on a space typed right after the word, a large paste, a load
+state = EditorState.create({ doc: pmDoc, plugins });
+state = state.apply(state.tr.insertText(' ', posOf(state, 'مليتية') + 6));
+out.uncertainAfterSpace = uncertain(state);
+state = state.apply(state.tr.insertText('نص طويل جدًّا أُلصق هنا', posOf(state, 'مليتية') + 1).setMeta('uiEvent', 'paste'));
+out.uncertainAfterPaste = uncertain(state).length;
+state = EditorState.create({ doc: pmDoc, plugins });
+state = state.apply(state.tr.insertText('x', posOf(state, 'مليتية') + 2).setMeta('ed:load', true));
+out.uncertainAfterLoad = uncertain(state);
+// the one-block editor's call numbers: the page's printed number, else the order
+let bst = EditorState.create({ doc: one.nodeFromJSON({ type: 'doc', content: [convert.toEditor([p11]).content[0]] }), plugins: [schema.pageNumbersPlugin((id) => (id === 'n1' ? '7' : ''))] });
+out.pageNumber = schema.numbersKey.getState(bst).find().map((d) => d.type.attrs['data-seq']);
+bst = EditorState.create({ doc: bst.doc, plugins: [schema.pageNumbersPlugin(() => '')] });
+out.orderNumber = schema.numbersKey.getState(bst).find().map((d) => d.type.attrs['data-seq']);
+console.log(JSON.stringify(out));
 """  # noqa: E501
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_layout_component_under_node(tmp_path):
-    harness = tmp_path / "layout.js"
-    harness.write_text(HARNESS, encoding="utf-8")
-    run = subprocess.run(
-        ["node", str(harness), str(JS / "layout.js")], capture_output=True, text=True, timeout=60
-    )
-    assert run.returncode == 0, run.stderr
-    out = json.loads(run.stdout.strip().splitlines()[-1])
-
-    # --- init: nothing cached → one GET (the server queues), the skeleton, the pill, polling every second
-    init = out["init"]
-    assert (
-        init["phase"] == "skeleton"
-        and init["gets"] == 1
-        and init["firstGet"] == "/api/books/1/preview/?scope=book"
-    )
-    assert (
-        init["status"] == "queued"
-        and init["active"] is True
-        and init["polling"] == 1
-        and init["store"] is True
-    )
-    assert init["pill"] == {"state": "saving", "text": "تُحدَّث المعاينة…", "action": ""}
-    assert init["footprint"] == {
-        "count": 0,
-        "computing": True,
-        "rows": [["p1", None], ["h10", None], ["h20", None]],
-    }
-    ready = out["ready"]
-    assert ready["running"] == {"status": "running", "phase": "skeleton", "polling": 1}
-    assert ready["status"] == "done" and ready["phase"] == "pages" and ready["pages"] == 5
-    assert (
-        ready["current"] == 1 and ready["cursor"] == 0 and ready["active"] is False and ready["polling"] == 0
-    )
-    assert ready["pill"] == "" and ready["counter"] == "صفحة 1 من 5" and ready["live"] == "صفحة 1 من 5"
-    assert ready["chapter"] == {"id": "p1", "title": "قبل الفصل الأول", "first": 1, "last": 1, "fresh": False}
-    assert ready["thumbs"] == [
-        [1, "/m/a/page-1.webp", True, False],
-        [2, "/m/a/page-2.webp", False, False],
-        [3, "/m/a/page-3.webp", False, False],
-        [4, "/m/a/page-4.webp", False, False],
-        [5, "/m/a/page-5.webp", False, False],
+def test_schema_module_conversion_matching_and_block_helpers_under_node(tmp_path):
+    folder = _node_tmp(tmp_path)
+    nodes = _chapter_nodes()
+    (folder / "fixture.json").write_text(json.dumps({"nodes": nodes, "queries": QUERIES}, ensure_ascii=False))
+    out = _run_node(folder, "schema.mjs", SCHEMA_HARNESS, str(ROOT), str(folder / "fixture.json"))
+    # a chapter round-trips as the server has it (the D47 flags too), and the server accepts it
+    assert out["roundTrip"] == nodes
+    assert doc.chapter_version(
+        doc.clean_nodes({"type": "doc", "content": out["roundTrip"]})
+    ) == doc.chapter_version(nodes)
+    assert out["editorTypes"] == [
+        "paragraph",
+        "heading:1",
+        "paragraph",
+        "paragraph",
+        "heading:1",
+        "heading:2",
+        "paragraph",
+        "paragraph:verse",
+        "separator",
     ]
-    assert ready["footprint"] == {
-        "count": 5,
-        "text": "5 صفحات",
-        "delta": "",
-        "rows": [["p1", 1, 1, 1, True], ["h10", 2, 3, 2, False], ["h20", 4, 5, 2, False]],
-    }
-    assert ready["editorHref"] == "/books/1/editor/?chapter=p1" and ready["pdf"] == "/m/a/book.pdf"
-    assert (
-        ready["prefetched"] == ["/m/a/page-2.webp"]
-        and ready["replaced"] == "/books/1/layout/#page-1"
-        and ready["session"] == "1"
-    )
-
-    # --- a change → one debounced PUT (values shown at once, the chapter under the eyes sent) → polling; the
-    # chapter's fresh render stands in for its range; the book's new render swaps every page, page 3 kept
-    saved = out["saved"]
-    assert saved["body"] == {"trim": "a5", "top_mm": 22, "chapter": "h10"} and saved["csrf"] == "tok"
-    assert (
-        saved["state"] == "saved"
-        and saved["message"] == "حُفظ"
-        and saved["sheet"] == {"trim": "a5", "top": 22, "saved": True}
-    )
-    assert (
-        saved["tracked"] == "h10"
-        and saved["rendering"] is True
-        and saved["stale"] is False
-        and saved["pill"] == "تُحدَّث المعاينة…"
-    )
-    assert (
-        saved["current"] == 3 and saved["pages"] == 5 and saved["polling"] == 1 and saved["savedTimer"] == 1
-    )
-    assert saved["gets"] == [
-        "/api/books/1/preview/?scope=book",
-        "/api/books/1/preview/?scope=chapter&chapter=h10",
+    assert out["odd"][0][:2] == ["paragraph", "quote"] and out["odd"][1][:2] == ["paragraph", "verse"]
+    assert out["odd"][2][:2] == ["separator", "r1"] and out["odd"][3][:2] == ["heading", 2]
+    assert json.loads(out["odd"][3][2]) == [{"type": "text", "text": "عنوان", "marks": [{"type": "bold"}]}]
+    assert out["odd"][4][0] == "title" and len(out["odd"]) == 6 and out["empty"] == 1
+    doc.clean_nodes(out["emptySaved"])
+    assert out["ids"] == {"unique": 200, "shape": True, "note": True}
+    for (query, opts), js, plain in zip(QUERIES, out["matches"], out["plainMatches"], strict=True):
+        options = doc.FindOptions(
+            match_tashkeel=bool(opts.get("match_tashkeel")),
+            fold_alef=opts.get("fold_alef", True),
+            whole_word=bool(opts.get("whole_word")),
+        )
+        expected = [
+            {"block": m.block, "note": m.note, "index": m.index, "length": m.length}
+            for m in doc.find_in_nodes(nodes, query, options)
+        ]
+        assert js == expected, (query, opts)
+        # by plain offsets: the same matches, each reading as the query in the container's inline_text
+        assert len(plain) == len(expected), (query, opts)
+        for m in plain:
+            container = next(n for n in doc.flat_blocks(nodes) if doc.node_id(n) == m["block"])
+            if m["note"]:
+                container = next(
+                    i
+                    for i in container["content"]
+                    if i.get("type") == "footnote" and doc.node_id(i) == m["note"]
+                )
+            found = doc.inline_text(container["content"])[m["start"] : m["end"]]
+            assert doc.fold_query(found, options) == doc.fold_query(query, options), (query, found)
+    assert out["words"] == doc.word_count(nodes)
+    assert out["fold"] == ["مدينة", "ااا", "aب", ""]
+    assert out["format"] == ["2\u202f184", "999", "31–58", "4", ""]
+    assert out["styles"] == [
+        "title",
+        "heading1",
+        "heading2",
+        "paragraph",
+        "quote",
+        "verse",
+        "center",
+        "separator",
+        "footnote",
     ]
-    assert saved["ratio"] == "--lo-ar: 0.7083"  # the sheets keep the shape of the pages drawn in them
-    assert out["savedCleared"] == ""
-    overlay = out["overlay"]
-    assert overlay["current"] == 3 and overlay["pages"] == 6
-    assert overlay["scopes"] == ["book", "chapter", "chapter", "chapter", "book", "book"]
-    assert overlay["numbers"] == [1, 2, 3, 4, 4, 5] and overlay["urls"] == ["a", "c", "c", "c", "a", "a"]
-    assert overlay["range"] == {"id": "h10", "title": "الفصل الأول", "first": 2, "last": 4, "fresh": True}
-    assert overlay["fresh"] == [["p1", False, 1], ["h10", True, 3], ["h20", False, 2]]
-    assert overlay["pill"] == "تُحدَّث المعاينة…" and overlay["counter"] == "صفحة 3 من 6"
-    assert overlay["thumbs"] == [[1, False], [2, True], [3, True], [4, True], [4, False], [5, False]]
-    swapped = out["swapped"]
+    assert out["styleOf"] == ["heading2", "quote", "separator", "paragraph"]
+    assert out["stepIndex"] == [1, 0, 2, 0, 2, -1]
+    # plain text = editor.document.inline_text (a call or a page mark one U+FFFC, a break "\n")
+    assert out["plain"] == [doc.inline_text(n.get("content") or []) for n in nodes]
+    assert out["marks"] == [{"offset": 17, "page": 6, "printed": "6"}]
+    split = out["split"]
     assert (
-        swapped["current"] == 3
-        and swapped["pages"] == 7
-        and swapped["scopes"] == ["book"]
-        and swapped["urls"] == ["b"]
+        split["plainA"] == doc.inline_text(nodes[2]["content"])[:5]
+        and split["plainB"] == doc.inline_text(nodes[2]["content"])[5:]
     )
-    assert swapped["delta"] == "+2" and swapped["chapterDeltas"] == {"h10": 1, "h20": 1}
-    assert swapped["rows"] == [["p1", 1, 0], ["h10", 3, 1], ["h20", 3, 1]]
+    assert split["a"]["attrs"] == {
+        "id": "p11",
+        "sourcePages": [2],
+        "sourceLineIds": [],
+        "reviewed": True,
+        "breakBefore": True,
+    }
+    assert split["b"]["attrs"] == {
+        "id": "NEW",
+        "sourcePages": [2],
+        "sourceLineIds": [],
+        "reviewed": True,
+        "keepWithNext": True,
+    }
+    assert split["b"]["content"][1]["type"] == "footnote"  # the call goes with the text after the caret
+    assert out["headingSplit"] == ["heading", "paragraph", True, 0]
+    assert out["midHeading"] == [["heading", 1], ["heading", 1]]
+    assert out["merge"]["offset"] == 5 and doc.inline_text(
+        out["merge"]["node"]["content"]
+    ) == doc.inline_text(nodes[2]["content"])
     assert (
-        swapped["active"] is False
-        and swapped["polling"] == 0
-        and swapped["pill"] == ""
-        and swapped["thumbs"] == 7
+        out["merge"]["node"]["attrs"]["id"] == "p11" and out["merge"]["node"]["attrs"]["keepWithNext"] is True
     )
-    assert swapped["counter"] == "صفحة 3 من 7" and swapped["editorHref"] == "/books/1/editor/?chapter=h10"
-    assert swapped["ratio"] == "--lo-ar: 0.7048"  # A5 now that the A5 render is on screen
+    assert out["mergeSeparator"] is None
+    paste = out["paste"]
+    base = doc.inline_text(nodes[2]["content"])
+    assert paste["types"] == ["paragraph", "heading:2", "paragraph:quote"] and paste["firstId"] == "p11"
+    assert paste["plain"] == [base[:3] + "أ", "ب", "ج" + base[6:]] and paste["caret"] == {
+        "index": 2,
+        "offset": 1,
+    }
+    replace = out["replace"]
+    assert (
+        replace["ids"] == ["p1", "h10", "p11", "p11", "NEW", "h20", "h21", "p22", "p30", "s1"]
+        and replace["unchanged"] is True
+    )
+    assert replace["removed"] == len(list(doc.flat_blocks(nodes))) - 1
+    quote = out["quote"]
+    assert [p["attrs"] for p in quote["kept"][0]["content"]] == [{"id": "q1"}, {"id": "q2"}, {"id": "q3"}]
+    assert [n["type"] for n in quote["lifted"]] == ["blockquote", "paragraph", "blockquote"]
+    assert (
+        quote["lifted"][0]["attrs"] == {"id": "bq"}
+        and "attrs" not in quote["lifted"][2]
+        and quote["emptied"] == []
+    )
+    assert out["flags"]["breakBefore"] is True and "keepWithNext" not in out["flags"]
+    assert out["note"] == ["p11", ["n1"], None]
+    text_after = doc.inline_text(out["replacePlain"])
+    assert (
+        text_after
+        == doc.inline_text(nodes[7]["content"])[:18] + "مدينة" + doc.inline_text(nodes[7]["content"])[24:]
+    )
+    assert not any(
+        m.get("type") == "uncertain" for item in out["replacePlain"] for m in item.get("marks", [])
+    )
+    marked = [
+        item for item in out["unmark"] if any(m.get("type") == "uncertain" for m in item.get("marks", []))
+    ]
+    assert [item["text"] for item in marked] == ["تية"]
+    assert out["inNote"]["content"] == [{"type": "text", "text": "ملاحظة عن برقة"}]
+    assert (
+        out["html"][0]
+        == '<p class="ed-p is-verse">شطر أول<br><i>شطر ثانٍ </i><span class="ed-pb" data-page="6"></span><mark class="ed-uncertain">مليتية</mark><b> وبرقة</b></p>'  # noqa: E501
+    )
+    assert '<sup class="ed-fn" data-seq="3"></sup>' in out["html"][1] and out["html"][2].startswith(
+        '<h2 class="ed-h1">'
+    )
+    assert out["html"][3] == '<p class="ed-p">&lt;b&gt;</p>'
+    # the schemas: the Phase 4 nodes one to one, the flags on every block; the one-block editor holds one
+    # block
+    assert out["schema"]["nodes"] == [
+        "doc",
+        "text",
+        "paragraph",
+        "heading",
+        "title",
+        "separator",
+        "hardBreak",
+        "pageBreak",
+        "footnote",
+    ]
+    assert out["schema"]["marks"] == ["bold", "italic", "uncertain"] and out["schema"]["flags"] == [
+        "breakBefore",
+        "keepWithNext",
+    ]
+    assert out["blockDoc"] == "block"
+    # p11: «مَدِينَةُ برقة القديمة » (23 units), the call (one offset, a node of 15), « وأهلها»
+    assert out["positions"] == [[0, 1, 0], [5, 6, 5], [23, 24, 23], [24, 39, 24], [25, 40, 25], [31, 46, 31]]
+    assert out["insideNote"] == 24
+    assert out["docChildren"] == 9
+    assert out["split2"] == {"unique": True, "second": True, "kept": "p11"}
+    assert out["dup"]["unique"] is True and out["dup"]["last"].startswith("ek")
+    assert out["find1"] == {"n": 1, "cls": "ed-match is-current"} and out["find2"]["from"] == 22
+    assert out["uncertainBefore"] == ["مليتية"] and out["uncertainAfterTyping"] == []
+    assert out["uncertainAfterSpace"] == ["مليتية"] and out["uncertainAfterPaste"] == 1
+    assert out["uncertainAfterLoad"] == ["ملxيتية"]
+    assert out["pageNumber"] == ["7"] and out["orderNumber"] == ["1"]
 
-    # --- fields: parsing (Eastern digits, a comma), clamping, nested paths, booleans, formatting, custom trim
-    fields = dict((f[0], f[1:]) for f in out["fields"])
-    assert (
-        fields["clamp-eastern"] == [24] and fields["nan-kept"] == [1.7] and fields["comma"] == [1.75, "1.75"]
+
+# ---------------------------------------------------------------- the live pages' geometry under Node
+
+
+def _real_layout(book) -> dict:
+    """The sample document rendered by WeasyPrint (test database): the live layout's pages."""
+    from publishing import preview, relayout
+
+    preview.render_preview(book, "book")
+    return relayout.layout_payload(book, first=1, last=40)
+
+
+def _line(
+    block,
+    kind,
+    y,
+    start,
+    end,
+    text,
+    *,
+    x=62.36,
+    w=368.5,
+    h=22.1,
+    justify=True,
+    first=False,
+    style="body",
+    runs=None,
+):
+    return {
+        "block": block,
+        "kind": kind,
+        "style": style,
+        "x": x,
+        "y": y,
+        "w": w,
+        "h": h,
+        "baseline": y + 14.2,
+        "dir": "rtl",
+        "justify": justify,
+        "start": start,
+        "end": end,
+        "first": first,
+        "runs": runs
+        or [
+            {
+                "text": text,
+                "font": "nk-body",
+                "size_pt": 13.0,
+                "weight": 400,
+                "italic": False,
+                "sup": False,
+                "note": None,
+                "start": start,
+                "end": end,
+            }
+        ],
+    }
+
+
+def _page_of(n, lines, *, side=None, number=True, rule=None, chapter="h10"):
+    side = side or ("left" if n % 2 else "right")
+    margins = (
+        {"top": 56.69, "right": 62.36, "bottom": 62.36, "left": 51.02}
+        if side == "left"
+        else {"top": 56.69, "right": 51.02, "bottom": 62.36, "left": 62.36}
     )
-    assert fields["nested"] == [1.55, 1.55] and fields["bool"] == [False]
-    assert fields["fmt"] == ["20", "1.7", "12.5", ""]
-    assert fields["takeDirty"] == [
-        {
-            "body_size_pt": 24,
-            "line_height": 1.75,
-            "heading_scale": {"h1": 1.55},
-            "front_matter": {"contents": False},
+    return {
+        "n": n,
+        "side": side,
+        "blank": False,
+        "width_pt": 481.89,
+        "height_pt": 680.31,
+        "margins": margins,
+        "header": None,
+        "number": {
+            "text": str(n),
+            "x": 238.3,
+            "y": 629.29,
+            "w": 5.32,
+            "h": 17.58,
+            "baseline": 640.23,
+            "font": "nk-body",
+            "size_pt": 10.0,
+            "weight": 400,
+            "italic": False,
+            "align": "center",
         }
-    ]
-    assert fields["trimLabel"] == ["A5", "108×166 مم"]  # 148 − 22 − 18, 210 − 22 − 22
-    assert fields["custom"] == [
-        "custom",
-        160,
-        {"trim": "custom", "width_mm": 160, "height_mm": 210},
-        "160×210 مم",
-    ]
-    assert out["diagram"].startswith("--lo-ar: 0.7619; --lo-t: 0.1048;") and out["focus"] == "inner"
-    invalid = out["invalid"]
-    assert invalid["state"] == "invalid" and invalid["errors"] == {
-        "inner_mm": "الهوامش الجانبية أعرض من أن يبقى للنص مكان."
+        if number
+        else None,
+        "footnote_rule": rule,
+        "chapter": chapter,
+        "lines": lines,
     }
-    assert invalid["dirty"] == {"top_mm": 25} and invalid["retryQueued"] == 1
-    assert invalid["resent"] == {"top_mm": 25, "chapter": "h10"}
-    # the refused field keeps its typed value and its message after the valid ones were saved
-    assert invalid["after"] == {
-        "state": "invalid",
-        "errors": {"inner_mm": "الهوامش الجانبية أعرض من أن يبقى للنص مكان."},
-        "inner": 70,
-        "top": 25,
-    }
-    failure = out["failure"]
-    assert failure["failed"] == {
-        "state": "error",
-        "message": "تعذّر الحفظ · إعادة المحاولة",
-        "dirty": {"inner_mm": 22, "outer_mm": 19},
-    }
-    assert failure["refused"] == {
-        "ok": False,
-        "message": "هذا الإجراء يتطلب صلاحية محرّر.",
-        "dirty": {"inner_mm": 22, "outer_mm": 19},
-    }
-    assert failure["okAgain"] is True and failure["state"] == "saved" and failure["dirty"] == {}
-    # leaving with a change waiting: it is sent with keepalive; nothing waiting → nothing sent
-    assert out["unload"] == {
-        "sent": True,
-        "keepalive": True,
-        "body": {"top_mm": 21, "chapter": "h10"},
-        "dirty": {},
-        "top": 21,
-        "idle": False,
-    }
-    # a change during a PUT keeps its value when the older answer lands, and goes out in the next PUT
-    mid = out["midflight"]
-    assert mid["during"] == {"value": 24, "saving": True, "armed": 1}
-    assert mid["landed"] == {"value": 24, "dirty": {"outer_mm": 24}, "state": "saved"}
-    assert mid["final"] == 24 and mid["dirty"] == {} and mid["puts"] >= 2
-    assert out["menuAbove"] == [True, False, False, False]
 
-    # --- spread mode: (2, 3) with the recto on the left, page 1 alone on the left, (6, 7) at the end; a
-    # narrow stage shows one page and the pairing returns with the width
-    spread = out["spread"]
-    assert spread["s23"] == {
-        "cursor": 1,
-        "right": 2,
-        "left": 3,
-        "counter": "الصفحتان 2–3 من 7",
-        "stored": "1",
-        "marked": [2, 3],
-    }
-    assert spread["s45"] == {"right": 4, "left": 5, "prev": 1, "next": 5}
-    assert spread["s1"] == {"right": None, "left": 1, "canPrev": False, "turned": False}
-    assert spread["s67"] == {"right": 6, "left": 7, "canNext": False}
-    assert spread["narrow"] == {"spreadOn": False, "spread": True, "right": 6, "left": None}
-    assert spread["wideAgain"] == {"spreadOn": True, "right": 6, "left": 7}
-    assert spread["single"] == [6, None]
 
-    # --- fit modes and the panel's tabs are remembered; the keyboard map (RTL)
-    modes = out["modes"]
+GEOMETRY_HARNESS = r"""
+const fs = require('fs');
+const fixture = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+globalThis.window = globalThis;
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+eval(fs.readFileSync(process.argv[3], 'utf8'));
+const G = globalThis.NassakhBook.geo;
+const F = globalThis.NassakhBook.editFlow;
+const out = {};
+// ---- a real page drawn: every line placed at its box, the call a superscript run, the note, the rule, the number
+const real = fixture.real.pages.find((p) => p.lines.some((l) => l.block === 'p11'));
+out.realHtml = G.pageHtml(real, {});
+out.realStyle = G.pageStyle(real);
+out.real = real;
+// ---- a justified line, runs with faces and weights, a leader, a header anchored right
+const crafted = { n: 7, width_pt: 481.89, height_pt: 680.31, margins: {}, header: { text: 'الفصل الأول', x: 300, y: 30, w: 80, h: 15, font: 'nk-heading', size_pt: 9.5, weight: 700, align: 'right' }, number: null, footnote_rule: null,
+  lines: [
+    { block: 'p1', kind: 'body', style: 'body', x: 62.36, y: 56.69, w: 368.5, h: 22.1, dir: 'rtl', justify: true, start: 0, end: 20, first: true, runs: [
+      { text: 'نص ', font: 'nk-body', size_pt: 13, weight: 400, italic: false, sup: false, note: null, start: 0, end: 3 },
+      { text: 'غامق', font: 'nk-body', size_pt: 13, weight: 700, italic: false, sup: false, note: null, start: 3, end: 7 },
+      { text: 'Latin', font: 'nk-latin', size_pt: 13, weight: 400, italic: true, sup: false, note: null, start: 7, end: 12 },
+      { text: 'Other', font: 'Gill Sans', size_pt: 11, weight: 400, italic: false, sup: false, note: null, start: 12, end: 17 } ] },
+    { block: 'toc-1', kind: 'contents', style: 'contents-1', target: 'h10', x: 62.36, y: 100, w: 368.5, h: 22.1, dir: 'rtl', justify: false, start: 0, end: 5, first: true, runs: [
+      { text: 'الفصل', font: 'nk-body', size_pt: 13, weight: 400, italic: false, sup: false, note: null, start: 0, end: 5 },
+      { text: '.', font: 'nk-body', size_pt: 13, weight: 400, italic: false, sup: false, note: null, start: 5, end: 5, leader: true, w: 282.11 },
+      { text: '4', font: 'nk-body', size_pt: 13, weight: 400, italic: false, sup: false, note: null, start: 5, end: 5 } ] } ] };
+out.craftedHtml = G.pageHtml(crafted, { hidden: new Set(['nothing']), selected: 'toc-1', flash: { block: 'p1', i: 0 } });
+// ---- a click: the run's text ↔ the block's plain text through collapsed spaces and unprinted page marks
+const plain = 'أهل  برقة￼ يزرعون القمح';
+out.runMap = G.runMap('أهل برقة يزرعون', plain, 0, 17);
+out.runMapBare = G.runMap('أهل برقة', undefined, 4, 12);
+const hitLine = { block: 'p1', start: 0, end: 22, runs: [{ text: 'أهل برقة يزرعون', start: 0, end: 17 }, { text: '(1)', sup: true, note: 'n1', start: 17, end: 18 }, { text: ' القمح', start: 18, end: 22 }] };
+out.hits = [G.hitOffset(hitLine, 0, 0, plain), G.hitOffset(hitLine, 0, 4, plain), G.hitOffset(hitLine, 0, 9, plain), G.hitOffset(hitLine, 1, 1, plain), G.hitOffset(hitLine, 2, 3, undefined), G.hitOffset(hitLine, 9, 0, plain)];
+// ---- decorations cut a run (find, the uncertain word, the picked word); page marks inserted with no width
+out.pieces = G.runPieces({ text: 'أهل برقة يزرعون', start: 0, end: 17 }, plain, [{ start: 5, end: 9, cls: 'lp-match is-current' }, { start: 11, end: 17, cls: 'lp-uncertain' }]);
+out.marked = G.lineHtml({ block: 'p1', kind: 'body', x: 1, y: 2, w: 3, h: 4, dir: 'rtl', justify: false, start: 0, end: 17, runs: [{ text: 'أهل برقة يزرعون', font: 'nk-body', size_pt: 13, start: 0, end: 17 }] }, 0,
+  { plain: () => plain, marks: () => [{ offset: 9, page: 6 }], decos: () => [{ start: 0, end: 3, cls: 'lp-picked' }] });
+// ---- lines by offset, across pages
+const pages = new Map(fixture.pages.map((p) => [p.n, p]));
+out.lineAt = [G.lineAt(pages.get(2), 'p13', 0), G.lineAt(pages.get(2), 'p13', 61), G.lineAt(pages.get(2), 'p13', 60), G.lineAt(pages.get(2), 'zz', 0)];
+out.caretLine = [G.caretLine(pages, 'p13', 10), G.caretLine(pages, 'p13', 130), G.caretLine(pages, 'p13', 175), G.caretLine(pages, 'n12', 3), G.caretLine(pages, 'nope', 0)];
+out.blocksOn = G.blocksOn(pages.get(2));
+out.bodyBottom = [G.bodyBottom(pages.get(2)), G.bodyBottom(pages.get(3))];
+out.measure = [G.measure(pages.get(2)), G.measure(pages.get(3))];
+// ---- an open paragraph: its lines, the lines below it; a new block under the one before it
+const around = G.flowAround(pages.get(2), 'p12');
+out.around = { lines: around.lines, top: around.top, bottom: around.bottom, below: pages.get(2).lines.map((l, i) => around.below(l, i)) };
+const after = G.flowAfter(pages.get(2), 'p12');
+out.after = { top: after.top, below: pages.get(2).lines.map((l, i) => after.below(l, i)) };
+// the flow with the open paragraph one line taller (22.1): the lines below move; the last one falls off the body
+const f = F.flow(pages.get(2), [{ key: 'p12', open: true, oldTop: around.top, oldBottom: around.bottom, anchorTop: around.top, height: around.bottom - around.top + 22.1 }], G.bodyBottom(pages.get(2)));
+out.flow = { regions: f.regions.map((r) => [r.key, r.screenTop, Math.round(r.after * 100) / 100]), lines: f.lines };
+// a removed block closes its room, a new one opens under the block before it
+const f2 = F.flow(pages.get(2), [{ key: 'p11', oldTop: 155.64, oldBottom: 199.84, height: 0 }, { key: 'new', oldTop: 199.85, oldBottom: 199.85, height: 22.1 }], 600);
+out.flow2 = f2.lines.map((l) => Math.round(l.dy * 100) / 100);
+// ---- the overlay's placement (viewport coordinates): below the anchor, above near the bottom, never across an edge
+const view = { top: 100, bottom: 800, left: 300, right: 1200 };
+out.place = [F.placeAgainst({ top: 200, bottom: 220, left: 700, right: 900 }, view, [380, 132], true), F.placeAgainst({ top: 740, bottom: 760, left: 700, right: 900 }, view, [380, 132], true),
+  F.placeAgainst({ top: 200, bottom: 220, left: 300, right: 400 }, view, [380, 132], true), F.placeAgainst({ top: 200, bottom: 220, left: 1100, right: 1190 }, view, [380, 132], false)];
+// ---- a page moved by a re-layout: renumbered; an odd delta swaps its side (the text moves by the side shift,
+// an outer number goes to the other corner, a centred one moves with the text)
+const p3 = pages.get(3);
+out.shiftEven = G.shiftPage(p3, 2, { side_shift_pt: -11.34, page_number: 'bottom_center' });
+out.shiftOdd = G.shiftPage(p3, 1, { side_shift_pt: -11.34, page_number: 'bottom_center' });
+const outer = Object.assign({}, p3, { number: Object.assign({}, p3.number, { x: 51.02, align: 'left' }) });
+out.shiftOuter = G.shiftPage(outer, -1, { side_shift_pt: -11.34, page_number: 'bottom_outer' }).number;
+out.noShift = G.shiftPage(p3, 0, {}) === p3;
+// ---- a re-layout spliced in: pages 2–3 of the chapter become three pages (delta +1, flip); later pages move
+const held = { pages: new Map(fixture.pages.map((p) => [p.n, p])), pageCount: 5, revision: 3 };
+const fresh = [2, 3, 4].map((n) => Object.assign({}, fixture.pages.find((p) => p.n === 2), { n, lines: [], fresh: true }));
+const result = { mode: 'chapter', full: false, from: 2, to: 3, count: 3, delta: 1, shifted_from: 4, flip: true, side_shift_pt: -11.34, page_count: 6, chapters: [{ id: 'h10', first: 2, last: 4 }, { id: 'h20', first: 5, last: 6 }], checks: [{ code: 'almost_empty_page', page: 4 }], revision: { before: 3, after: 4 } };
+const applied = G.applyRelayout(held, result, fresh, { page_number: 'bottom_center' });
+out.applied = { numbers: [...applied.pages.keys()].sort((a, b) => a - b), fresh: [2, 3, 4].map((n) => Boolean(applied.pages.get(n).fresh)), moved: [1, 2, 3, 4, 5].map((n) => applied.moved(n)),
+  p5: { side: applied.pages.get(5).side, number: applied.pages.get(5).number.text, x0: applied.pages.get(5).lines[0].x, margins: applied.pages.get(5).margins }, pageCount: applied.pageCount, revision: applied.revision, delta: applied.delta, flip: applied.flip, chapters: applied.chapters, checks: applied.checks };
+out.contentsDropped = G.applyRelayout({ pages: new Map([[1, { n: 1, lines: [{ kind: 'contents', block: 'toc-1' }] }], [5, fixture.pages[3]]]), pageCount: 5, revision: 3 }, result, [], {}).pages.has(1);
+out.refetch = [G.applyRelayout(held, Object.assign({}, result, { revision: { before: 2, after: 4 } }), fresh, {}), G.applyRelayout(held, Object.assign({}, result, { full: true }), fresh, {}), G.applyRelayout(held, { unchanged: true }, [], {})];
+// ---- which pages: fetched around the page shown; drawn: one page, or the two of a spread (recto on the left)
+out.around2 = [G.around(1, 1, 400, false), G.around(200, 1, 400, true), G.around(399, 1, 400, false), G.around(3, 1, 2, false)];
+const seq = [1, 2, 3, 4, 5, 6, 7];
+out.shown = [G.shown(seq, 0, false), G.shown(seq, 0, true), G.shown(seq, 1, true), G.shown(seq, 2, true), G.shown(seq, 6, true), G.shown(seq, 9, true)];
+// ---- the keyboard maps (nothing fires inside a field; the open paragraph keeps its own keys)
+const k = (key, extra = {}, ctx = {}) => G.keyAction(Object.assign({ key, code: extra.code || '' }, extra), Object.assign({ mode: 'preview' }, ctx));
+out.preview = [k('ArrowLeft'), k('ArrowRight'), k('PageDown'), k('PageUp'), k('Home'), k('End'), k('g', { code: 'KeyG' }), k('s', { code: 'KeyS' }), k('e', { code: 'KeyE' }), k('ث', { code: 'KeyE' }), k('1'), k('2'), k('3'), k('?'), k('؟'), k('f', { code: 'KeyF', metaKey: true }), k('z', { code: 'KeyZ', metaKey: true }), k('o', { code: 'KeyO' }), k('Escape')];
+const e = (key, extra = {}, ctx = {}) => k(key, extra, Object.assign({ mode: 'edit' }, ctx));
+out.edit = [e('s', { code: 'KeyS', metaKey: true }), e('z', { code: 'KeyZ', metaKey: true }), e('z', { code: 'KeyZ', metaKey: true, shiftKey: true }), e('y', { code: 'KeyY', ctrlKey: true }), e('f', { code: 'KeyF', metaKey: true }), e('f', { code: 'KeyF', metaKey: true, shiftKey: true }),
+  e('b', { code: 'KeyB', metaKey: true }), e('i', { code: 'KeyI', metaKey: true }), e('1', { code: 'Digit1', metaKey: true, altKey: true }), e('0', { code: 'Digit0', metaKey: true, altKey: true }), e('6', { code: 'Digit6', metaKey: true, altKey: true }),
+  e('[', { code: 'BracketLeft', metaKey: true }), e(']', { code: 'BracketRight', metaKey: true }), e('o', { code: 'KeyO' }), e('e', { code: 'KeyE' }), e('ArrowLeft'), e('Delete'), e('g', { code: 'KeyG' }), e('s', { code: 'KeyS' }), e('Escape')];
+out.fields = [e('o', { code: 'KeyO' }, { inField: true }), e('Escape', {}, { inField: true }), e('s', { code: 'KeyS', metaKey: true }, { inField: true }), e('z', { code: 'KeyZ', metaKey: true }, { inField: true }), e('e', { code: 'KeyE' }, { inBlock: true }), e('ArrowLeft', {}, { inBlock: true }), k('ArrowLeft', {}, { inField: true }), e('1', { code: 'Digit1', metaKey: true, altKey: true }, { inField: true })];
+// ---- the side panel's lists
+out.snippet = [G.snippet('قال الراوي إن أهل برقة كانوا يزرعون القمح في السهول الواسعة', 18, 22, 10), G.snippet('قصير', 0, 4)];
+out.groups = G.groupUncertain([{ chapter: 'h10', block: 'p11', start: 1, page: 4 }, { chapter: 'h10', block: 'p12', start: 1, page: 3 }, { chapter: 'h10', block: 'p13', start: 1, page: null }, { chapter: 'h20', block: 'p21', start: 1, page: 9 }, { chapter: 'h10', block: 'p11', start: 9, page: 4 }], { h10: 'الفصل الأول' });
+out.rows = G.chapterRowsHtml([{ id: 'h1', kind: 'chapter', title: 'الفصل <الأول>', first: 3, last: 9, pages: 7, delta: 2, drift: true, current: true }, { id: 'p0', kind: 'front', title: 'قبل', first: null, last: null, pages: null, delta: 0 }, { id: 'h2', kind: 'chapter', title: 'ثان', first: 10, last: 10, pages: 1, delta: -1 }]);
+out.count = [G.arCount(1, ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة']), G.arCount(2, ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة']), G.arCount(7, ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة']), G.arCount(412, ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'])];
+console.log(JSON.stringify(out));
+"""  # noqa: E501
+
+
+WORDS = "أهل برقة يزرعون القمح في السهول الواسعة حول المدينة القديمة منذ عصور بعيدة "
+
+
+def _words(n: int, shift: int = 0) -> str:
+    """Arabic text of exactly `n` characters (words and single spaces)."""
+    base = WORDS * 20
+    return base[shift : shift + n]
+
+
+def _h10_texts() -> dict:
+    return {
+        "h10": "الفصل الأول",
+        "p11": _words(80),
+        "p12a": _words(30, 3),
+        "p12b": _words(29, 7),
+        "p13": _words(180, 11),
+        "p14": _words(30, 13),
+        "n12": "حاشية عن برقة",
+    }
+
+
+def _h10_nodes() -> list:
+    t = _h10_texts()
+    return [
+        heading("h10", t["h10"], pages=(2,)),
+        para("p11", t["p11"], pages=(2,)),
+        para("p12", t["p12a"], note("n12", t["n12"], page=2), t["p12b"], pages=(2, 3)),
+        para("p13", t["p13"], pages=(3,)),
+        para("p14", t["p14"], pages=(3,)),
+    ]
+
+
+def _run(value, start, end, **extra):
+    return {
+        "text": value,
+        "font": "nk-body",
+        "size_pt": 13.0,
+        "weight": 400,
+        "italic": False,
+        "sup": False,
+        "note": None,
+        "start": start,
+        "end": end,
+        **extra,
+    }
+
+
+def _chapter_pages() -> list[dict]:
+    """Chapter h10 on pages 2–3 (p13 runs over), h20 on 4–5: every line's runs are its block's text between
+    its offsets (the call is its own superscript run)."""
+    t = _h10_texts()
+    p12 = t["p12a"] + doc.OBJECT + t["p12b"]
+    rule = {"x": 62.36, "y": 560.0, "w": 368.5}
+    call = _run("(1)", 30, 31, size_pt=6.2, sup=True, note="n12")
+
+    def body(block, text, y, a, b, **k):
+        return _line(block, "body", y, a, b, text[a:b].strip(), runs=[_run(text[a:b].strip(), a, b)], **k)
+
+    page2 = _page_of(
+        2,
+        [
+            _line(
+                "h10",
+                "heading",
+                102.05,
+                0,
+                11,
+                t["h10"],
+                x=201.92,
+                w=89.38,
+                h=28.08,
+                justify=False,
+                first=True,
+                style="chapter-title",
+                runs=[_run(t["h10"], 0, 11, font="nk-heading", size_pt=20.8, weight=700)],
+            ),
+            body("p11", t["p11"], 155.64, 0, 40, first=True),
+            body("p11", t["p11"], 177.74, 41, 80, justify=False),
+            _line(
+                "p12",
+                "body",
+                199.84,
+                0,
+                35,
+                "",
+                first=True,
+                runs=[_run(p12[0:30], 0, 30), call, _run(p12[31:35], 31, 35)],
+            ),
+            body("p12", p12, 221.94, 36, 60, justify=False),
+            body("p13", t["p13"], 244.04, 0, 60, first=True),
+            body("p13", t["p13"], 266.14, 61, 120),
+            body("p13", t["p13"], 530.0, 121, 150),
+            _line(
+                "n12",
+                "note",
+                565.0,
+                0,
+                13,
+                t["n12"],
+                h=15.0,
+                justify=False,
+                style="footnote-text",
+                runs=[_run("(1)\u00a0", 0, 0, size_pt=10.0, note="n12"), _run(t["n12"], 0, 13, size_pt=10.0)],
+            ),
+        ],
+        rule=rule,
+    )
+    page3 = _page_of(
+        3,
+        [
+            body("p13", t["p13"], 56.69, 151, 180, justify=False),
+            body("p14", t["p14"], 78.79, 0, 30, first=True, justify=False),
+        ],
+    )
+    page4 = _page_of(
+        4,
+        [
+            _line(
+                "h20",
+                "heading",
+                102.05,
+                0,
+                12,
+                "الفصل الثاني",
+                justify=False,
+                first=True,
+                style="chapter-title",
+            ),
+            _line("p21", "body", 155.64, 0, 20, "…", first=True, justify=False),
+        ],
+        chapter="h20",
+    )
+    page5 = _page_of(5, [_line("p22", "body", 56.69, 0, 10, "…", first=True, justify=False)], chapter="h20")
+    return [page2, page3, page4, page5]
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_live_page_geometry_under_node(tmp_path):
+    book = _book()
+    fixture = {"real": _real_layout(book), "pages": _chapter_pages()}
+    (tmp_path / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    out = _run_node(
+        tmp_path,
+        "geometry.js",
+        GEOMETRY_HARNESS,
+        str(BOOK_JS / "geometry.js"),
+        str(BOOK_JS / "edit.js"),
+        str(tmp_path / "fixture.json"),
+    )
+
+    # --- a real page: one element per line at its box, in points (the CSS scales them with the page)
+    real, html = out["real"], out["realHtml"]
+    assert out["realStyle"] == f"--pw:{real['width_pt']:g};--ph:{real['height_pt']:g}"
+    drawn = re.findall(
+        r'<div class="(lp-line [^"]*)" data-i="(\d+)" data-b="([^"]*)" dir="rtl" style="([^"]*)">', html
+    )
+    assert [int(i) for _c, i, _b, _s in drawn] == list(range(len(real["lines"])))
+    for (cls, _i, block, style), line in zip(drawn, real["lines"], strict=True):
+        assert block == line["block"]
+        box = [f"--{k}:{round(line[k], 2):g}" for k in ("x", "y", "w", "h")]
+        want = ";".join(box)
+        assert style.startswith(want), (style, want)
+        assert f"k-{line['kind']}" in cls and ("is-j" in cls) == line["justify"]
+    heading_cls = next(c for c, _i, b, _s in drawn if b == "h10")
+    assert "is-c" in heading_cls and "f-h" in heading_cls
+    # the call: a superscript run of the note, its one position; the note at the foot; the rule; the number
+    assert re.search(
+        r'<span class="lp-run f-b is-sup" data-r="1" data-s="23" data-e="24" data-note="n1" style="--fs:6.2">\(1\)</span>',  # noqa: E501
+        html,
+    )
+    note_cls = next(c for c, _i, b, _s in drawn if b == "n1")
+    assert "k-note" in note_cls
+    rule = real["footnote_rule"]
     assert (
-        modes["fitW"] == ["width", "width"]
-        and modes["fitBogus"] == "height"
-        and modes["fitActual"] == "actual"
+        f'<div class="lp-rule" style="--x:{rule["x"]:g};--y:{rule["y"]:g};--w:{rule["w"]:g}"></div>' in html
+    )
+    number = real["number"]
+    assert (
+        f'<div class="lp-number f-b" data-align="center" style="--x:{number["x"]:g};--y:{number["y"]:g};--w:{number["w"]:g};--h:{number["h"]:g};--fs:10"><span>{number["text"]}</span></div>'  # noqa: E501
+        in html
+    )
+
+    # --- a justified line with runs in their faces, weights and styles; a contents line with its leader
+    crafted = out["craftedHtml"]
+    assert 'class="lp-line k-body is-j f-b is-flash"' in crafted
+    assert (
+        '<span class="lp-run f-b is-b" data-r="1" data-s="3" data-e="7" style="--fs:13">غامق</span>'
+        in crafted
     )
     assert (
-        modes["panel"] == ["pages", "pages"]
-        and modes["sheetStyle"] == "--lo-ar: 0.7083; --lo-w: 170; --lo-gap: 12px"
-    )  # the server's values won on the last save
-    assert out["keys"] == [
+        '<span class="lp-run f-l is-i" data-r="2" data-s="7" data-e="12" style="--fs:13">Latin</span>'
+        in crafted
+    )
+    assert (
+        'style="--fs:11;font-family:&quot;Gill Sans&quot;,serif"' in crafted
+        or 'font-family:"Gill Sans",serif' in crafted
+    )
+    assert (
+        'class="lp-line k-contents is-link is-front f-b is-selected" data-i="1" data-b="toc-1" data-target="h10"'  # noqa: E501
+        in crafted
+    )
+    assert '<span class="lp-leader f-b" data-r="1" style="--fs:13;--lw:282.11" aria-hidden="true">' in crafted
+    assert (
+        '<div class="lp-header f-h is-b" data-align="right"' in crafted
+        and "<span>الفصل الأول</span>" in crafted
+    )
+
+    # --- clicks: the run's characters mapped through the doubled space and the unprinted page mark
+    assert (
+        out["runMap"][:5] == [0, 1, 2, 3, 5] and out["runMap"][7:10] == [8, 9, 11] and out["runMap"][-1] == 17
+    )
+    assert out["runMapBare"] == [4, 5, 6, 7, 8, 9, 10, 11, 12]
+    assert out["hits"] == [0, 5, 11, 18, 21, 0]
+    # decorations: the current match and the uncertain word cut the run; a page mark sits between letters
+    assert out["pieces"] == [
+        {"text": "أهل ", "cls": "", "before": ""},
+        {"text": "برقة", "cls": "lp-match is-current", "before": ""},
+        {"text": " ", "cls": "", "before": ""},
+        {"text": "يزرعون", "cls": "lp-uncertain", "before": ""},
+    ]
+    assert (
+        '<mark class="lp-picked">أهل</mark>' in out["marked"]
+        and '<span class="lp-pb" data-page="6"></span>' in out["marked"]
+    )
+    assert out["marked"].index("برقة") < out["marked"].index('class="lp-pb"') < out["marked"].index("يزرعون")
+
+    # --- lines by offset (the end of a line holds the caret), across pages; the page's blocks; the body's end
+    assert out["lineAt"] == [5, 6, 5, -1]
+    assert out["caretLine"] == [{"n": 2, "i": 5}, {"n": 2, "i": 7}, {"n": 3, "i": 0}, {"n": 2, "i": 8}, None]
+    assert out["blocksOn"] == ["h10", "p11", "p12", "p13", "n12"]
+    assert out["bodyBottom"] == [560.0, 680.31 - 62.36]
+    assert out["measure"] == [
+        {"x": 62.36, "w": pytest.approx(368.51)},
+        {"x": 51.02, "w": pytest.approx(368.51)},
+    ]
+    # --- the open paragraph: its lines, the body lines under it move (not the note); a new block under p12
+    around = out["around"]
+    assert around["lines"] == [3, 4] and around["top"] == 199.84 and around["bottom"] == pytest.approx(244.04)
+    assert around["below"] == [False, False, False, False, False, True, True, True, False]
+    assert out["after"]["top"] == pytest.approx(244.04) and out["after"]["below"] == around["below"]
+    flow = out["flow"]
+    assert flow["regions"] == [["p12", 199.84, 22.1]]
+    assert [round(line["dy"], 2) for line in flow["lines"]] == [0, 0, 0, 0, 0, 22.1, 22.1, 22.1, 0]
+    assert [line["over"] for line in flow["lines"]] == [False] * 7 + [True, False]  # 530 + 22.1 + 22.1 > 560
+    assert out["flow2"] == [0, 0, 0, -22.1, -22.1, -22.1, -22.1, -22.1, 0]
+    # --- the overlay: below the anchor with its start (right) edge on the anchor's; flipped above at the
+    # bottom;
+    # kept inside the side edges
+    assert out["place"][0] == {"style": "top:226px;left:520px", "above": False}
+    assert out["place"][1] == {"style": "top:602px;left:520px", "above": True}
+    assert out["place"][2] == {"style": "top:226px;left:300px", "above": False}
+    assert out["place"][3] == {"style": "top:226px;left:820px", "above": False}
+    # --- renumbered pages: an even delta keeps the side; an odd one swaps it and moves the text
+    p3 = fixture["pages"][1]
+    assert (
+        out["shiftEven"]["n"] == 5
+        and out["shiftEven"]["side"] == "left"
+        and out["shiftEven"]["number"]["text"] == "5"
+    )
+    assert out["shiftEven"]["lines"][0]["x"] == p3["lines"][0]["x"]
+    odd = out["shiftOdd"]
+    assert odd["n"] == 4 and odd["side"] == "right" and odd["number"]["text"] == "4"
+    assert odd["lines"][0]["x"] == pytest.approx(p3["lines"][0]["x"] + 11.34)  # left → right: −side_shift
+    assert odd["margins"] == {"top": 56.69, "right": 51.02, "bottom": 62.36, "left": 62.36}
+    assert odd["number"]["x"] == pytest.approx(
+        p3["number"]["x"] + 11.34
+    )  # a centred number moves with the text
+    assert (
+        out["shiftOuter"]["x"] == pytest.approx(481.89 - 51.02 - 5.32)
+        and out["shiftOuter"]["align"] == "right"
+        and out["shiftOuter"]["text"] == "2"
+    )
+    assert out["noShift"] is True
+    # --- a re-layout spliced in: 2–3 replaced by three pages; 4–5 become 5–6 on the other side
+    applied = out["applied"]
+    assert applied["numbers"] == [2, 3, 4, 5, 6] and applied["fresh"] == [True, True, True]
+    assert applied["moved"] == [1, None, None, 5, 6]
+    # the old page 4 (a right-hand page) is page 5 now, a left-hand one: its text moves by the side shift
+    assert applied["p5"]["side"] == "left" and applied["p5"]["number"] == "5"
+    assert applied["p5"]["x0"] == pytest.approx(62.36 - 11.34) and applied["p5"]["margins"]["left"] == 51.02
+    assert (
+        applied["pageCount"] == 6
+        and applied["revision"] == 4
+        and applied["delta"] == 1
+        and applied["flip"] is True
+    )
+    assert applied["chapters"][1] == {"id": "h20", "first": 5, "last": 6} and applied["checks"] == [
+        {"code": "almost_empty_page", "page": 4}
+    ]
+    assert out["contentsDropped"] is False  # a contents page's numbers may have moved: fetched again
+    assert out["refetch"] == [{"refetch": True}, {"refetch": True}, {"unchanged": True}]
+    # --- the pages worth fetching around the one shown; the pages drawn (one, or a spread: even right, odd
+    # left)
+    assert out["around2"] == [[1, 6], [197, 207], [397, 400], [1, 2]]
+    assert out["shown"] == [
+        {"right": 1, "left": 0},
+        {"right": 0, "left": 1},
+        {"right": 2, "left": 3},
+        {"right": 2, "left": 3},
+        {"right": 6, "left": 7},
+        {"right": 0, "left": 0},
+    ]
+    # --- the keyboard: preview turns (RTL: ← is the next page), jumps, spreads, fits, toggles the mode
+    assert out["preview"] == [
         "next",
         "prev",
         "next",
@@ -913,127 +1311,1157 @@ def test_layout_component_under_node(tmp_path):
         "last",
         "jump",
         "spread",
-        "editor",
+        "mode",
+        "mode",
         "fitHeight",
+        "fitWidth",
         "fitActual",
-        "blur",
+        "sheet",
+        "sheet",
+        "find",
         None,
         None,
+        "escape",
+    ]
+    assert out["edit"] == [
+        "save",
+        "undo",
+        "redo",
+        "redo",
+        "find",
+        "footnote",
+        "bold",
+        "italic",
+        "heading1",
+        "paragraph",
+        "separator",
+        "prevChapter",
+        "nextChapter",
+        "source",
+        "mode",
+        "next",
+        "deleteSelected",
         None,
+        None,
+        "escape",
+    ]
+    # inside a field or the open paragraph nothing fires but Esc and ⌘S / ⌘F
+    assert out["fields"] == [None, "blur", "save", None, None, None, None, None]
+    # --- the lists
+    assert out["snippet"][0] == {"before": "… إن أهل ", "match": "برقة", "after": " كانوا …"}
+    assert out["snippet"][1] == {"before": "", "match": "قصير", "after": ""}
+    groups = out["groups"]
+    assert [(g["chapter"], g["title"], g["count"]) for g in groups] == [
+        ("h10", "الفصل الأول", 4),
+        ("h20", "", 1),
+    ]
+    assert [(p["page"], [i["block"] for i in p["items"]]) for p in groups[0]["pages"]] == [
+        (3, ["p12"]),
+        (4, ["p11", "p11"]),
+        (None, ["p13"]),
+    ]
+    rows = out["rows"]
+    assert 'class="bp-ch is-current" data-cid="h1" aria-current="true" title="الفصل &lt;الأول&gt;"' in rows
+    assert (
+        '<bdi class="bp-ch-count">7</bdi><bdi class="lo-delta">+2</bdi><span class="bp-ch-range">ص <bdi>3–9</bdi></span>'  # noqa: E501
+        in rows
+    )
+    assert '<span class="bp-ch-drift">تغيّر في المراجعة</span>' in rows and 'class="bp-ch is-front"' in rows
+    assert (
+        '<bdi class="lo-delta">−1</bdi><span class="bp-ch-range">ص <bdi>10</bdi></span>' in rows
+        and "is-none" in rows
+    )
+    assert out["count"] == ["صفحة واحدة", "صفحتان", "7 صفحات", "412 صفحة"]
+
+
+# ---------------------------------------------------------------- the bookPage component under Node
+
+COMPONENT_HARNESS = r"""
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [, , root, fixturePath] = process.argv;
+const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
+const convert = await import(pathToFileURL(`${root}/static/src/editor/convert.js`));
+const clone = (v) => JSON.parse(JSON.stringify(v));
+
+// ---------------------------------------------------------------- a tiny DOM
+class ClassList { constructor(el) { this.s = new Set(); this.el = el; } add(...c) { c.forEach((x) => this.s.add(x)); } remove(...c) { c.forEach((x) => this.s.delete(x)); }
+  toggle(c, f) { if (f === undefined) f = !this.s.has(c); if (f) this.s.add(c); else this.s.delete(c); return f; } contains(c) { return this.s.has(c); } toString() { return [...this.s].join(' '); } }
+const camel = (k) => k.replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
+function matchOne(el, sel) {
+  if (!el || el.nodeType !== 1) return false;
+  const m = /^([a-z]+)?((?:\.[\w-]+)*)((?:\[[^\]]+\])*)$/i.exec(sel.trim());
+  if (!m) return false;
+  if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
+  const classes = (m[2] || '').split('.').filter(Boolean);
+  if (!classes.every((c) => el.classList.contains(c))) return false;
+  const attrs = [...(m[3] || '').matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)];
+  return attrs.every(([, name, value]) => {
+    const got = name.startsWith('data-') ? el.dataset[camel(name.slice(5))] : el.attrs[name];
+    return value === undefined ? got !== undefined : String(got) === value;
+  });
+}
+const matches = (el, sel) => sel.split(',').some((s) => matchOne(el, s));
+class Element {
+  constructor(tag) { this.tagName = String(tag).toUpperCase(); this.nodeType = 1; this.classList = new ClassList(this); this.attrs = {}; this.dataset = {}; this.childNodes = []; this.parentNode = null; this.listeners = {}; this.offsetHeight = 0; this.rect = null; this.isConnected = true;
+    const style = {}; style.setProperty = (k, v) => { style[k] = String(v); }; style.getPropertyValue = (k) => style[k] || ''; this.style = style; }
+  set className(v) { this.classList = new ClassList(this); String(v).split(/\s+/).filter(Boolean).forEach((c) => this.classList.add(c)); } get className() { return this.classList.toString(); }
+  setAttribute(k, v) { this.attrs[k] = String(v); if (k.startsWith('data-')) this.dataset[camel(k.slice(5))] = String(v); } getAttribute(k) { return k in this.attrs ? this.attrs[k] : k.startsWith('data-') && this.dataset[camel(k.slice(5))] !== undefined ? this.dataset[camel(k.slice(5))] : null; }
+  removeAttribute(k) { delete this.attrs[k]; } hasAttribute(k) { return k in this.attrs; }
+  appendChild(n) { if (n.parentNode) n.parentNode.removeChild(n); n.parentNode = this; this.childNodes.push(n); return n; }
+  removeChild(n) { const i = this.childNodes.indexOf(n); if (i >= 0) this.childNodes.splice(i, 1); n.parentNode = null; return n; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); this.isConnected = false; }
+  get children() { return this.childNodes.filter((c) => c.nodeType === 1); }
+  get parentElement() { return this.parentNode; }
+  set textContent(v) { this._text = String(v); this.childNodes = []; } get textContent() { return this._text || ''; }
+  set innerHTML(v) {
+    this._html = String(v); this.childNodes = [];
+    if (this.classList.contains('lp-lines')) {
+      for (const m of this._html.matchAll(/<div class="(lp-line [^"]*)" data-i="(\d+)" data-b="([^"]*)"/g)) {
+        const line = new Element('div'); line.className = m[1]; line.dataset.i = m[2]; line.dataset.b = m[3]; this.appendChild(line);
+      }
+    }
+  }
+  get innerHTML() { return this._html || ''; }
+  addEventListener(ev, fn) { this.listeners[ev] = fn; }
+  querySelector(sel) { for (const c of this.childNodes) { if (matches(c, sel)) return c; const d = c.querySelector ? c.querySelector(sel) : null; if (d) return d; } return null; }
+  querySelectorAll(sel) { const out = []; const walk = (n) => n.childNodes.forEach((c) => { if (matches(c, sel)) out.push(c); if (c.childNodes) walk(c); }); walk(this); return out; }
+  closest(sel) { let n = this; while (n && n.nodeType === 1) { if (matches(n, sel)) return n; n = n.parentNode; } return null; }
+  contains(node) { let n = node; while (n) { if (n === this) return true; n = n.parentNode; } return false; }
+  getBoundingClientRect() { const r = this.rect || { top: 0, left: 0, width: 0, height: 0 }; return { ...r, right: r.left + r.width, bottom: r.top + r.height }; }
+  getClientRects() { return [1]; }
+  focus() { focused.push(this.dataset.name || this.tagName); } blur() {} scrollIntoView() {} scrollBy() {}
+}
+const textNode = (data, parent) => { const n = { nodeType: 3, data, parentNode: parent, get parentElement() { return parent; } }; parent.childNodes.push(n); return n; };
+const el = (tag, cls, data) => { const e = new Element(tag); if (cls) e.className = cls; Object.entries(data || {}).forEach(([k, v]) => { e.dataset[k] = v; }); return e; };
+
+// ---------------------------------------------------------------- globals: Alpine, timers, storage, fetch
+const reg = {}; const inits = []; const stores = {}; const toasts = []; const focused = []; const replaced = [];
+let caretHit = null;
+globalThis.window = globalThis;
+globalThis.document = { hidden: false, activeElement: null, createElement: (t) => new Element(t), addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); },
+  querySelector: (sel) => (sel === 'meta[name="csrf-token"]' ? { content: 'tok' } : null), querySelectorAll: () => [], caretPositionFromPoint: () => caretHit };
+globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
+globalThis.location = { hash: '', pathname: '/books/1/layout/', search: '' };
+globalThis.history = { replaceState: (a, b, url) => replaced.push(url) };
+globalThis.innerWidth = 1400; globalThis.innerHeight = 900;
+let reducedFlag = false; globalThis.matchMedia = () => ({ matches: reducedFlag });
+globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+const timers = []; let timerId = 0;
+globalThis.setTimeout = (fn, ms) => { timerId += 1; timers.push({ id: timerId, fn, ms: ms || 0, cleared: false }); return timerId; };
+globalThis.clearTimeout = (id) => { const t = timers.find((x) => x.id === id); if (t) t.cleared = true; };
+const local = {}; globalThis.localStorage = { getItem: (k) => (k in local ? local[k] : null), setItem: (k, v) => { local[k] = String(v); } };
+const session = {}; globalThis.sessionStorage = { getItem: (k) => (k in session ? session[k] : null), setItem: (k, v) => { session[k] = String(v); } };
+globalThis.Nassakh = { toast: (m) => toasts.push(m) };
+const settle = async () => { for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r)); };
+const pending = (ms) => timers.filter((t) => !t.cleared && (ms === undefined || t.ms === ms));
+const fire = async (ms) => { const list = pending(ms); const t = list[list.length - 1]; if (!t) return false; t.cleared = true; await t.fn(); await settle(); return true; };
+const drop = () => { timers.forEach((t) => { t.cleared = true; }); };
+
+// the server: the live layout (pages by number, a revision), the chapters, scripted answers
+const server = { revision: 3, pages: new Map(fixture.pages.map((p) => [p.n, p])), pageCount: 5, chapters: fixture.ranges, stale: false, docs: clone(fixture.docs), versions: { h10: 'v1', h20: 'w1' }, put: null, relayout: null, uncertain: fixture.uncertain, choose: null, find: null, sheet: null };
+const calls = [];
+const reply = (status, data) => ({ ok: status < 400, status, json: async () => clone(data) });
+const layoutPayload = (from, to) => ({ scope: 'book', revision: server.revision, page_count: server.pageCount, first_page: 1, from, to, chapters: server.chapters, checks: [], geometry: fixture.geometry, font_css: '@font-face{}', stale: server.stale,
+  pages: [...server.pages.values()].filter((p) => p.n >= from && p.n <= to).map((p) => ({ ...p, url: `/m/page-${p.n}.webp`, url2x: `/m/page-${p.n}-2x.webp` })) });
+const previewPayload = () => ({ scope: 'book', status: 'done', stale: false, rendering: false, page_count: server.pageCount, pages: [], pdf_url: '/m/book.pdf', error: '', missing_fonts: [], checks: [],
+  layout: { revision: server.revision, page_count: server.pageCount, chapters: server.chapters, stale: server.stale } });
+globalThis.fetch = async (url, init = {}) => {
+  const method = init.method || 'GET';
+  const body = init.body ? JSON.parse(init.body) : null;
+  calls.push([method, url, body]);
+  let m;
+  if ((m = /^\/api\/books\/1\/preview\/layout\/\?from=(\d+)&to=(\d+)$/.exec(url))) return reply(200, layoutPayload(Number(m[1]), Number(m[2])));
+  if (url.startsWith('/api/books/1/preview/')) return method === 'POST' ? reply(202, previewPayload()) : reply(200, previewPayload());
+  if ((m = /^\/api\/books\/1\/chapters\/(\w+)\/relayout\/$/.exec(url))) return reply(202, server.relayout ? server.relayout(m[1]) : { id: 8, status: 'queued', url: '/api/books/1/relayout/8/', result: {} });
+  if ((m = /^\/api\/books\/1\/relayout\/(\d+)\//.exec(url))) return reply(200, server.status ? server.status(Number(m[1]), url) : { id: Number(m[1]), status: 'done', result: { unchanged: true }, pages: [] });
+  if ((m = /^\/api\/books\/1\/chapters\/(\w+)\/$/.exec(url))) {
+    const cid = m[1];
+    if (method === 'PUT') return server.put ? server.put(cid, body) : reply(200, { version: 'v2', id: cid, chapters: [{ id: cid, version: 'v2', title: 'الفصل الأول' }], reload: false, manuscript_version: 2, changed: true, relayout: { id: 7, status: 'queued', url: '/api/books/1/relayout/7/', result: {} } });
+    const nodes = server.docs[cid];
+    return nodes ? reply(200, { id: cid, version: server.versions[cid], content: { type: 'doc', content: nodes }, warnings: [], number: cid === 'h10' ? 2 : 3, kind: 'chapter', title: cid, prev: cid === 'h20' ? 'h10' : 'p1', next: cid === 'h10' ? 'h20' : null, count: 3, source_pages: { first: 2, last: 3 }, pages: null, drift: false }) : reply(404, { detail: 'الفصل غير موجود.' });
+  }
+  if (url === '/api/books/1/chapters/') return reply(200, fixture.summaries);
+  if (url === '/api/books/1/uncertain/') return reply(200, { count: server.uncertain.length, manuscript_version: 2, items: server.uncertain });
+  if (url === '/api/books/1/uncertain/choose/' || url === '/api/books/1/uncertain/accept/' || url === '/api/books/1/uncertain/type/') return server.choose ? server.choose(url, body) : reply(200, { chapter: body.chapter, version: 'v5', manuscript_version: 5, word: 'كيانها', start: body.start, end: body.start + 6, remaining: server.uncertain.length - 1, relayout: null });
+  if (url === '/api/books/1/find-replace/') return server.find ? server.find(body) : reply(200, { matches: [{ chapter: 'h10', block: 'p11', note: null, index: 4, length: 4 }, { chapter: 'h20', block: 'p21', note: null, index: 0, length: 4 }], total: 2, replaced: 0 });
+  if (url === '/api/books/1/stylesheet/') return server.sheet ? server.sheet(body) : reply(200, { ...fixture.sheetPayload, saved: true });
+  if (url.startsWith('/api/books/1/sheets/')) return reply(200, { pages: [{ number: Number(/from=(\d+)/.exec(url)[1]), id: 9, width: 1000, height: 1400, display_url: '/m/scan.webp', lines: [{ id: 1, bbox: [0.1, 0.2, 0.9, 0.25] }, { id: 2, bbox: [0.1, 0.3, 0.9, 0.35] }] }] });
+  if (url === '/api/books/1/snapshots/') return reply(200, []);
+  return reply(404, { detail: 'لا' });
+};
+
+// ---------------------------------------------------------------- the one-block editor, stubbed
+const editors = [];
+const notes = [];
+globalThis.NassakhEditor = Object.assign({}, convert, {
+  createBlock(host, opts) {
+    const ed = { host, opts, node: clone(opts.node), at: opts.offset, destroyed: false, focusedNow: false, calls: [], top: 0 };
+    host.offsetHeight = 22.1 * 2 * (600 / 481.89);
+    Object.assign(ed, {
+      get isFocused() { return ed.focusedNow; },
+      getNode: () => clone(ed.node),
+      style: () => convert.styleOf(ed.node),
+      offset: () => ed.at,
+      range: () => ({ from: ed.at, to: ed.at }),
+      setOffset(o) { ed.at = o; ed.calls.push(['setOffset', o]); return ed; },
+      setNode(node, o) { ed.node = clone(node); ed.at = o; ed.calls.push(['setNode', convert.plainText(node).length, o]); return ed; },
+      focus() { ed.focusedNow = true; return ed; }, blur() { ed.focusedNow = false; },
+      destroy() { ed.destroyed = true; },
+      // the top of the caret's line inside the paragraph: as the engine broke it (the fixture's lines), in pixels
+      lineTop(off) {
+        const lines = fixture.pages.flatMap((p) => p.lines.filter((l) => l.block === ed.node.attrs.id && l.kind !== 'note').map((l) => ({ n: p.n, ...l })));
+        if (!lines.length) return 0;
+        const i = lines.findIndex((l) => off >= l.start && off <= l.end);
+        const before = lines.slice(0, i < 0 ? 0 : i);
+        return before.reduce((sum, l) => sum + l.h, 0) * (600 / 481.89);
+      },
+      isBold: () => false, isItalic: () => false,
+      toggleBold() { ed.calls.push(['bold']); }, toggleItalic() { ed.calls.push(['italic']); },
+      setStyle(k) { ed.calls.push(['style', k]); if (k === 'heading2') ed.node = { ...ed.node, type: 'heading', attrs: { ...ed.node.attrs, level: 2 } }; opts.onChange(); return true; },
+      setAttrs(patch) { ed.node = { ...ed.node, attrs: { ...ed.node.attrs } }; Object.entries(patch).forEach(([k, v]) => { if (v === null) delete ed.node.attrs[k]; else ed.node.attrs[k] = v; }); opts.onChange(); return ed; },
+      setNumbers() { ed.calls.push(['numbers']); return ed; }, togglePageMarks(on) { ed.calls.push(['marks', on]); return ed; },
+      placeAtX(x, which) { ed.calls.push(['placeAtX', x, which]); return ed; },
+      setFind(ranges) { ed.calls.push(['find', ranges]); return ed; },
+      insertFootnote() { ed.calls.push(['insertFootnote']); return { id: 'nek1', dom: el('sup', 'ed-fn') }; },
+      noteAt: (id) => ({ id, content: [{ type: 'text', text: 'حاشية' }], text: 'حاشية', sourcePage: 2, orphan: false, dom: el('sup', 'ed-fn') }),
+      setNoteContent(id, c) { ed.calls.push(['note', id, c]); return true; }, deleteNote(id) { ed.calls.push(['deleteNote', id]); return true; },
+      replaceOffsets(a, b, t) { ed.calls.push(['replaceOffsets', a, b, t]); return true; },
+      acceptUncertain(a, b) { ed.calls.push(['accept', a, b]); return true; }, replaceRange(a, b, t) { ed.calls.push(['replaceRange', a, b, t]); return true; },
+      // test helpers: typing replaces the text, a taller paragraph grows the box
+      type(text) { ed.node = { ...ed.node, content: [{ type: 'text', text }] }; opts.onChange(); },
+      grow(lines) { host.offsetHeight = 22.1 * lines * (600 / 481.89); },
+    });
+    editors.push(ed);
+    return ed;
+  },
+  createNote(host, opts) { const n = { host, opts, calls: [] }; Object.assign(n, { focus() { n.calls.push('focus'); }, destroy() { n.calls.push('destroy'); }, setContent(c) { n.calls.push(['set', c]); }, toggleBold() {}, toggleItalic() {} }); notes.push(n); return n; },
+});
+
+for (const name of ['geometry.js', 'stage.js', 'style.js', 'edit.js', 'panel.js', 'page.js']) (0, eval)(readFileSync(`${root}/static/src/js/book/${name}`, 'utf8'));
+globalThis.NassakhBook.register();
+
+const mkDom = () => {
+  const rootEl = el('div', '', { book: '' });
+  const canvas = el('div', 'lo-canvas', { canvas: '' }); canvas.clientWidth = 1000; rootEl.appendChild(canvas);
+  const sheets = {};
+  ['right', 'left'].forEach((side) => {
+    const fig = el('figure', 'lo-sheet', { sheet: side });
+    const page = el('div', 'lp-page'); page.rect = { top: 100, left: side === 'right' ? 700 : 90, width: 600, height: 846.6 };
+    const lines = el('div', 'lp-lines', { lines: '' }); const host = el('div', 'lp-edit', { editHost: '' });
+    page.appendChild(lines); page.appendChild(host); fig.appendChild(page); canvas.appendChild(fig);
+    sheets[side] = { fig, page, lines, host };
+  });
+  const body = el('div', 'bp-tab-body'); rootEl.appendChild(body);
+  const film = el('div', 'lo-film-track', { filmTrack: '' }); body.appendChild(film);
+  const list = el('nav', 'bp-chapters', { chapterList: '' }); body.appendChild(list);
+  return { root: rootEl, canvas, sheets, film, list };
+};
+const refs = () => ({ stage: el('div', 'lo-stage'), jump: Object.assign(el('input'), { select() {} }), findQuery: Object.assign(el('input'), { select() {} }), noteHost: el('div'), pop: el('div'), wordTyped: Object.assign(el('input'), { select() {} }), drawerClose: el('button'), snapshotLabel: el('input'), snapshotsClose: el('button'), sheetClose: el('button'), digitsFirst: el('button') });
+const mk = (extra = {}, initial = {}) => {
+  const d = mkDom();
+  const cfg = clone({ ...fixture.config, ...extra, initial: { ...fixture.config.initial, ...initial } });
+  const v = reg.bookPage(cfg);
+  v.$el = d.root; v.$refs = refs(); v.$nextTick = (fn) => fn();
+  v.init();
+  return Object.assign(v, { _dom: d });
+};
+const shownLines = (v, side = 'right') => v._dom.sheets[side].lines.children.map((c) => [Number(c.dataset.i), c.dataset.b, c.classList.contains('is-hidden'), c.style['--dy'] || '0', c.classList.contains('is-over')]);
+const gets = () => calls.filter((c) => c[0] === 'GET').map((c) => c[1]);
+const lineTarget = (v, side, i, runIndex, charIndex) => {
+  const page = v.ctx().pages.get(v.shownNumbers[side]);
+  const lineEl = v._dom.sheets[side].lines.children.find((c) => Number(c.dataset.i) === i);
+  const run = el('span', 'lp-run', { r: String(runIndex) });
+  lineEl.appendChild(run);
+  const node = textNode(page.lines[i].runs[runIndex].text, run);
+  caretHit = { offsetNode: node, offset: charIndex };
+  lineEl.rect = { top: 300, left: 150, width: 400, height: 20 };
+  return { target: node.parentElement, clientX: 400, clientY: 310 };
+};
+
+const out = {};
+(async () => {
+  // ---- first paint: the embedded live pages, the page asked for, the pages around it fetched once
+  const v = mk();
+  await settle();
+  out.first = { pageCount: v.pageCount, revision: v.revision, current: v.current, phase: v.phase, painted: v._dom.sheets.right.page.dataset.n,
+    lines: shownLines(v).map((l) => l[1]), left: v._dom.sheets.left.lines.innerHTML, gets: gets(), thumbs: v._dom.film.children.map((t) => [t.dataset.number, t.childNodes[0].childNodes[0].getAttribute('src'), t.classList.contains('is-current')]),
+    tab: v.tab, mode: v.mode, counter: v.counterText, store: stores.bookPage.view === v, html: v._dom.sheets.right.lines.innerHTML.slice(0, 400) };
+  // ---- virtualisation: one page in the DOM, two in a spread; turning redraws, fetching only what is missing
+  v.setSpread(true);
+  out.spread = { right: v._dom.sheets.right.page.dataset.n, left: v._dom.sheets.left.page.dataset.n, leftLines: shownLines(v, 'left').length };
+  v.setSpread(false);
+  calls.length = 0;
+  v.turn(1); await fire(200); await settle();
+  out.turned = { current: v.current, painted: v._dom.sheets.right.page.dataset.n, left: v._dom.sheets.left.page.dataset.n, gets: gets(), replaced: replaced.slice(-1)[0] };
+  v.showPage(2, { instant: true });
+
+  // ---- the mode switch: edit loads the chapter under the eyes, the panel shows the mode's tab; both remembered
+  calls.length = 0;
+  v.setMode('edit'); await settle();
+  out.edit = { mode: v.mode, tab: v.tab, chapter: v.editChapterId, version: v.version, gets: gets(), address: replaced.slice(-1)[0] };
+  v.setTab('find'); v.setMode('preview'); await settle();
+  out.preview = { mode: v.mode, tab: v.tab, stored: [local['nassakh.book.tab.edit'], local['nassakh.book.tab.preview']] };
+  v.setMode('edit'); await settle();
+  out.editAgain = v.tab;
+  v.setTab('source');
+
+  // ---- a click on a line: the point → (block, offset); the paragraph opens in place over its lines, anchored
+  // so the clicked line stays where it was (its second line: the box starts one line higher, on its first)
+  const click = lineTarget(v, 'right', 6, 0, 10);
+  v.onSheetClick(click, 'right'); await settle();
+  const ed = editors[editors.length - 1];
+  const host = v._dom.sheets.right.host;
+  out.open = { block: v.open && v.open.block, n: v.open && v.open.n, offset: ed.at, node: ed.node.attrs.id, inHost: host.childNodes.includes(ed.host), cls: ed.host.className, style: { x: ed.host.style['--x'], w: ed.host.style['--w'], fs: ed.host.style['--fs'], lh: ed.host.style['--lh'], indent: ed.host.style['--indent'], top: ed.host.style['--top'] },
+    focused: ed.focusedNow, lines: shownLines(v).filter((l) => l[1] === 'p13').map((l) => l[2]), others: shownLines(v).filter((l) => l[1] !== 'p13').some((l) => l[2]), tab: v.tab, clip: host.style['--clip'] };
+  // a second click in the same paragraph only moves the caret
+  v.onSheetClick(lineTarget(v, 'right', 5, 0, 3), 'right'); await settle();
+  out.sameBlock = { editors: editors.length, offset: ed.at };
+
+  // ---- the pause → PUT (the chapter's nodes, its version) → re-layout (long poll) → pages spliced in
+  // place: the chapter now takes 3 pages (delta +1), the later pages renumbered and on the other side
+  calls.length = 0;
+  const grownText = convert.plainText(fixture.docs.h10[3]) + ' وزاد النص سطرًا';
+  const fresh = fixture.relaid.map((p) => ({ ...p, url: null, url2x: null }));
+  const relaid = (id) => ({ id, status: 'done', chapter: 'h10', version: 2, url: `/api/books/1/relayout/${id}/`, error: '', pages: fresh,
+    result: { mode: 'chapter', full: false, from: 2, to: 3, count: 3, delta: 1, chapter_delta: 1, shifted_from: 4, flip: true, side_shift_pt: -11.34, page_count: 6, chapters: [{ id: 'p1', first: 1, last: 1 }, { id: 'h10', first: 2, last: 4 }, { id: 'h20', first: 5, last: 6 }], checks: [], revision: { before: 3, after: 4 } } });
+  server.status = (id) => relaid(id);
+  ed.type(grownText);
+  const beforePause = { state: v.editSave.state, pill: v.savePill.text, timer: pending(500).length, puts: calls.filter((c) => c[0] === 'PUT').length };
+  await fire(500); await settle();
+  const put = calls.find((c) => c[0] === 'PUT');
+  out.saved = { beforePause, url: put[1], putVersion: put[2].version, texts: put[2].content.content.map((n) => convert.plainText(n).length), p13: convert.plainText(put[2].content.content[3]) === grownText, relayoutGets: gets().filter((u) => u.includes('/relayout/7/')),
+    pageCount: v.pageCount, revision: v.revision, numbers: [...v.ctx().pages.keys()].sort((a, b) => a - b), sides: [...v.ctx().pages.values()].sort((a, b) => a.n - b.n).map((p) => [p.n, p.side, p.number && p.number.text]),
+    p5x: v.ctx().pages.get(5).lines[0].x, chapterDeltas: v.chapterDeltas, delta: v.delta, footprint: [v.footprint.text, v.footprint.deltaText], version: v.version, state: v.editSave.state, pill: v.savePill.text,
+    stillOpen: !ed.destroyed && v.open && v.open.block, editors: editors.length, relayout: v.relayout.state, current: v.current, numbersAsked: ed.calls.filter((c) => c[0] === 'numbers').length,
+    thumbs: v._dom.film.children.map((t) => [t.dataset.number, t.classList.contains('is-pending')]), laid: convert.plainText(convert.locate(v.ctx().laid, 'p13').node) === grownText };
+  // a re-layout seen from a later page: the page shown moves with its content (5 → 6)
+  v.ctx().pages = new Map(fixture.pages.map((p) => [p.n, p])); v.revision = 3; v.pageCount = 5; v.rebuildSequence();
+  v.closeBlock({ commit: false }); drop(); v.showPage(5, { instant: true });
+  v.applyRelayoutPayload(relaid(11));
+  out.later = { current: v.current, side: v.ctx().pages.get(6).side, painted: v._dom.sheets.right.page.dataset.n };
+  v.showPage(2, { instant: true });
+  v.onSheetClick(lineTarget(v, 'right', 6, 0, 10), 'right'); await settle();
+  const edB = editors[editors.length - 1];
+
+  // ---- the open paragraph grows: the lines below it move; one pushed past the body is hidden
+  edB.opts.onBoundary('escape', {}); await settle();
+  v.onSheetClick(lineTarget(v, 'right', 4, 0, 4), 'right'); await settle();
+  const e12 = editors[editors.length - 1];
+  const grownTop = e12.host.style['--top'];
+  e12.grow(4); v.layoutPatches();
+  out.grown = { block: e12.node.attrs.id, top: grownTop, lines: shownLines(v).map((l) => [l[1], l[2], l[3], l[4]]) };
+  e12.grow(2); v.layoutPatches();
+  e12.opts.onBoundary('escape', {}); await settle();
+
+  // ---- a 409: the conflict banner, the pill; «إعادة التحميل» takes the other window's text
+  server.put = () => reply(409, { detail: 'تغيّر هذا الفصل في نافذة أخرى.', version: 'v9', content: [...clone(fixture.docs.h10).slice(0, 3), { type: 'paragraph', attrs: { id: 'p13' }, content: [{ type: 'text', text: 'نص النافذة الأخرى' }] }, clone(fixture.docs.h10[4])] });
+  v.onSheetClick(lineTarget(v, 'right', 6, 0, 10), 'right'); await settle();
+  const eC = editors[editors.length - 1];
+  calls.length = 0;
+  eC.type('نص جديد');
+  await fire(500); await settle();
+  out.conflict = { open: v.conflict.open, version: v.conflict.version, state: v.editSave.state, pill: v.savePill.text };
+  v.reloadConflict(); await settle();
+  out.reloaded = { open: v.conflict.open, version: v.version, p13: convert.plainText(v.nodes()[3]), editorClosed: eC.destroyed, openNow: v.open, relayoutPosts: calls.filter((c) => c[0] === 'POST' && c[1].includes('/relayout/')).length };
+  server.put = null; server.status = null;
+
+  // ---- Enter splits the paragraph (the second half opens under the first, the first half drawn by the
+  // browser until the engine lays it out again); Backspace at the start joins it back
+  server.status = (id) => ({ id, status: 'running', url: `/api/books/1/relayout/${id}/`, result: {}, pages: [] });
+  const at = v.ctx().pages.get(2).lines.findIndex((l) => l.block === 'p11');
+  v.onSheetClick(lineTarget(v, 'right', at, 0, 5), 'right'); await settle();
+  const e2 = editors[editors.length - 1];
+  calls.length = 0;
+  e2.opts.onBoundary('split', { node: e2.getNode(), from: 5, to: 5 }); await settle();
+  const e3 = editors[editors.length - 1];
+  const ids = convert.flatBlocks(v.nodes()).map((b) => b.id);
+  const patch = v.ctx().patches.get('p11');
+  out.split = { e2closed: e2.destroyed, e3block: e3.node.attrs.id === ids[2] && ids[2] !== 'p11', e3offset: e3.at, ids: ids.length, first: convert.plainText(v.nodes()[1]).length, second: convert.plainText(v.nodes()[2]).length, undo: v.canUndo,
+    patch: Boolean(patch), patchHtml: patch && patch.el.innerHTML, patchCls: patch && patch.el.className, patchTop: patch && patch.el.style['--top'], newTop: e3.host.style['--top'], hidden: shownLines(v).filter((l) => l[1] === 'p11').map((l) => l[2]),
+    puts: calls.filter((c) => c[0] === 'PUT').length, relayout: v.relayout.state, pill: v.renderPill.text };
+  server.status = null;
+  e3.opts.onBoundary('mergeBackward', {}); await settle();
+  const e4 = editors[editors.length - 1];
+  out.merged = { block: e4.node.attrs.id, offset: e4.at, count: convert.flatBlocks(v.nodes()).length, text: convert.plainText(v.nodes()[1]).length };
+  // the chapter's undo: back to the split, forward again
+  v.undo(); await settle();
+  const afterUndo = convert.flatBlocks(v.nodes()).length;
+  v.redo(); await settle();
+  out.history = { afterUndo, afterRedo: convert.flatBlocks(v.nodes()).length, canUndo: v.canUndo, canRedo: v.canRedo };
+  // ↓ past the last line: the next block, the caret under the same x
+  e4.opts.onBoundary('down', { x: 420 }); await settle();
+  let e5 = editors[editors.length - 1];
+  out.down = { block: e5.node.attrs.id, calls: e5.calls.filter((c) => c[0] === 'placeAtX') };
+  // the style picker and «ابدأ صفحة جديدة» on the open paragraph (a flag saves at once)
+  calls.length = 0;
+  v.setStyle('heading2'); await settle();
+  const styled = { calls: e5.calls.filter((c) => c[0] === 'style'), label: v.styleLabel, cls: e5.host.className };
+  v.setStyle('paragraph');
+  v.toggleFlag('breakBefore'); await settle();
+  const flagPut = calls.filter((c) => c[0] === 'PUT').pop();
+  out.styled = { ...styled, flag: v.flags.breakBefore, put: flagPut && convert.locate(flagPut[2].content.content, e5.node.attrs.id).node.attrs.breakBefore, block: v.blockInfo && [v.blockInfo.id, v.blockInfo.breakBefore, v.blockInfo.pages] };
+  // a footnote: the call clicked opens its note's small editor (one overlay); ⌘⇧F inserts one at the caret
+  const callLine = v.ctx().pages.get(2).lines.findIndex((l) => l.block === 'p12');
+  const callTarget = lineTarget(v, 'right', callLine, 1, 1);
+  callTarget.target.classList.add('is-sup'); callTarget.target.dataset.note = 'n12';
+  v.onSheetClick(callTarget, 'right'); await settle();
+  out.note = { pop: v.pop.kind, note: v.note.id, number: v.note.number, open: v.open && v.open.block, notes: notes.length, content: notes[notes.length - 1] && notes[notes.length - 1].opts.content };
+  notes[notes.length - 1].opts.onUpdate([{ type: 'text', text: 'حاشية معدّلة' }]);
+  out.noteEdit = editors[editors.length - 1].calls.filter((c) => c[0] === 'note');
+  v.closePop(); v.insertFootnote(); await settle();
+  out.inserted = { pop: v.pop.kind, id: v.note.id, calls: editors[editors.length - 1].calls.filter((c) => c[0] === 'insertFootnote').length };
+  v.closePop();
+  // Esc closes the paragraph, a second Esc leaves edit mode
+  e5 = editors[editors.length - 1];
+  v.onKey({ key: 'Escape', target: {}, preventDefault() {} }); await settle();
+  const escOnce = { open: v.open, mode: v.mode, destroyed: e5.destroyed };
+  v.onKey({ key: 'Escape', target: {}, preventDefault() {} }); await settle();
+  out.escape = { escOnce, mode: v.mode, tab: v.tab };
+
+  // ---- the keyboard: preview turns and toggles; ⌘Z is the chapter's undo in edit mode; fields keep their keys
+  drop(); v.showPage(2, { instant: true });
+  v.onKey({ key: 'ArrowLeft', target: {}, preventDefault() {} }); await fire(200);
+  const keyNext = v.current;
+  v.onKey({ key: 'e', code: 'KeyE', target: {}, preventDefault() {} }); await settle();
+  const keyMode = v.mode;
+  v.onKey({ key: 'z', code: 'KeyZ', metaKey: true, target: {}, preventDefault() {} });
+  const keyUndo = v.canRedo;
+  v.onKey({ key: 'e', code: 'KeyE', target: { tagName: 'INPUT' }, preventDefault() {} });
+  out.keys = { keyNext, keyMode, keyUndo, field: v.mode };
+  v.setMode('preview'); await settle();
+
+  // ---- the uncertain words: loaded with the tab, grouped; a pick shows the word's page lit; a reading chosen
+  calls.length = 0;
+  v.setTab('uncertain'); await settle();
+  const groups = v.uncertainGroups;
+  const word = v.uncertain.items[0];
+  v.pickUncertain(word); await fire(200); await settle();
+  const deco = v.decorationsFor(v.current);
+  out.uncertain = { count: v.uncertain.count, groups: groups.map((g) => [g.chapter, g.count, g.pages.map((p) => p.page)]), current: v.current, deco: deco.get(word.block), picked: v.isPicked(word), html: v._dom.sheets.right.lines.innerHTML.includes('lp-picked') };
+  await v.resolveUncertain(word, 'choose', { engine: 'secondary' }); await settle();
+  const post = calls.find((c) => c[0] === 'POST' && c[1].includes('/uncertain/'));
+  out.chosen = { url: post[1], body: post[2], count: v.uncertain.count, left: v.uncertain.items.length, live: v.liveMessage };
+  // a 409 (the chapter moved on): once more with the chapter's version, then the list is loaded again
+  server.choose = (url, body) => (body.version === 'v7' ? reply(200, { chapter: 'h10', version: 'v8', word: 'اهل', start: body.start, end: body.end, remaining: 0, relayout: null }) : reply(409, { detail: 'تغيّر', version: 'v7' }));
+  await v.resolveUncertain(v.uncertain.items[0], 'accept'); await settle();
+  out.retried = calls.filter((c) => c[0] === 'POST' && c[1].includes('/uncertain/accept/')).map((c) => c[2].version);
+  server.choose = null;
+
+  // ---- find in the chapter: the matches with their pages; Enter turns to the next match's page and lights it
+  v.setTab('find'); v.find.query = 'برقة'; v.onFindInput(); await fire(200); await settle();
+  const results = v.find.results.map((m) => [m.block, m.note, m.start, m.page]);
+  const idx0 = v.find.index;
+  v.findStep(1); await fire(200); await settle();
+  out.find = { results, idx0, idx1: v.find.index, current: v.current, flash: v.flash, count: v.findCountText, deco: [...v.decorationsFor(v.current).keys()] };
+  v.setFindScope('book'); await settle();
+  out.findBook = { groups: v.find.groups.map((g) => [g.id, g.count]), total: v.find.total, text: v.findCountText, post: calls.filter((c) => c[1].includes('find-replace')).pop()[2] };
+  v.setFindScope('chapter'); await settle();
+
+  // ---- the stylesheet: a change → one PUT; the page setup changed → the chapter under the eyes laid out again
+  // (a whole-book layout: the pages shown are fetched again from the new revision)
+  calls.length = 0; drop();
+  server.relayout = () => ({ id: 9, status: 'queued', url: '/api/books/1/relayout/9/', result: {} });
+  server.status = (id) => ({ id, status: 'done', result: { full: true, revision: { before: 4, after: 5 } }, pages: [] });
+  server.revision = 5; // the whole-book layout the re-layout made (an answer older than the pages held is ignored)
+  v.setField('body_size_pt', 14);
+  await fire(400); await settle();
+  server.revision = 5;
+  await settle();
+  out.sheet = { puts: calls.filter((c) => c[0] === 'PUT').map((c) => [c[1], c[2]]), posts: calls.filter((c) => c[0] === 'POST').map((c) => c[1]), gets: gets().filter((u) => u.includes('layout') || u.includes('relayout')), pill: v.sheetSave.state, after: [v.revision, v.pageCount] };
+
+  // ---- a newer live revision in the polling (the book render adopted): the pages shown are fetched again
+  calls.length = 0;
+  server.revision = 6;
+  v.applyPreview(previewPayload()); await settle();
+  out.adopted = { revision: v.revision, gets: gets() };
+
+  // ---- a double-click in preview: edit mode, the paragraph open at the point
+  drop(); v.showPage(2, { instant: true });
+  const before = editors.length;
+  await v.onSheetDblClick(lineTarget(v, 'right', 1, 0, 6), 'right'); await settle();
+  out.dbl = { mode: v.mode, tab: v.tab, opened: editors.length - before, block: v.open && v.open.block, offset: editors[editors.length - 1].at,
+    find: editors[editors.length - 1].calls.filter((c) => c[0] === 'find') };
+  v.setMode('preview'); await settle();
+
+  // ---- a proofreader: no edit mode, no save
+  drop(); calls.length = 0;
+  const r = mk({ canEdit: false, mode: 'edit' });
+  await settle();
+  out.reader = { mode: r.mode, refused: r.setMode('edit'), toast: toasts.slice(-1)[0], puts: calls.filter((c) => c[0] === 'PUT').length, tab: r.tab };
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def _component_fixture() -> dict:
+    pages = _chapter_pages()
+    first = _page_of(
+        1,
+        [
+            _line(
+                "front-title",
+                "title",
+                159.87,
+                0,
+                4,
+                "كتاب",
+                x=210.17,
+                w=50.21,
+                h=40.77,
+                justify=False,
+                first=True,
+                style="book-title",
+            )
+        ],
+        number=False,
+        chapter=None,
+    )
+    pages = [first, *pages]
+    ranges = [
+        {"id": "p1", "title": "قبل", "first": 1, "last": 1},
+        {"id": "h10", "title": "الفصل الأول", "first": 2, "last": 3},
+        {"id": "h20", "title": "الفصل الثاني", "first": 4, "last": 5},
+    ]
+    geometry = {
+        "width_pt": 481.89,
+        "height_pt": 680.31,
+        "margins_pt": {"top": 56.69, "bottom": 62.36, "inner": 62.36, "outer": 51.02},
+        "side_shift_pt": -11.34,
+        "page_number": "bottom_center",
+    }
+    # the chapter laid out again on three pages (2–4), fresh from the engine
+    relaid = [dict(page, n=n) for n, page in zip((2, 3, 4), (pages[1], pages[2], pages[2]), strict=True)]
+    relaid[2] = dict(
+        relaid[2],
+        side="right",
+        lines=[
+            _line("p14", "body", 56.69, 0, 30, _h10_texts()["p14"][:30].strip(), first=True, justify=False)
+        ],
+    )
+    t = _h10_texts()
+    uncertain = [
+        {
+            "chapter": "h10",
+            "block": "p11",
+            "note": None,
+            "start": 4,
+            "end": 8,
+            "word": "برقة",
+            "page": 2,
+            "source_page": 2,
+            "context": {"before": "أهل", "after": "يزرعون"},
+            "readings": [
+                {"engine": "primary", "label": "Qari v0.3", "text": "برقة", "current": True},
+                {"engine": "secondary", "label": "Qari v0.2", "text": "برقه", "current": False},
+            ],
+        },
+        {
+            "chapter": "h10",
+            "block": "p14",
+            "note": None,
+            "start": 0,
+            "end": 3,
+            "word": t["p14"][:3],
+            "page": 3,
+            "source_page": 3,
+            "context": {"before": "", "after": "…"},
+            "readings": [],
+        },
+    ]
+    sheet = {
+        "stylesheet": {
+            "trim": "17x24",
+            "width_mm": 170,
+            "height_mm": 240,
+            "top_mm": 20,
+            "bottom_mm": 22,
+            "inner_mm": 22,
+            "outer_mm": 18,
+            "bleed_mm": 0,
+            "body_font": "amiri",
+            "latin_font": "times",
+            "heading_font": "amiri",
+            "body_size_pt": 13,
+            "line_height": 1.7,
+            "indent_em": 1.5,
+            "heading_scale": {"h1": 1.6, "h2": 1.25},
+            "footnote_size_pt": 10,
+            "footnote_numbering": "page",
+            "running_header": "chapter",
+            "page_number": "bottom_center",
+            "chapter_opening": "any",
+            "widows": 2,
+            "orphans": 2,
+            "keep_headings": True,
+            "front_matter": {
+                "title_page": True,
+                "contents": True,
+                "copyright_page": False,
+                "fields": {"title": "", "author": ""},
+            },
+            "print_source_pages": False,
+        },
+        "saved": False,
+        "trims": [{"key": "17x24", "label": "17×24 سم", "width_mm": 170, "height_mm": 240}],
+        "fonts": [{"key": "amiri", "label": "أميري", "family": "Amiri", "installed": True, "latin": True}],
+        "latin_fonts": ["amiri"],
+        "choices": {},
+        "limits": {"body_size_pt": [7, 24]},
+        "missing_fonts": [],
+        "field_defaults": {"title": "كتاب", "author": "م"},
+    }
+    urls = {
+        "chapter": "/api/books/1/chapters/__cid__/",
+        "chapters": "/api/books/1/chapters/",
+        "relayout": "/api/books/1/chapters/__cid__/relayout/",
+        "relayoutStatus": "/api/books/1/relayout/__rid__/",
+        "pageLayout": "/api/books/1/preview/layout/",
+        "preview": "/api/books/1/preview/",
+        "stylesheet": "/api/books/1/stylesheet/",
+        "uncertain": "/api/books/1/uncertain/",
+        "uncertainAccept": "/api/books/1/uncertain/accept/",
+        "uncertainChoose": "/api/books/1/uncertain/choose/",
+        "uncertainType": "/api/books/1/uncertain/type/",
+        "findReplace": "/api/books/1/find-replace/",
+        "snapshots": "/api/books/1/snapshots/",
+        "restore": "/api/books/1/snapshots/__sid__/restore/",
+        "sheets": "/api/books/1/sheets/",
+        "review": "/books/1/review/__n__/",
+        "manuscriptState": "/api/books/1/manuscript/state/",
+        "reassemble": "/api/books/1/chapters/__cid__/reassemble/",
+        "convertDigits": "/api/books/1/convert-digits/",
+    }
+    initial_layout = {
+        "scope": "book",
+        "revision": 3,
+        "page_count": 5,
+        "first_page": 1,
+        "from": 1,
+        "to": 4,
+        "chapters": ranges,
+        "checks": [],
+        "geometry": geometry,
+        "font_css": "",
+        "stale": False,
+        "pages": [dict(p, url=f"/m/page-{p['n']}.webp", url2x=None) for p in pages[:4]],
+    }
+    config = {
+        "bookId": 1,
+        "title": "كتاب",
+        "canEdit": True,
+        "mode": "preview",
+        "chapter": "h10",
+        "requestedChapter": "h10",
+        "relayoutMs": 500,
+        "uncertainCount": 2,
+        "fontCss": "",
+        "chapters": [
+            {"id": "p1", "number": 1, "kind": "front", "title": "قبل"},
+            {"id": "h10", "number": 2, "kind": "chapter", "title": "الفصل الأول"},
+            {"id": "h20", "number": 3, "kind": "chapter", "title": "الفصل الثاني"},
+        ],
+        "chapterSummaries": [
+            {"id": "h10", "version": "v1", "drift": False, "source_pages": {"first": 2, "last": 3}},
+            {"id": "h20", "version": "w1", "drift": False},
+        ],
+        "drift": {"edited": True, "pages": [], "chapters": []},
+        "urls": urls,
+        "initial": {"stylesheet": sheet, "preview": None, "layout": initial_layout},
+    }
+    docs = {
+        "h10": _h10_nodes(),
+        "h20": [
+            heading("h20", "الفصل الثاني", pages=(4,)),
+            para("p21", "برقة مدينة قديمة كبيرة", pages=(4,)),
+            para("p22", "برقة مدينة", pages=(5,)),
+        ],
+    }
+    return {
+        "pages": pages,
+        "ranges": ranges,
+        "geometry": geometry,
+        "relaid": relaid,
+        "uncertain": uncertain,
+        "config": config,
+        "docs": docs,
+        "sheetPayload": sheet,
+        "summaries": config["chapterSummaries"],
+    }
+
+
+def test_book_page_component_under_node(tmp_path):
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    out = _run_node(folder, "component.mjs", COMPONENT_HARNESS, str(ROOT), str(folder / "fixture.json"))
+    scale = 600 / 481.89
+
+    # --- the first paint: the embedded pages (1–4) drawn at once on the requested chapter's first page; the
+    # one
+    # page missing around it fetched; the filmstrip from the pages' images; the polling of the book render
+    first = out["first"]
+    assert (
+        first["pageCount"] == 5
+        and first["revision"] == 3
+        and first["current"] == 2
+        and first["phase"] == "pages"
+    )
+    assert first["painted"] == "2" and first["lines"] == [
+        "h10",
+        "p11",
+        "p11",
+        "p12",
+        "p12",
+        "p13",
+        "p13",
+        "p13",
+        "n12",
+    ]
+    assert first["left"] == "" and first["gets"] == [
+        "/api/books/1/preview/layout/?from=5&to=5",
+        "/api/books/1/preview/?scope=book",
+    ]
+    assert [t[0] for t in first["thumbs"]] == ["1", "2", "3", "4", "5"] and first["thumbs"][1] == [
+        "2",
+        "/m/page-2.webp",
+        True,
     ]
     assert (
-        out["keyEditor"] == "/books/1/editor/?chapter=h20"
-        and out["keyFit"] == "height"
-        and out["keySpread"] is True
-        and out["keyHome"] == 1
+        first["tab"] == "format"
+        and first["mode"] == "preview"
+        and first["counter"] == "صفحة 2 من 5"
+        and first["store"] is True
     )
-
-    # --- the turn motion, reduced motion, wheel and touch (RTL), a thumb click
-    assert out["turn"]["midTurn"] == {"turning": "out-next", "current": 1, "timer": 1}
-    assert out["turn"]["after"] == {
-        "turning": "",
+    assert first["html"].startswith(
+        '<div class="lp-line k-heading is-c f-h" data-i="0" data-b="h10" dir="rtl" style="--x:201.92;--y:102.05;--w:89.38;--h:28.08;--fs:20.8">'  # noqa: E501
+    )
+    # --- virtualisation: one page in the DOM; a spread draws the facing page; a turn redraws (nothing
+    # fetched)
+    assert out["spread"] == {"right": "2", "left": "3", "leftLines": 2}
+    assert out["turned"] == {
         "current": 3,
-        "marked": [3],
+        "painted": "3",
+        "left": "",
+        "gets": [],
         "replaced": "/books/1/layout/#page-3",
     }
-    assert out["reduced"] == {"current": 4, "turning": ""}
-    assert out["wheel"] == {
-        "afterOne": 1,
-        "afterSwipe": 2,
-        "inertia": 2,
-        "wheelDown": 3,
-        "touchBack": 2,
-        "mouseIgnored": 2,
-        "scrollingStage": 2,
-    }
-    assert out["thumbClick"] == {"current": 5, "marked": [5]}
-
-    # --- jump, the chapter list, the fonts
-    assert out["jump"] == [3, 7, None, None, "لا صفحة بهذا الرقم"]
-    assert out["chapter"] == {
-        "current": 5,
-        "focus": "h20",
-        "editorHref": "/books/1/editor/?chapter=h20",
-        "unknown": False,
-        "toast": "لم تُخرَج صفحات هذا الفصل بعد",
-    }
-    fonts = out["fonts"]
+    # --- the mode switch: edit loads the chapter under the eyes once, the panel opens «الأصل»; the choice
+    # of tab
+    # is remembered per mode
+    edit = out["edit"]
     assert (
-        fonts["latin"] == ["amiri", "simplified_arabic", "times"]
-        and fonts["all"] == 4
-        and fonts["label"] == "أميري"
+        edit["mode"] == "edit"
+        and edit["tab"] == "source"
+        and edit["chapter"] == "h10"
+        and edit["version"] == "v1"
     )
     assert (
-        fonts["installed"] == [True, False]
-        and fonts["style"] == 'font-family: "Lotus Linotype Exnd", var(--font-sans)'
+        edit["gets"].count("/api/books/1/chapters/h10/") == 1
+        and edit["address"] == "/books/1/layout/?mode=edit#page-2"
     )
     assert (
-        fonts["field"] == "latin_font" and fonts["sample"] == "Nassakh, 1234 pages" and fonts["missing"] == ""
+        out["preview"] == {"mode": "preview", "tab": "format", "stored": ["find", None]}
+        and out["editAgain"] == "find"
     )
-    assert out["missingText"] == "Simplified Arabic غير مثبّت على هذا الجهاز؛ تُخرَج الصفحات بخط Amiri بدلًا منه."
+    # --- a click on the second line of p13 at its 10th character: offset 61 + 10; the paragraph opens in
+    # place,
+    # on the page's measure, face, size and leading, its box on the block's first line (the clicked line
+    # stays under the pointer), its own lines hidden, nothing else
+    opened = out["open"]
+    assert (
+        opened["block"] == "p13" and opened["n"] == 2 and opened["offset"] == 71 and opened["node"] == "p13"
+    )
+    assert (
+        opened["inHost"] is True and opened["cls"] == "lp-patch is-body is-open" and opened["focused"] is True
+    )
+    assert opened["style"] == {
+        "x": "62.36",
+        "w": "368.51",
+        "fs": "13",
+        "lh": "22.1",
+        "indent": "19.5",
+        "top": f"{244.04 - 52.69:.2f}",
+    }
+    assert opened["lines"] == [True, True, True] and opened["others"] is False and opened["clip"] == "52.69"
+    assert out["sameBlock"] == {"editors": 1, "offset": 3}
+    # --- the pause: one PUT of the chapter with its version, the re-layout followed by its long poll, three
+    # new
+    # pages for the chapter spliced in, the later pages renumbered (+1) and on the other side, the footprint's
+    # delta, the paragraph still open (re-anchored), the new pages' thumbs waiting for their images
+    saved = out["saved"]
+    assert saved["beforePause"] == {"state": "dirty", "pill": "غير محفوظ", "timer": 1, "puts": 0}
+    assert (
+        saved["url"] == "/api/books/1/chapters/h10/" and saved["putVersion"] == "v1" and saved["p13"] is True
+    )
+    assert saved["texts"][:3] == [11, 80, 60] and saved["relayoutGets"] == ["/api/books/1/relayout/7/?wait=2"]
+    assert saved["pageCount"] == 6 and saved["revision"] == 4 and saved["numbers"] == [1, 2, 3, 4, 5, 6]
+    assert [s[:2] for s in saved["sides"]] == [
+        [1, "left"],
+        [2, "right"],
+        [3, "left"],
+        [4, "right"],
+        [5, "left"],
+        [6, "right"],
+    ]
+    assert (
+        saved["sides"][4][2] == "5"
+        and saved["sides"][5][2] == "6"
+        and saved["p5x"] == pytest.approx(62.36 - 11.34)
+    )
+    assert (
+        saved["chapterDeltas"] == {"h10": 1}
+        and saved["delta"] == 1
+        and saved["footprint"] == ["6 صفحات", "+1"]
+    )
+    assert (
+        saved["version"] == "v2"
+        and saved["state"] == "saved"
+        and saved["pill"] == "محفوظ"
+        and saved["relayout"] == ""
+    )
+    assert (
+        saved["stillOpen"] == "p13"
+        and saved["editors"] == 1
+        and saved["current"] == 2
+        and saved["numbersAsked"] == 1
+        and saved["laid"] is True
+    )
+    assert saved["thumbs"] == [
+        ["1", False],
+        ["2", True],
+        ["3", True],
+        ["4", True],
+        ["5", False],
+        ["6", False],
+    ]
+    assert out["later"] == {"current": 6, "side": "right", "painted": "6"}
+    # --- a 409: the banner and the pill; «إعادة التحميل» takes the other window's text and version, closes
+    # the
+    # paragraph and lays the chapter out again
+    assert out["conflict"] == {
+        "open": True,
+        "version": "v9",
+        "state": "conflict",
+        "pill": "تغيّر في نافذة أخرى",
+    }
+    reloaded = out["reloaded"]
+    assert (
+        reloaded["open"] is False and reloaded["version"] == "v9" and reloaded["p13"] == "نص النافذة الأخرى"
+    )
+    assert reloaded["editorClosed"] is True and reloaded["openNow"] is None and reloaded["relayoutPosts"] == 1
+    # --- the open paragraph grows to four lines: every body line under it moves by 44.2 pt, the one pushed
+    # past
+    # the body (the footnote rule) is hidden; its own lines hidden; the note stays
+    grown = out["grown"]
+    assert grown["block"] == "p12" and grown["top"] == f"{199.84 - 52.69:.2f}"
+    assert grown["lines"] == [
+        ["h10", False, "0", False],
+        ["p11", False, "0", False],
+        ["p11", False, "0", False],
+        ["p12", True, "0", False],
+        ["p12", True, "0", False],
+        ["p13", False, "44.2", False],
+        ["p13", False, "44.2", False],
+        ["p13", False, "44.2", True],
+        ["n12", False, "0", False],
+    ]
+    # --- Enter at the 5th character of p11: two blocks (the second opens at its start), the first half
+    # drawn by
+    # the browser in its place until the re-layout, the new paragraph under it; one PUT
+    split = out["split"]
+    assert (
+        split["e2closed"] is True
+        and split["e3block"] is True
+        and split["e3offset"] == 0
+        and split["ids"] == 6
+    )
+    assert split["first"] == 5 and split["second"] == 75 and split["undo"] is True and split["puts"] == 1
+    assert (
+        split["patch"] is True
+        and split["patchHtml"] == '<p class="ed-p">أهل ب</p>'
+        and split["patchCls"] == "lp-patch is-body is-static"
+    )
+    assert split["patchTop"] == f"{155.64 - 52.69:.2f}" and split["hidden"] == [True, True]
+    assert float(split["newTop"]) == pytest.approx(
+        float(split["patchTop"]), abs=0.02
+    )  # the patch measures 0 here
+    # Backspace at the start of the second half: one block again, the caret at the seam; the chapter's undo
+    assert out["merged"] == {"block": "p11", "offset": 5, "count": 5, "text": 80}
+    assert out["history"] == {"afterUndo": 6, "afterRedo": 5, "canUndo": True, "canRedo": False}
+    # ↓ past the last line: the next block, the caret on its first line under the same x
+    assert out["down"] == {"block": "p12", "calls": [["placeAtX", 420, "first"]]}
+    # the style picker restyles the open paragraph; «ابدأ صفحة جديدة» is saved at once
+    styled = out["styled"]
+    assert (
+        styled["calls"] == [["style", "heading2"]]
+        and styled["label"] == "عنوان فرعي"
+        and styled["cls"] == "lp-patch is-h2 is-open"
+    )
+    assert styled["flag"] is True and styled["put"] is True and styled["block"] == ["p12", True, [2, 3]]
+    # a click on the call opens the note's small editor (its paragraph opened first), numbered as printed
+    assert out["note"] == {
+        "pop": "note",
+        "note": "n12",
+        "number": "1",
+        "open": "p12",
+        "notes": 1,
+        "content": [{"type": "text", "text": "حاشية"}],
+    }
+    assert out["noteEdit"] == [["note", "n12", [{"type": "text", "text": "حاشية معدّلة"}]]]
+    assert out["inserted"] == {"pop": "note", "id": "nek1", "calls": 1}
+    # Esc: the paragraph closes, then edit mode (the panel back on its preview tab)
+    assert out["escape"] == {
+        "escOnce": {"open": None, "mode": "edit", "destroyed": True},
+        "mode": "preview",
+        "tab": "format",
+    }
+    # --- the keyboard: ← turns (RTL), E toggles the mode, ⌘Z undoes in edit mode, a field keeps its keys
+    assert out["keys"] == {"keyNext": 3, "keyMode": "edit", "keyUndo": True, "field": "edit"}
+    # --- the uncertain words: by chapter and page; a pick turns to its page and lights the word; a reading
+    # chosen on the server with the chapter's version (its edits saved first); a 409 retried with the new one
+    unc = out["uncertain"]
+    assert unc["count"] == 2 and unc["groups"] == [["h10", 2, [2, 3]]] and unc["current"] == 2
+    assert (
+        unc["deco"] == [{"start": 4, "end": 8, "cls": "lp-picked"}]
+        and unc["picked"] is True
+        and unc["html"] is True
+    )
+    chosen = out["chosen"]
+    assert chosen["url"] == "/api/books/1/uncertain/choose/" and chosen["count"] == 1 and chosen["left"] == 1
+    assert chosen["body"] == {
+        "chapter": "h10",
+        "block": "p11",
+        "note": None,
+        "start": 4,
+        "end": 8,
+        "word": "برقة",
+        "version": "v2",
+        "engine": "secondary",
+    }
+    assert out["retried"] == ["v1", "v7"]
+    # --- find in the chapter: every match with its page (a note's too); Enter goes to the next one, lit
+    find = out["find"]
+    assert find["results"] == [
+        ["p11", None, 4, 2],
+        ["p12", None, 1, 2],
+        ["p12", "n12", 9, 2],
+        ["p13", None, 68, 2],
+        ["p13", None, 143, 2],
+    ]
+    assert (
+        find["idx0"] == 0
+        and find["idx1"] == 1
+        and find["flash"] == {"n": 2, "block": "p12", "i": 3}
+        and find["count"] == "2 من 5"
+    )
+    assert set(find["deco"]) == {"p11", "p12", "n12", "p13"}
+    # in the book: the server's matches grouped by chapter
+    assert out["findBook"]["groups"] == [["h10", 1], ["h20", 1]] and out["findBook"]["text"] == "2 في الكتاب"
+    assert out["findBook"]["post"] == {
+        "query": "برقة",
+        "replacement": "",
+        "replace": False,
+        "match_tashkeel": False,
+        "fold_alef": True,
+        "whole_word": False,
+    }
+    # --- the stylesheet: one PUT; the page setup changed → the chapter under the eyes laid out again (the
+    # whole
+    # book: the pages shown fetched again from the new revision)
+    sheet = out["sheet"]
+    assert sheet["puts"] == [["/api/books/1/stylesheet/", {"body_size_pt": 14}]] and sheet["posts"] == [
+        "/api/books/1/chapters/h10/relayout/"
+    ]
+    # (the six pages held after the splice above: the pages around the one shown, 1–6, from revision 5)
+    assert (
+        sheet["gets"] == ["/api/books/1/relayout/9/?wait=2", "/api/books/1/preview/layout/?from=1&to=6"]
+        and sheet["pill"] == "saved"
+        and sheet["after"] == [5, 5]
+    )
+    # --- a newer live revision (the book render adopted): the pages shown fetched again
+    assert out["adopted"] == {"revision": 6, "gets": ["/api/books/1/preview/layout/?from=1&to=5"]}
+    # --- a double-click in preview: edit mode with the paragraph open at the point
+    # the find match inside the opened paragraph is drawn by its editor (its lines are hidden), once
+    assert out["dbl"] == {
+        "mode": "edit",
+        "tab": "source",
+        "opened": 1,
+        "block": "p11",
+        "offset": 6,
+        "find": [["find", [{"start": 4, "end": 8, "current": True}]]],
+    }
+    # --- a proofreader: preview only, nothing saved
+    assert (
+        out["reader"]["mode"] == "preview"
+        and out["reader"]["refused"] is False
+        and out["reader"]["puts"] == 0
+    )
+    assert out["reader"]["toast"] == "التحرير لمحرّر الكتاب؛ يمكنك تصفّح الصفحات."
+    assert scale > 1
 
-    # --- stale: the pill, one automatic POST per content; updating: the pill
-    stale = out["stale"]
-    assert stale["pill"] == {"state": "warn", "text": "المعاينة أقدم من النص", "action": "retry"}
-    assert stale["posts"] == 1 and stale["body"] == {"scope": "book"} and stale["postsAfterRepeat"] == 1
-    assert stale["pagesKept"] == 6  # the old pages stay, the fresh chapter still standing in for its range
-    assert out["updatingPill"] == "تُحدَّث المعاينة…"
 
-    # --- error: the designed state without pages (asked for once by itself), the banner with pages, the retry
-    error = out["error"]
-    assert error["noPages"] == {
-        "phase": "error",
-        "error": "تعذّر إخراج صفحات المعاينة.",
-        "pill": "",
-        "posts": 1,
-    }
-    assert error["autoOnce"] == {"posts": 1, "phase": "error"}
-    assert error["withPages"] == {
-        "phase": "pages",
-        "error": "فشل",
-        "pill": {"state": "error", "text": "تعذّر تحديث المعاينة · إعادة المحاولة", "action": "retry"},
-        "pages": 5,
-    }
-    assert error["retried"] is True and error["afterRetry"] == {
-        "status": "queued",
-        "phase": "skeleton",
-        "polling": 1,
-        "pill": "تُحدَّث المعاينة…",
-    }
-    assert out["visible"] == {"polled": True, "gets": 1, "phase": "pages", "idle": False}
-    assert out["swapLost"] == {
-        "current": 3,
-        "replaced": "/books/1/layout/#page-3",
-        "session": "3",
-        "live": "صفحة 3 من 3",
-    }
+# ---------------------------------------------------------------- the review's fixes (D47 UI), under Node
+# The component harness above (its tiny DOM, the scripted server, the stubbed one-block editor) with its own
+# scenario: stale layout answers, the refetch path, the checks after a splice, Esc and the keys behind layers,
+# bidi of the counter, «الفقرة» in preview, a word picked in edit mode, the contents fallback, the body clip.
 
-    # --- the address names the page; the server-painted page shows at once; opened from the editor
-    assert out["fromHash"] == {
-        "current": 4,
-        "phase": "pages",
-        "gets": 1,
-        "replaced": "/books/1/layout/#page-4",
-        "loading": [True],
-        "polling": 0,
-    }
-    assert out["loaded"] is False
-    assert out["fromEditor"] == {
-        "current": 4,
-        "tracked": "h20",
-        "gets": ["/api/books/1/preview/?scope=book", "/api/books/1/preview/?scope=chapter&chapter=h20"],
-        "active": True,
-        "polling": 1,
-        "focus": "h20",
-    }
+REVIEW_SCENARIO = r"""
+const out = {};
+(async () => {
+  // ---- an answer older than the pages held (a splice landed while it was on the wire) never replaces them
+  const v = mk();
+  await settle();
+  server.revision = 2;
+  const stale = await v.refetchShown();
+  out.stale = { accepted: stale, revision: v.revision, pages: v.ctx().pages.size };
+  server.revision = 3;
 
-    # --- a proofreader changes nothing on the server; auth loss stops the polling; failures back off
+  // ---- the page checks after a splice: the replaced pages' (old 2–3) go, later ones move by the delta
+  v.checks = [{ code: 'a', page: 1 }, { code: 'b', page: 3 }, { code: 'c', page: 4 }, { code: 'd', page: 5 }, { code: 'e', page: null }];
+  const fresh = fixture.relaid.map((p) => ({ ...p, url: null, url2x: null }));
+  const relaid = (id, result = {}) => ({ id, status: 'done', chapter: 'h10', url: `/api/books/1/relayout/${id}/`, error: '', pages: fresh,
+    result: Object.assign({ mode: 'chapter', full: false, from: 2, to: 3, count: 3, delta: 1, shifted_from: 4, flip: true, side_shift_pt: -11.34, page_count: 6,
+      chapters: [{ id: 'p1', first: 1, last: 1 }, { id: 'h10', first: 2, last: 4 }, { id: 'h20', first: 5, last: 6 }], checks: [{ code: 'n', page: 4 }], revision: { before: 3, after: 4 } }, result) });
+  v.applyRelayoutPayload(relaid(20));
+  out.checks = v.checks.map((c) => [c.code, c.page]);
+
+  // ---- the counter of a spread: the range isolated left to right
+  v.setSpread(true); v.showPage(2, { instant: true });
+  out.counter = v.counterText;
+  v.setSpread(false);
+
+  // ---- a whole-book re-layout: the edited paragraph's patch stays until the new pages are drawn
+  v.ctx().pages = new Map(fixture.pages.map((p) => [p.n, p])); v.revision = 3; v.pageCount = 5; v.rebuildSequence();
+  v.showPage(2, { instant: true });
+  v.setMode('edit'); await settle();
+  v.onSheetClick(lineTarget(v, 'right', 6, 0, 10), 'right'); await settle();
+  const ed = editors[editors.length - 1];
+  out.clip = { top: v._dom.sheets.right.host.style['--clip'], bottom: v._dom.sheets.right.host.style['--clip-b'] };
+  server.status = (id) => ({ id, status: 'done', url: `/api/books/1/relayout/${id}/`, result: { full: true, revision: { before: 3, after: 4 } }, pages: [] });
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes('/preview/layout/')) seen.push(v.ctx().laid === v.ctx().nodes);
+    return realFetch(url, init);
+  };
+  server.revision = 4;
+  ed.type('نص جديد للفقرة');
+  await fire(500); await settle();
+  globalThis.fetch = realFetch;
+  out.refetch = { laidDuringFetch: seen, laidAfter: v.ctx().laid === v.ctx().nodes, revision: v.revision, open: v.open && v.open.block };
+  server.status = null;
+
+  // ---- Esc: a menu open outside the component (the top bar's «⋯») takes it alone
+  const menu = el('div', 'menu'); menu.getClientRects = () => [1];
+  const realQuery = globalThis.document.querySelector;
+  globalThis.document.querySelector = (sel) => (sel === '[data-book-menu]' ? menu : realQuery(sel));
+  const prevented = [];
+  v.onKey({ key: 'Escape', target: {}, preventDefault() { prevented.push('menu'); } }); await settle();
+  const withMenu = { open: v.open && v.open.block, mode: v.mode, prevented: prevented.length };
+  menu.style.display = 'none';
+  v.onKey({ key: 'Escape', target: {}, preventDefault() {} }); await settle();
+  out.escMenu = { withMenu, afterClose: [v.open, v.mode] };
+  globalThis.document.querySelector = realQuery;
+
+  // ---- a dialog open: the page's keys wait behind it; Esc closes the dialog only
+  drop(); v.showPage(2, { instant: true });
+  v.openSheet();
+  v.onKey({ key: 'ArrowLeft', target: {}, preventDefault() {} }); await settle();
+  v.onKey({ key: 'e', code: 'KeyE', target: {}, preventDefault() {} }); await settle();
+  const behind = { current: v.current, mode: v.mode, sheet: v.sheetOpen };
+  v.onKey({ key: 'Escape', target: {}, preventDefault() {} }); await settle();
+  out.dialog = { behind, closed: !v.sheetOpen, mode: v.mode };
+
+  // ---- the fit keys by their place (an Arabic keyboard types «١»)
+  const K = globalThis.NassakhBook.geo.keyAction;
+  out.fitKeys = [K({ key: '١', code: 'Digit1' }, { mode: 'preview' }), K({ key: '2', code: 'Digit2' }, { mode: 'preview' }), K({ key: '#', code: 'Digit3', shiftKey: true }, { mode: 'preview' })];
+
+  // ---- the contents line: a heading whose page is not held yet goes to its printed page number
+  v.ranges = v.ranges.filter((c) => c.id !== 'hx');
+  out.contents = v.goToBlock('hx', { runs: [{ text: 'الفصل' }, { text: '4' }] });
+  await fire(200);
+  out.contentsPage = v.current;
+
+  // ---- a word picked in edit mode: its page now (not the list's stale one), its paragraph open, the word selected
+  drop(); v.setMode('edit'); await settle(); v.showPage(4, { instant: true });
+  const word = Object.assign({}, fixture.uncertain[0], { page: 5 });
+  v.uncertain.items = [word];
+  await v.pickUncertain(word); await settle();
+  const eW = editors[editors.length - 1];
+  out.picked = { current: v.current, open: v.open && v.open.block, calls: eW.calls.filter((c) => c[0] === 'setOffset').slice(-1) };
+  // the style menu and the word's overlay never show together
+  v.styleMenu = true;
+  eW.opts.onUncertain({ from: 5, to: 9, start: 4, end: 8, text: 'برقة', dom: el('mark', 'ed-uncertain') });
+  out.oneOverlay = { pop: v.pop.kind, styleMenu: v.styleMenu };
+  v.closePop();
+  // «الفقرة»'s flags act on the paragraph it shows, once that paragraph is closed too
+  await v.closeBlock({ commit: false }); await settle();
+  calls.length = 0;
+  const shownBlock = v.blockInfo && v.blockInfo.id;
+  v.toggleFlag('keepWithNext'); await settle();
+  const flagPut = calls.filter((c) => c[0] === 'PUT').pop();
+  out.flagClosed = { shownBlock, put: Boolean(flagPut) && convert.locate(flagPut[2].content.content, 'p11').node.attrs.keepWithNext, shown: v.blockInfo && v.blockInfo.keepWithNext };
+  v.setMode('preview'); await settle();
+
+  // ---- «الفقرة» for a proofreader: the paragraph clicked in preview, from its chapter's nodes
+  // (the server is at revision 4 now, the page embeds revision 3: the window fetched ahead finds the newer
+  // one, and the pages shown are fetched again from it — never left as skeletons)
+  drop();
+  const r = mk({ canEdit: false });
+  await settle();
+  r.showPage(2, { instant: true });
+  r.setTab('block');
+  r.onSheetClick(lineTarget(r, 'right', 6, 0, 10), 'right'); await settle();
+  out.reader = { block: r.blockInfo && [r.blockInfo.id, r.blockInfo.style, r.blockInfo.pages], mode: r.mode, editChapter: r.editChapterId, revision: r.revision, held: [...r.ctx().pages.keys()].sort() };
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_book_page_review_fixes_under_node(tmp_path):
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    base = COMPONENT_HARNESS.split("\nconst out = {};\n")[0]
+    out = _run_node(folder, "review.mjs", base + REVIEW_SCENARIO, str(ROOT), str(folder / "fixture.json"))
+    # an older layout answer is ignored: the pages held stay
+    assert out["stale"] == {"accepted": False, "revision": 3, "pages": 5}
+    # the checks of the replaced pages 2–3 go (not those of the old page 4, which moves to 5), the ones after
+    # them move by +1, the book-wide one goes; the new pages' checks come with the answer
+    assert out["checks"] == [["a", 1], ["c", 5], ["d", 6], ["n", 4]]
+    # «الصفحتان 2–3» with the range isolated (an RTL line would print «3–2»)
+    assert out["counter"] == "الصفحتان ⁦2–3⁩ من 6"
+    # the edit host ends at the body's foot (the footnote rule on this page): the open box never covers notes
+    page2 = fixture["pages"][1]
+    assert float(out["clip"]["bottom"]) == pytest.approx(
+        page2["height_pt"] - page2["footnote_rule"]["y"], abs=0.01
+    )
+    # a whole-book re-layout: while the new pages are on the wire the page still shows the patch (the text
+    # laid out is the old one); once drawn, the saved text is the laid one; the paragraph stays open
+    assert out["refetch"]["laidDuringFetch"] and not any(out["refetch"]["laidDuringFetch"])
+    assert out["refetch"]["laidAfter"] is True and out["refetch"]["revision"] == 4
+    assert out["refetch"]["open"] == "p13"
+    # Esc with the top bar's menu open closes only the menu; the next Esc closes the paragraph
+    assert out["escMenu"]["withMenu"] == {"open": "p13", "mode": "edit", "prevented": 0}
+    assert out["escMenu"]["afterClose"] == [None, "edit"]
+    # behind the shortcut sheet no key turns a page or switches the mode; Esc closes the sheet alone
+    assert out["dialog"] == {
+        "behind": {"current": 2, "mode": "edit", "sheet": True},
+        "closed": True,
+        "mode": "edit",
+    }
+    assert out["fitKeys"] == ["fitHeight", "fitWidth", None]
+    assert out["contents"] is True and out["contentsPage"] == 4
+    # the word's page from the layout held (2), not the list's (5); its paragraph open with the word selected
+    assert out["picked"] == {"current": 2, "open": "p11", "calls": [["setOffset", 4]]}
+    assert out["oneOverlay"] == {"pop": "word", "styleMenu": False}
+    assert out["flagClosed"] == {"shownBlock": "p11", "put": True, "shown": True}
+    # a proofreader clicks a paragraph in preview: «الفقرة» describes it (nothing is loaded for editing)
     assert out["reader"] == {
-        "puts": 0,
-        "posts": 0,
-        "pill": {"state": "warn", "text": "المعاينة أقدم من النص", "action": ""},
-        "value": 30,
+        "block": ["p13", "paragraph", [3]],
+        "mode": "preview",
+        "editChapter": None,
+        "revision": 4,
+        "held": [1, 2, 3, 4, 5],
     }
-    assert out["auth"] == {"state": "auth", "stopped": True, "polling": 0}
-    assert out["backoff"] == {"state": "error", "failures": 3, "timers": [[2000], [3000], [4000]]}
-    assert out["recovered"] == {"state": "ok", "phase": "pages", "polling": 0}

@@ -1,4 +1,5 @@
-"""Celery application. Queues: `default` (CPU work) and `gpu` (OCR models, one solo worker)."""
+"""Celery application. Queues: `default` (CPU work), `layout` (the fast chapter re-layout, D47; consumed
+by the default worker with `-Q default,layout`) and `gpu` (OCR models, one solo worker)."""
 
 import os
 

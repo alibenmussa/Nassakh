@@ -7,7 +7,6 @@
 @import "./components/theatre.css";
 @import "./components/review.css";
 @import "./components/manuscript.css";
-@import "./components/editor.css";
 @import "./components/layout.css";
 
 @source "../../templates";

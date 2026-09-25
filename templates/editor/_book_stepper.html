@@ -1,7 +1,7 @@
 {% comment %}One stepper of the stylesheet panel (PHASE5_SPEC §5), styled like the dashboard's jump field: a label,
 [−] a numeric field [+] and the unit. Context: field (a dotted path of the stylesheet, e.g. "top_mm" or
 "heading_scale.h1"), label, unit (optional), error (the key of `errors`, default = field). Numbers are parsed
-by bookLayout.setField (Eastern digits welcome), clamped to the field's limits and saved after a short quiet;
+by bookPage.setField (Eastern digits welcome), clamped to the field's limits and saved after a short quiet;
 ↑/↓ step, Enter commits. Western digits in the field (dir=ltr).{% endcomment %}
 <div class="lo-stepper" data-field="{{ field }}" :class="{ 'is-invalid': errors['{{ error|default:field }}'] }">
   <span class="lo-stepper-label" id="lo-label-{{ field|slugify }}">{{ label }}</span>

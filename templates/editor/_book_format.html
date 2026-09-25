@@ -1,0 +1,167 @@
+{% comment %}«التنسيق» (PHASE5_SPEC §5, §9.2): the stylesheet in accordions — القطع (the presets with a page glyph, custom
+fields), الهوامش (four steppers beside a live spread diagram), الخطوط (three face menus with a sample line), النص
+(sizes, leading, indent, widows and orphans), الصفحة (running header, page number, chapter opening, footnote
+numbering, front matter, headings kept with their text, scan page marks), بيانات الكتاب (the title and copyright
+pages). Every change saves through bookPage.setField (one debounced PUT) and lays the book out again.
+Context: can_edit.{% endcomment %}
+{# a proofreader reads every section (the heads open and close); the fields inside are disabled #}
+<fieldset class="lo-panel{% if not can_edit %} is-readonly{% endif %}" data-layout-panel>
+  <legend class="sr-only">تنسيق الكتاب</legend>
+  {% if not can_edit %}<p class="lo-readonly meta">التنسيق يغيّره محرّر الكتاب؛ يمكنك تصفّح الصفحات.</p>{% endif %}
+
+  {# ---------------------------------------------------------- القطع #}
+  <section class="bp-acc" data-section="trim">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.trim ? 'true' : 'false'" aria-controls="bp-sec-trim" @click="toggleSection('trim')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">القطع</span><span class="lo-head-meta" x-text="trimLabel"></span>
+    </button>
+    <fieldset class="lo-section" id="bp-sec-trim" x-show="sections.trim"{% if not can_edit %} disabled{% endif %}>
+      <div class="lo-trims" role="radiogroup" aria-label="القطع" data-trims>
+        <template x-for="t in trims" :key="t.key">
+          <button type="button" class="lo-trim" role="radio" :aria-checked="sheet.trim === t.key" @click="setTrim(t.key)">
+            <span class="lo-trim-glyph" aria-hidden="true" :style="t.width_mm ? trimGlyphStyle(t) : 'aspect-ratio: 5 / 7; border-style: dashed'"></span>
+            <span class="lo-trim-label" x-text="t.label"></span>
+            <span class="lo-trim-size num" x-show="t.width_mm"><bdi x-text="fmt(t.width_mm) + '×' + fmt(t.height_mm)"></bdi> مم</span>
+          </button>
+        </template>
+      </div>
+      <div class="lo-grid" x-show="sheet.trim === 'custom'" x-cloak>
+        {% include "editor/_book_stepper.html" with field="width_mm" label="العرض" unit="مم" %}
+        {% include "editor/_book_stepper.html" with field="height_mm" label="الارتفاع" unit="مم" %}
+      </div>
+      <p class="field-error" x-show="errors.trim || errors.width_mm || errors.height_mm" x-text="errors.trim || errors.width_mm || errors.height_mm"></p>
+    </fieldset>
+  </section>
+
+  {# ---------------------------------------------------------- الهوامش #}
+  <section class="bp-acc" data-section="margins">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.margins ? 'true' : 'false'" aria-controls="bp-sec-margins" @click="toggleSection('margins')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">الهوامش</span><span class="lo-head-meta">النص <bdi class="num" x-text="textAreaText"></bdi></span>
+    </button>
+    <fieldset class="lo-section" id="bp-sec-margins" x-show="sections.margins"{% if not can_edit %} disabled{% endif %}>
+      <div class="lo-diagram" :style="diagramStyle" :data-focus="focusMargin" aria-hidden="true" data-diagram>
+        <span class="lo-diagram-page is-verso"><span class="lo-diagram-block"><i></i><i></i><i></i><i></i></span></span>
+        <span class="lo-diagram-page is-recto"><span class="lo-diagram-block"><i></i><i></i><i></i><i></i></span></span>
+      </div>
+      <div class="lo-grid">
+        {% include "editor/_book_stepper.html" with field="top_mm" label="أعلى" unit="مم" %}
+        {% include "editor/_book_stepper.html" with field="bottom_mm" label="أسفل" unit="مم" %}
+        {% include "editor/_book_stepper.html" with field="inner_mm" label="داخلي" unit="مم" %}
+        {% include "editor/_book_stepper.html" with field="outer_mm" label="خارجي" unit="مم" %}
+      </div>
+      <p class="help">الهامش الداخلي عند الكعب في كل صفحة؛ الهوامش متناظرة بين اليمين واليسار.</p>
+      <p class="field-error" x-show="errors.top_mm || errors.bottom_mm || errors.inner_mm || errors.outer_mm" x-text="errors.top_mm || errors.bottom_mm || errors.inner_mm || errors.outer_mm"></p>
+    </fieldset>
+  </section>
+
+  {# ---------------------------------------------------------- الخطوط #}
+  <section class="bp-acc" data-section="fonts">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.fonts ? 'true' : 'false'" aria-controls="bp-sec-fonts" @click="toggleSection('fonts')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">الخطوط</span><span class="lo-head-meta" x-text="fontLabel(sheet.body_font)"></span>
+    </button>
+    <fieldset class="lo-section" id="bp-sec-fonts" x-show="sections.fonts"{% if not can_edit %} disabled{% endif %}>
+      {% include "editor/_book_font.html" with role="body" label="المتن" %}
+      {% include "editor/_book_font.html" with role="latin" label="النص اللاتيني والأرقام" %}
+      {% include "editor/_book_font.html" with role="heading" label="العناوين" %}
+      <p class="lo-note" x-show="missingFontText" x-text="missingFontText" data-missing-fonts></p>
+      <p class="field-error" x-show="errors.body_font || errors.latin_font || errors.heading_font" x-text="errors.body_font || errors.latin_font || errors.heading_font"></p>
+    </fieldset>
+  </section>
+
+  {# ---------------------------------------------------------- النص #}
+  <section class="bp-acc" data-section="text">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.text ? 'true' : 'false'" aria-controls="bp-sec-text" @click="toggleSection('text')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">النص</span><span class="lo-head-meta num"><bdi x-text="fmt(sheet.body_size_pt)"></bdi> نقطة</span>
+    </button>
+    <fieldset class="lo-section" id="bp-sec-text" x-show="sections.text"{% if not can_edit %} disabled{% endif %}>
+      <div class="lo-grid">
+        {% include "editor/_book_stepper.html" with field="body_size_pt" label="حجم المتن" unit="نقطة" %}
+        {% include "editor/_book_stepper.html" with field="line_height" label="تباعد الأسطر" %}
+        {% include "editor/_book_stepper.html" with field="indent_em" label="إزاحة أول السطر" unit="em" %}
+        {% include "editor/_book_stepper.html" with field="footnote_size_pt" label="حجم الحواشي" unit="نقطة" %}
+        {% include "editor/_book_stepper.html" with field="heading_scale.h1" label="عنوان الفصل" unit="×" error="heading_scale" %}
+        {% include "editor/_book_stepper.html" with field="heading_scale.h2" label="عنوان فرعي" unit="×" error="heading_scale" %}
+        {% include "editor/_book_stepper.html" with field="orphans" label="أسطر أسفل الصفحة" unit="سطر" %}
+        {% include "editor/_book_stepper.html" with field="widows" label="أسطر أعلى الصفحة" unit="سطر" %}
+      </div>
+      <p class="help">أحجام العناوين أضعاف حجم المتن. لا تُترك فقرة بأقل من هذه الأسطر في أسفل صفحة أو أعلاها.</p>
+      <p class="field-error" x-show="errors.body_size_pt || errors.line_height || errors.indent_em || errors.footnote_size_pt || errors.heading_scale || errors.widows || errors.orphans" x-text="errors.body_size_pt || errors.line_height || errors.indent_em || errors.footnote_size_pt || errors.heading_scale || errors.widows || errors.orphans"></p>
+    </fieldset>
+  </section>
+
+  {# ---------------------------------------------------------- الصفحة #}
+  <section class="bp-acc" data-section="page">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.page ? 'true' : 'false'" aria-controls="bp-sec-page" @click="toggleSection('page')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">الصفحة</span><span class="lo-head-meta" x-text="choiceLabel('page_number', sheet.page_number)"></span>
+    </button>
+    <fieldset class="lo-section" id="bp-sec-page" x-show="sections.page"{% if not can_edit %} disabled{% endif %}>
+      <div class="lo-field">
+        <span class="lo-stepper-label">الترويسة</span>
+        <div class="segmented lo-seg" role="group" aria-label="الترويسة">
+          <template x-for="c in choices.running_header || []" :key="c.value">
+            <button type="button" :aria-pressed="sheet.running_header === c.value" @click="setField('running_header', c.value)" x-text="c.label"></button>
+          </template>
+        </div>
+      </div>
+      <div class="lo-field">
+        <label class="lo-stepper-label" for="lo-page-number">رقم الصفحة</label>
+        <select id="lo-page-number" class="select" :value="sheet.page_number" @change="setField('page_number', $el.value)">
+          <template x-for="c in choices.page_number || []" :key="c.value">
+            <option :value="c.value" :selected="sheet.page_number === c.value" x-text="c.label"></option>
+          </template>
+        </select>
+      </div>
+      <div class="lo-field">
+        <span class="lo-stepper-label">بداية الفصل</span>
+        <div class="segmented lo-seg" role="group" aria-label="بداية الفصل">
+          <template x-for="c in choices.chapter_opening || []" :key="c.value">
+            <button type="button" :aria-pressed="sheet.chapter_opening === c.value" @click="setField('chapter_opening', c.value)" x-text="c.label"></button>
+          </template>
+        </div>
+      </div>
+      <div class="lo-field">
+        <label class="lo-stepper-label" for="lo-footnote-numbering">ترقيم الحواشي</label>
+        <select id="lo-footnote-numbering" class="select" :value="sheet.footnote_numbering" @change="setField('footnote_numbering', $el.value)">
+          <template x-for="c in choices.footnote_numbering || []" :key="c.value">
+            <option :value="c.value" :selected="sheet.footnote_numbering === c.value" x-text="c.label"></option>
+          </template>
+        </select>
+      </div>
+      <div class="lo-checks">
+        <label class="lo-check"><input type="checkbox" :checked="sheet.front_matter && sheet.front_matter.title_page" @change="setField('front_matter.title_page', $el.checked)"><span>صفحة العنوان</span></label>
+        <label class="lo-check"><input type="checkbox" :checked="sheet.front_matter && sheet.front_matter.copyright_page" @change="setField('front_matter.copyright_page', $el.checked)"><span>صفحة الحقوق</span></label>
+        <label class="lo-check"><input type="checkbox" :checked="sheet.front_matter && sheet.front_matter.contents" @change="setField('front_matter.contents', $el.checked)"><span>صفحة المحتويات</span></label>
+        <label class="lo-check"><input type="checkbox" :checked="sheet.keep_headings" @change="setField('keep_headings', $el.checked)"><span>العنوان لا يُفصل عن نصّه</span></label>
+        <label class="lo-check"><input type="checkbox" :checked="sheet.print_source_pages" @change="setField('print_source_pages', $el.checked)"><span>أرقام الصفحات الأصلية في الهامش</span></label>
+      </div>
+      <p class="field-error" x-show="errors.running_header || errors.page_number || errors.chapter_opening || errors.footnote_numbering || errors.front_matter || errors.keep_headings" x-text="errors.running_header || errors.page_number || errors.chapter_opening || errors.footnote_numbering || errors.front_matter || errors.keep_headings"></p>
+    </fieldset>
+  </section>
+
+  {# ---------------------------------------------------------- بيانات الكتاب: the title and copyright pages #}
+  <section class="bp-acc" data-section="details">
+    <button type="button" class="bp-acc-head" :aria-expanded="sections.details ? 'true' : 'false'" aria-controls="bp-sec-details" @click="toggleSection('details')">
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+      <span class="bp-acc-title">بيانات الكتاب</span>
+    </button>
+    <fieldset class="lo-section bp-details" id="bp-sec-details" x-show="sections.details" data-book-details{% if not can_edit %} disabled{% endif %}>
+      <template x-for="d in details" :key="d.key">
+        <label class="bp-detail" :class="{ 'is-invalid': errors['front_matter.fields.' + d.key] }">
+          <span class="lo-stepper-label" x-text="d.label"></span>
+          <template x-if="!d.long">
+            <input type="text" :dir="d.ltr ? 'ltr' : 'auto'" autocomplete="off" spellcheck="false" :value="detailValue(d.key)" :placeholder="detailPlaceholder(d.key)" @input="setField('front_matter.fields.' + d.key, $el.value)">
+          </template>
+          <template x-if="d.long">
+            <textarea dir="auto" spellcheck="false" :placeholder="detailPlaceholder(d.key)" @input="setField('front_matter.fields.' + d.key, $el.value)" x-text="detailValue(d.key)"></textarea>
+          </template>
+          <span class="field-error" x-show="errors['front_matter.fields.' + d.key]" x-text="errors['front_matter.fields.' + d.key]"></span>
+        </label>
+      </template>
+      <p class="help">العنوان والمؤلف يُؤخذان من بطاقة الكتاب إن بقيا فارغين. تُطبع على صفحة العنوان وصفحة الحقوق.</p>
+    </fieldset>
+  </section>
+</fieldset>

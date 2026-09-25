@@ -323,6 +323,35 @@ def _cmap(path: str, size: int, mtime: int) -> frozenset[int]:
         return frozenset()
 
 
+@lru_cache(maxsize=64)
+def _tabular(path: str, size: int, mtime: int) -> bool:
+    from fontTools.ttLib import TTFont
+
+    try:
+        with TTFont(path, lazy=True, fontNumber=0) as font:
+            cmap = font.getBestCmap() or {}
+            widths = {font["hmtx"][cmap[ord(digit)]][0] for digit in "0123456789" if ord(digit) in cmap}
+            return len(widths) == 1
+    except Exception:  # noqa: BLE001 - unknown: not tabular
+        return False
+
+
+def tabular_digits(path: Path) -> bool:
+    """True when the ten digits of a font file are all as wide (a footnote number can change without
+    moving a line)."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    return _tabular(str(path), stat.st_size, int(stat.st_mtime))
+
+
+def number_face(fonts: ResolvedFonts) -> Face:
+    """The face the footnote numbers print in: the body face, or the Latin face when the body face has no
+    digits (Lotus)."""
+    return fonts.body if fonts.body.latin else fonts.latin
+
+
 def coverage(path: Path) -> frozenset[int]:
     """The code points a font file maps to glyphs (its `cmap`; cached by path, size and mtime)."""
     try:
@@ -368,3 +397,78 @@ def families(role: str = "body") -> str:
     """The CSS family list of a role: `"nk-body", "nk-latin", serif` (or `nk-heading`)."""
     first = "nk-heading" if role == "heading" else "nk-body"
     return f'"{first}", "nk-latin", serif'
+
+
+# ====================================================================== the same faces in the browser (D47)
+
+
+@lru_cache(maxsize=64)
+def _names(path: str, size: int, mtime: int) -> tuple[str, ...]:
+    """The full name and the PostScript name of a font file (what CSS `local()` matches)."""
+    from fontTools.ttLib import TTFont
+
+    try:
+        with TTFont(path, lazy=True, fontNumber=0) as font:
+            table = font["name"]
+            out = []
+            for name_id in (4, 6):
+                record = table.getDebugName(name_id)
+                if record and record not in out:
+                    out.append(record)
+            return tuple(out)
+    except Exception:  # noqa: BLE001 - an unreadable table: the family name stands in
+        return ()
+
+
+def local_names(path: Path) -> tuple[str, ...]:
+    """`_names` of a file (cached by path, size and mtime)."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return ()
+    return _names(str(path), stat.st_size, int(stat.st_mtime))
+
+
+def browser_faces(fonts: ResolvedFonts) -> list[dict]:
+    """The render's faces for the live pages (D47): `[{family, weight, style, src: [...], unicode_range}]`
+    — the same families (`nk-body`, `nk-heading`, `nk-latin`), files and unicode ranges as the PDF. The
+    vendored Amiri is served from /static/; an installed face is used through `local()` (its files stay in
+    the Mac's font folders, never served)."""
+    from django.templatetags.static import static
+
+    out: list[dict] = []
+    for family, face, ranges in (
+        ("nk-body", fonts.body, _ARABIC_RANGES if fonts.body.latin else _ARABIC_RANGES_NO_DIGITS),
+        ("nk-heading", fonts.heading, _ARABIC_RANGES if fonts.heading.latin else _ARABIC_RANGES_NO_DIGITS),
+        ("nk-latin", fonts.latin, None),
+    ):
+        for weight, style, path in face.files.styles():
+            src = [f'local("{name}")' for name in local_names(path)]
+            if FONTS[face.key].vendored:  # the very file the PDF embeds first (an installed copy may differ)
+                try:
+                    relative = path.resolve().relative_to(VENDORED_DIR.parent.resolve())
+                    src.insert(0, f'url("{static(str(relative))}")')
+                except ValueError:
+                    pass
+            out.append(
+                {
+                    "family": family,
+                    "weight": int(weight),
+                    "style": style,
+                    "src": src or [f'local("{face.family}")'],
+                    "unicode_range": face_ranges(path, ranges) if ranges else None,
+                }
+            )
+    return out
+
+
+def browser_font_css(fonts: ResolvedFonts) -> str:
+    """`browser_faces` as `@font-face` rules, ready for a `<style>`."""
+    rules = []
+    for face in browser_faces(fonts):
+        extra = f" unicode-range: {face['unicode_range']};" if face["unicode_range"] else ""
+        rules.append(
+            f'@font-face {{ font-family: "{face["family"]}"; src: {", ".join(face["src"])};'
+            f" font-weight: {face['weight']}; font-style: {face['style']}; font-display: block;{extra} }}"
+        )
+    return "\n".join(rules)

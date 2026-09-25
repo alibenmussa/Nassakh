@@ -14,10 +14,14 @@
   after its call's).
 - recto openings (`break-before: recto`) or a new page for each chapter; sections of a book without
   headings run on.
+- widows and orphans from the stylesheet (default 2), headings kept with the next line (`keep_headings`,
+  default on), a new page before a block (`.nk-break`) and a block kept with the next (`.nk-keep`), D47.
+- the title page with the book details, the copyright page (D47).
 - the faces' `@font-face` rules from the font registry (`publishing.fonts`).
 
-For a chapter rendered alone, `first_page` makes the page counter start at that chapter's first page in
-the last full render and puts that page on the right side (recto for an odd number).
+For a chapter (or a window, D47) rendered alone, `first_page` makes the page counter start at that
+chapter's first page in the current layout and puts that page on the right side (recto for an odd
+number); a window's first page shows the running header unless the window opens the book's text.
 """
 
 from __future__ import annotations
@@ -72,10 +76,16 @@ _ALL_BOXES = (
 
 
 def stylesheet_css(
-    stylesheet, fonts: ResolvedFonts | None = None, *, scope: str = "book", first_page: int = 1
+    stylesheet,
+    fonts: ResolvedFonts | None = None,
+    *,
+    scope: str = "book",
+    first_page: int = 1,
+    continues: bool = False,
 ) -> str:
     """The print CSS of a book for WeasyPrint (see the module docstring); `fonts` are resolved from the
-    stylesheet's faces when not given."""
+    stylesheet's faces when not given. `continues`: a window that goes on from the pages before it (its
+    first page shows the running header like any page inside a chapter)."""
     s = _setup(stylesheet)
     if fonts is None:
         fonts = resolve(s.body_font, s.latin_font, s.heading_font)
@@ -102,15 +112,19 @@ def stylesheet_css(
         f"@page front {{ {_ALL_BOXES} }}",
         f"@page :blank {{ {_ALL_BOXES} }}",
     ]
-    if scope == "chapter" and first_page > 1:
+    if scope in ("chapter", "window") and first_page > 1:
         side = "recto" if first_page % 2 == 1 else "verso"
         parts.append(f"@page :first {{ counter-reset: page {int(first_page)}; }}")
         parts.append(f"html {{ break-before: {side}; }}")
+    if scope == "window" and continues and header:
+        parts.append("@page :first { @top-center { content: string(running, first); } }")
+    keep = "avoid" if s.keep_headings else "auto"
     parts += [
         f"html {{ font-family: {body_font}; font-size: {_pt(s.body_size_pt)};"
         f" line-height: {_num(s.line_height)};"
         " color: #000; }",
-        "body { margin: 0; text-align: justify; hyphens: manual; orphans: 2; widows: 2; }",
+        f"body {{ margin: 0; text-align: justify; hyphens: manual; orphans: {int(s.orphans)};"
+        f" widows: {int(s.widows)}; }}",
         "p, h1, h2 { margin: 0; }",
         "b { font-weight: bold; } i { font-style: italic; }",
         ".nk-run-mark { string-set: running attr(data-running); height: 0; margin: 0; }",
@@ -121,6 +135,13 @@ def stylesheet_css(
         " font-weight: bold;"
         " line-height: 1.4; text-align: center; margin: 0 0 10mm; }",
         ".nk-book-author { font-size: 1.3em; text-align: center; text-indent: 0; }",
+        ".nk-book-subtitle { font-size: 1.15em; text-align: center; text-indent: 0; margin: -6mm 0 10mm; }",
+        ".nk-book-credit { font-size: 1.05em; text-align: center; text-indent: 0; margin-top: 3mm; }",
+        ".nk-title-foot { margin-top: 30mm; }",
+        ".nk-book-imprint { text-align: center; text-indent: 0; }",
+        ".nk-copyright-page { break-before: page; break-after: page; padding-top: 70%; }",
+        f".nk-copyright {{ font-size: {_pt(s.footnote_size_pt)}; line-height: 1.6; text-align: center;"
+        " text-align-last: center; text-indent: 0; margin: 0 0 1mm; }",
         f".nk-contents {{ break-before: {opening}; break-after: page; }}",
         f".nk-contents-title {{ font-family: {heading_font}; font-size: {_num(s.h1_scale)}em;"
         " font-weight: bold;"
@@ -132,13 +153,14 @@ def stylesheet_css(
         ".nk-toc a::after { content: leader('.') target-counter(attr(href), page); }",
         # chapters
         f".nk-chapter.is-chapter, .nk-chapter.is-front {{ break-before: {opening}; }}",
-        ".nk-scope-chapter .nk-chapter:first-of-type { break-before: auto; }",
+        ".nk-scope-chapter .nk-chapter:first-of-type, .nk-scope-window .nk-chapter:first-of-type"
+        " { break-before: auto; }",
         f".nk-chapter-title {{ string-set: running attr(data-running); font-family: {heading_font};"
         f" font-size: {_num(s.h1_scale)}em; font-weight: bold; line-height: 1.35; text-align: center;"
-        " margin: 16mm 0 9mm; break-after: avoid; }",
+        f" margin: 16mm 0 9mm; break-after: {keep}; }}",
         f".nk-section-title {{ font-family: {heading_font}; font-size: {_num(s.h2_scale)}em;"
         " font-weight: bold;"
-        " line-height: 1.4; text-align: center; margin: 5mm 0 3mm; break-after: avoid; }",
+        f" line-height: 1.4; text-align: center; margin: 5mm 0 3mm; break-after: {keep}; }}",
         # First-line indent as a start-side spacer: WeasyPrint puts `text-indent` on the left of an RTL line.
         f'.nk-body::before {{ content: ""; display: inline-block; width: {_num(s.indent_em)}em; }}',
         ".nk-body { text-indent: 0; }",
@@ -147,6 +169,9 @@ def stylesheet_css(
         ".nk-center { text-align: center; text-align-last: center; text-indent: 0; margin: 2mm 0; }",
         ".nk-separator { text-align: center; text-align-last: center; text-indent: 0; margin: 4mm 0; }",
         ".nk-book-title:not(:first-child) { margin-top: 8mm; }",
+        # D47 block attrs (after the style rules: they win over a heading's `keep_headings: off`)
+        ".nk-break { break-before: page; }",
+        ".nk-keep { break-after: avoid; }",
         # footnotes (D46: numbers come from data-n)
         # `footnote-policy: line`: a note that does not fit takes the line of its call to the next page
         # (as Word does), so a call and its note are always on the same page and numbered there (D46).

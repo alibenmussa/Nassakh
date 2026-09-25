@@ -16,6 +16,11 @@ manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, 
 - GET  /api/books/<id>/stylesheet/                    → `services.stylesheet_payload`
 - PUT  /api/books/<id>/stylesheet/                    fields (any subset) [+ `chapter`] → the payload +
                                                         `preview` (the book render is queued)
+- GET  /api/books/<id>/uncertain/                     → `uncertain.uncertain_words` (D47)
+- POST /api/books/<id>/uncertain/accept|choose|type/  `{chapter, block, note?, start, end, word, version,
+                                                        engine? | text?}` → `uncertain.resolve`
+
+Edits answer `relayout` (the chapter's re-layout to poll, `publishing.relayout`) when one was asked for.
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ from books.models import Book
 from core.decorators import ROLE_EDITOR, has_role
 from core.permissions import IsEditor
 
-from . import services
+from . import services, uncertain
 
 
 class EditorOrReadOnly(BasePermission):
@@ -199,3 +204,41 @@ def stylesheet(request: Request, book_id: int) -> Response:
     except PreviewNotFound:
         payload["preview"] = None
     return Response(payload)
+
+
+@api_view(["GET"])
+def uncertain_words(request: Request, book_id: int) -> Response:
+    """Every uncertain word left in the manuscript, with its page, context and readings (D47)."""
+    try:
+        return Response(uncertain.uncertain_words(_book(book_id)))
+    except services.EditorError as exc:
+        return _refused(exc)
+
+
+def _resolve(request: Request, book_id: int, action: str) -> Response:
+    book = _book(book_id)
+    try:
+        return Response(uncertain.resolve(book, action, _data(request), request.user))
+    except services.EditorError as exc:
+        return _refused(exc)
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def uncertain_accept(request: Request, book_id: int) -> Response:
+    """Keep an uncertain word as it is (its mark goes)."""
+    return _resolve(request, book_id, "accept")
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def uncertain_choose(request: Request, book_id: int) -> Response:
+    """Replace an uncertain word by one of its readings (`engine`: primary, secondary or tess)."""
+    return _resolve(request, book_id, "choose")
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def uncertain_type(request: Request, book_id: int) -> Response:
+    """Replace an uncertain word by the typed `text`."""
+    return _resolve(request, book_id, "type")

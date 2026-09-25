@@ -1,0 +1,11 @@
+{% comment %}One tab of the side panel's icon bar: the icon (its name as the tooltip), the name shown on the active tab,
+a count badge. Context: key, label, icon.{% endcomment %}
+<button type="button" role="tab" class="bp-tab" id="bp-tab-{{ key }}" aria-controls="bp-panel-{{ key }}" data-tab="{{ key }}" title="{{ label }}" aria-label="{{ label }}"
+        :class="{ 'is-active': tab === '{{ key }}' }" :aria-selected="tab === '{{ key }}' ? 'true' : 'false'" :tabindex="tab === '{{ key }}' ? 0 : -1" @click="setTab('{{ key }}')"
+        @keydown.arrow-left.prevent="stepTab(1)" @keydown.arrow-right.prevent="stepTab(-1)">
+  <svg class="icon" aria-hidden="true"><use href="#{{ icon }}"/></svg>
+  <span class="bp-tab-label">{{ label }}</span>
+  {% if key == 'uncertain' %}<bdi class="bp-badge is-warn" x-show="uncertain.count" x-cloak x-text="uncertain.count"></bdi>{% endif %}
+  {% if key == 'find' %}<bdi class="bp-badge" x-show="find.total && find.query.trim()" x-cloak x-text="find.total"></bdi>{% endif %}
+  {% if key == 'chapters' %}<bdi class="bp-badge is-warn" x-show="checks.length" x-cloak x-text="checks.length"></bdi>{% endif %}
+</button>

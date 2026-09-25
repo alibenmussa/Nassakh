@@ -72,11 +72,11 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
         <span>فتح المخطوطة</span>
       </a>
-      {# Phase 5 (PHASE5_SPEC §3): once the manuscript is fresh, editors open the chapter editor #}
+      {# Phase 5 (PHASE5_SPEC §9, D47): once the manuscript is fresh, editors open the book page (its pages, edited in place) #}
       {% if role == 'admin' or role == 'editor' %}
-      <a class="btn btn-primary" x-show="d.primary === 'editor'" :href="d.editorUrl" data-editor-open title="تحرير نص الكتاب فصلًا فصلًا">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
-        <span>فتح المحرّر</span>
+      <a class="btn btn-primary" x-show="d.primary === 'book'" :href="d.layoutUrl" data-book-open title="صفحات الكتاب: معاينتها وتحرير نصّها وتنسيقها">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+        <span>فتح الكتاب</span>
       </a>
       {% endif %}
 
@@ -98,15 +98,9 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
             <span>فتح المخطوطة</span>
           </a>
-          {% if role == 'admin' or role == 'editor' %}
-          <a class="menu-item" role="menuitem" :href="d.editorUrl" x-show="d.editorUrl && d.hasManuscript && !d.manuscriptActive && d.primary !== 'editor'">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
-            <span>فتح المحرّر</span>
-          </a>
-          {% endif %}
-          <a class="menu-item" role="menuitem" :href="d.layoutUrl" x-show="d.layoutUrl && d.hasManuscript && !d.manuscriptActive" data-layout-open>
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
-            <span>تنسيق الكتاب ومعاينته</span>
+          <a class="menu-item" role="menuitem" :href="d.layoutUrl" x-show="d.layoutUrl && d.hasManuscript && !d.manuscriptActive && d.primary !== 'book'" data-book-menu-item>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+            <span>الكتاب</span>
           </a>
           {% if role == 'admin' or role == 'editor' %}
           <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openConvert()">
@@ -268,15 +262,12 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           <button type="button" class="link bk-manuscript-convert" x-show="!hasManuscript && allReviewed" @click="openConvert()">تحويل إلى كتاب…</button>
           {% endif %}
         </div>
-        {# Phase 5 (PHASE5_SPEC §5): the book's physical form — trim and page count from the newest render, the review drift after editing (D41), the layout page and the editor #}
+        {# Phase 5 (PHASE5_SPEC §5, §9): the book's physical form — trim and page count from the newest render, the review drift after editing (D41), the book page #}
         <div class="bk-book" role="group" aria-label="الكتاب" x-show="hasManuscript && !manuscriptActive"{% if not manuscript.exists %} x-cloak{% endif %}>
           <div class="bk-side-head"><span>الكتاب</span></div>
           <span class="status bk-book-line"><span class="dot" :class="bookDot" aria-hidden="true"></span><span x-text="bookLine"></span></span>
           <span class="status bk-book-drift" x-show="driftLine" x-cloak><span class="dot dot-warning" aria-hidden="true"></span><span x-text="driftLine"></span></span>
-          <a class="link bk-book-layout" :href="layoutUrl" x-show="layoutUrl">تنسيق الكتاب ومعاينته</a>
-          {% if role == 'admin' or role == 'editor' %}
-          <a class="link bk-book-edit" :href="editorUrl" x-show="editorUrl && primary !== 'editor'">فتح المحرّر</a>
-          {% endif %}
+          <a class="link bk-book-open" :href="layoutUrl" x-show="layoutUrl" data-book-link>فتح الكتاب</a>
         </div>
         <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
           <summary>تحتاج انتباهًا <span class="badge badge-warning num" x-text="attention.length">{{ attention|length }}</span></summary>

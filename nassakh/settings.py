@@ -123,6 +123,9 @@ CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TASK_ROUTES = {
     "ocr.tasks.ocr_page_full": {"queue": "gpu"},
     "ocr.tasks.warm_up_engines": {"queue": "gpu"},
+    # D47: the fast re-layout of a chapter has its own queue (the default worker consumes default,layout)
+    "publishing.tasks.relayout_chapter": {"queue": "layout"},
+    "publishing.tasks.render_layout_images": {"queue": "default", "priority": 9},
 }
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1

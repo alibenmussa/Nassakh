@@ -39,24 +39,33 @@
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7L4 12l5 5"/><path d="M4 12h9.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
   <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7l5 5-5 5"/><path d="M20 12h-9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01" stroke-width="2.4"/></symbol>
+  <symbol id="i-pages" viewBox="0 0 24 24"><rect x="8" y="3.5" width="11.5" height="15" rx="1.5"/><path d="M4.5 7.5v11.5A1.5 1.5 0 0 0 6 20.5h9"/></symbol>
+  <symbol id="i-pilcrow" viewBox="0 0 24 24"><path d="M12.5 4v16M16.5 4v16"/><path d="M19 4h-9.5a4 4 0 0 0 0 8h3"/></symbol>
+  <symbol id="i-uncertain" viewBox="0 0 24 24"><path d="M4 6.5h16M4 11h10"/><path d="M4 16.5c1.33-1.2 2.67-1.2 4 0s2.67 1.2 4 0 2.67-1.2 4 0 2.67 1.2 4 0"/></symbol>
+  <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol>
 </svg>
 
 {% block body %}
-<div class="app-shell" x-data="{ navOpen: false }" @keydown.escape.window="navOpen = false">
+<div class="app-shell" x-data="{ navOpen: false, railOpen: false }" :class="{ 'is-rail-open': railOpen }" @keydown.escape.window="navOpen = false; railOpen = false">
   <div class="scrim" x-show="navOpen" x-cloak @click="navOpen = false"></div>
-  <aside class="sidebar" :class="{ 'is-open': navOpen }" aria-label="التنقّل الرئيسي">
-    <a class="brand" href="{% url 'core:home' %}">
+  <aside class="sidebar" :class="{ 'is-open': navOpen }" aria-label="التنقّل الرئيسي" @click.outside="railOpen = false">
+    <a class="brand" href="{% url 'core:home' %}" title="نسّاخ">
       <span class="brand-mark" aria-hidden="true">ن</span>
       <span class="brand-name">نسّاخ</span>
     </a>
+    {# a page that needs the room (the book page) folds this sidebar into an icon rail; the button unfolds it over the page #}
+    <button type="button" class="btn-icon rail-toggle" @click="railOpen = !railOpen" :aria-expanded="railOpen ? 'true' : 'false'" :title="railOpen ? 'طيّ القائمة' : 'إظهار القائمة'" aria-label="القائمة">
+      <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-sidebar"/></svg>
+    </button>
 
     <nav class="nav">
-      <a class="nav-item{% if request.resolver_match.namespace == 'books' or request.resolver_match.namespace == 'processing' %} is-active{% endif %}" href="{% url 'books:list' %}">
+      <a class="nav-item{% if request.resolver_match.namespace == 'books' or request.resolver_match.namespace == 'processing' %} is-active{% endif %}" href="{% url 'books:list' %}" title="الكتب">
         <svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>
         <span>الكتب</span>
       </a>
       {% if is_admin %}
-      <a class="nav-item" href="{% url 'admin:index' %}">
+      <a class="nav-item" href="{% url 'admin:index' %}" title="المستخدمون">
         <svg class="icon" aria-hidden="true"><use href="#i-users"/></svg>
         <span>المستخدمون</span>
       </a>
@@ -73,7 +82,7 @@
       </div>
       <form method="post" action="{% url 'accounts:logout' %}">
         {% csrf_token %}
-        <button type="submit" class="btn btn-ghost w-full justify-start">
+        <button type="submit" class="btn btn-ghost w-full justify-start" title="تسجيل الخروج">
           <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-logout"/></svg>
           <span>تسجيل الخروج</span>
         </button>
@@ -134,7 +143,12 @@
 <script src="{% static 'src/js/ocr.js' %}"></script>
 <script src="{% static 'src/js/review.js' %}"></script>
 <script src="{% static 'src/js/manuscript.js' %}"></script>
-<script src="{% static 'src/js/editor.js' %}"></script>
+<script src="{% static 'src/js/book/geometry.js' %}"></script>
+<script src="{% static 'src/js/book/stage.js' %}"></script>
+<script src="{% static 'src/js/book/style.js' %}"></script>
+<script src="{% static 'src/js/book/edit.js' %}"></script>
+<script src="{% static 'src/js/book/panel.js' %}"></script>
+<script src="{% static 'src/js/book/page.js' %}"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

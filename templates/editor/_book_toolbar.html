@@ -1,0 +1,84 @@
+{% comment %}The book page's toolbar (PHASE5_SPEC §9.2), hanging from the top bar (= bk-toolbar): «معاينة | تحرير» (E)
+first, then the mode's tools — preview: spread and fit; edit: undo / redo (the chapter's), the style picker,
+B / I, «حاشية», «فواصل الصفحات الأصلية»; the page counter at the end, the jump field in preview, the primary «تم»
+in edit mode. The groups swap with a 200 ms fade (none under reduced motion); the page does not move. Inside
+the bookPage component (layout.html). Context: can_edit.{% endcomment %}
+<div class="lo-toolbar bp-toolbar">
+  <div class="lo-toolbar-start">
+    {% if can_edit %}
+    <div class="segmented bp-mode" role="group" aria-label="الوضع" data-mode-toggle>
+      <button type="button" :aria-pressed="mode !== 'edit'" aria-pressed="true" @click="setMode('preview')" title="معاينة الصفحات (E)">معاينة</button>
+      <button type="button" :aria-pressed="mode === 'edit'" aria-pressed="false" @click="setMode('edit')" title="تحرير النص على صفحاته (E، أو نقرتان على سطر)">تحرير</button>
+    </div>
+    <span class="bp-sep" aria-hidden="true"></span>
+    {% endif %}
+
+    {# ---- preview: one page or a spread, the fit #}
+    <div class="bp-tools is-preview" x-show="mode !== 'edit'" x-transition.opacity.duration.200ms data-preview-tools>
+      <div class="segmented" role="group" aria-label="عدد الصفحات المعروضة" data-spread-toggle>
+        <button type="button" :aria-pressed="!spread" aria-pressed="true" @click="setSpread(false)" title="صفحة واحدة (S)">صفحة</button>
+        <button type="button" :aria-pressed="spread" aria-pressed="false" @click="setSpread(true)" title="صفحتان متقابلتان (S)">صفحتان</button>
+      </div>
+      <div class="segmented" role="group" aria-label="مقاس العرض" data-fit-toggle>
+        <button type="button" :aria-pressed="fit === 'height'" aria-pressed="true" @click="setFit('height')" title="ملء الارتفاع (1)">ملء الارتفاع</button>
+        <button type="button" :aria-pressed="fit === 'width'" aria-pressed="false" @click="setFit('width')" title="ملء العرض (2)">ملء العرض</button>
+        <button type="button" :aria-pressed="fit === 'actual'" aria-pressed="false" @click="setFit('actual')" title="الحجم الحقيقي (3)"><bdi>100 %</bdi></button>
+      </div>
+    </div>
+
+    {% if can_edit %}
+    {# ---- edit: history, the style picker, marks, the footnote, the scan page marks #}
+    <div class="bp-tools is-edit" x-show="mode === 'edit'" x-cloak x-transition.opacity.duration.200ms data-edit-tools>
+      <button type="button" class="btn-icon btn-icon-sm" title="تراجع (⌘Z)" aria-label="تراجع" :disabled="!canUndo" @mousedown.prevent @click="undo()">
+        <svg class="icon" aria-hidden="true"><use href="#i-undo"/></svg>
+      </button>
+      <button type="button" class="btn-icon btn-icon-sm" title="إعادة (⇧⌘Z)" aria-label="إعادة" :disabled="!canRedo" @mousedown.prevent @click="redo()">
+        <svg class="icon" aria-hidden="true"><use href="#i-redo"/></svg>
+      </button>
+      <span class="bp-sep" aria-hidden="true"></span>
+      {# the style picker: the block's style; mousedown is swallowed so the paragraph keeps the caret (as in Word) #}
+      <div class="menu-anchor ed-style" @keydown.escape.stop="styleMenu = false">
+        <button type="button" class="btn btn-sm ed-style-btn" @mousedown.prevent @click="closePop(); styleMenu = !styleMenu" :aria-expanded="styleMenu" aria-haspopup="menu" aria-label="نمط الفقرة" title="نمط الفقرة" :disabled="!open && !selected" data-style-picker>
+          <span class="ed-style-label" x-text="open || selected ? styleLabel : 'نمط الفقرة'"></span>
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </button>
+        <div class="menu ed-style-menu" role="menu" aria-label="نمط الفقرة" x-show="styleMenu" x-cloak @click.outside="styleMenu = false" x-transition.opacity.duration.120ms
+             @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)">
+          <template x-for="s in styles" :key="s.key">
+            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="s.key === blockStyle ? 'true' : 'false'" :class="'is-' + s.key" @mousedown.prevent @click="setStyle(s.key)">
+              <span class="ed-style-check" aria-hidden="true" x-text="s.key === blockStyle ? '✓' : ''"></span>
+              <span class="ed-style-name" x-text="s.label"></span>
+              <kbd class="kbd ed-style-key" x-show="s.keys" x-text="s.keys"></kbd>
+            </button>
+          </template>
+        </div>
+      </div>
+      <span class="bp-sep" aria-hidden="true"></span>
+      <button type="button" class="btn-icon ed-glyph" :aria-pressed="bold" title="غامق (⌘B)" aria-label="غامق" :disabled="!open" @mousedown.prevent @click="toggleBold()"><span class="ed-glyph-b" aria-hidden="true">B</span></button>
+      <button type="button" class="btn-icon ed-glyph" :aria-pressed="italic" title="مائل (⌘I)" aria-label="مائل" :disabled="!open" @mousedown.prevent @click="toggleItalic()"><span class="ed-glyph-i" aria-hidden="true">I</span></button>
+      <span class="bp-sep" aria-hidden="true"></span>
+      <button type="button" class="btn btn-ghost btn-sm" title="إدراج حاشية عند المؤشّر (⌘⇧F)" :disabled="!open" @mousedown.prevent @click="insertFootnote()" data-footnote-button>
+        <span class="ed-tb-note-glyph" aria-hidden="true">١</span>
+        <span class="bp-tb-label">حاشية</span>
+      </button>
+      <button type="button" class="bk-chip" :aria-pressed="pageMarks" @mousedown.prevent @click="togglePageMarks()" title="علامات صفحات المسح على الصفحات (ص 12)" data-marks-toggle>فواصل الصفحات الأصلية</button>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="lo-toolbar-end">
+    <span class="bk-counter lo-counter" x-show="counterText" x-cloak aria-live="polite" data-counter>
+      <span x-text="counterText"></span>
+      <span class="lo-counter-chapter" x-show="counterChapter"><span aria-hidden="true">·</span> <span class="lo-counter-title" x-text="counterChapter && counterChapter.title"></span> <span class="num">ص <bdi x-text="counterChapter && (counterChapter.first + '–' + counterChapter.last)"></bdi></span></span>
+    </span>
+    <label class="bk-jump lo-jump" x-show="mode !== 'edit'">
+      <span class="sr-only">الانتقال إلى صفحة</span>
+      <input type="text" inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة" x-ref="jump" autocomplete="off"
+             @keydown.enter.prevent="jump($el.value); $el.value = ''" @blur="if ($el.value.trim()) { jump($el.value); $el.value = ''; }" @keydown.escape.stop="$el.value = ''; $el.blur()">
+      <kbd class="kbd" aria-hidden="true">G</kbd>
+    </label>
+    {% if can_edit %}
+    <button type="button" class="btn btn-primary btn-sm bp-done" x-show="mode === 'edit'" x-cloak @click="setMode('preview')" title="العودة إلى المعاينة (E)" data-done>تم</button>
+    {% endif %}
+  </div>
+</div>

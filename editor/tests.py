@@ -1,4 +1,7 @@
-"""Tests of the editor app's models (Phase 4: the manuscript written by assembly, and its snapshots)."""
+"""Tests of the editor app: the manuscript and its snapshots (Phase 4); chapters, saves, find & replace,
+digits, drift, re-assembly, the stylesheet and the pages (Phase 5); D47: block page-break attrs, the plain
+text offsets and range edits, widows / orphans / book details, the uncertain words (listing with readings,
+accept / choose / type, re-layout), the old editor address's redirect and the book page's config."""
 
 from __future__ import annotations
 
@@ -74,7 +77,7 @@ from books.models import Page  # noqa: E402
 from books.services import book_progress  # noqa: E402
 from editor import document as doc  # noqa: E402
 from editor import services  # noqa: E402
-from editor.models import StyleSheet  # noqa: E402
+from editor.models import BOOK_FIELDS, StyleSheet  # noqa: E402
 from ocr.models import Line  # noqa: E402
 from processing.models import Preprocess, Region  # noqa: E402
 from review import services as review_services  # noqa: E402
@@ -379,7 +382,8 @@ def test_chapter_summaries_cost_a_fixed_number_of_queries(book, django_assert_nu
     for n in range(40):
         blocks += [heading(f"h{n}", f"الفصل {n}", pages=(n + 1,)), para(f"p{n}", "نص الفصل", pages=(n + 1,))]
     Manuscript.objects.create(book=book, document=document(*blocks))
-    with django_assert_num_queries(2):  # the manuscript (no run: no drift queries), the newest book render
+    # the manuscript (no run: no drift queries), the live layout (D47), without one the newest book render
+    with django_assert_num_queries(3):
         rows = services.chapter_summaries(book)
     assert len(rows) == 40
 
@@ -625,7 +629,11 @@ def test_stylesheet_defaults_without_a_row(book, reader_user):
     assert sheet["heading_scale"] == {"h1": 1.6, "h2": 1.25} and sheet["front_matter"] == {
         "title_page": True,
         "contents": True,
+        "copyright_page": False,
+        "fields": {name: "" for name in BOOK_FIELDS},
     }
+    assert (sheet["widows"], sheet["orphans"], sheet["keep_headings"]) == (2, 2, True)  # D47
+    assert data["field_defaults"] == {"title": book.title, "author": book.author}
     assert (sheet["running_header"], sheet["page_number"], sheet["chapter_opening"]) == (
         "chapter",
         "bottom_center",
@@ -696,51 +704,55 @@ def test_dashboard_states_before_and_after_the_manuscript(book, django_assert_ma
 
 def test_editor_and_layout_pages_render_their_config(written, editor_user):
     client = logged(editor_user)
-    page = client.get(reverse("editor:edit", args=[written.book.pk]) + "?chapter=h20")
+    book_id = written.book.pk
+    page = client.get(reverse("editor:layout", args=[book_id]) + "?chapter=h20&mode=edit")
     assert page.status_code == 200
     config = page.context["config"]
     assert config["chapter"] == "h20" and config["canEdit"] is True and config["exists"] is True
-    assert config["urls"]["chapter"] == f"/api/books/{written.book.pk}/chapters/__cid__/"
-    assert config["urls"]["restore"] == f"/api/books/{written.book.pk}/snapshots/__sid__/restore/"
-    assert config["faces"]["body"]["key"] == "amiri" and 'id="editor-config"' in page.content.decode()
-    assert (
-        client.get(reverse("editor:edit", args=[written.book.pk]) + "?chapter=zz").context["config"][
-            "chapter"
-        ]
-        == "p1"
-    )
-    layout = client.get(reverse("editor:layout", args=[written.book.pk]))
-    assert layout.status_code == 200 and layout.context["config"]["page"] == "layout"
+    assert config["page"] == "layout" and config["mode"] == "edit"
+    assert config["urls"]["chapter"] == f"/api/books/{book_id}/chapters/__cid__/"
+    assert config["urls"]["restore"] == f"/api/books/{book_id}/snapshots/__sid__/restore/"
+    assert config["faces"]["body"]["key"] == "amiri"
+    layout = client.get(reverse("editor:layout", args=[book_id]) + "?chapter=zz")
+    assert layout.status_code == 200 and layout.context["config"]["chapter"] == "p1"
+    assert layout.context["config"]["mode"] == "preview"
     other = Book.objects.create(title="بلا مخطوطة")
-    empty = client.get(reverse("editor:edit", args=[other.pk]))
-    assert empty.status_code == 200 and "لا توجد مخطوطة بعد" in empty.content.decode()
-    assert Client().get(reverse("editor:edit", args=[written.book.pk])).status_code == 302
+    empty = client.get(reverse("editor:layout", args=[other.pk]))
+    assert empty.status_code == 200 and empty.context["config"]["exists"] is False
+    assert Client().get(reverse("editor:layout", args=[book_id])).status_code == 302  # the login
 
 
-def test_a_save_schedules_the_debounced_renders(written, editor_user, monkeypatch):
-    from publishing import preview, tasks
+def test_a_save_asks_for_the_relayout_and_schedules_the_book_render(written, editor_user, monkeypatch):
+    """D47: a save asks for the chapter's fast re-layout at once (its answer says what to poll) and the
+    book's render once edits settle (debounced, D44)."""
+    from publishing import preview, relayout, tasks
 
     scheduled = []
-    monkeypatch.setattr(
-        tasks.render_chapter_preview,
-        "apply_async",
-        lambda args, countdown: scheduled.append(("chapter", args, countdown)),
-    )
     monkeypatch.setattr(
         tasks.render_book_preview,
         "apply_async",
         lambda args, countdown: scheduled.append(("book", args, countdown)),
+    )
+    monkeypatch.setattr(
+        relayout,
+        "_enqueue",
+        lambda row: scheduled.append(("relayout", row.chapter_id, row.version, row.kind)),
     )
     loaded = services.chapter_document(written.book, "h10")
     loaded["content"]["content"][2]["content"][0]["text"] = "تعديل"
     with override_settings(
         NASSAKH={**__import__("django.conf").conf.settings.NASSAKH, "PREVIEW_AUTORENDER": True}
     ):
-        services.save_chapter(written.book, "h10", loaded["content"], loaded["version"], editor_user)
+        saved = services.save_chapter(written.book, "h10", loaded["content"], loaded["version"], editor_user)
     assert scheduled == [
-        ("chapter", (written.book.pk, "h10", 2), preview.CHAPTER_SETTLE_S),
+        ("relayout", "h10", 2, "layout"),
         ("book", (written.book.pk, 2), preview.BOOK_SETTLE_S),
     ]
+    assert saved["relayout"]["status"] == "queued" and saved["relayout"]["url"].endswith(
+        f"/relayout/{saved['relayout']['id']}/"
+    )
+    unchanged = services.save_chapter(written.book, "h10", loaded["content"], saved["version"], editor_user)
+    assert unchanged["changed"] is False and unchanged["relayout"] is None and len(scheduled) == 2
 
 
 def test_a_full_reassembly_keeps_the_edited_text_for_good(editor_user):
@@ -1039,3 +1051,287 @@ def test_requests_only_queue_renders_never_run_them(written, editor_user, monkey
     assert "publishing.tasks.render_book_preview" in names
     assert "publishing.tasks.render_chapter_preview" in names
     assert client.get(reverse("editor:layout", args=[book.pk]) + "?chapter=h10").status_code == 200
+
+
+# ====================================================================== D47: the book page
+
+
+def test_block_page_break_attrs_are_validated():
+    good = [para("p1", "نص", breakBefore=True, keepWithNext=False), heading("h2", "عنوان")]
+    good[1]["attrs"]["keepWithNext"] = True
+    assert doc.clean_nodes(good)[0]["attrs"]["breakBefore"] is True
+    for bad in ("yes", 1, {"a": 1}):
+        with pytest.raises(doc.DocumentError):
+            doc.clean_nodes([para("p1", "نص", breakBefore=bad)])
+
+
+def test_plain_text_offsets_and_range_edits():
+    content = [
+        text("أوّل "),
+        text("كلمة", "uncertain"),
+        {"type": "footnote", "attrs": {"id": "n1"}, "content": [text("حاشية")]},
+        {"type": "hardBreak"},
+        text("𝕏 بعد", "bold"),
+        {"type": "pageBreak", "attrs": {"page": 3}},
+    ]
+    plain = doc.inline_text(content)
+    assert plain == "أوّل كلمة￼\n𝕏 بعد￼" and doc.object_kinds(content) == "أوّل كلمة￼\n𝕏 بعد\x00"
+    assert doc.utf16_index(plain, len(plain)) == len(plain) + 1 and doc.code_index(
+        plain, len(plain) + 1
+    ) == len(plain)
+    assert doc.code_index(plain, 13) == 12  # inside the surrogate pair: its character's start
+    assert doc.has_mark_range(content, 5, 9, "uncertain") and not doc.has_mark_range(
+        content, 4, 9, "uncertain"
+    )
+    unmarked = doc.unmark_range(content, 5, 9)
+    assert doc.inline_text(unmarked) == plain and not doc.has_mark_range(unmarked, 5, 9, "uncertain")
+    assert unmarked[0] == {"type": "text", "text": "أوّل كلمة"}  # merged with its neighbour
+    replaced = doc.replace_range(content, 5, 9, "لفظة")
+    assert doc.inline_text(replaced) == "أوّل لفظة￼\n𝕏 بعد￼" and replaced[1]["type"] == "footnote"
+    assert not doc.has_mark_range(replaced, 5, 9, "uncertain")
+    bold = doc.replace_range(content, 13, 16, "قبل")  # keeps the marks of the text it replaces
+    assert bold[-2] == {"type": "text", "text": "𝕏 قبل", "marks": [{"type": "bold"}]}
+
+
+def test_stylesheet_line_rules_and_book_details(book, editor_user):
+    client = logged(editor_user)
+    url = reverse("api:stylesheet", args=[book.pk])
+    fields = {
+        "subtitle": "  دراسة   تاريخية ",
+        "isbn": "978-9959-26-123-4",
+        "rights": "جميع الحقوق\\nمحفوظة",
+        "x": "y",
+    }
+    response = put_json(
+        client,
+        url,
+        {
+            "widows": 3,
+            "orphans": "1",
+            "keep_headings": False,
+            "front_matter": {"copyright_page": True, "fields": fields},
+        },
+    )
+    assert response.status_code == 200, response.json()
+    sheet = StyleSheet.objects.get(book=book)
+    assert (sheet.widows, sheet.orphans, sheet.keep_headings) == (3, 1, False)
+    assert sheet.front_matter == {
+        "title_page": True,
+        "contents": True,
+        "copyright_page": True,
+        "fields": {
+            "subtitle": "دراسة تاريخية",
+            "isbn": "978-9959-26-123-4",
+            "rights": "جميع الحقوق\\nمحفوظة",
+        },
+    }
+    values = response.json()["stylesheet"]["front_matter"]["fields"]
+    assert values["subtitle"] == "دراسة تاريخية" and values["title"] == "" and set(values) == set(BOOK_FIELDS)
+    refused = put_json(
+        client, url, {"widows": 9, "orphans": 1.5, "front_matter": {"fields": {"isbn": "9" * 41}}}
+    )
+    assert refused.status_code == 400
+    errors = refused.json()["errors"]
+    assert set(errors) == {"widows", "orphans", "front_matter.fields.isbn"}
+    cleared = put_json(client, url, {"front_matter": {"fields": {"subtitle": ""}}})
+    assert (
+        "subtitle" not in StyleSheet.objects.get(book=book).front_matter["fields"]
+        and cleared.status_code == 200
+    )
+
+
+def test_the_old_editor_address_redirects_to_the_book_page(written, editor_user):
+    client = logged(editor_user)
+    book_id = written.book.pk
+    response = client.get(reverse("editor:edit", args=[book_id]) + "?chapter=h20")
+    assert response.status_code == 302
+    assert response["Location"] == f"/books/{book_id}/layout/?chapter=h20&mode=edit"
+    plain = client.get(reverse("editor:edit", args=[book_id]))
+    assert plain.status_code == 302 and plain["Location"] == f"/books/{book_id}/layout/?mode=edit"
+    assert client.get(reverse("editor:edit", args=[999999])).status_code == 404
+
+
+def test_the_book_page_config_has_everything_the_merged_page_needs(written, editor_user):
+    from publishing import preview
+
+    book = written.book
+    preview.render_preview(book, "book")
+    page = logged(editor_user).get(reverse("editor:layout", args=[book.pk]) + "?chapter=h20&mode=edit")
+    config = page.context["config"]
+    assert config["mode"] == "edit" and config["relayoutMs"] == 500 and config["uncertainCount"] == 0
+    assert [c["id"] for c in config["chapterSummaries"]] == ["p1", "h10", "h20"]
+    assert set(config["chapterSummaries"][1]) >= {"version", "words", "pages", "drift", "source_pages"}
+    assert config["drift"] == {"edited": False, "pages": [], "chapters": []}
+    assert '@font-face { font-family: "nk-body"' in config["fontCss"]
+    urls = config["urls"]
+    assert urls["relayout"] == f"/api/books/{book.pk}/chapters/__cid__/relayout/"
+    assert urls["relayoutStatus"] == f"/api/books/{book.pk}/relayout/__rid__/"
+    assert urls["pageLayout"] == f"/api/books/{book.pk}/preview/layout/"
+    assert urls["uncertain"] == f"/api/books/{book.pk}/uncertain/"
+    assert urls["uncertainChoose"] == f"/api/books/{book.pk}/uncertain/choose/"
+    for key in (
+        "chapter",
+        "chapters",
+        "findReplace",
+        "convertDigits",
+        "snapshots",
+        "restore",
+        "sheets",
+        "review",
+    ):
+        assert urls[key], key
+    initial = config["initial"]
+    assert initial["layout"]["revision"] == 1 and initial["layout"]["pages"]
+    first_h20 = next(c["first"] for c in initial["preview"]["layout"]["chapters"] if c["id"] == "h20")
+    assert initial["layout"]["pages"][0]["n"] == first_h20
+
+
+def uncertain_book(user):
+    """A reviewed page whose words are still uncertain (low confidence, unresolved), assembled."""
+    pages = Pages()
+    one = pages.page(1)
+    pages.line(one, "الفصل الأول", (300, 700), role="heading")
+    line = pages.line(one, "كان أهل برقة يزرعون القمح", (100, 850))
+    line.tokens[1] = dict(line.tokens[1], conf="low", alt="اهل", tess="أهل")
+    line.tokens[3] = dict(line.tokens[3], conf="low", alt="يررعون", tess=None)
+    line.save()
+    other = pages.line(one, "وكان أهل المدينة كثيرين", (100, 850))
+    other.tokens[1] = dict(other.tokens[1], conf="low", alt="أهيل", tess="اهل")
+    other.save()
+    assembly_services.start_assembly(pages.book, user)
+    return pages.book
+
+
+def test_uncertain_words_are_listed_with_their_readings_page_and_context(editor_user, reader_user):
+    from publishing import preview
+
+    book = uncertain_book(editor_user)
+    preview.render_preview(book, "book")
+    data = logged(reader_user).get(reverse("api:uncertain", args=[book.pk])).json()
+    assert data["count"] == 3 and [item["word"] for item in data["items"]] == ["أهل", "يزرعون", "أهل"]
+    first, second, third = data["items"]
+    assert first["readings"] == [
+        {"engine": "primary", "label": "Qari v0.3", "text": "أهل", "current": True},
+        {"engine": "secondary", "label": "Qari v0.2", "text": "اهل", "current": False},
+    ]
+    assert third["readings"][1]["text"] == "أهيل" and third["readings"][2] == {
+        "engine": "tess",
+        "label": "Tesseract",
+        "text": "اهل",
+        "current": False,
+    }  # the second «أهل» takes the token of its own line
+    assert second["readings"][1]["text"] == "يررعون" and len(second["readings"]) == 2
+    manuscript = Manuscript.objects.get(book=book)
+    block = next(
+        b for b in doc.flat_blocks(doc.content_of(manuscript.document)) if doc.node_id(b) == first["block"]
+    )
+    assert doc.inline_text(block["content"])[first["start"] : first["end"]] == "أهل"
+    # (40 characters at most on each side, cut at a word)
+    assert first["context"] == {"before": "كان", "after": "برقة يزرعون القمح وكان أهل المدينة"}
+    # the book's page 3 (after the title and contents pages), read from scan page 1
+    assert first["page"] == 3 and first["source_page"] == 1 and first["note"] is None and first["chapter"]
+
+
+def test_uncertain_words_are_accepted_chosen_or_typed_and_relaid_out(editor_user, reader_user, monkeypatch):
+    from publishing import relayout
+
+    book = uncertain_book(editor_user)
+    asked = []
+    monkeypatch.setattr(relayout, "_enqueue", lambda row: asked.append(row.chapter_id))
+    client = logged(editor_user)
+    listing = client.get(reverse("api:uncertain", args=[book.pk])).json()["items"]
+    chapter = services.chapter_document(book, listing[0]["chapter"])
+
+    def body(item, version, **extra):
+        keys = ("chapter", "block", "note", "start", "end", "word")
+        return {**{key: item[key] for key in keys}, "version": version, **extra}
+
+    assert (
+        post_json(
+            logged(reader_user),
+            reverse("api:uncertain_accept", args=[book.pk]),
+            body(listing[0], chapter["version"]),
+        ).status_code
+        == 403
+    )
+    stale = post_json(client, reverse("api:uncertain_accept", args=[book.pk]), body(listing[0], "old"))
+    assert stale.status_code == 409 and stale.json()["version"] == chapter["version"]
+    with override_settings(
+        NASSAKH={**__import__("django.conf").conf.settings.NASSAKH, "PREVIEW_AUTORENDER": True}
+    ):
+        accepted = post_json(
+            client, reverse("api:uncertain_accept", args=[book.pk]), body(listing[0], chapter["version"])
+        )
+        assert accepted.status_code == 200, accepted.json()
+        answer = accepted.json()
+        assert (
+            answer["word"] == "أهل" and answer["remaining"] == 2 and answer["relayout"]["status"] == "queued"
+        )
+        assert asked == [listing[0]["chapter"]]
+        again = post_json(
+            client, reverse("api:uncertain_accept", args=[book.pk]), body(listing[0], answer["version"])
+        )
+        assert again.status_code == 409  # not uncertain any more
+        chosen = post_json(
+            client,
+            reverse("api:uncertain_choose", args=[book.pk]),
+            body(listing[1], answer["version"], engine="secondary"),
+        )
+        assert (
+            chosen.status_code == 200
+            and chosen.json()["word"] == "يررعون"
+            and chosen.json()["remaining"] == 1
+        )
+        missing = post_json(
+            client,
+            reverse("api:uncertain_choose", args=[book.pk]),
+            body(listing[2], chosen.json()["version"], engine="nope"),
+        )
+        assert missing.status_code == 400
+        empty = post_json(
+            client,
+            reverse("api:uncertain_type", args=[book.pk]),
+            body(listing[2], chosen.json()["version"], text="  "),
+        )
+        assert empty.status_code == 400
+        typed = post_json(
+            client,
+            reverse("api:uncertain_type", args=[book.pk]),
+            body(listing[2], chosen.json()["version"], text=" أهالي "),
+        )
+    assert typed.status_code == 200 and typed.json()["word"] == "أهالي" and typed.json()["remaining"] == 0
+    assert typed.json()["end"] - typed.json()["start"] == len("أهالي")
+    text_now = json.dumps(Manuscript.objects.get(book=book).document, ensure_ascii=False)
+    assert "يررعون" in text_now and "أهالي" in text_now and '"uncertain"' not in text_now
+    assert Manuscript.objects.get(book=book).origin == "editor" and len(asked) == 3
+    assert client.get(reverse("api:uncertain", args=[book.pk])).json()["count"] == 0
+
+
+def test_uncertain_readings_come_in_the_manuscripts_digits_and_keep_the_diacritics(editor_user):
+    """Assembly writes Western digits (D6) and drops OCR's direction marks; a reading must match and be
+    offered in that form, or choosing it brings back «٢١» into a Western-digit book (and a word read as
+    «٢٠» found no readings at all)."""
+    pages = Pages()
+    one = pages.page(1)
+    pages.line(one, "الفصل الأول", (300, 700), role="heading")
+    line = pages.line(one, "وَفِي سنة ٢٠ للهجرة", (100, 850))
+    line.tokens[2] = dict(line.tokens[2], conf="low", alt="٢١", tess="20‏")
+    line.save()
+    assembly_services.start_assembly(pages.book, editor_user)
+    client = logged(editor_user)
+    item = client.get(reverse("api:uncertain", args=[pages.book.pk])).json()["items"][0]
+    assert item["word"] == "20"
+    assert [(r["engine"], r["text"], r["current"]) for r in item["readings"]] == [
+        ("primary", "20", True),
+        ("secondary", "21", False),
+    ]  # Tesseract's «20» less its direction mark is the primary reading: not offered twice
+    chapter = services.chapter_document(pages.book, item["chapter"])
+    keys = ("chapter", "block", "note", "start", "end", "word")
+    chosen = post_json(
+        client,
+        reverse("api:uncertain_choose", args=[pages.book.pk]),
+        {**{key: item[key] for key in keys}, "version": chapter["version"], "engine": "secondary"},
+    )
+    assert chosen.status_code == 200 and chosen.json()["word"] == "21"
+    text = json.dumps(Manuscript.objects.get(book=pages.book).document, ensure_ascii=False)
+    assert "وَفِي سنة 21 للهجرة" in text and "٢" not in text

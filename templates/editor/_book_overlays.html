@@ -1,0 +1,196 @@
+{% comment %}The book page's layers (PHASE5_SPEC §9.2): the one overlay (= rv-pop: the footnote's editor or a word's
+readings, at most one open), the source drawer («عرض الأصل», = ms-drawer), the dialogs (= rv-modal: snapshots, the
+digit conversion, the shortcut sheet) and the undo toast. Inside the bookPage component (layout.html).
+Context: can_edit.{% endcomment %}
+{# ------------------------------------------------------------ the one overlay #}
+<div class="menu ed-pop" x-ref="pop" x-show="pop.kind" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-note': pop.kind === 'note', 'is-word': pop.kind === 'word' }"
+     role="dialog" :aria-label="pop.kind === 'note' ? 'الحاشية' : 'قراءات الكلمة'"
+     @click.outside="onPopOutside($event)" @keydown.escape.stop.prevent="closePop(true)" data-pop>
+  <template x-if="pop.kind === 'note'">
+    <div class="ed-note">
+      <div class="ed-note-head">
+        <span class="ed-note-num">الحاشية <bdi class="num" x-show="note.number" x-text="note.number"></bdi></span>
+        <span class="meta num" x-show="note.sourcePage">ص <bdi x-text="note.sourcePage"></bdi></span>
+        <span class="ed-note-flag" x-show="note.orphan">بلا علامة في الأصل</span>
+        <span class="ed-note-tools">
+          <button type="button" class="btn-icon btn-icon-sm ed-glyph" title="غامق (⌘B)" aria-label="غامق" @click="noteBold()"><span class="ed-glyph-b" aria-hidden="true">B</span></button>
+          <button type="button" class="btn-icon btn-icon-sm ed-glyph" title="مائل (⌘I)" aria-label="مائل" @click="noteItalic()"><span class="ed-glyph-i" aria-hidden="true">I</span></button>
+          <button type="button" class="btn-icon btn-icon-sm ed-note-delete" title="حذف الحاشية" aria-label="حذف الحاشية" @click="deleteNote()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+        </span>
+      </div>
+      <div class="ed-note-host" x-ref="noteHost"></div>
+      <p class="ed-note-hint meta">Enter للعودة إلى النص · ⇧Enter سطر جديد · Esc للإغلاق</p>
+    </div>
+  </template>
+  <template x-if="pop.kind === 'word'">
+    <div class="ed-word" @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)">
+      <div class="rv-pop-title">اختر القراءة الصحيحة</div>
+      <template x-for="(r, i) in word.readings" :key="r.value + i">
+        <button type="button" class="rv-opt" :class="{ 'is-current': r.value === word.text }" @click="chooseReading(r.value)" :title="r.label">
+          <bdi class="rv-opt-value" x-text="r.value"></bdi>
+          <span class="rv-opt-label" x-text="r.label"></span>
+        </button>
+      </template>
+      <p class="rv-pop-note" x-show="!word.readings.length">لا قراءات أخرى لهذه الكلمة.</p>
+      <form class="rv-typed" @submit.prevent="submitTyped()">
+        <div class="rv-pop-sep" aria-hidden="true"></div>
+        <label class="sr-only" for="bp-word-typed">تصحيح</label>
+        <input id="bp-word-typed" class="input" x-ref="wordTyped" x-model="word.typed" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto">
+        <button type="submit" class="btn btn-sm">تصحيح</button>
+      </form>
+      <button type="button" class="rv-act" @click="acceptWord()"><span class="rv-act-label">قبول الكلمة كما هي</span></button>
+    </div>
+  </template>
+</div>
+
+{# ------------------------------------------------------------ the source drawer («عرض الأصل», = ms-drawer): the scan with the block's lines #}
+<aside class="ed-drawer" role="dialog" aria-modal="false" aria-label="الأصل" x-show="drawerOpen" x-cloak @keydown.escape.stop.prevent="closeDrawer()" data-drawer>
+  <div class="ed-drawer-head">
+    <h2 class="section-title">الأصل</h2>
+    <span class="meta num" x-show="sourcePage">ص <bdi x-text="sourcePage"></bdi></span>
+    <div class="ed-drawer-pager" role="group" aria-label="صفحات الفقرة" x-show="source.pages.length > 1">
+      <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة السابقة" :disabled="source.index <= 0" @click="sourceStep(-1)">
+        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+      </button>
+      <span class="meta num"><bdi x-text="source.index + 1"></bdi> / <bdi x-text="source.pages.length"></bdi></span>
+      <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة التالية" :disabled="source.index >= source.pages.length - 1" @click="sourceStep(1)">
+        <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+      </button>
+    </div>
+    <a class="btn btn-ghost btn-sm ed-drawer-review" :href="reviewUrl(sourcePage)" x-show="sourcePage">فتح في المراجعة</a>
+    <button type="button" class="btn-icon" x-ref="drawerClose" aria-label="إغلاق" title="إغلاق (Esc)" @click="closeDrawer()">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+  <div class="ed-drawer-body">
+    <div class="ed-sheet-skeleton" x-show="source.loading" aria-hidden="true"></div>
+    <div class="empty-state ed-drawer-error" x-show="source.error && !source.loading" x-cloak>
+      <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+      <p class="empty-text" x-text="source.error"></p>
+      <button type="button" class="btn btn-sm" @click="loadSource(sourcePage, true)">إعادة المحاولة</button>
+    </div>
+    <template x-if="source.sheet && !source.loading">
+      <div class="ed-scan" dir="ltr" :style="'--ar:' + sourceAspect">
+        <img class="ed-scan-img" :src="source.sheet.display_url || source.sheet.scan_url" :alt="'صورة الصفحة ' + sourcePage" decoding="async">
+        <div class="ed-scan-empty" x-show="!source.sheet.display_url && !source.sheet.scan_url"><span class="meta">لا صورة لهذه الصفحة بعد.</span></div>
+        <div class="ed-scan-overlay" aria-hidden="true">
+          <template x-for="b in sourceBoxes()" :key="b.id">
+            <div class="ed-band" :style="boxStyle(b.bbox)"></div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+</aside>
+
+{# ------------------------------------------------------------ snapshots #}
+<div class="rv-scrim" x-show="snapshots.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeSnapshots()">
+  <div class="rv-modal ed-snapshots" role="dialog" aria-modal="true" aria-labelledby="bp-snap-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeSnapshots()">
+    <div class="rv-modal-head">
+      <h2 class="rv-modal-title" id="bp-snap-title">النسخ المحفوظة</h2>
+      <button type="button" class="btn-icon" x-ref="snapshotsClose" aria-label="إغلاق" @click="closeSnapshots()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    {% if can_edit %}
+    <form class="ed-snap-form" @submit.prevent="createSnapshot()">
+      <label class="sr-only" for="bp-snap-label">اسم النسخة</label>
+      <input id="bp-snap-label" type="text" class="input" x-ref="snapshotLabel" x-model="snapshots.label" placeholder="حفظ نسخة باسم…" autocomplete="off" maxlength="200">
+      <button type="submit" class="btn" :disabled="snapshots.busy">حفظ نسخة الآن</button>
+    </form>
+    <p class="help">تُحفظ نسخة تلقائيًا قبل كل استبدال شامل وتحويل للأرقام واستعادة وإعادة تجميع؛ النسخ اليدوية لا تُحذف.</p>
+    {% endif %}
+    <p class="field-error" x-show="snapshots.error" x-text="snapshots.error"></p>
+    <div class="ed-snap-skeleton" x-show="snapshots.loading" aria-hidden="true"><span></span><span></span></div>
+    <ul class="ed-snap-list" x-show="!snapshots.loading">
+      <template x-for="s in snapshots.list" :key="s.id">
+        <li class="ed-snap" :class="{ 'is-current': s.current }">
+          <span class="ed-snap-body">
+            <span class="ed-snap-label" x-text="s.label || ('الإصدار ' + s.version)"></span>
+            <span class="meta"><span x-text="s.reason_label"></span><span x-show="s.created_by"> · <bdi x-text="s.created_by"></bdi></span> · <span x-text="relativeTime(s.created_at)"></span> · الإصدار <bdi class="num" x-text="s.version"></bdi></span>
+          </span>
+          <span class="badge" x-show="s.current">الحالية</span>
+          {% if can_edit %}<button type="button" class="btn btn-sm" x-show="!s.current" :disabled="snapshots.busy" @click="restoreSnapshot(s.id)">استعادة</button>{% endif %}
+        </li>
+      </template>
+      <li class="meta ed-snap-empty" x-show="!snapshots.list.length">لا نسخ محفوظة بعد.</li>
+    </ul>
+  </div>
+</div>
+
+{# ------------------------------------------------------------ digit conversion #}
+{% if can_edit %}
+<div class="rv-scrim" x-show="digits.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeDigits()">
+  <div class="rv-modal ed-digits" role="dialog" aria-modal="true" aria-labelledby="bp-digits-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeDigits()">
+    <h2 class="rv-modal-title" id="bp-digits-title">تحويل الأرقام</h2>
+    <p class="meta">تُحوَّل أرقام النص وعلامات الحواشي؛ تُحفظ نسخة قبل التحويل ويمكن التراجع من التنبيه.</p>
+    <div class="ed-digits-group">
+      <span class="group-label">النمط</span>
+      <div class="segmented ed-digits-seg" role="group" aria-label="نمط الأرقام">
+        <button type="button" x-ref="digitsFirst" :aria-pressed="digits.style === 'western'" @click="digits.style = 'western'">غربية <bdi class="num">0-9</bdi></button>
+        <button type="button" :aria-pressed="digits.style === 'arabic_indic'" @click="digits.style = 'arabic_indic'">عربية هندية <bdi>٠-٩</bdi></button>
+      </div>
+    </div>
+    <div class="ed-digits-group">
+      <span class="group-label">النطاق</span>
+      <div class="segmented ed-digits-seg" role="group" aria-label="نطاق التحويل">
+        <button type="button" :aria-pressed="digits.scope === 'chapter'" @click="digits.scope = 'chapter'">هذا الفصل</button>
+        <button type="button" :aria-pressed="digits.scope === 'book'" @click="digits.scope = 'book'">الكتاب كلّه</button>
+      </div>
+    </div>
+    <div class="rv-modal-actions">
+      <button type="button" class="btn" @click="closeDigits()">إلغاء</button>
+      <button type="button" class="btn btn-primary btn-sm" :disabled="digits.busy" @click="convertDigits()">تحويل</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ------------------------------------------------------------ the shortcut sheet (= rv-shortcuts): both modes #}
+<div class="rv-scrim" x-show="sheetOpen" x-cloak x-transition.opacity.duration.150ms @click.self="closeSheet()">
+  <div class="rv-modal rv-shortcuts" role="dialog" aria-modal="true" aria-labelledby="bp-sheet-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeSheet()" data-shortcuts>
+    <div class="rv-modal-head">
+      <h2 class="rv-modal-title" id="bp-sheet-title">اختصارات لوحة المفاتيح</h2>
+      <button type="button" class="btn-icon" x-ref="sheetClose" aria-label="إغلاق" @click="closeSheet()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <dl class="rv-keys">
+      <dt><span class="group-label">المعاينة</span></dt><dd></dd>
+      <dt><kbd class="kbd">←</kbd> <kbd class="kbd">→</kbd> <kbd class="kbd">PageUp</kbd> <kbd class="kbd">PageDown</kbd></dt><dd>الصفحة التالية / السابقة</dd>
+      <dt><kbd class="kbd">Home</kbd> / <kbd class="kbd">End</kbd></dt><dd>أول صفحة / آخر صفحة</dd>
+      <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة</dd>
+      <dt><kbd class="kbd">S</kbd></dt><dd>صفحة واحدة أو صفحتان</dd>
+      <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>ملء الارتفاع · ملء العرض · الحجم الحقيقي</dd>
+      {% if can_edit %}
+      <dt><kbd class="kbd">E</kbd></dt><dd>التحرير والمعاينة (أو نقرتان على سطر)</dd>
+      <dt><span class="group-label">التحرير</span></dt><dd></dd>
+      <dt><span class="meta">نقرة على سطر</span></dt><dd>فتح الفقرة في مكانها والمؤشّر حيث نقرت</dd>
+      <dt><kbd class="kbd">Enter</kbd> / <kbd class="kbd">⇧Enter</kbd></dt><dd>فقرة جديدة / سطر جديد داخل الفقرة</dd>
+      <dt><kbd class="kbd">↑</kbd> <kbd class="kbd">↓</kbd></dt><dd>من أول سطر أو آخره إلى الفقرة المجاورة</dd>
+      <dt><kbd class="kbd">⌘S</kbd></dt><dd>الحفظ الآن (يُحفظ بعد نصف ثانية من التوقف وتُرتَّب الصفحات)</dd>
+      <dt><kbd class="kbd">⌘Z</kbd> / <kbd class="kbd">⇧⌘Z</kbd></dt><dd>تراجع / إعادة في هذا الفصل</dd>
+      <dt><kbd class="kbd">⌘B</kbd> / <kbd class="kbd">⌘I</kbd></dt><dd>غامق / مائل</dd>
+      <dt><kbd class="kbd">⌘⌥1</kbd> <kbd class="kbd">⌘⌥2</kbd> <kbd class="kbd">⌘⌥0</kbd></dt><dd>عنوان فصل / عنوان فرعي / فقرة</dd>
+      <dt><kbd class="kbd">⌘⌥3</kbd> <kbd class="kbd">⌘⌥4</kbd> <kbd class="kbd">⌘⌥5</kbd> <kbd class="kbd">⌘⌥6</kbd></dt><dd>اقتباس / شعر / ملاحظة وسط / فاصل</dd>
+      <dt><kbd class="kbd">⌘⇧F</kbd></dt><dd>حاشية عند المؤشّر</dd>
+      <dt><kbd class="kbd">⌘[</kbd> / <kbd class="kbd">⌘]</kbd></dt><dd>الفصل السابق / التالي</dd>
+      <dt><kbd class="kbd">O</kbd> <span class="meta">خارج النص</span></dt><dd>عرض أصل الفقرة</dd>
+      {% endif %}
+      <dt><kbd class="kbd">⌘F</kbd></dt><dd>بحث</dd>
+      <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق الطبقة العليا، ثم الفقرة، ثم وضع التحرير</dd>
+      <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
+    </dl>
+  </div>
+</div>
+
+{# the undo toast (DESIGN.md §6): one action, replaces the shared toast while it shows #}
+<div class="toast ed-toast" role="status" aria-live="polite" x-show="$store.bookToast && $store.bookToast.visible" x-cloak x-transition.opacity.duration.200ms data-undo-toast>
+  <span class="grow" x-text="$store.bookToast && $store.bookToast.message"></span>
+  <button type="button" class="btn" x-show="$store.bookToast && $store.bookToast.action" @click="$store.bookToast.run()">تراجع</button>
+  <button type="button" class="toast-close" aria-label="إغلاق" @click="$store.bookToast.hide()">
+    <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+  </button>
+</div>

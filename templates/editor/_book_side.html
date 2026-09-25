@@ -1,0 +1,227 @@
+{% comment %}The book page's one side panel (PHASE5_SPEC §9.2, = bk-side, one scrolling column): an icon tab bar (the
+icon with its name as the tooltip, the active tab labelled, count badges) over one tab at a time — الفصول، الصفحات،
+بحث، التنسيق، الفقرة، الأصل، غير المؤكَّدة. Preview opens التنسيق, edit الأصل; the choice is remembered per mode.
+Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
+<aside class="bk-side lo-side bp-side" aria-label="لوحة الكتاب" data-side>
+  <div class="bp-tabbar" role="tablist" aria-label="أقسام اللوحة" data-tabbar>
+    {% include "editor/_book_tab.html" with key="chapters" label="الفصول" icon="i-list" %}
+    {% include "editor/_book_tab.html" with key="pages" label="الصفحات" icon="i-pages" %}
+    {% include "editor/_book_tab.html" with key="find" label="بحث" icon="i-search" %}
+    {% include "editor/_book_tab.html" with key="format" label="التنسيق" icon="i-sliders" %}
+    {% include "editor/_book_tab.html" with key="block" label="الفقرة" icon="i-pilcrow" %}
+    {% include "editor/_book_tab.html" with key="source" label="الأصل" icon="i-image" %}
+    {% include "editor/_book_tab.html" with key="uncertain" label="غير المؤكَّدة" icon="i-uncertain" %}
+  </div>
+
+  <div class="bp-tab-body" data-tab-body>
+    {# ---------------------------------------------------------- الفصول: the footprint, the chapters, the page checks #}
+    <section class="bp-panel" id="bp-panel-chapters" role="tabpanel" aria-labelledby="bp-tab-chapters" x-show="tab === 'chapters'" x-cloak data-panel="chapters">
+      <div class="lo-footprint" role="group" aria-label="حجم الكتاب" data-footprint>
+        <div class="lo-footprint-head">
+          <span class="lo-footprint-count" x-show="footprint.count" x-text="footprint.text"></span>
+          <span class="lo-footprint-count is-empty" x-show="!footprint.count && !footprint.computing">لم تُرتَّب الصفحات بعد</span>
+          <bdi class="lo-delta num" x-show="footprint.deltaText" x-text="footprint.deltaText" title="الفرق عن الترتيب السابق"></bdi>
+          <span class="lo-pill is-saving lo-computing" x-show="footprint.computing"><span class="lo-pill-dot" aria-hidden="true"></span><span>يُحسب…</span></span>
+        </div>
+      </div>
+      <div class="bp-group">
+        <div class="bk-side-head"><span>الفصول</span><bdi class="num" x-text="chapters.length"></bdi></div>
+        <nav class="bp-chapters" aria-label="الفصول" data-chapter-list @click="onChapterListClick($event)" x-effect="void painted; void tab; void ranges; void focusChapter; renderChapters()"></nav>
+      </div>
+      <div class="bp-group" x-show="checks.length" data-checks>
+        <div class="bk-side-head"><span>ملاحظات الصفحات</span><bdi class="num" x-text="checks.length"></bdi></div>
+        <ul class="bp-checks">
+          <template x-for="c in checkRows" :key="c.key">
+            <li><button type="button" class="bp-check" @click="goToCheck(c)" :title="c.message">
+              <span class="dot dot-warning" aria-hidden="true"></span>
+              <span class="bp-check-label" x-text="c.message || c.label"></span>
+              <span class="bp-check-page" x-show="c.page">ص <bdi x-text="c.page"></bdi></span>
+            </button></li>
+          </template>
+        </ul>
+      </div>
+    </section>
+
+    {# ---------------------------------------------------------- الصفحات: the filmstrip (static thumbs) #}
+    <section class="bp-panel" id="bp-panel-pages" role="tabpanel" aria-labelledby="bp-tab-pages" x-show="tab === 'pages'" x-cloak data-panel="pages">
+      <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="pageCount || ''"></bdi></div>
+      <nav class="lo-film" aria-label="شريط الصفحات"><div class="lo-film-track" data-film-track></div></nav>
+    </section>
+
+    {# ---------------------------------------------------------- بحث: find & replace, the matches with their pages #}
+    <section class="bp-panel" id="bp-panel-find" role="tabpanel" aria-labelledby="bp-tab-find" x-show="tab === 'find'" x-cloak data-panel="find">
+      <div class="bp-find" role="search" aria-label="بحث واستبدال">
+        <label class="bp-field">
+          <span class="sr-only">البحث عن</span>
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+          <input type="text" x-ref="findQuery" x-model="find.query" placeholder="بحث…" autocomplete="off" spellcheck="false" dir="auto" @input="onFindInput()" @keydown="onFindKey($event)">
+          <span class="bp-count meta" x-text="findCountText" aria-live="polite"></span>
+        </label>
+        <div class="bp-find-options">
+          <label class="check"><input type="checkbox" x-model="find.matchTashkeel" @change="runFind()"> <span>مطابقة التشكيل</span></label>
+          <label class="check"><input type="checkbox" x-model="find.foldAlef" @change="runFind()"> <span>توحيد الألف</span></label>
+          <label class="check"><input type="checkbox" x-model="find.wholeWord" @change="runFind()"> <span>كلمة كاملة</span></label>
+        </div>
+        <div class="bp-find-row">
+          <div class="segmented" role="group" aria-label="نطاق البحث">
+            <button type="button" :aria-pressed="find.scope === 'chapter'" @click="setFindScope('chapter')">هذا الفصل</button>
+            <button type="button" :aria-pressed="find.scope === 'book'" @click="setFindScope('book')">الكتاب كلّه</button>
+          </div>
+          <button type="button" class="btn-icon btn-icon-sm" title="المطابقة السابقة (⇧Enter)" aria-label="المطابقة السابقة" :disabled="!find.total || find.scope === 'book'" @click="findStep(-1)">
+            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+          </button>
+          <button type="button" class="btn-icon btn-icon-sm" title="المطابقة التالية (Enter)" aria-label="المطابقة التالية" :disabled="!find.total || find.scope === 'book'" @click="findStep(1)">
+            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+          </button>
+        </div>
+        {% if can_edit %}
+        <div class="bp-replace">
+          <label class="bp-field">
+            <span class="sr-only">الاستبدال بـ</span>
+            <input type="text" x-model="find.replacement" placeholder="استبدال بـ…" autocomplete="off" spellcheck="false" dir="auto" @keydown.enter.prevent="replaceOne()">
+          </label>
+          <div class="bp-replace-actions">
+            <button type="button" class="btn btn-sm" :disabled="!find.total || find.scope === 'book' || find.busy" @click="replaceOne()">استبدال</button>
+            <button type="button" class="btn btn-sm" :disabled="find.busy || !find.total" @click="replaceAll()">استبدال الكل</button>
+          </div>
+          <p class="help" x-show="find.scope === 'book'">الاستبدال في الكتاب كلّه يُحفظ نسخةً قبله؛ يمكن التراجع من التنبيه.</p>
+        </div>
+        {% endif %}
+      </div>
+      <p class="bp-empty" x-show="!find.query.trim()">اكتب كلمة لتظهر مطابقاتها مع صفحاتها؛ النقر على مطابقة يقلب إلى صفحتها.</p>
+      <ol class="bp-results" x-show="find.scope === 'chapter' && find.results.length" data-find-results>
+        <template x-for="(m, i) in find.results" :key="m.block + ':' + (m.note || '') + ':' + m.start">
+          <li><button type="button" class="bp-result" :class="{ 'is-current': i === find.index, 'is-note': m.note }" @click="goToMatch(i)">
+            <span class="bp-result-text" dir="rtl"><span x-text="m.snippet.before"></span><mark x-text="m.snippet.match"></mark><span x-text="m.snippet.after"></span></span>
+            <span class="bp-result-page" x-show="m.page">ص <bdi x-text="m.page"></bdi></span>
+          </button></li>
+        </template>
+      </ol>
+      <ol class="bp-results" x-show="find.scope === 'book' && find.groups.length" data-find-groups>
+        <template x-for="g in find.groups" :key="g.id">
+          <li><button type="button" class="bp-result" @click="openFindGroup(g)" :title="'المطابقات في ' + g.title">
+            <span class="bp-result-text" x-text="g.title"></span>
+            <span class="bp-result-page"><bdi x-text="g.count"></bdi><span x-show="g.first"> · ص <bdi x-text="g.first + '–' + g.last"></bdi></span></span>
+          </button></li>
+        </template>
+      </ol>
+    </section>
+
+    {# ---------------------------------------------------------- التنسيق: the stylesheet in accordions #}
+    <section class="bp-panel" id="bp-panel-format" role="tabpanel" aria-labelledby="bp-tab-format" x-show="tab === 'format'" x-cloak data-panel="format">
+      {% include "editor/_book_format.html" %}
+    </section>
+
+    {# ---------------------------------------------------------- الفقرة: the open block's style, page breaks and source pages #}
+    <section class="bp-panel" id="bp-panel-block" role="tabpanel" aria-labelledby="bp-tab-block" x-show="tab === 'block'" x-cloak data-panel="block">
+      <p class="bp-empty" x-show="!blockInfo">{% if can_edit %}في وضع التحرير انقر فقرة على الصفحة لتظهر هنا خصائصها.{% else %}انقر فقرة على الصفحة لتظهر هنا خصائصها.{% endif %}</p>
+      <template x-if="blockInfo">
+        <div class="bp-group">
+          <div class="bp-group">
+            <div class="bk-side-head"><span>النمط</span><span class="meta" x-text="blockInfo.styleLabel"></span></div>
+            {% if can_edit %}
+            <div class="bp-block-style" role="radiogroup" aria-label="نمط الفقرة" x-show="mode === 'edit'">
+              <template x-for="s in styles.filter((x) => x.key !== 'footnote')" :key="s.key">
+                <button type="button" class="menu-item" role="radio" :aria-checked="s.key === blockInfo.style ? 'true' : 'false'" @mousedown.prevent @click="setStyle(s.key)">
+                  <span class="ed-style-name" x-text="s.label"></span>
+                  <kbd class="kbd ed-style-key" x-show="s.keys" x-text="s.keys"></kbd>
+                </button>
+              </template>
+            </div>
+            {% endif %}
+          </div>
+          <div class="bp-group">
+            <div class="bk-side-head"><span>الصفحة</span></div>
+            <div class="bp-flags">
+              <label class="bp-flag"><input type="checkbox" :checked="blockInfo.breakBefore" @mousedown.prevent @change="toggleFlag('breakBefore')" {% if not can_edit %}disabled{% endif %} :disabled="mode !== 'edit'"><span>ابدأ صفحة جديدة</span><span class="help">تبدأ الفقرة أعلى صفحة جديدة.</span></label>
+              <label class="bp-flag"><input type="checkbox" :checked="blockInfo.keepWithNext" @mousedown.prevent @change="toggleFlag('keepWithNext')" {% if not can_edit %}disabled{% endif %} :disabled="mode !== 'edit'"><span>مع التالية</span><span class="help">لا تُفصل عن الفقرة التي بعدها في آخر الصفحة.</span></label>
+            </div>
+          </div>
+          <div class="bp-group">
+            <div class="bk-side-head"><span>الصفحات الأصلية</span></div>
+            <p class="bp-empty" x-show="!blockInfo.pages.length">لا أصل لهذه الفقرة في صفحات المسح.</p>
+            <div class="bp-pages" x-show="blockInfo.pages.length">
+              <template x-for="n in blockInfo.pages" :key="n">
+                <a class="link" :href="reviewUrl(n)">ص <bdi x-text="n"></bdi></a>
+              </template>
+            </div>
+            <p class="help" x-show="!blockInfo.reviewed">من صفحة لم تُراجَع بعد.</p>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    {# ---------------------------------------------------------- الأصل: exactly the editor page's pane #}
+    <section class="bp-panel" id="bp-panel-source" role="tabpanel" aria-labelledby="bp-tab-source" x-show="tab === 'source'" x-cloak data-panel="source">
+      <div class="bk-side-head"><span>الأصل</span><span class="num" x-show="sourcePage">ص <bdi x-text="sourcePage"></bdi></span></div>
+      <p class="bp-empty" x-show="!source.pages.length">ضع المؤشّر في فقرة ليظهر أصلها من الصفحة الممسوحة.</p>
+      <div class="ed-source-pane" x-show="source.pages.length">
+        <div class="ed-source-skeleton" x-show="source.loading" aria-hidden="true"></div>
+        <p class="bp-empty" x-show="source.error && !source.loading" x-text="source.error"></p>
+        <template x-if="source.sheet && !source.loading">
+          <button type="button" class="ed-scan ed-scan-thumb" dir="ltr" :style="'--ar:' + sourceAspect" @click="openDrawer()" title="عرض الأصل كبيرًا (O)" aria-label="عرض الأصل كبيرًا">
+            <img class="ed-scan-img" :src="source.sheet.display_url || source.sheet.scan_url" :alt="'صورة الصفحة ' + sourcePage" decoding="async" loading="lazy">
+            <span class="ed-scan-overlay" aria-hidden="true">
+              <template x-for="b in sourceBoxes()" :key="b.id">
+                <span class="ed-band" :style="boxStyle(b.bbox)"></span>
+              </template>
+            </span>
+          </button>
+        </template>
+        <div class="ed-source-foot">
+          <div class="ed-drawer-pager" role="group" aria-label="صفحات الفقرة" x-show="source.pages.length > 1">
+            <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة السابقة" :disabled="source.index <= 0" @click="sourceStep(-1)">
+              <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+            </button>
+            <span class="meta num"><bdi x-text="source.index + 1"></bdi> / <bdi x-text="source.pages.length"></bdi></span>
+            <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة التالية" :disabled="source.index >= source.pages.length - 1" @click="sourceStep(1)">
+              <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+            </button>
+          </div>
+          <button type="button" class="link ed-source-open" @click="openDrawer()">عرض الأصل <kbd class="kbd">O</kbd></button>
+          <a class="link ed-source-review" :href="reviewUrl(sourcePage)" x-show="sourcePage">فتح في المراجعة</a>
+        </div>
+      </div>
+    </section>
+
+    {# ---------------------------------------------------------- غير المؤكَّدة: by chapter and page, in place #}
+    <section class="bp-panel" id="bp-panel-uncertain" role="tabpanel" aria-labelledby="bp-tab-uncertain" x-show="tab === 'uncertain'" x-cloak data-panel="uncertain">
+      <div class="bk-side-head"><span>كلمات غير مؤكَّدة</span><bdi class="num" x-text="uncertain.count"></bdi></div>
+      <div class="ed-source-skeleton" style="aspect-ratio: 3" x-show="uncertain.loading && !uncertain.loaded" aria-hidden="true"></div>
+      <p class="bp-empty" x-show="uncertain.error" x-text="uncertain.error"></p>
+      <p class="bp-empty" x-show="uncertain.loaded && !uncertain.items.length">لا كلمات غير مؤكَّدة في الكتاب.</p>
+      <template x-for="g in uncertainGroups" :key="g.chapter">
+        <div class="bp-unc-chapter">
+          <div class="bk-side-head"><span x-text="g.title || 'فصل'"></span><bdi class="num" x-text="g.count"></bdi></div>
+          <template x-for="p in g.pages" :key="g.chapter + ':' + (p.page === null ? 'none' : p.page)">
+            <div class="bp-unc-page">
+              <span class="bp-unc-page-head"><span x-show="p.page === null">لم تُرتَّب صفحتها بعد</span><span x-show="p.page !== null">ص <bdi x-text="p.page"></bdi></span></span>
+              <template x-for="w in p.items" :key="w.block + ':' + (w.note || '') + ':' + w.start">
+                <div class="bp-unc" :class="{ 'is-open': isPicked(w) }" @click="if (!isPicked(w)) pickUncertain(w)" :aria-busy="uncertain.busy === w.block + ':' + w.start ? 'true' : 'false'">
+                  {# the context is the row's button (the keyboard reaches every word; Enter turns to its page) #}
+                  <button type="button" class="bp-unc-context" dir="rtl" :aria-expanded="isPicked(w) ? 'true' : 'false'" :aria-label="'الكلمة ' + w.word" @click.stop="pickUncertain(w)"><span x-text="w.context.before + ' '"></span><mark x-text="w.word"></mark><span x-text="' ' + w.context.after"></span></button>
+                  {% if can_edit %}
+                  <div class="bp-unc-actions" x-show="isPicked(w)" @click.stop>
+                    <template x-for="r in w.readings" :key="r.engine + r.text">
+                      <button type="button" class="rv-opt" :class="{ 'is-current': r.current }" @click="resolveUncertain(w, r.current ? 'accept' : 'choose', r.current ? {} : { engine: r.engine })" :disabled="Boolean(uncertain.busy)">
+                        <bdi class="rv-opt-value" x-text="r.text"></bdi>
+                        <span class="rv-opt-label" x-text="r.label"></span>
+                      </button>
+                    </template>
+                    <form class="bp-unc-typed" @submit.prevent="resolveUncertain(w, 'type', { text: $el.querySelector('input').value })">
+                      <label class="sr-only" :for="'bp-typed-' + w.block + '-' + w.start">تصحيح</label>
+                      <input class="input" :id="'bp-typed-' + w.block + '-' + w.start" :value="w.word" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto">
+                      <button type="submit" class="btn btn-sm" :disabled="Boolean(uncertain.busy)">تصحيح</button>
+                    </form>
+                    <button type="button" class="rv-act" x-show="!w.readings.some((r) => r.current)" @click="resolveUncertain(w, 'accept')" :disabled="Boolean(uncertain.busy)"><span class="rv-act-label">قبول الكلمة كما هي</span></button>
+                  </div>
+                  {% endif %}
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+  </div>
+</aside>

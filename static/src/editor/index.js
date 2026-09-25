@@ -1,24 +1,29 @@
-// The chapter editor bundle (PHASE5_SPEC §4): TipTap on the Phase 4 schema, behind one small object the
-// Alpine glue (static/src/js/editor.js) drives, so the glue can be run under Node with a stub in its place.
-//   window.NassakhEditor.create(element, options)  → the editor object below
-//   window.NassakhEditor.createNote(element, opts) → the footnote's small editor (text, line breaks, B / I)
-//   window.NassakhEditor.{toEditor, fromEditor, findMatches, wordCount, STYLES, …}  the pure helpers
-// Options of `create`: { content (the chapter's nodes), editable, onUpdate, onSelection, onFocus, onBlur,
-// onFootnote({id, pos, dom}) (a click on a call, or ⌘⇧F after the insert), onUncertain({from, to, text, dom}) }.
-// The editor object: content in and out (`getContent` gives the nodes the server saves), the style of the block
-// under the caret and `setStyle`, marks, undo / redo, footnotes (insert, read, write, delete), the caret block
-// with its source pages and lines, find & replace (highlights, cycling, replace one / all), word count.
-import { Editor, createDocument, getMarkRange } from '@tiptap/core';
-import { Gapcursor, Placeholder, UndoRedo } from '@tiptap/extensions';
-import { Fragment } from '@tiptap/pm/model';
-import { NodeSelection, TextSelection } from '@tiptap/pm/state';
+// The book page's editor bundle (PHASE5_SPEC §9.2, D47): TipTap on the Phase 4 schema, behind small objects the
+// Alpine glue (static/src/js/book/*.js) drives, so the glue runs under Node with a stub in their place.
+//   window.NassakhEditor.createBlock(element, options) → one paragraph opened in place on its page (below)
+//   window.NassakhEditor.createNote(element, options)  → the footnote's small editor (text, line breaks, B / I)
+//   window.NassakhEditor.{toEditor, fromEditor, splitNode, mergeNodes, replaceBlock, findPlain, …}  pure helpers
+//
+// createBlock(element, { node, offset, numberOf, onChange, onSelection, onFocus, onBlur, onBoundary(kind, info),
+//                        onFootnote({id, dom}), onUncertain({from, to, start, end, text, dom}) })
+//   `node` is one block of the chapter as saved (a paragraph, a heading…); the editor holds exactly that block
+//   in the page's face, size, measure and line height (the glue sets them on `element`). What the block cannot
+//   answer alone is a boundary for the page: `split` (Enter: `{node, from, to}`), `mergeBackward` (Backspace at
+//   the start), `mergeForward` (Delete at the end), `up` / `down` (the arrows past the first or last line:
+//   `{x}`), `prev` / `next` (the reading-direction arrow at an edge), `escape`, `undo`, `redo`, `save`,
+//   `separator` (⌘⌥6), `paste` (several paragraphs: `{node, from, to, blocks}`). The editor has no history of
+//   its own: undo is the chapter's (the page keeps every version of the chapter it saved).
+//   Offsets are plain-text offsets of the block (a footnote call one position, UTF-16), as in the page layout.
+import { Editor, getMarkRange } from '@tiptap/core';
+import { DOMSerializer, Fragment } from '@tiptap/pm/model';
+import { TextSelection } from '@tiptap/pm/state';
 
 import * as convert from './convert.js';
-import { LOAD_META, caretBlockPos, extensions, findKey, noteExtensions, srcLabel } from './schema.js';
+import { NUMBERS_META, blockExtensions, findKey, noteExtensions, offsetOfPos, posOfOffset } from './schema.js';
 
-export const VERSION = '1';
+export const VERSION = '2';
 
-const BLOCKS = new Set(['paragraph', 'heading', 'title', 'separator']);
+const BLOCK_START = 1; // the one block of the document begins at 0; its text at 1
 
 function styleOfNode(node) {
   if (!node) return 'paragraph';
@@ -28,396 +33,273 @@ function styleOfNode(node) {
   return convert.PARAGRAPH_STYLES.includes(node.attrs.style) ? node.attrs.style : 'paragraph';
 }
 
-function blockInfo(node, pos, index) {
-  return {
-    id: node.attrs.id || null,
-    type: node.type.name,
-    style: styleOfNode(node),
-    sourcePages: Array.isArray(node.attrs.sourcePages) ? node.attrs.sourcePages.slice() : [],
-    sourceLineIds: Array.isArray(node.attrs.sourceLineIds) ? node.attrs.sourceLineIds.slice() : [],
-    reviewed: node.attrs.reviewed !== false,
-    src: srcLabel(node.attrs.sourcePages),
-    pos,
-    index,
-    size: node.nodeSize,
-  };
-}
-
 function withoutUncertain(marks, schema) {
   const type = schema.marks.uncertain;
   return (marks || []).filter((m) => m.type !== type);
 }
 
-// The find ranges of a document: text runs of every block and note, matched like the server (convert.js).
-function findRanges(doc, query, options) {
-  const folded = convert.foldQuery(query, options);
-  const out = [];
-  if (!folded.trim()) return out;
-  const scan = (container, start, blockId, noteId) => {
-    let runStart = null;
-    let text = '';
-    const flush = () => {
-      if (runStart === null) return;
-      convert.segmentMatches(text, folded, options).forEach(([a, b]) => out.push({ from: runStart + a, to: runStart + b, block: blockId, note: noteId }));
-      runStart = null;
-      text = '';
-    };
-    container.forEach((child, offset) => {
-      const pos = start + offset;
-      if (child.isText) {
-        if (runStart === null) runStart = pos;
-        text += child.text;
-        return;
-      }
-      flush();
-      if (child.type.name === 'footnote') scan(child, pos + 1, blockId, child.attrs.id || null);
-    });
-    flush();
-  };
-  doc.forEach((block, offset) => {
-    if (block.isTextblock) scan(block, offset + 1, block.attrs.id || null, null);
-  });
-  return out;
-}
-
-export function create(element, options = {}) {
+export function createBlock(element, options = {}) {
   const opts = options || {};
-  const listeners = { update: [], selection: [], focus: [], blur: [], transaction: [] };
+  const listeners = { change: opts.onChange, selection: opts.onSelection, focus: opts.onFocus, blur: opts.onBlur };
+  const fire = (name, payload) => { const fn = listeners[name]; if (typeof fn === 'function') { try { fn(payload); } catch (_) { /* never breaks typing */ } } };
   let editor = null;
   let ready = false;
-  const fire = (name, payload) => listeners[name].forEach((fn) => { try { fn(payload); } catch (_) { /* a listener's error never breaks typing */ } });
-  // The live views of the editor are getters on the object itself (Object.assign would copy their values once).
+  let numbers = typeof opts.numberOf === 'function' ? opts.numberOf : null;
+  const block = () => editor.state.doc.child(0);
+  const rtl = () => (editor.view.dom && editor.view.dom.getAttribute('dir')) !== 'ltr';
+  const boundary = (kind, info) => (typeof opts.onBoundary === 'function' ? opts.onBoundary(kind, info || {}) !== false : false);
+
   const api = {
     get editor() { return editor; },
-    get state() { return editor.state; },
     get view() { return editor.view; },
     get dom() { return editor.view.dom; },
     get isFocused() { return Boolean(editor && editor.isFocused); },
-    get isEditable() { return Boolean(editor && editor.isEditable); },
   };
 
-  function build(content) {
+  // ---------------------------------------------------------- selection in plain offsets
+  const offsetAt = (pos) => offsetOfPos(block(), pos, BLOCK_START);
+  const posAt = (offset) => Math.min(posOfOffset(block(), offset, BLOCK_START), editor.state.doc.content.size - 1);
+  const range = () => {
+    const { from, to } = editor.state.selection;
+    return { from: offsetAt(from), to: offsetAt(to) };
+  };
+  const coords = () => {
+    try { return editor.view.coordsAtPos(editor.state.selection.head); } catch (_) { return null; }
+  };
+
+  function handle(name) {
+    const { selection } = editor.state;
+    const length = convert.plainText(api.getNode()).length;
+    const r = range();
+    const c = coords();
+    const x = c ? (c.left + c.right) / 2 : 0;
+    switch (name) {
+      case 'Enter': return boundary('split', { node: api.getNode(), from: r.from, to: r.to });
+      case 'Backspace': return selection.empty && r.from === 0 ? boundary('mergeBackward', {}) : false;
+      case 'Delete': return selection.empty && r.from === length ? boundary('mergeForward', {}) : false;
+      case 'ArrowUp': return selection.empty && editor.view.endOfTextblock('up') ? boundary('up', { x }) : false;
+      case 'ArrowDown': return selection.empty && editor.view.endOfTextblock('down') ? boundary('down', { x }) : false;
+      case 'ArrowRight':
+      case 'ArrowLeft': {
+        if (!selection.empty) return false;
+        const back = (name === 'ArrowRight') === rtl(); // RTL: the right arrow goes back in the text
+        if (back && r.from === 0) return boundary('prev', { x });
+        if (!back && r.from === length) return boundary('next', { x });
+        return false;
+      }
+      case 'Escape': return boundary('escape', {});
+      case 'undo': return boundary('undo', {});
+      case 'redo': return boundary('redo', {});
+      case 'save': return boundary('save', {});
+      case 'separator': return boundary('separator', {});
+      case 'footnote': { const note = api.insertFootnote(); if (note && opts.onFootnote) opts.onFootnote(note); return true; }
+      default: return false;
+    }
+  }
+
+  // Several paragraphs pasted: the page makes blocks of them; one paragraph goes in as usual.
+  function handlePaste(_view, _event, slice) {
+    const blocks = [];
+    slice.content.forEach((node) => { if (node.isTextblock) blocks.push(node); });
+    if (blocks.length < 2) return false;
+    const json = blocks.map((node) => convert.fromEditor({ type: 'doc', content: [node.toJSON()] })[0]).filter(Boolean);
+    const r = range();
+    return boundary('paste', { node: api.getNode(), from: r.from, to: r.to, blocks: json });
+  }
+
+  function build(node, offset) {
+    ready = false;
     editor = new Editor({
       element,
-      extensions: [
-        ...extensions({ onFootnote: () => { const note = api.insertFootnote(); if (note && opts.onFootnote) opts.onFootnote(note); } }),
-        UndoRedo.configure({ depth: 400, newGroupDelay: 600 }),
-        Placeholder.configure({ placeholder: 'ابدأ الكتابة…', showOnlyCurrent: false }),
-        Gapcursor, // a caret before or after a separator at the chapter's ends (editor.css draws it)
-      ],
-      content: convert.toEditor(content),
+      extensions: blockExtensions({ handle, numberOf: (id) => (numbers ? numbers(id) : '') }),
+      content: { type: 'doc', content: convert.toEditor([node]).content.slice(0, 1) },
       editable: opts.editable !== false,
       injectCSS: false,
       editorProps: {
-        attributes: { class: 'ed-doc', dir: 'rtl', lang: 'ar', spellcheck: 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'نص الفصل' },
-        handleClickOn(view, _pos, node, nodePos) {
-          if (node.type.name !== 'footnote') return false;
-          if (opts.onFootnote) opts.onFootnote({ id: node.attrs.id, pos: nodePos, dom: view.nodeDOM(nodePos) });
+        attributes: { class: 'ed-doc ed-block', dir: 'rtl', lang: 'ar', spellcheck: 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'الفقرة' },
+        handlePaste,
+        handleClickOn(view, _pos, clicked, nodePos) {
+          if (clicked.type.name !== 'footnote') return false;
+          if (opts.onFootnote) opts.onFootnote({ id: clicked.attrs.id, dom: view.nodeDOM(nodePos) });
           return true;
         },
         handleClick(view, pos, event) {
           const target = event && event.target;
           const markEl = target && typeof target.closest === 'function' ? target.closest('mark.ed-uncertain') : null;
           if (!markEl || !opts.onUncertain) return false;
-          const range = api.uncertainAt(pos);
-          if (range) opts.onUncertain({ ...range, dom: markEl });
+          const found = api.uncertainAt(pos);
+          if (found) opts.onUncertain({ ...found, dom: markEl });
           return false;
         },
       },
-      onUpdate: ({ transaction }) => { if (ready && !transaction.getMeta(LOAD_META)) fire('update', { transaction }); },
+      onUpdate: ({ transaction }) => { if (ready && !transaction.getMeta('preventUpdate')) fire('change'); },
       onSelectionUpdate: () => { if (ready) fire('selection'); },
-      onTransaction: ({ transaction }) => { if (ready) fire('transaction', { transaction }); },
       onFocus: () => fire('focus'),
       onBlur: () => fire('blur'),
     });
     ready = true;
-  }
-
-  const state = () => editor.state;
-  const schema = () => editor.schema;
-
-  function findNote(id) {
-    let found = null;
-    state().doc.descendants((node, pos) => {
-      if (found) return false;
-      if (node.type.name === 'footnote') {
-        if (node.attrs.id === id) found = { node, pos };
-        return false;
-      }
-      return true;
-    });
-    return found;
-  }
-
-  function noteSeq(pos) {
-    let n = 0;
-    let seq = 0;
-    state().doc.descendants((node, at) => {
-      if (seq) return false;
-      if (node.type.name === 'footnote') { n += 1; if (at === pos) seq = n; return false; }
-      return true;
-    });
-    return seq;
-  }
-
-  function findBlock(id) {
-    let found = null;
-    state().doc.forEach((node, offset, index) => {
-      if (!found && node.attrs.id === id) found = { node, pos: offset, index };
-    });
-    return found;
-  }
-
-  function current() {
-    return findKey.getState(state()) || { ranges: [], current: -1 };
-  }
-
-  function setFind(ranges, index) {
-    const tr = state().tr.setMeta(findKey, { ranges, current: index });
-    editor.view.dispatch(tr);
-  }
-
-  function select(from, to) {
-    const doc = state().doc;
-    const tr = state().tr.setSelection(TextSelection.create(doc, Math.min(from, doc.content.size), Math.min(to, doc.content.size))).scrollIntoView();
-    editor.view.dispatch(tr);
+    api.setOffset(offset || 0);
   }
 
   Object.assign(api, {
-    on(name, fn) { if (listeners[name]) listeners[name].push(fn); return api; },
-
     // ---------------------------------------------------------- content
-    getJSON() { return editor.getJSON(); },
-    getContent() { return convert.fromEditor(editor.getJSON()); },
-    // A new document: the editor is rebuilt so its history starts afresh (a chapter switch, a reload).
-    setContent(content) {
-      const editable = editor ? editor.isEditable : opts.editable !== false;
-      ready = false;
-      if (editor) editor.destroy(); // removes its own root from the element; the sheet's other children stay
-      opts.editable = editable;
-      build(content);
+    // The block as the server saves it (null attrs dropped).
+    getNode() { return convert.fromEditor(editor.getJSON())[0] || null; },
+    // Another block (or the same one again after an undo): the editor is rebuilt in the same element.
+    setNode(node, offset) {
+      const focused = api.isFocused;
+      if (editor) editor.destroy();
+      build(node, offset);
+      if (focused) api.focus();
       return api;
     },
-    // The same document again, in place (the caret and the history stay): loads use the `ed:load` meta.
-    replaceContent(content) {
-      const doc = createDocument(convert.toEditor(content), schema());
-      const tr = state().tr.replaceWith(0, state().doc.content.size, doc.content).setMeta(LOAD_META, true).setMeta('preventUpdate', true);
-      editor.view.dispatch(tr);
+    style() { return styleOfNode(block()); },
+    text() { return convert.plainText(api.getNode()); },
+    offset() { return range().to; },
+    range,
+    setOffset(offset, to) {
+      const doc = editor.state.doc;
+      const a = posAt(offset);
+      const b = to === undefined ? a : posAt(to);
+      editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(doc, a, b)).setMeta('preventUpdate', true));
       return api;
     },
-    setEditable(on) { editor.setEditable(Boolean(on), false); return api; },
-    focus(where) { editor.commands.focus(where === undefined ? null : where, { scrollIntoView: false }); return api; },
+    focus() { editor.commands.focus(null, { scrollIntoView: false }); return api; },
     blur() { editor.commands.blur(); return api; },
     destroy() { ready = false; if (editor) editor.destroy(); editor = null; },
 
-    // ---------------------------------------------------------- history, marks, styles
-    undo() { return editor.chain().focus().undo().run(); },
-    redo() { return editor.chain().focus().redo().run(); },
-    canUndo() { return editor.can().undo(); },
-    canRedo() { return editor.can().redo(); },
+    // ---------------------------------------------------------- geometry (viewport pixels)
+    // The top of the line holding `offset`, from the editor's top edge (the page anchors the paragraph there).
+    lineTop(offset) {
+      const top = editor.view.dom.getBoundingClientRect().top;
+      try { return editor.view.coordsAtPos(posAt(offset)).top - top; } catch (_) { return 0; }
+    },
+    caretRect() { return coords(); },
+    // The caret on the first or the last line, as near `x` as the line allows (↑ / ↓ from a neighbour).
+    placeAtX(x, which) {
+      const box = editor.view.dom.getBoundingClientRect();
+      const first = editor.view.coordsAtPos(BLOCK_START);
+      const last = editor.view.coordsAtPos(editor.state.doc.content.size - 1);
+      const y = which === 'last' ? (last.top + last.bottom) / 2 : (first.top + first.bottom) / 2;
+      const hit = editor.view.posAtCoords({ left: Math.min(Math.max(x, box.left + 1), box.right - 1), top: y });
+      if (hit) editor.view.dispatch(editor.state.tr.setSelection(TextSelection.near(editor.state.doc.resolve(hit.pos))).setMeta('preventUpdate', true));
+      return api;
+    },
+
+    // ---------------------------------------------------------- marks and styles
     toggleBold() { return editor.chain().focus().toggleMark('bold').run(); },
     toggleItalic() { return editor.chain().focus().toggleMark('italic').run(); },
     isBold() { return editor.isActive('bold'); },
     isItalic() { return editor.isActive('italic'); },
-    currentStyle() {
-      const pos = caretBlockPos(state());
-      return styleOfNode(pos === null ? null : state().doc.nodeAt(pos));
+    setStyle(key) { return editor.chain().focus().setBlockStyle(key).run(); },
+    // «ابدأ صفحة جديدة» / «مع التالية» on the block (null clears)
+    setAttrs(patch) {
+      const node = block();
+      const attrs = { ...node.attrs };
+      Object.entries(patch || {}).forEach(([k, v]) => { attrs[k] = v === undefined ? null : v; });
+      editor.view.dispatch(editor.state.tr.setNodeMarkup(0, undefined, attrs, node.marks));
+      return api;
     },
-    setStyle(key) {
-      if (key === 'footnote') return api.insertFootnote();
-      return editor.chain().focus().setBlockStyle(key).run();
+    // the printed numbers of the calls changed (a new layout of the page)
+    setNumbers(numberOf) {
+      numbers = typeof numberOf === 'function' ? numberOf : null;
+      editor.view.dispatch(editor.state.tr.setMeta(NUMBERS_META, true).setMeta('preventUpdate', true).setMeta('addToHistory', false));
+      return api;
     },
-
-    // ---------------------------------------------------------- blocks
-    caretBlock() {
-      const pos = caretBlockPos(state());
-      if (pos === null) return null;
-      const node = state().doc.nodeAt(pos);
-      if (!node) return null;
-      const index = state().doc.resolve(pos).index(0);
-      return blockInfo(node, pos, index);
-    },
-    blocks() {
-      const out = [];
-      state().doc.forEach((node, offset, index) => { if (BLOCKS.has(node.type.name)) out.push(blockInfo(node, offset, index)); });
-      return out;
-    },
-    blockDom(id) {
-      const found = findBlock(id);
-      return found ? editor.view.nodeDOM(found.pos) : null;
-    },
-    goToBlock(id) {
-      const found = findBlock(id);
-      if (!found) return false;
-      const doc = state().doc;
-      const sel = found.node.isTextblock ? TextSelection.near(doc.resolve(found.pos + 1)) : NodeSelection.create(doc, found.pos);
-      editor.view.dispatch(state().tr.setSelection(sel).scrollIntoView());
-      editor.commands.focus(undefined, { scrollIntoView: false });
-      return true;
-    },
-    selectRange(from, to) { select(from, to); return api; },
+    togglePageMarks(on) { if (editor.view.dom.classList) editor.view.dom.classList.toggle('hide-marks', !on); return api; },
 
     // ---------------------------------------------------------- footnotes
     insertFootnote() {
-      const { selection } = state();
-      const $from = selection.$from;
-      if (!$from.parent.isTextblock) return null;
-      const block = $from.depth >= 1 ? $from.node(1) : null;
+      const { selection } = editor.state;
+      const node = block();
       const id = convert.newId('ne');
-      const node = schema().nodes.footnote.create({
+      const note = editor.schema.nodes.footnote.create({
         id,
         number: null,
         marker: '',
-        sourcePage: block && block.attrs.sourcePages && block.attrs.sourcePages.length ? block.attrs.sourcePages[0] : null,
+        sourcePage: Array.isArray(node.attrs.sourcePages) && node.attrs.sourcePages.length ? node.attrs.sourcePages[0] : null,
         sourceLineIds: [],
         orphan: false,
       });
-      const tr = state().tr.replaceSelectionWith(node, false);
-      const pos = tr.selection.from - node.nodeSize;
-      tr.setSelection(TextSelection.create(tr.doc, pos + node.nodeSize)).scrollIntoView();
+      if (!selection.$from.parent.isTextblock) return null;
+      const tr = editor.state.tr.replaceSelectionWith(note, false);
+      const pos = tr.selection.from - note.nodeSize;
+      tr.setSelection(TextSelection.create(tr.doc, pos + note.nodeSize));
       editor.view.dispatch(tr);
-      return { id, pos, dom: editor.view.nodeDOM(pos) };
+      return { id, dom: editor.view.nodeDOM(pos) };
     },
     noteAt(id) {
-      const found = findNote(id);
-      if (!found) return null;
-      const { node, pos } = found;
-      return {
-        id,
-        pos,
-        seq: noteSeq(pos),
-        number: node.attrs.number,
-        sourcePage: node.attrs.sourcePage,
-        sourceLineIds: Array.isArray(node.attrs.sourceLineIds) ? node.attrs.sourceLineIds.slice() : [],
-        orphan: Boolean(node.attrs.orphan),
-        content: node.content.toJSON() || [],
-        text: node.textContent,
-        dom: editor.view.nodeDOM(pos),
-      };
-    },
-    notes() {
-      const out = [];
-      state().doc.descendants((node, pos) => {
-        if (node.type.name === 'footnote') { out.push({ id: node.attrs.id, pos, text: node.textContent }); return false; }
+      let found = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (found) return false;
+        if (node.type.name === 'footnote') { if (node.attrs.id === id) found = { node, pos }; return false; }
         return true;
       });
-      return out;
+      if (!found) return null;
+      return { id, content: found.node.content.toJSON() || [], text: found.node.textContent, sourcePage: found.node.attrs.sourcePage, orphan: Boolean(found.node.attrs.orphan), dom: editor.view.nodeDOM(found.pos) };
     },
     setNoteContent(id, content) {
-      const found = findNote(id);
+      let found = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (found) return false;
+        if (node.type.name === 'footnote') { if (node.attrs.id === id) found = { node, pos }; return false; }
+        return true;
+      });
       if (!found) return false;
-      const fragment = Fragment.fromJSON(schema(), Array.isArray(content) ? content : []);
+      const fragment = Fragment.fromJSON(editor.schema, Array.isArray(content) ? content : []);
       if (found.node.content.eq(fragment)) return false;
-      const tr = state().tr.replaceWith(found.pos + 1, found.pos + 1 + found.node.content.size, fragment);
-      editor.view.dispatch(tr);
+      editor.view.dispatch(editor.state.tr.replaceWith(found.pos + 1, found.pos + 1 + found.node.content.size, fragment));
       return true;
     },
     deleteNote(id) {
-      const found = findNote(id);
+      let found = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (found) return false;
+        if (node.type.name === 'footnote') { if (node.attrs.id === id) found = { node, pos }; return false; }
+        return true;
+      });
       if (!found) return false;
-      const tr = state().tr.delete(found.pos, found.pos + found.node.nodeSize);
-      tr.setSelection(TextSelection.near(tr.doc.resolve(found.pos)));
+      const tr = editor.state.tr.delete(found.pos, found.pos + found.node.nodeSize);
+      tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(found.pos, tr.doc.content.size - 1))));
       editor.view.dispatch(tr);
       return true;
     },
 
     // ---------------------------------------------------------- uncertain words
     uncertainAt(pos) {
-      const type = schema().marks.uncertain;
-      const doc = state().doc;
-      const range = getMarkRange(doc.resolve(Math.max(0, Math.min(pos, doc.content.size))), type);
-      if (!range) return null;
-      return { from: range.from, to: range.to, text: doc.textBetween(range.from, range.to) };
+      const type = editor.schema.marks.uncertain;
+      const doc = editor.state.doc;
+      const r = getMarkRange(doc.resolve(Math.max(0, Math.min(pos, doc.content.size))), type);
+      if (!r) return null;
+      return { from: r.from, to: r.to, start: offsetAt(r.from), end: offsetAt(r.to), text: doc.textBetween(r.from, r.to) };
     },
-    acceptUncertain(from, to) {
-      editor.view.dispatch(state().tr.removeMark(from, to, schema().marks.uncertain));
-      return true;
-    },
+    acceptUncertain(from, to) { editor.view.dispatch(editor.state.tr.removeMark(from, to, editor.schema.marks.uncertain)); return true; },
     replaceRange(from, to, text) {
-      const doc = state().doc;
-      const marks = withoutUncertain(doc.resolve(from).marks(), schema());
-      const tr = text ? state().tr.replaceWith(from, to, schema().text(text, marks)) : state().tr.delete(from, to);
+      const marks = withoutUncertain(editor.state.doc.resolve(from).marks(), editor.schema);
+      const tr = text ? editor.state.tr.replaceWith(from, to, editor.schema.text(text, marks)) : editor.state.tr.delete(from, to);
       editor.view.dispatch(tr);
       return true;
     },
+    // the same by plain offsets (find & replace in the open paragraph)
+    replaceOffsets(start, end, text) { return api.replaceRange(posAt(start), posAt(end), text); },
 
-    // ---------------------------------------------------------- find & replace
-    find(query, options, keepIndex) {
-      const ranges = findRanges(state().doc, query, options);
-      let index = -1;
-      if (ranges.length) {
-        const before = current();
-        const caret = state().selection.from;
-        if (keepIndex && before.current >= 0 && before.current < ranges.length) index = before.current;
-        else {
-          index = ranges.findIndex((r) => r.from >= caret);
-          if (index === -1) index = 0;
-        }
-      }
-      setFind(ranges, index);
-      return { total: ranges.length, index };
+    // ---------------------------------------------------------- find highlights (plain offsets)
+    setFind(ranges) {
+      const list = (Array.isArray(ranges) ? ranges : []).map((r) => ({ from: posAt(r.start), to: posAt(r.end), block: null, note: null }));
+      const current = (Array.isArray(ranges) ? ranges : []).findIndex((r) => r.current);
+      editor.view.dispatch(editor.state.tr.setMeta(findKey, { ranges: list, current }).setMeta('preventUpdate', true));
+      return api;
     },
-    findCurrent() {
-      const c = current();
-      return c.current >= 0 ? c.ranges[c.current] : null;
-    },
-    // The next match (dir > 0), the previous (dir < 0) or the current one again (dir 0, after a replacement).
-    findNext(dir) {
-      const c = current();
-      if (!c.ranges.length) return null;
-      const index = convert.stepIndex(c.current, dir, c.ranges.length);
-      setFind(c.ranges, index);
-      const range = c.ranges[index];
-      if (!range.note) select(range.from, range.to);
-      else {
-        const found = findNote(range.note);
-        if (found) editor.view.dispatch(state().tr.setSelection(NodeSelection.create(state().doc, found.pos)).scrollIntoView());
-      }
-      return { ...range, index, total: c.ranges.length };
-    },
-    clearFind() { if (current().ranges.length) setFind([], -1); return api; },
-    replaceCurrent(replacement) {
-      const range = api.findCurrent();
-      if (!range) return false;
-      const marks = withoutUncertain(state().doc.resolve(range.from).marks(), schema());
-      const text = String(replacement || '');
-      const tr = text ? state().tr.replaceWith(range.from, range.to, schema().text(text, marks)) : state().tr.delete(range.from, range.to);
-      editor.view.dispatch(tr);
-      return true;
-    },
-    replaceAll(replacement) {
-      const c = current();
-      if (!c.ranges.length) return 0;
-      const text = String(replacement || '');
-      const tr = state().tr;
-      c.ranges.slice().sort((a, b) => b.from - a.from).forEach((range) => {
-        const marks = withoutUncertain(tr.doc.resolve(range.from).marks(), schema());
-        if (text) tr.replaceWith(range.from, range.to, schema().text(text, marks));
-        else tr.delete(range.from, range.to);
-      });
-      tr.setMeta(findKey, { ranges: [], current: -1 });
-      editor.view.dispatch(tr);
-      return c.ranges.length;
-    },
-
-    // ---------------------------------------------------------- counts
-    wordCount() {
-      let total = 0;
-      const count = (text) => text.split(/\s+/).filter(Boolean).length;
-      state().doc.forEach((block) => {
-        if (!block.isTextblock) return;
-        let text = '';
-        block.forEach((child) => {
-          if (child.isText) text += child.text;
-          else { text += ' '; if (child.type.name === 'footnote') total += count(child.textBetween(0, child.content.size, ' ', ' ')); }
-        });
-        total += count(text);
-      });
-      return total;
+    // the block's markup as the browser lays it out (a static copy for a page not laid out again yet)
+    html() {
+      const serializer = DOMSerializer.fromSchema(editor.schema);
+      const host = element.ownerDocument.createElement('div');
+      host.appendChild(serializer.serializeFragment(editor.state.doc.content));
+      return host.innerHTML;
     },
   });
 
-  build(opts.content);
+  build(opts.node, opts.offset);
   return api;
 }
 
@@ -453,7 +335,11 @@ export function createNote(element, options = {}) {
   };
 }
 
+export { posOfOffset, offsetOfPos };
 export const {
   STYLES, STYLE_LABELS, PARAGRAPH_STYLES, DEFAULT_FIND, toEditor, fromEditor, newId, fold, foldQuery, segmentMatches, findMatches,
-  wordCount, blockText, formatCount, pageRange, wordsHtml, stepIndex, chapterListHtml, escapeHtml, styleOf,
+  wordCount, blockText, formatCount, pageRange, stepIndex, escapeHtml, styleOf,
+  OBJECT, BREAK, inlineText, plainText, normalizeContent, sliceContent, splitNode, mergeNodes, insertBlocks, locate, flatBlocks,
+  replaceBlock, setBlockAttrs, findNote, noteOwner, noteIds, pageMarks, findPlain, replacePlain, unmarkPlain, editContent,
+  replaceInBlock, nodeHtml,
 } = convert;

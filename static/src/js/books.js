@@ -209,7 +209,7 @@ document.addEventListener('alpine:init', () => {
     manuscriptUrls: cfg.manuscriptUrls || {},
     editor: cfg.editor || null, // Phase 5: {edited, version, drift_pages} (D41), refreshed by the poll
     layout: cfg.layout || null, // Phase 5: {trim, trim_label, page_count, rendering, rendered_at}, refreshed by the poll
-    editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: editor, layout, …
+    editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: layout (the book page), chapters, …
     convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
@@ -508,8 +508,9 @@ document.addEventListener('alpine:init', () => {
     },
     // Exactly one primary button per state (§2.1.5, PHASE4 §4.1, PHASE5 §3), chosen from the poll without a
     // reload: once every page is reviewed, convert (or re-assemble a stale / failed manuscript) for editors;
-    // once the manuscript is fresh, editors open the chapter editor (after the first edit the review drift
-    // is resolved per chapter there, D41), everyone else the manuscript; else copy the book's text.
+    // once the manuscript is fresh, editors open the book page (D47: its pages, edited in place; after the
+    // first edit the review drift is resolved per chapter there, D41), everyone else the manuscript; else copy
+    // the book's text.
     get primary() {
       if (this.canEdit && (this.status === 'uploaded' || this.status === 'error')) return 'start';
       if (this.canEdit && this.status === 'needs_guides' && cfg.guidesUrl) return 'guides';
@@ -517,7 +518,7 @@ document.addEventListener('alpine:init', () => {
       if (this.allReviewed) {
         const m = this.manuscript || {};
         if (m.active) return this.manuscriptUrl ? 'manuscript' : '';
-        if (this.canEdit && m.exists && !this.manuscriptFailed && (!m.stale || this.edited) && this.editorUrl) return 'editor';
+        if (this.canEdit && m.exists && !this.manuscriptFailed && (!m.stale || this.edited) && this.layoutUrl) return 'book';
         if (m.exists && !m.stale && !this.manuscriptFailed) return this.manuscriptUrl ? 'manuscript' : 'copy';
         if (this.canEdit) return m.exists ? 'reassemble' : 'convert';
         if (m.exists && this.manuscriptUrl) return 'manuscript';
@@ -562,13 +563,11 @@ document.addEventListener('alpine:init', () => {
       if (m.exists) return 'dot-success';
       return 'dot-neutral';
     },
-    // ------------------------------------------------------------ the editor and the book's form (Phase 5)
+    // ------------------------------------------------------------ the book page and the book's form (Phase 5, D47)
     get edited() {
       return Boolean(this.editor && this.editor.edited);
     },
-    get editorUrl() {
-      return this.editorUrls.editor || '';
-    },
+    // the book page (`/books/<id>/layout/`): the one place to preview and to edit the book
     get layoutUrl() {
       return this.editorUrls.layout || '';
     },

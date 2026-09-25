@@ -10,6 +10,7 @@ from django.conf import settings
 from django.db import models
 
 from books.models import Book
+from publishing.model import BOOK_FIELDS  # noqa: F401 - the book details of `front_matter["fields"]`
 
 from .document import ChapterSlice, chapters_of
 
@@ -116,8 +117,9 @@ def default_heading_scale() -> dict:
 
 
 def default_front_matter() -> dict:
-    """Front matter of the book: a title page and a contents page."""
-    return {"title_page": True, "contents": True}
+    """Front matter of the book: a title page and a contents page; no copyright page until asked for; the
+    book details (`BOOK_FIELDS`) empty (the title and the author then come from the Book)."""
+    return {"title_page": True, "contents": True, "copyright_page": False, "fields": {}}
 
 
 class StyleSheet(models.Model):
@@ -126,6 +128,8 @@ class StyleSheet(models.Model):
     One per book, created on the first change; a book without one uses the defaults below. Faces are
     keys of the font registry (`publishing.fonts.FONTS`); a face whose files are missing on this Mac falls
     back to Amiri when rendering. Margins are mirrored: `inner` is the binding side of every page.
+    `widows` / `orphans` are the fewest lines of a paragraph left at the top / foot of a page; with
+    `keep_headings` a heading never ends a page apart from the text after it (D47).
     """
 
     class Trim(models.TextChoices):
@@ -188,6 +192,9 @@ class StyleSheet(models.Model):
     chapter_opening = models.CharField(
         "بداية الفصل", max_length=10, choices=ChapterOpening.choices, default=ChapterOpening.ANY
     )
+    widows = models.PositiveSmallIntegerField("أقل عدد من الأسطر أعلى الصفحة", default=2)
+    orphans = models.PositiveSmallIntegerField("أقل عدد من الأسطر أسفل الصفحة", default=2)
+    keep_headings = models.BooleanField("العنوان مع السطر التالي", default=True)
     front_matter = models.JSONField("الصفحات التمهيدية", default=default_front_matter, blank=True)
     print_source_pages = models.BooleanField("أرقام الصفحات الأصلية في الهامش", default=False)
     updated_at = models.DateTimeField("عُدّل في", auto_now=True)

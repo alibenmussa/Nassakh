@@ -1,7 +1,8 @@
 """Editor routes (PHASE5_SPEC §3).
 
-`urlpatterns` are mounted at /books/ (reverse as `editor:<name>`): the chapter editor and the layout
-page (stylesheet + page preview). `api_urlpatterns` at /api/ in the shared `api` namespace.
+`urlpatterns` are mounted at /books/ (reverse as `editor:<name>`): the book page (`editor:layout`, live
+pages, preview and edit, D47) and the old editor address, which redirects to it. `api_urlpatterns` at
+/api/ in the shared `api` namespace.
 """
 
 from django.urls import path
@@ -32,4 +33,8 @@ api_urlpatterns = [
         name="snapshot_restore",
     ),
     path("books/<int:book_id>/stylesheet/", api.stylesheet, name="stylesheet"),
+    path("books/<int:book_id>/uncertain/", api.uncertain_words, name="uncertain"),
+    path("books/<int:book_id>/uncertain/accept/", api.uncertain_accept, name="uncertain_accept"),
+    path("books/<int:book_id>/uncertain/choose/", api.uncertain_choose, name="uncertain_choose"),
+    path("books/<int:book_id>/uncertain/type/", api.uncertain_type, name="uncertain_type"),
 ]

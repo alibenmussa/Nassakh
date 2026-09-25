@@ -9,7 +9,8 @@ corrections no longer flow in — pages changed in review since show as drift, a
 re-assembled from the reviewed pages (the old chapter kept as a snapshot, reason `edit`).
 
 Views and API functions stay thin; the renders after a save are scheduled through `publishing.engine`
-(debounced, D44), never run here.
+(the chapter's fast re-layout at once, the book debounced, D44/D47), never run here: an edit's answer
+carries `relayout` (`{id, status, url}` to poll, or null) so the book page can swap its live pages.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from django.utils import timezone
 from books.models import Book, Page
 
 from . import document as doc
-from .models import CUSTOM_TRIM, TRIM_PRESETS, Manuscript, ManuscriptSnapshot, StyleSheet
+from .models import BOOK_FIELDS, CUSTOM_TRIM, TRIM_PRESETS, Manuscript, ManuscriptSnapshot, StyleSheet
 
 log = logging.getLogger(__name__)
 
@@ -226,10 +227,12 @@ def chapter_document(book: Book, chapter_id: str) -> dict:
 # ====================================================================== saving
 
 
-def _schedule(book: Book, chapter_id: str | None, version: int) -> None:
+def _schedule(book: Book, chapter_id: str | None, version: int) -> dict | None:
+    """Schedule the renders after an edit; the chapter's re-layout to poll (None when none was asked)."""
     from publishing import engine
 
-    engine.schedule_after_edit(book, chapter_id, version)
+    row = engine.schedule_after_edit(book, chapter_id, version)
+    return engine.relayout_payload(row) if row is not None else None
 
 
 def _other_ids(document: dict, chapter: doc.ChapterSlice) -> set[str]:
@@ -240,12 +243,12 @@ def _other_ids(document: dict, chapter: doc.ChapterSlice) -> set[str]:
 def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
     """Save one chapter (D40): splice it into the document by id, after the per-chapter version check.
 
-    Returns `{version, id, chapters: [{id, version, title}], reload, manuscript_version, changed}`: the
-    chapter's new version, or — when the saved blocks no longer form exactly this chapter (a new level-1
-    heading split it, a deleted heading merged it with the one before) — `reload: true`, `version: null`
-    and the chapters they now form: the editor reloads the chapter list and the chapter before saving
-    again. Raises `ChapterConflict` when `version` is not the chapter's current version, `EditorError`
-    for invalid content.
+    Returns `{version, id, chapters: [{id, version, title}], reload, manuscript_version, changed,
+    relayout}`: the chapter's new version (`relayout`: the re-layout to poll, D47), or — when the saved
+    blocks no longer form exactly this chapter (a new level-1 heading split it, a deleted heading merged
+    it with the one before) — `reload: true`, `version: null` and the chapters they now form: the editor
+    reloads the chapter list and the chapter before saving again. Raises `ChapterConflict` when
+    `version` is not the chapter's current version, `EditorError` for invalid content.
     """
     _check_chapter_id(chapter_id)
     try:
@@ -277,8 +280,7 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
             manuscript.origin = Manuscript.Origin.EDITOR
             manuscript.updated_by = _user_or_none(user)
             manuscript.save(update_fields=["document", "version", "origin", "updated_by", "updated_at"])
-    if changed:
-        _schedule(book, formed[0].id if formed else None, manuscript.version)
+    relayout = _schedule(book, formed[0].id if formed else None, manuscript.version) if changed else None
     summary = [
         {"id": c.id, "version": doc.chapter_version(c.nodes(new_document)), "title": c.title} for c in formed
     ]
@@ -292,6 +294,7 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
         "reload": reload,
         "manuscript_version": manuscript.version,
         "changed": changed,
+        "relayout": relayout,
     }
 
 
@@ -505,7 +508,7 @@ def find_replace(
                 chapter = doc.find_chapter(new_document, chapters[0].id)
                 out["version"] = doc.chapter_version(chapter.nodes(new_document)) if chapter else None
     if replace and replaced:
-        _schedule(book, chapter_id or None, manuscript.version)
+        out["relayout"] = _schedule(book, chapter_id or None, manuscript.version)
     return out
 
 
@@ -540,7 +543,7 @@ def convert_digits(book: Book, chapter_id, style: str, user=None) -> dict:
                 chapter = doc.find_chapter(new_document, chapters[0].id)
                 out["version"] = doc.chapter_version(chapter.nodes(new_document)) if chapter else None
     if changed:
-        _schedule(book, chapter_id or None, manuscript.version)
+        out["relayout"] = _schedule(book, chapter_id or None, manuscript.version)
     return out
 
 
@@ -871,6 +874,11 @@ CHOICE_FIELDS: dict[str, type] = {
     "chapter_opening": StyleSheet.ChapterOpening,
     "footnote_numbering": StyleSheet.FootnoteNumbering,
 }
+LINE_COUNT_FIELDS: dict[str, tuple[int, int, str]] = {
+    "widows": (1, 5, "أقل عدد من الأسطر أعلى الصفحة بين 1 و5."),
+    "orphans": (1, 5, "أقل عدد من الأسطر أسفل الصفحة بين 1 و5."),
+}
+BOOK_FIELD_LIMITS: dict[str, int] = {name: 300 for name in BOOK_FIELDS} | {"rights": 1000, "isbn": 40}
 STYLESHEET_FIELDS: tuple[str, ...] = (
     "trim",
     *NUMBER_FIELDS,
@@ -879,9 +887,12 @@ STYLESHEET_FIELDS: tuple[str, ...] = (
     "heading_font",
     "heading_scale",
     *CHOICE_FIELDS,
+    *LINE_COUNT_FIELDS,
+    "keep_headings",
     "front_matter",
     "print_source_pages",
 )
+FRONT_FLAGS: dict[str, bool] = {"title_page": True, "contents": True, "copyright_page": False}
 
 
 def stylesheet_for(book: Book) -> StyleSheet:
@@ -894,13 +905,24 @@ def stylesheet_values(sheet: StyleSheet) -> dict:
     """The stylesheet's fields as JSON values."""
     out = {name: getattr(sheet, name) for name in STYLESHEET_FIELDS}
     out["heading_scale"] = {"h1": 1.6, "h2": 1.25, **(sheet.heading_scale or {})}
-    out["front_matter"] = {"title_page": True, "contents": True, **(sheet.front_matter or {})}
+    out["front_matter"] = front_matter_values(sheet.front_matter)
     out["updated_at"] = sheet.updated_at.isoformat() if sheet.updated_at else None
     return out
 
 
+def front_matter_values(front) -> dict:
+    """`front_matter` with every flag and every book detail present (`fields`: '' when not given)."""
+    front = front if isinstance(front, dict) else {}
+    fields = front.get("fields") if isinstance(front.get("fields"), dict) else {}
+    out = {**FRONT_FLAGS, **{key: bool(front[key]) for key in FRONT_FLAGS if key in front}}
+    out["fields"] = {name: str(fields.get(name) or "") for name in BOOK_FIELDS}
+    return out
+
+
 def stylesheet_payload(book: Book) -> dict:
-    """`api:stylesheet` GET: `{stylesheet, saved, trims, fonts, choices, limits, missing_fonts}`."""
+    """`api:stylesheet` GET: `{stylesheet, saved, trims, fonts, choices, limits, missing_fonts,
+    field_defaults}` (`field_defaults`: the book details used when a field is empty — the Book's title
+    and author)."""
     from publishing.fonts import LATIN_FONTS, font_status, resolve
 
     sheet = stylesheet_for(book)
@@ -924,8 +946,12 @@ def stylesheet_payload(book: Book) -> dict:
         "limits": {
             **{name: [lo, hi] for name, (lo, hi, _msg) in NUMBER_FIELDS.items()},
             **{f"heading_scale.{name}": [lo, hi] for name, (lo, hi, _msg) in HEADING_SCALE_LIMITS.items()},
+            **{name: [lo, hi] for name, (lo, hi, _msg) in LINE_COUNT_FIELDS.items()},
+            **{f"front_matter.fields.{name}": [0, limit] for name, limit in BOOK_FIELD_LIMITS.items()},
         },
         "missing_fonts": resolve(sheet.body_font, sheet.latin_font, sheet.heading_font).missing,
+        "book_fields": list(BOOK_FIELDS),
+        "field_defaults": {"title": book.title, "author": book.author},
     }
 
 
@@ -1006,15 +1032,44 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
                     errors[name] = "قيمة غير معروفة."
                 else:
                     setattr(sheet, name, data[name])
+        for name, (lo, hi, message) in LINE_COUNT_FIELDS.items():
+            if name in data:
+                value = _number(data[name])
+                if value is None or value != int(value) or not lo <= value <= hi:
+                    errors[name] = message
+                else:
+                    setattr(sheet, name, int(value))
+        if "keep_headings" in data:
+            sheet.keep_headings = _parse_bool(data["keep_headings"], sheet.keep_headings)
         if "front_matter" in data:
             front = data["front_matter"]
-            merged = {"title_page": True, "contents": True, **(sheet.front_matter or {})}
+            merged = front_matter_values(sheet.front_matter)
             if not isinstance(front, dict):
                 errors["front_matter"] = "الصفحات التمهيدية غير صالحة."
             else:
-                for key in ("title_page", "contents"):
+                for key in FRONT_FLAGS:
                     if key in front:
                         merged[key] = _parse_bool(front[key], merged[key])
+                fields = front.get("fields", {})
+                if not isinstance(fields, dict):
+                    errors["front_matter"] = "بيانات الكتاب غير صالحة."
+                else:
+                    for name, value in fields.items():
+                        if name not in BOOK_FIELDS:
+                            continue
+                        if value is None:
+                            value = ""
+                        if not isinstance(value, str | int) or isinstance(value, bool):
+                            errors[f"front_matter.fields.{name}"] = "قيمة غير صالحة."
+                            continue
+                        text = str(value).strip() if name == "rights" else " ".join(str(value).split())
+                        if len(text) > BOOK_FIELD_LIMITS[name]:
+                            errors[f"front_matter.fields.{name}"] = (
+                                f"النص أطول من المسموح ({BOOK_FIELD_LIMITS[name]} حرفًا)."
+                            )
+                            continue
+                        merged["fields"][name] = text
+                merged["fields"] = {name: text for name, text in merged["fields"].items() if text}
                 sheet.front_matter = merged
         if "print_source_pages" in data:
             sheet.print_source_pages = _parse_bool(data["print_source_pages"], sheet.print_source_pages)
@@ -1055,14 +1110,17 @@ CHAPTER_SLOT = "__cid__"
 
 
 def editor_urls(book: Book) -> dict:
-    """URLs of the editor and the layout page (`__cid__` stands for a chapter id, `__sid__` for a
-    snapshot)."""
+    """URLs of the book page and its APIs (`__cid__` stands for a chapter id, `__sid__` for a snapshot,
+    `__rid__` for a re-layout). `layout` is the book page (D47); the old editor address only redirects
+    there, so nothing links to it."""
     chapter = reverse("api:chapter", args=[book.pk, "CID"]).replace("CID", CHAPTER_SLOT)
     reassemble = reverse("api:chapter_reassemble", args=[book.pk, "CID"]).replace("CID", CHAPTER_SLOT)
+    relayout = reverse("api:relayout", args=[book.pk, "CID"]).replace("CID", CHAPTER_SLOT)
     restore_url = reverse("api:snapshot_restore", args=[book.pk, 0])
     head, _sep, tail = restore_url.rpartition("/0/")
+    status_url = reverse("api:relayout_status", args=[book.pk, 0])
+    status_head, _sep, status_tail = status_url.rpartition("/0/")
     return {
-        "editor": reverse("editor:edit", args=[book.pk]),
         "layout": reverse("editor:layout", args=[book.pk]),
         "chapters": reverse("api:chapters", args=[book.pk]),
         "chapter": chapter,
@@ -1077,10 +1135,20 @@ def editor_urls(book: Book) -> dict:
         "manuscript": reverse("assembly:manuscript", args=[book.pk]),
         "dashboard": reverse("books:detail", args=[book.pk]),
         "sheets": reverse("api:book_sheets", args=[book.pk]),
+        # D47: live pages, the fast re-layout and the uncertain words
+        "pageLayout": reverse("api:preview_layout", args=[book.pk]),
+        "relayout": relayout,
+        "relayoutStatus": f"{status_head}/__rid__/{status_tail}",
+        "uncertain": reverse("api:uncertain", args=[book.pk]),
+        "uncertainAccept": reverse("api:uncertain_accept", args=[book.pk]),
+        "uncertainChoose": reverse("api:uncertain_choose", args=[book.pk]),
+        "uncertainType": reverse("api:uncertain_type", args=[book.pk]),
     }
 
 
 AUTOSAVE_MS = 1500
+RELAYOUT_MS = 500  # the pause after typing on a live page before the chapter is saved and re-laid-out
+MODES: tuple[str, ...] = ("preview", "edit")
 
 
 def _faces(sheet: StyleSheet) -> dict:
@@ -1101,10 +1169,16 @@ def _faces(sheet: StyleSheet) -> dict:
     }
 
 
-def page_config(book: Book, user, chapter_id: str | None = None, page: str = "editor") -> dict:
-    """What the editor page (`bookEditor`) and the layout page (`bookLayout`) start from: the book, the
-    chapter to open (the requested one when it exists, else the first), the chapters' order, whether the
-    user may edit, the stylesheet with its faces and every URL (`editor_urls`)."""
+def page_config(
+    book: Book, user, chapter_id: str | None = None, page: str = "editor", mode: str | None = None
+) -> dict:
+    """What the book page (`bookLayout`, D47) and the old editor page start from: the book, the chapter to
+    open (the requested one when it exists, else the first), the chapters' order, whether the user may
+    edit, the stylesheet with its faces and every URL (`editor_urls`).
+
+    For the book page (`page="layout"`) also: `mode` (`preview` | `edit`), the chapter summaries (versions,
+    words, pages, drift: `chapter_summaries`), the review drift, the uncertain words' count, the browser
+    `@font-face` rules of the live pages (`fontCss`) and the pause before a re-layout (`relayoutMs`)."""
     from books.services import page_url_templates
     from core.decorators import ROLE_EDITOR, has_role
 
@@ -1118,7 +1192,29 @@ def page_config(book: Book, user, chapter_id: str | None = None, page: str = "ed
     ids = [chapter.id for chapter in chapters]
     current = chapter_id if chapter_id in ids else (ids[0] if ids else None)
     sheet = stylesheet_for(book)
+    extra: dict = {}
+    if page == "layout":
+        from publishing.fonts import browser_font_css, resolve
+
+        from .uncertain import count as uncertain_count
+
+        drift = (
+            review_drift(book) if manuscript is not None else {"edited": False, "pages": [], "chapters": {}}
+        )
+        extra = {
+            "mode": mode if mode in MODES else "preview",
+            "chapterSummaries": chapter_summaries(book) if manuscript is not None else [],
+            "drift": {
+                "edited": drift["edited"],
+                "pages": drift["pages"],
+                "chapters": sorted(drift["chapters"]),
+            },
+            "uncertainCount": uncertain_count(document) if manuscript is not None else 0,
+            "fontCss": browser_font_css(resolve(sheet.body_font, sheet.latin_font, sheet.heading_font)),
+            "relayoutMs": RELAYOUT_MS,
+        }
     return {
+        **extra,
         "page": page,
         "bookId": book.pk,
         "title": book.title,

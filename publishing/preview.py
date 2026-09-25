@@ -4,7 +4,10 @@
 manuscript and the stylesheet, hash it, reuse a finished render of the same hash, otherwise render with
 `publishing.engine` and write under `media/books/<id>/preview/<hash>/`:
 
-    book.pdf | chapter.pdf, page-0001.webp (1×, ≈ 1100 px tall), page-0001-2x.webp, …
+    book.pdf | chapter.pdf, page-0001.webp (1×, ≈ 1100 px tall), page-0001-2x.webp, …, layout.json
+
+`layout.json` (D47) is the pages' layout (`publishing.layout`) with the chapters, the page checks and the
+footnote numbers shown; a finished book render becomes the book's live layout (`publishing.relayout`).
 
 **Cache by hash.** The hash covers the content rendered (the whole document, or the chapter with the
 title node and the number of notes before it), the page setup, the font files (path, size, mtime), the
@@ -15,10 +18,11 @@ the same chapter) cancels the queued or running one: its row becomes `cancelled`
 revoked (a queued task never starts) and a running job stops at its next check (between layout passes,
 every 20 page images) — the worker process is not killed. Then the new hash is rendered.
 
-**After edits (D44).** An editor save schedules the chapter's render a few seconds later and the book's
-twenty seconds later; each task carries the manuscript version it was scheduled for and does nothing if
-a later save happened (that save scheduled its own), so renders run once edits settle. A chapter rendered
-alone starts at its first page in the last full render (odd pages recto).
+**After edits (D44, D47).** An editor save asks for the chapter's fast re-layout at once
+(`publishing.relayout`, queue `layout`) and schedules the book's render twenty seconds later; the task
+carries the manuscript version it was scheduled for and does nothing if a later save happened (that save
+scheduled its own), so the book renders once edits settle. A chapter rendered alone starts at its first
+page in the current layout (odd pages recto).
 
 Old renders are pruned: the newest 3 of the book, 2 per chapter, 24 chapter renders per book.
 """
@@ -38,16 +42,18 @@ from pathlib import Path
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
+from django.urls import reverse
 from django.utils import timezone
 
 from books.models import Book
 from editor import document as doc
 from editor.models import TRIM_PRESETS, Manuscript, StyleSheet
 
-from .engine import RenderJob, get_engine
+from .engine import Rendered, RenderJob, get_engine
 from .fonts import resolve
+from .layout import side_shift
 from .model import page_setup
-from .models import PreviewRender
+from .models import LiveLayout, PreviewRender
 from .pdf import RenderCancelled
 
 log = logging.getLogger(__name__)
@@ -57,7 +63,6 @@ WEBP_QUALITY = 78
 WEBP_METHOD = 3
 ENCODERS = min(8, os.cpu_count() or 2)
 ENCODE_BACKLOG = ENCODERS * 3  # page images drawn and waiting for an encoder
-CHAPTER_SETTLE_S = 3
 BOOK_SETTLE_S = 20
 ABANDONED_AFTER = timedelta(minutes=30)
 KEEP_BOOK = 3
@@ -70,6 +75,8 @@ ABANDONED_ERROR = "توقّف إخراج المعاينة قبل أن يكتمل
 ENQUEUE_ERROR = "تعذّر إرسال المعاينة إلى طابور المهام؛ تحقّق من تشغيل Redis وعامل Celery ثم أعد المحاولة."
 
 ACTIVE = (PreviewRender.Status.QUEUED, PreviewRender.Status.RUNNING)
+LAYOUT_FILE = "layout.json"
+LAYOUT_FORMAT = 1
 
 
 class PreviewNotFound(LookupError):
@@ -93,8 +100,8 @@ def _manuscript(book: Book) -> Manuscript | None:
     )
 
 
-def _rows(book_id: int, scope: str, chapter_id: str):
-    rows = PreviewRender.objects.filter(book_id=book_id, scope=scope)
+def _rows(book_id: int, scope: str, chapter_id: str, kind: str = PreviewRender.Kind.PAGES):
+    rows = PreviewRender.objects.filter(book_id=book_id, scope=scope, kind=kind)
     return rows.filter(chapter_id=chapter_id) if scope == PreviewRender.Scope.CHAPTER else rows
 
 
@@ -114,9 +121,12 @@ def latest_done(book_id: int, scope: str = "book", chapter_id: str = "") -> Prev
 
 
 def chapter_first_page(book_id: int, chapter_id: str) -> int:
-    """The chapter's first page in the newest finished book render (1 when unknown)."""
-    render = latest_done(book_id, PreviewRender.Scope.BOOK)
-    for item in (render.chapters if render is not None else []) or []:
+    """The chapter's first page in the book's live layout, else in the newest finished book render (1 when
+    unknown)."""
+    live = LiveLayout.objects.filter(book_id=book_id, revision__gt=0).only("chapters").first()
+    render = latest_done(book_id, PreviewRender.Scope.BOOK) if live is None else None
+    items = live.chapters if live is not None else (render.chapters if render is not None else [])
+    for item in items or []:
         if isinstance(item, dict) and item.get("id") == chapter_id and isinstance(item.get("first"), int):
             return max(1, item["first"])
     return 1
@@ -196,7 +206,80 @@ def _files_exist(render: PreviewRender) -> bool:
     if not render.folder or not render.page_count:
         return False
     folder = _abs(render.folder)
+    if render.kind == PreviewRender.Kind.LAYOUT:
+        return (folder / LAYOUT_FILE).is_file()
     return (folder / page_file(1)).is_file() and (folder / page_file(render.page_count)).is_file()
+
+
+def layout_path(render: PreviewRender) -> Path:
+    """The file of a render's layout (`<folder>/layout.json`)."""
+    return _abs(render.folder) / LAYOUT_FILE
+
+
+def layout_document(
+    render: PreviewRender, rendered: Rendered, setup, *, first_page: int, chapters: list[dict]
+) -> dict:
+    """What `layout.json` holds (D47): the render's pages (each with its image reference `src`), chapters,
+    checks, the footnote numbers shown and the page geometry the client needs to move pages."""
+    pages = []
+    for index, page in enumerate(rendered.layout, start=1):
+        pages.append(dict(page, src={"render": render.pk, "index": index}))
+    return {
+        "format": LAYOUT_FORMAT,
+        "engine": get_engine().version,
+        "render": render.pk,
+        "kind": render.kind,
+        "scope": render.scope,
+        "chapter": render.chapter_id or None,
+        "first_page": first_page,
+        "page_count": len(pages),
+        "unit": "pt",
+        "setup_hash": setup_hash(setup),
+        "geometry": geometry(setup),
+        "chapters": chapters,
+        "checks": rendered.checks,
+        "numbers": rendered.numbers,
+        "misses": rendered.misses,
+        "missing_fonts": rendered.missing_fonts,
+        "pages": pages,
+    }
+
+
+def setup_hash(setup) -> str:
+    """24 hex digits identifying how pages are laid out: the renderer, the page setup and the font files
+    (a live layout of another setup is replaced, never spliced into)."""
+    fonts = resolve(setup.body_font, setup.latin_font, setup.heading_font)
+    payload = {"engine": get_engine().version, "setup": setup.as_dict(), "fonts": fonts.fingerprint()}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
+
+
+def geometry(setup) -> dict:
+    """The page geometry of a setup for the client: size, margins, the text's move when a page changes
+    side (`side_shift_pt`: right → left; left → right is the negative) and where the number sits."""
+    mm = 72 / 25.4
+    return {
+        "width_pt": round(setup.width_mm * mm, 2),
+        "height_pt": round(setup.height_mm * mm, 2),
+        "margins_pt": {
+            "top": round(setup.top_mm * mm, 2),
+            "bottom": round(setup.bottom_mm * mm, 2),
+            "inner": round(setup.inner_mm * mm, 2),
+            "outer": round(setup.outer_mm * mm, 2),
+        },
+        "side_shift_pt": side_shift(setup),
+        "page_number": setup.page_number,
+        "running_header": setup.running_header,
+        "chapter_opening": setup.chapter_opening,
+    }
+
+
+def write_json(path: Path, data: dict) -> None:
+    """Write `data` as compact UTF-8 JSON, atomically (a reader never sees half a file)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _abandoned(render: PreviewRender) -> bool:
@@ -323,6 +406,7 @@ def render_preview(
     version: int | None = None,
     task_id: str = "",
 ) -> PreviewRender | None:
+    # (D47: the finished render also writes `layout.json`; a book render becomes the live layout)
     """Render the book's current content for `scope` (the tasks' job; synchronous).
 
     Returns the finished (or failed, or cancelled) render, the cached one for an unchanged hash, the one
@@ -338,10 +422,25 @@ def render_preview(
     digest = job_hash(job)
     row, work = _claim(book, scope, scope_key(scope, chapter_id), digest, job.first_page, task_id)
     if not work or row is None:
+        _adopt(row)
         return row
+    PreviewRender.objects.filter(pk=row.pk).update(version=manuscript.version)
+    row.version = manuscript.version
     _run(row, job)
     row.refresh_from_db()
+    _adopt(row)
     return row
+
+
+def _adopt(row: PreviewRender | None) -> None:
+    """A finished book render of the current content becomes the live layout when nothing newer is live
+    (`relayout.adopt_book_render`): a new one, or a cached one found again — the page setup changed back to
+    one rendered before, whose pages are not the live ones."""
+    if row is None or row.status != PreviewRender.Status.DONE or row.scope != PreviewRender.Scope.BOOK:
+        return
+    from .relayout import adopt_book_render
+
+    adopt_book_render(row)
 
 
 def _cancel_check(render_id: int):
@@ -370,6 +469,12 @@ def _run(row: PreviewRender, job: RenderJob) -> None:
             chapters = [
                 dict(item, first=row.first_page, last=row.first_page + pages - 1) for item in chapters[:1]
             ]
+        write_json(
+            target / LAYOUT_FILE,
+            layout_document(
+                row, rendered, page_setup(job.stylesheet), first_page=job.first_page, chapters=chapters
+            ),
+        )
         finished = PreviewRender.objects.filter(pk=row.pk, status=PreviewRender.Status.RUNNING).update(
             status=PreviewRender.Status.DONE,
             page_count=pages,
@@ -377,6 +482,7 @@ def _run(row: PreviewRender, job: RenderJob) -> None:
             folder=folder,
             passes=rendered.passes,
             duration_ms=rendered.duration_ms,
+            checks=rendered.checks,
             error="",
             finished_at=timezone.now(),
         )
@@ -418,6 +524,8 @@ def prune(book_id: int, scope: str, chapter_id: str = "") -> int:
             .order_by("-created_at", "-id")[KEEP_CHAPTERS:]
         )
         drop += others
+    live = LiveLayout.objects.filter(book_id=book_id).values_list("base_id", flat=True).first()
+    drop = [row for row in drop if row.pk != live]  # the live layout's base keeps its files
     if not drop:
         return 0
     kept_folders = set(
@@ -466,47 +574,58 @@ def request_preview(
         return None
     key = scope_key(scope, chapter_id)
     digest = job_hash(job)
+    cached = None
     with transaction.atomic():
         Book.objects.select_for_update().filter(pk=book.pk).first()
         row = _rows(book.pk, scope, key).filter(content_hash=digest).order_by("-created_at", "-id").first()
         if row is not None and row.status == PreviewRender.Status.DONE and _files_exist(row):
+            cached = row
+        elif row is not None and row.is_active and not _abandoned(row):
             return row
-        if row is not None and row.is_active and not _abandoned(row):
+        elif row is not None and row.status == PreviewRender.Status.ERROR and not force:
             return row
-        if row is not None and row.status == PreviewRender.Status.ERROR and not force:
-            return row
-        if row is not None and row.is_active:  # abandoned
-            PreviewRender.objects.filter(pk=row.pk).update(
-                status=PreviewRender.Status.ERROR, error=ABANDONED_ERROR, finished_at=timezone.now()
+        else:
+            if row is not None and row.is_active:  # abandoned
+                PreviewRender.objects.filter(pk=row.pk).update(
+                    status=PreviewRender.Status.ERROR, error=ABANDONED_ERROR, finished_at=timezone.now()
+                )
+            row = PreviewRender.objects.create(
+                book_id=book.pk,
+                scope=scope,
+                chapter_id=key,
+                content_hash=digest,
+                first_page=job.first_page,
+                status=PreviewRender.Status.QUEUED,
             )
-        row = PreviewRender.objects.create(
-            book_id=book.pk,
-            scope=scope,
-            chapter_id=key,
-            content_hash=digest,
-            first_page=job.first_page,
-            status=PreviewRender.Status.QUEUED,
-        )
-        cancel_others(book.pk, scope, key, keep=row.pk)
+            cancel_others(book.pk, scope, key, keep=row.pk)
+    if cached is not None:
+        _adopt(cached)  # a cached book render (the page setup changed back) becomes the live layout again
+        return cached
     _enqueue(row)
     row.refresh_from_db()
     return row
 
 
-def schedule_after_edit(book: Book, chapter_id: str | None, version: int) -> None:
-    """The debounced renders after an editor save (setting `NASSAKH["PREVIEW_AUTORENDER"]`, on by default)."""
+def schedule_after_edit(book: Book, chapter_id: str | None, version: int) -> PreviewRender | None:
+    """After an editor save (setting `NASSAKH["PREVIEW_AUTORENDER"]`, on by default): the chapter's fast
+    re-layout now (D47, returned so the save can tell the client what to poll) and the book's render once
+    edits settle (debounced, D44). Nothing is scheduled for a whole-book edit but the book render."""
     if not settings.NASSAKH.get("PREVIEW_AUTORENDER", True):
-        return
+        return None
     from . import tasks
+    from .relayout import request_relayout
 
+    relayout = None
+    if chapter_id:
+        try:
+            relayout = request_relayout(book, chapter_id, version)
+        except Exception:  # noqa: BLE001 - a save never fails because the layout could not be asked for
+            log.warning("could not ask for the re-layout of book %s", book.pk, exc_info=True)
     try:
-        if chapter_id:
-            tasks.render_chapter_preview.apply_async(
-                (book.pk, chapter_id, version), countdown=CHAPTER_SETTLE_S
-            )
         tasks.render_book_preview.apply_async((book.pk, version), countdown=BOOK_SETTLE_S)
     except Exception:  # noqa: BLE001 - a save never fails because the queue is down
         log.warning("could not schedule the previews of book %s", book.pk, exc_info=True)
+    return relayout
 
 
 # ====================================================================== read models
@@ -583,6 +702,11 @@ def preview_payload(
     setup = page_setup(job.stylesheet)
     fonts = resolve(setup.body_font, setup.latin_font, setup.heading_font)
     pdf_name = "chapter.pdf" if scope == PreviewRender.Scope.CHAPTER else "book.pdf"
+    from .relayout import live_summary
+
+    layout_url = reverse("api:preview_layout", args=[book.pk]) + (
+        f"?scope=chapter&chapter={chapter_id}" if scope == PreviewRender.Scope.CHAPTER else ""
+    )
     return {
         "scope": scope,
         "chapter": chapter_id if scope == PreviewRender.Scope.CHAPTER else None,
@@ -604,6 +728,9 @@ def preview_payload(
         if current is not None and current.status == PreviewRender.Status.ERROR
         else "",
         "missing_fonts": fonts.missing,
+        "checks": list(shown.checks or []) if shown is not None else [],
+        "layout_url": layout_url,
+        "layout": live_summary(book, setup) if scope == PreviewRender.Scope.BOOK else None,
     }
 
 
@@ -632,6 +759,7 @@ def layout_state(book: Book, manuscript_exists: bool = True) -> dict:
         else f"{sheet.width_mm:g}×{sheet.height_mm:g} مم"
     )
     render = latest_done(book.pk, PreviewRender.Scope.BOOK)
+    live = LiveLayout.objects.filter(book_id=book.pk).only("page_count", "revision").first()
     rendering = PreviewRender.objects.filter(
         book_id=book.pk,
         scope=PreviewRender.Scope.BOOK,
@@ -641,7 +769,9 @@ def layout_state(book: Book, manuscript_exists: bool = True) -> dict:
     return {
         "trim": sheet.trim,
         "trim_label": label,
-        "page_count": render.page_count if render is not None else None,
+        "page_count": live.page_count
+        if live is not None and live.revision
+        else (render.page_count if render is not None else None),
         "rendering": rendering,
         "rendered_at": render.finished_at.isoformat() if render is not None and render.finished_at else None,
     }

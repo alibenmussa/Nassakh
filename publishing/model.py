@@ -20,7 +20,11 @@ Phase 5 styles, see `editor.document`) into plain dataclasses that know nothing 
   editor, the chapters panel, the preview's page ranges and, later, Word sections (one per chapter:
   recto openings as `oddPage` section breaks, per-chapter running headers).
 - **Page setup** (`PageSetup`) is the stylesheet as plain values: trim, mirrored margins (inner / outer),
-  faces (registry keys), sizes, running header, page numbers, openings, front matter.
+  faces (registry keys), sizes, running header, page numbers, openings, widows / orphans, headings kept
+  with the next line, front matter and the book details (D47: title and copyright pages).
+- **Page layout (D47)**: every block and note keeps its plain text (`Block.plain`, `Footnote.plain`,
+  `editor.document.object_kinds`), so the layout export can give each laid-out line its character range;
+  `break_before` / `keep_with_next` come from the block's `breakBefore` / `keepWithNext` attrs.
 
 Empty paragraphs are left out (spacing comes from the styles). `direction_runs` splits a run's text into
 right-to-left and left-to-right pieces for renderers that need explicit direction (Word's `w:rtl`).
@@ -72,6 +76,21 @@ PARAGRAPH_STYLE_OF: dict[str | None, str] = {
 }
 TYPOGRAPHIC_MARKS: dict[str, str] = {"bold": "bold", "strong": "bold", "italic": "italic", "em": "italic"}
 SEPARATOR_TEXT = "* * *"
+# The book details of `StyleSheet.front_matter["fields"]` (D47), in the order the title and copyright pages
+# print them; the title and the author default from the Book.
+BOOK_FIELDS: tuple[str, ...] = (
+    "title",
+    "subtitle",
+    "author",
+    "editor",
+    "translator",
+    "publisher",
+    "city",
+    "year",
+    "edition",
+    "isbn",
+    "rights",
+)
 
 
 # ====================================================================== the structure
@@ -119,6 +138,7 @@ class Footnote:
     source_page: int | None = None
     marker: str = ""
     orphan: bool = False
+    plain: str = ""  # the note's text as the layout counts it (`editor.document.object_kinds`)
 
 
 @dataclass
@@ -131,6 +151,9 @@ class Block:
     id: str = ""
     source_pages: tuple[int, ...] = ()
     level: int = 0  # 1 / 2 for chapter and section titles
+    plain: str = ""  # the block's text as the layout counts it (`editor.document.object_kinds`)
+    break_before: bool = False  # «ابدأ صفحة جديدة» (D47)
+    keep_with_next: bool = False  # «مع التالية» (D47)
 
     def text(self) -> str:
         """The block's text without notes and marks."""
@@ -158,12 +181,23 @@ class Chapter:
 
 @dataclass
 class Front:
-    """The front matter: the title page and the contents page, when the stylesheet asks for them."""
+    """The front matter: the title page, the copyright page and the contents page, when the stylesheet asks
+    for them, with the book details (D47; empty details are left out)."""
 
     title: str
     author: str
     title_page: bool = True
     contents: bool = True
+    copyright_page: bool = False
+    subtitle: str = ""
+    editor: str = ""
+    translator: str = ""
+    publisher: str = ""
+    city: str = ""
+    year: str = ""
+    edition: str = ""
+    isbn: str = ""
+    rights: str = ""
 
 
 @dataclass(frozen=True)
@@ -193,9 +227,18 @@ class PageSetup:
     title_page: bool = True
     contents: bool = True
     print_source_pages: bool = False
+    widows: int = 2
+    orphans: int = 2
+    keep_headings: bool = True
+    copyright_page: bool = False
+    details: tuple[tuple[str, str], ...] = ()  # the non-empty book details, `(field, value)` in field order
 
     def as_dict(self) -> dict:
         return {name: getattr(self, name) for name in self.__dataclass_fields__}
+
+    def detail(self, name: str) -> str:
+        """One book detail ('' when not given)."""
+        return next((value for key, value in self.details if key == name), "")
 
 
 @dataclass(frozen=True)
@@ -252,9 +295,12 @@ def _number(value, default: float) -> float:
 
 
 def page_setup(stylesheet) -> PageSetup:
-    """`PageSetup` from an `editor.StyleSheet`, a dict of its fields, or None (the defaults)."""
+    """`PageSetup` from an `editor.StyleSheet`, a dict of its fields, a `PageSetup` (as it is) or None (the
+    defaults)."""
     if stylesheet is None:
         return PageSetup()
+    if isinstance(stylesheet, PageSetup):
+        return stylesheet  # (read field by field it would lose the heading scales and the front matter)
     get = (
         stylesheet.get
         if isinstance(stylesheet, dict)
@@ -292,6 +338,13 @@ def page_setup(stylesheet) -> PageSetup:
     ):
         value = get(name)
         values[name] = value if isinstance(value, str) and value else getattr(base, name)
+    fields = front.get("fields") if isinstance(front.get("fields"), dict) else {}
+    details = tuple(
+        (name, " ".join(str(fields[name]).split()) if name != "rights" else str(fields[name]).strip())
+        for name in BOOK_FIELDS
+        if isinstance(fields.get(name), str) and fields[name].strip()
+    )
+    keep = get("keep_headings", base.keep_headings)
     return PageSetup(
         **values,
         h1_scale=_number(scale.get("h1"), base.h1_scale),
@@ -299,7 +352,19 @@ def page_setup(stylesheet) -> PageSetup:
         title_page=bool(front.get("title_page", base.title_page)),
         contents=bool(front.get("contents", base.contents)),
         print_source_pages=bool(get("print_source_pages", base.print_source_pages)),
+        widows=_count(get("widows"), base.widows),
+        orphans=_count(get("orphans"), base.orphans),
+        keep_headings=keep if isinstance(keep, bool) else base.keep_headings,
+        copyright_page=bool(front.get("copyright_page", base.copyright_page)),
+        details=details,
     )
+
+
+def _count(value, default: int) -> int:
+    """A small line count (widows, orphans): 1 to 9, `default` for anything else."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return default
+    return max(1, min(9, int(value)))
 
 
 @dataclass
@@ -388,6 +453,7 @@ def _inline(content: list, counters: _Counters, notes: list[Footnote]) -> list[I
                     source_page=page if isinstance(page, int) and not isinstance(page, bool) else None,
                     marker=str(attrs.get("marker") or ""),
                     orphan=bool(attrs.get("orphan")),
+                    plain=doc.object_kinds(item.get("content") or []),
                 )
             )
             runs.append(NoteRef(note_id))
@@ -412,7 +478,8 @@ def _has_content(runs: list) -> bool:
 
 
 def _block(node: dict, counters: _Counters, style_override: str | None = None) -> list[Block]:
-    """The model block(s) of one document block (a blockquote gives one block per paragraph)."""
+    """The model block(s) of one document block (a blockquote gives one block per paragraph; its own
+    `breakBefore` goes to the first, its `keepWithNext` to the last)."""
     kind = node.get("type")
     attrs = doc.attrs_of(node)
     if kind == doc.BLOCKQUOTE:
@@ -421,11 +488,18 @@ def _block(node: dict, counters: _Counters, style_override: str | None = None) -
             if isinstance(child, dict) and child.get("type") == doc.PARAGRAPH:
                 style = "verse" if doc.attrs_of(child).get("style") == "verse" else "quote"
                 out.extend(_block(child, counters, style))
+        if out:
+            out[0].break_before = out[0].break_before or attrs.get("breakBefore") is True
+            out[-1].keep_with_next = out[-1].keep_with_next or attrs.get("keepWithNext") is True
         return out
     pages = tuple(sorted(set(doc.source_pages(node))))
     block_id = doc.node_id(node)
+    flags = {
+        "break_before": attrs.get("breakBefore") is True,
+        "keep_with_next": attrs.get("keepWithNext") is True,
+    }
     if kind in (doc.SEPARATOR, "horizontalRule"):
-        return [Block("separator", [Run(SEPARATOR_TEXT)], id=block_id, source_pages=pages)]
+        return [Block("separator", [Run(SEPARATOR_TEXT)], id=block_id, source_pages=pages, **flags)]
     notes: list[Footnote] = []
     runs: list[Inline] = []
     if pages and (counters.last_page is None or pages[0] > counters.last_page):
@@ -447,7 +521,10 @@ def _block(node: dict, counters: _Counters, style_override: str | None = None) -
     runs = _trim_edges(_tidy_breaks(runs))
     if not _has_content(runs):
         return []
-    return [Block(style, runs, notes, id=block_id, source_pages=pages, level=level)]
+    plain = doc.object_kinds(node.get("content") or [])
+    if kind == doc.TITLE and not plain.strip():
+        plain = str(attrs.get("text") or "").strip()  # printed from its attrs
+    return [Block(style, runs, notes, id=block_id, source_pages=pages, level=level, plain=plain, **flags)]
 
 
 def _trim_edges(runs: list[Inline]) -> list[Inline]:
@@ -471,18 +548,20 @@ def _title_of(content: list, fallback: str) -> tuple[str, str]:
 def book_model(document, stylesheet=None, *, title: str = "", author: str = "", chapter_ids=None) -> Book:
     """The book model of a manuscript document with a stylesheet (`editor.StyleSheet`, a dict or None).
 
-    `title` / `author` stand in when the document's title node has none (the book's own fields).
-    `chapter_ids`, when given, keeps only those chapters (the chapter preview); footnote numbers still
-    count from the start of the book.
+    The title and the author are the stylesheet's book details when given, else the document's title
+    node's, else `title` / `author` (the book's own fields). `chapter_ids`, when given, keeps only those
+    chapters (the chapter preview, the re-layout); footnote numbers still count from the start of the book.
     """
     setup = page_setup(stylesheet)
     content = doc.content_of(document)
     doc_title, doc_author = _title_of(content, title)
     front = Front(
-        title=doc_title or title,
-        author=doc_author or author,
+        title=setup.detail("title") or doc_title or title,
+        author=setup.detail("author") or doc_author or author,
         title_page=setup.title_page,
         contents=setup.contents,
+        copyright_page=setup.copyright_page,
+        **{name: setup.detail(name) for name in BOOK_FIELDS if name not in ("title", "author")},
     )
     wanted = set(chapter_ids) if chapter_ids is not None else None
     counters = _Counters()

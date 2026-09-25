@@ -8,13 +8,21 @@ show `attr(data-n)`); a third pass runs only when a page assignment moved in pas
 push a call onto the next line). Per-chapter and per-book numbering need one pass.
 
 One `FontConfiguration` serves the `CSS` object and every `render` of a job (WeasyPrint needs the same
-instance for `@font-face` rules to apply).
+instance for `@font-face` rules to apply). With `reuse`, the pair is kept for the next job with the same
+CSS (the re-layout worker saves the ~0.1 s the CSS and its fonts take to load; one job at a time uses it).
+
+**Layout (D47).** Given the markup's `texts`, the last pass's box tree is exported as the page layout
+(`publishing.layout`); `pdf=False` stops there (the fast re-layout writes no PDF). `seed` (element id →
+number) starts pass 1 with the numbers of the last layout: when no note changed page, one pass is enough.
 """
 
 from __future__ import annotations
 
+import atexit
 import logging
+import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -41,6 +49,35 @@ class PdfResult:
     numbers: dict[str, str] = field(default_factory=dict)
     passes: int = 1
     duration_ms: int = 0
+    layout: list[dict] | None = None  # the pages' layout (`publishing.layout`) when `texts` were given
+    misses: int = 0  # characters the layout could not place in their block's text (0 when sound)
+    patched: bool = False  # the footnote numbers are to be set in the layout (`numbers`), see `patch`
+
+
+_SHEETS: OrderedDict[str, tuple] = OrderedDict()
+_SHEETS_KEPT = 4
+_SHEETS_LOCK = threading.RLock()
+atexit.register(_SHEETS.clear)  # the kept font configurations go before the interpreter tears down
+
+
+def _sheet(css: str, fonts, reuse: bool):
+    """`(CSS, FontConfiguration)` for `css`: a new pair, or with `reuse` the kept one for the same CSS."""
+    from weasyprint import CSS
+    from weasyprint.text.fonts import FontConfiguration
+
+    if not reuse or fonts is not None:
+        font_config = fonts or FontConfiguration()
+        return CSS(string=css, font_config=font_config), font_config
+    found = _SHEETS.get(css)
+    if found is not None:
+        _SHEETS.move_to_end(css)
+        return found
+    font_config = FontConfiguration()
+    found = (CSS(string=css, font_config=font_config), font_config)
+    _SHEETS[css] = found
+    while len(_SHEETS) > _SHEETS_KEPT:
+        _SHEETS.popitem(last=False)
+    return found
 
 
 def first_pages(document) -> dict[str, int]:
@@ -73,31 +110,62 @@ def render_pdf(
     numbering: str = "page",
     base_url: str | None = None,
     cancelled: Callable[[], bool] | None = None,
+    texts: dict[str, str] | None = None,
+    first_page: int = 1,
+    pdf: bool = True,
+    seed: dict[str, str] | None = None,
+    reuse: bool = False,
+    patch: bool = False,
 ) -> PdfResult:
     """Lay out `html` with `css` and write the PDF (`fonts`: a WeasyPrint `FontConfiguration`, one is
     made when None). `numbering` `page` runs the D46 passes; `cancelled()` is asked between passes and
-    raises `RenderCancelled` when it answers True."""
-    from weasyprint import CSS, HTML
-    from weasyprint.text.fonts import FontConfiguration
+    raises `RenderCancelled` when it answers True. With `texts` the layout is exported (pages numbered
+    from `first_page`); `pdf=False` writes no PDF (`PdfResult.pdf` is empty); `seed` and `reuse`: see the
+    module docstring. `patch` (a layout without a PDF, digits all as wide): when the footnote numbers of
+    pass 1 are wrong but as long as the right ones, no second pass is laid out — the caller sets the
+    numbers in the layout (`PdfResult.patched`; the lines cannot move)."""
+    options = (numbering, base_url, cancelled, texts, first_page, pdf, seed, patch)
+    if reuse and fonts is None:
+        with _SHEETS_LOCK:
+            return _render(html, css, None, *options, reuse=True)
+    return _render(html, css, fonts, *options, reuse=False)
+
+
+def _render(
+    html, css, fonts, numbering, base_url, cancelled, texts, first_page, pdf, seed, patch, *, reuse
+) -> PdfResult:
+    from weasyprint import HTML
 
     started = time.monotonic()
-    font_config = fonts or FontConfiguration()
-    sheet = CSS(string=css, font_config=font_config)
+    sheet, font_config = _sheet(css, fonts, reuse)
 
     def layout(markup: str):
         if cancelled is not None and cancelled():
             raise RenderCancelled
         return HTML(string=markup, base_url=base_url).render(stylesheets=[sheet], font_config=font_config)
 
-    document = layout(html)
-    anchors = first_pages(document)
-    passes = 1
     order = note_order(html)
     numbers: dict[str, str] = {}
+    seeded = numbering == "page" and bool(seed) and bool(order)
+    if seeded:
+        numbers = {element_id: str(seed.get(element_id) or "1") for element_id in order}
+        html_first = with_numbers(html, numbers)
+    else:
+        html_first = html
+    document = layout(html_first)
+    anchors = first_pages(document)
+    passes = 1
     note_pages = {element_id: anchors[element_id] for element_id in order if element_id in anchors}
+    patched = False
     if numbering == "page" and order:
         wanted = per_page_numbers(order, note_pages)
-        while passes < MAX_PASSES:
+        shown = numbers if seeded else {element_id: "1" for element_id in order}
+        if wanted == {element_id: shown[element_id] for element_id in wanted}:
+            numbers = wanted  # every number shown in pass 1 is already right: no second pass
+        elif patch and not pdf and all(len(value) == len(shown[key]) for key, value in wanted.items()):
+            numbers = wanted  # as long as the numbers shown, digits all as wide: set in the layout instead
+            patched = True
+        while passes < MAX_PASSES and wanted != numbers:
             document = layout(with_numbers(html, wanted))
             passes += 1
             numbers = wanted
@@ -113,13 +181,21 @@ def render_pdf(
             log.warning("footnote numbers may be off on some pages after %s passes", passes)
     if cancelled is not None and cancelled():
         raise RenderCancelled
-    pdf = document.write_pdf()
+    pages = misses = None
+    if texts is not None:
+        from .layout import extract_layout
+
+        pages, misses = extract_layout(document, texts, first_page=first_page)
+    data = document.write_pdf() if pdf else b""
     return PdfResult(
-        pdf=pdf,
+        pdf=data,
         page_count=len(document.pages),
         anchors=anchors,
         footnote_pages=note_pages,
         numbers=numbers,
         passes=passes,
         duration_ms=int((time.monotonic() - started) * 1000),
+        layout=pages,
+        misses=misses or 0,
+        patched=patched,
     )

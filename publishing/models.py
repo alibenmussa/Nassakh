@@ -1,4 +1,5 @@
-"""Page previews (PHASE5_SPEC §2, D44): one row per render of the book or of one chapter, cached by hash."""
+"""Page previews (PHASE5_SPEC §2, D44): one row per render of the book or of one chapter, cached by hash;
+the book's live layout (D47): the pages the book page draws now."""
 
 from __future__ import annotations
 
@@ -15,7 +16,16 @@ class PreviewRender(models.Model):
     reuses it. `chapters` is `[{id, title, first, last}]` (page numbers as printed); `folder` the media
     path of `page-0001.webp`, `page-0001-2x.webp`, … and the PDF; `first_page` the printed number of the
     first page (a chapter rendered alone starts where it starts in the last full render).
+
+    D47: every render also writes `layout.json` (the pages' layout, `publishing.layout`) and its `checks`.
+    `kind` `layout` is a fast re-layout of a chapter (`publishing.relayout`): layout only, its page images
+    follow in a low-priority task (`images`); `result` holds what it changed in the live layout (the
+    replaced page range, the delta, the blank pages…); `version` is the manuscript version rendered.
     """
+
+    class Kind(models.TextChoices):
+        PAGES = "pages", "صفحات"
+        LAYOUT = "layout", "إعادة ترتيب"
 
     class Scope(models.TextChoices):
         BOOK = "book", "الكتاب"
@@ -32,6 +42,7 @@ class PreviewRender(models.Model):
         Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="preview_renders"
     )
     scope = models.CharField("النطاق", max_length=10, choices=Scope.choices, default=Scope.BOOK)
+    kind = models.CharField("النوع", max_length=10, choices=Kind.choices, default=Kind.PAGES)
     chapter_id = models.CharField("الفصل", max_length=64, blank=True)
     content_hash = models.CharField("بصمة المحتوى", max_length=64, db_index=True)
     status = models.CharField("الحالة", max_length=10, choices=Status.choices, default=Status.QUEUED)
@@ -40,6 +51,10 @@ class PreviewRender(models.Model):
     chapters = models.JSONField("الفصول", default=list, blank=True)
     folder = models.CharField("المجلد", max_length=255, blank=True)
     passes = models.PositiveSmallIntegerField("مرات الإخراج", default=0)
+    images = models.BooleanField("صور الصفحات جاهزة", default=True)
+    checks = models.JSONField("ملاحظات الصفحات", default=list, blank=True)
+    result = models.JSONField("نتيجة إعادة الترتيب", default=dict, blank=True)
+    version = models.PositiveIntegerField("إصدار المخطوطة", default=0)
     duration_ms = models.PositiveIntegerField("المدة (مللي ثانية)", default=0)
     error = models.TextField("الخطأ", blank=True)
     task_id = models.CharField("معرّف المهمة", max_length=64, blank=True)
@@ -52,6 +67,7 @@ class PreviewRender(models.Model):
         ordering = ["-created_at", "-id"]
         indexes = [
             models.Index(fields=["book", "scope", "chapter_id", "-created_at"], name="preview_scope_latest"),
+            models.Index(fields=["book", "kind", "chapter_id", "-created_at"], name="preview_kind_latest"),
         ]
 
     def __str__(self) -> str:
@@ -62,3 +78,41 @@ class PreviewRender(models.Model):
     def is_active(self) -> bool:
         """True while the render waits in the queue or runs."""
         return self.status in (self.Status.QUEUED, self.Status.RUNNING)
+
+
+class LiveLayout(models.Model):
+    """The book's current page layout (D47): what the book page draws and the next re-layout builds on.
+
+    `path` is the media path of the pages' JSON (`publishing.layout` pages plus each page's image
+    reference): a finished book render's `layout.json`, or a revision written by a chapter re-layout
+    (`books/<id>/layout/live-<revision>.json`, one file per revision, never rewritten). `revision` grows
+    on every change; `chapters` is `[{id, title, first, last, version}]` (printed pages, the chapter
+    version laid out); `manuscript_version` the newest manuscript version in it; `setup_hash` the page
+    setup it was laid out with (a render with another setup replaces it).
+    """
+
+    book = models.OneToOneField(
+        Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="live_layout"
+    )
+    revision = models.PositiveIntegerField("المراجعة", default=0)
+    path = models.CharField("الملف", max_length=255, blank=True)
+    base = models.ForeignKey(
+        PreviewRender,
+        verbose_name="إخراج الكتاب الأساس",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    page_count = models.PositiveIntegerField("عدد الصفحات", default=0)
+    chapters = models.JSONField("الفصول", default=list, blank=True)
+    manuscript_version = models.PositiveIntegerField("إصدار المخطوطة", default=0)
+    setup_hash = models.CharField("بصمة التنسيق", max_length=64, blank=True)
+    updated_at = models.DateTimeField("حُدّث في", auto_now=True)
+
+    class Meta:
+        verbose_name = "ترتيب صفحات الكتاب"
+        verbose_name_plural = "ترتيبات صفحات الكتب"
+
+    def __str__(self) -> str:
+        return f"live layout of book {self.book_id} r{self.revision} ({self.page_count} pages)"

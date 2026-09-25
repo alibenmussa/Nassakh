@@ -15,7 +15,8 @@ page is `SECTION_PAGES` or more after the section's first page. Such a chapter's
 
 - blocks: `title` {text, author} (optional inline content), `heading` {level 1–6, id, …}, `paragraph`
   {id, style: null | "quote" | "verse" | "center", …}, `separator` {id} (alias `horizontalRule`),
-  `blockquote` (paragraphs inside; its paragraphs read as quotes)
+  `blockquote` (paragraphs inside; its paragraphs read as quotes); every block may carry
+  `breakBefore` («ابدأ صفحة جديدة») and `keepWithNext` («مع التالية»), booleans (D47)
 - inline: `text` with marks `bold`, `italic`, `uncertain`; `footnote` {id, number, marker, sourcePage,
   sourceLineIds, orphan} holding text / `hardBreak`; `pageBreak` {page, printed} (a source page mark,
   not a printed page break); `hardBreak`
@@ -26,6 +27,13 @@ when the chapter really changed, and saving one chapter never conflicts with ano
 **Ids.** Blocks and notes keep their ids (`h` / `p` / `n` + a source line id from assembly). A saved
 chapter's missing or duplicated ids are repaired deterministically: a duplicate becomes `<id>-2`, `-3`…,
 a missing block id `e<n>`, a missing note id `ne<n>` (the smallest unused `n`).
+
+**Plain text and offsets (D47).** `inline_text(content)` is a block's (or a note's) text as the page
+layout counts it: text as it is, a hard break `"\\n"`, a footnote call or a scan page mark one U+FFFC. An
+offset into it is the ProseMirror offset inside the textblock. Offsets that leave the server (the layout's
+`start` / `end`, the uncertain words) are in UTF-16 code units, the unit of JavaScript strings and of
+ProseMirror positions (`utf16_index` / `code_index` convert; identical for text without astral
+characters). `replace_range` / `unmark_range` edit a container's inline content by such offsets.
 """
 
 from __future__ import annotations
@@ -52,6 +60,9 @@ INLINE_TYPES: frozenset[str] = frozenset({"text", "footnote", "pageBreak", "hard
 NOTE_INLINE_TYPES: frozenset[str] = frozenset({"text", "hardBreak"})
 MARK_TYPES: frozenset[str] = frozenset({"bold", "italic", "uncertain"})
 PARAGRAPH_STYLES: tuple[str, ...] = ("quote", "verse", "center")
+BLOCK_FLAGS: tuple[str, ...] = ("breakBefore", "keepWithNext")  # D47 page-break attrs (booleans)
+OBJECT = "￼"  # a footnote call or a scan page mark in a block's plain text (one position)
+BREAK = "\n"  # a hard line break in a block's plain text
 
 SECTION_PAGES = 30
 MAX_CHAPTER_BYTES = 8 * 1024 * 1024
@@ -336,6 +347,148 @@ def has_uncertain(block: dict) -> bool:
     return False
 
 
+# ====================================================================== plain text and offsets (D47)
+
+
+def inline_text(content) -> str:
+    """The plain text of a list of inline nodes (see the module docstring): text as is, a hard break
+    `"\\n"`, a footnote call or a scan page mark one U+FFFC (`OBJECT`)."""
+    parts: list[str] = []
+    for item in content if isinstance(content, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "text":
+            parts.append(str(item.get("text") or ""))
+        elif kind == "hardBreak":
+            parts.append(BREAK)
+        elif kind in ("footnote", "pageBreak"):
+            parts.append(OBJECT)
+    return "".join(parts)
+
+
+def block_text(node) -> str:
+    """A block's (or a note's) plain text: `inline_text` of its content ('' for a separator)."""
+    return inline_text(node.get("content") if isinstance(node, dict) else None)
+
+
+def object_kinds(content) -> str:
+    """`inline_text` with each object told apart: a footnote call stays U+FFFC, a scan page mark becomes
+    U+0000 (the layout aligner skips page marks but matches calls; the positions are the same)."""
+    parts: list[str] = []
+    for item in content if isinstance(content, list) else []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "text":
+            parts.append(str(item.get("text") or ""))
+        elif kind == "hardBreak":
+            parts.append(BREAK)
+        elif kind == "footnote":
+            parts.append(OBJECT)
+        elif kind == "pageBreak":
+            parts.append("\x00")
+    return "".join(parts)
+
+
+def _astral(text: str) -> bool:
+    return any(ord(char) > 0xFFFF for char in text)
+
+
+def utf16_index(text: str, index: int) -> int:
+    """Code point index `index` in `text` → the same position in UTF-16 code units."""
+    index = max(0, min(int(index), len(text)))
+    if not _astral(text):
+        return index
+    return index + sum(1 for char in text[:index] if ord(char) > 0xFFFF)
+
+
+def code_index(text: str, units: int) -> int:
+    """UTF-16 position `units` in `text` → the code point index (a unit inside a surrogate pair rounds
+    down to the character's start)."""
+    units = max(0, int(units))
+    if not _astral(text):
+        return min(units, len(text))
+    count = 0
+    for i, char in enumerate(text):
+        width = 2 if ord(char) > 0xFFFF else 1
+        if count + width > units:
+            return i
+        count += width
+    return len(text)
+
+
+def _pieces(content: list) -> list[tuple[str, object]]:
+    """A container's inline content as positions: `("c", (char, marks))` per text character, `("n",
+    node)` per inline node (a hard break, a call, a page mark)."""
+    out: list[tuple[str, object]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "text":
+            marks = item.get("marks") or []
+            out.extend(("c", (char, marks)) for char in str(item.get("text") or ""))
+        else:
+            out.append(("n", item))
+    return out
+
+
+def _rebuild(pieces: list[tuple[str, object]]) -> list:
+    """Inline content from positions (neighbouring characters with the same marks merged)."""
+    out: list = []
+    chars: list[tuple[str, list]] = []
+    for kind, value in pieces:
+        if kind == "c":
+            chars.append(value)  # type: ignore[arg-type]
+            continue
+        if chars:
+            out.extend(_text_nodes(chars))
+            chars = []
+        out.append(value)
+    if chars:
+        out.extend(_text_nodes(chars))
+    return out
+
+
+def _without(marks, mark: str) -> list:
+    return [m for m in marks or [] if not (isinstance(m, dict) and m.get("type") == mark)]
+
+
+def has_mark_range(content: list, start: int, end: int, mark: str) -> bool:
+    """True when every text character in `[start, end)` (code points of `inline_text`) carries `mark`
+    and there is at least one."""
+    pieces = _pieces(content)
+    chars = [value for kind, value in pieces[start:end] if kind == "c"]
+    return bool(chars) and all(
+        any(isinstance(m, dict) and m.get("type") == mark for m in marks) for _char, marks in chars
+    )
+
+
+def unmark_range(content: list, start: int, end: int, mark: str = "uncertain") -> list:
+    """`content` with `mark` taken off the characters in `[start, end)` (a new list)."""
+    pieces = _pieces(content)
+    for i in range(max(0, start), min(end, len(pieces))):
+        kind, value = pieces[i]
+        if kind == "c":
+            char, marks = value  # type: ignore[misc]
+            pieces[i] = ("c", (char, _without(marks, mark)))
+    return _rebuild(pieces)
+
+
+def replace_range(content: list, start: int, end: int, text: str, drop: str = "uncertain") -> list:
+    """`content` with the characters in `[start, end)` replaced by `text` (a new list). The new text takes
+    the marks of the first character replaced, less `drop` (a corrected word counts as resolved); inline
+    nodes inside the range are kept after the new text."""
+    pieces = _pieces(content)
+    start, end = max(0, start), min(end, len(pieces))
+    inside = pieces[start:end]
+    marks = next((value[1] for kind, value in inside if kind == "c"), [])  # type: ignore[index]
+    marks = _without(marks, drop)
+    new = [("c", (char, marks)) for char in text]
+    kept = [(kind, value) for kind, value in inside if kind == "n"]
+    return _rebuild([*pieces[:start], *new, *kept, *pieces[end:]])
+
+
 # ====================================================================== writing
 
 
@@ -404,6 +557,9 @@ def _check_block(node, counter: list[int], top: bool) -> None:
     if kind not in BLOCK_TYPES:
         raise DocumentError(f"نوع فقرة غير معروف: {kind[:40]}.")
     attrs = _check_attrs(node)
+    for flag in BLOCK_FLAGS:
+        if attrs.get(flag) is not None and not isinstance(attrs.get(flag), bool):
+            raise DocumentError("خاصية فاصل الصفحة غير صالحة.")
     content = node.get("content", [])
     if content is None:
         content = []

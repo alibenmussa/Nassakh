@@ -1,76 +1,77 @@
 {% extends "base.html" %}
 {% load static %}
 {% comment %}
-Stylesheet and page preview (PHASE5_SPEC §5): the dashboard's grid, one to one — the real pages in the viewer
-(D33: one page or a spread fitted to the window, review-style turns, keys, wheel, touch, the counter, the
-filmstrip in the side panel) beside the stylesheet panel (= bk-side sections: القطع، الهوامش، الخطوط، النص،
-الصفحة) under the footprint block. Every change saves (PUT) and re-renders; the viewer swaps the pages in place
-keeping the current page. The top-bar controls live in header_actions (outside the component root) and read the
-component through Alpine.store('layout').view; everything else is `bookLayout` in static/src/js/layout.js;
-styles in static/src/components/layout.css.
+The book page (PHASE5_SPEC §9, D47): the one place to preview and to edit the book. The dashboard viewer (turns,
+keys, wheel, spread, fit modes) draws live pages: every line of the WeasyPrint layout as positioned text in the
+render's faces, so the page on screen is the PDF's page. «معاينة | تحرير» (E, a double-click in preview):
+in edit mode a click opens the paragraph in place; after a short pause the chapter is saved, laid out again and
+the pages swap in place. One side panel with an icon tab bar (الفصول، الصفحات، بحث، التنسيق، الفقرة، الأصل،
+غير المؤكَّدة). The top-bar controls live in header_actions (outside the component root) and read the page
+through Alpine.store('bookPage').view; everything else is `bookPage` (static/src/js/book/*.js) with the one-block
+editor of static/dist/editor.js; styles in static/src/components/layout.css.
 Context: book, exists, can_edit, config (editor.services.page_config + `initial`: the stylesheet payload, the
-book's cached preview and the requested chapter's), initial, first_page (the page the server paints),
-preview_pages (the cached pages: static thumbs). Western digits everywhere; numbers in Arabic strings sit in <bdi>.
+book's preview, the first live pages). Western digits everywhere; numbers in Arabic strings sit in <bdi>.
 {% endcomment %}
-{% block head_title %}تنسيق الكتاب · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}<span class="title-page">تنسيق الكتاب</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{% block head_title %}الكتاب · {{ book.title }} · نسّاخ{% endblock %}
+{% block title %}<span class="title-page">الكتاب</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
 
 {% block header_actions %}
 {% if exists %}
-<div class="lo-bar" x-data="layoutBar">
+<div class="lo-bar" x-data="bookBar">
   <template x-if="v">
     <div class="lo-bar-inner">
-      <a class="btn btn-ghost btn-sm" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
-
-      {# the save pill (= rv-save): «يُحفظ…», «حُفظ», «لم يُحفظ · صحّح القيم», «تعذّر الحفظ · إعادة المحاولة» (click retries) #}
-      <button type="button" class="lo-pill lo-save" :class="'is-' + v.savePill.state" x-show="v.savePill.text" :disabled="v.savePill.state !== 'error'" @click="v.flush()" data-save-pill>
+      {# the save pill (= rv-save): the chapter's text and the stylesheet; a failed save retries on a click #}
+      <button type="button" class="lo-pill lo-save" :class="'is-' + v.savePill.state" x-show="v.savePill.text" :disabled="v.savePill.state !== 'error'" @click="v.retrySave()" data-save-pill>
         <span class="lo-pill-dot" aria-hidden="true"></span>
         <span role="status" aria-live="polite" x-text="v.savePill.text"></span>
       </button>
-
-      {# the one primary: the editor on the chapter under the reader's eyes #}
-      {% if can_edit %}
-      <a class="btn btn-primary btn-sm" :href="v.editorHref" data-layout-editor title="فتح المحرّر على هذا الفصل (E)">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
-        <span>فتح المحرّر</span>
+      {# the render pill: the pages being laid out again, the book render, stale pages, a failure (a click retries) #}
+      <button type="button" class="lo-pill lo-render" :class="'is-' + v.renderPill.state" x-show="v.renderPill.text" :disabled="!v.renderPill.action || v.retrying" @click="v.retry()" data-render-pill>
+        <span class="lo-pill-dot" aria-hidden="true"></span>
+        <span role="status" aria-live="polite" x-text="v.renderPill.text"></span>
+      </button>
+      <button type="button" class="bk-poll" x-show="v.pollState === 'error'" @click="v.pollNow()" title="إعادة محاولة التحديث الآن">
+        <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
+      </button>
+      <a class="bk-poll" x-show="v.pollState === 'auth'" href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
+        <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
       </a>
-      {% else %}
-      <a class="btn btn-primary btn-sm" href="{% url 'assembly:manuscript' book.pk %}">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
-        <span>المخطوطة</span>
-      </a>
-      {% endif %}
 
-      {# «⋯» menu: the manuscript, the preview's PDF, the shortcuts, the dashboard #}
+      {# «⋯»: snapshots, digits, the chapter's re-assembly on drift, the PDF of the last render, the manuscript, the dashboard #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
         <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
         </button>
-        <div class="menu menu-popover lo-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+        <div class="menu menu-popover lo-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms
+             @keydown.arrow-down.prevent="v.moveIn($el, 1)" @keydown.arrow-up.prevent="v.moveIn($el, -1)" data-book-menu>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSnapshots()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>نسخة محفوظة…</span>
+          </button>
           {% if can_edit %}
-          <a class="menu-item" role="menuitem" :href="v.editorHref">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
-            <span>فتح المحرّر</span>
-            <kbd class="kbd ms-auto">E</kbd>
-          </a>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openDigits()">
+            <span class="bp-menu-glyph" aria-hidden="true">0</span>
+            <span>تحويل الأرقام…</span>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" x-show="v.driftChapter" :disabled="v.reassembly.running" @click="open = false; v.reassembleChapter()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>إعادة تجميع الفصل من المراجعة</span>
+          </button>
           {% endif %}
+          <a class="menu-item" role="menuitem" :href="v.pdfUrl || '#'" :aria-disabled="v.pdfUrl ? 'false' : 'true'" target="_blank" rel="noopener" @click="if (!v.pdfUrl) $event.preventDefault(); else open = false" data-pdf-link>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"/></svg>
+            <span>إخراج PDF</span>
+            <span class="meta ms-auto" x-show="!v.pdfUrl">بعد أول إخراج</span>
+          </a>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
+            <span class="bp-menu-glyph" aria-hidden="true">?</span>
+            <span>اختصارات لوحة المفاتيح</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
           <a class="menu-item" role="menuitem" href="{% url 'assembly:manuscript' book.pk %}">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
             <span>المخطوطة</span>
           </a>
-          <a class="menu-item" role="menuitem" x-show="v.pdfUrl" :href="v.pdfUrl" target="_blank" rel="noopener">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"/></svg>
-            <span>فتح PDF المعاينة</span>
-          </a>
-          <div class="menu-sep" role="separator"></div>
-          <div class="menu-label">اختصارات</div>
-          <div class="lo-keys" aria-label="اختصارات لوحة المفاتيح">
-            <span><kbd class="kbd">←</kbd> <kbd class="kbd">→</kbd> تقليب</span>
-            <span><kbd class="kbd">G</kbd> إلى صفحة</span>
-            <span><kbd class="kbd">S</kbd> صفحتان</span>
-            <span><kbd class="kbd">1</kbd><kbd class="kbd">2</kbd><kbd class="kbd">3</kbd> ملء الارتفاع · العرض · 100 %</span>
-          </div>
-          <div class="menu-sep" role="separator"></div>
           <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
             <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
             <span>لوحة الكتاب</span>
@@ -84,59 +85,54 @@ preview_pages (the cached pages: static thumbs). Western digits everywhere; numb
 {% endblock %}
 
 {% block content %}
-{{ config|json_script:"layout-config" }}
+{{ config|json_script:"book-config" }}
 {% if not exists %}
 {% url 'assembly:manuscript' book.pk as manuscript_url %}
-{% include "partials/_empty_state.html" with title="لا توجد مخطوطة بعد" text="حوّل الكتاب إلى مخطوطة أولًا، ثم اختر قطعه وخطوطه وهوامشه هنا وشاهد صفحاته الحقيقية." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-book" %}
+{% include "partials/_empty_state.html" with title="لا توجد مخطوطة بعد" text="حوّل الكتاب إلى مخطوطة أولًا، ثم اختر قطعه وخطوطه وهوامشه هنا وحرّر نصّه على صفحاته." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-book" %}
 {% else %}
-<div class="lo-screen" data-layout x-data="bookLayout(JSON.parse(document.getElementById('layout-config').textContent))"
-     :class="{ 'is-spread': spreadOn, 'is-rendering': rendering, 'is-saving': saving }" :data-fit="fit"
-     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="onUnload()" @pagehide.window="onUnload()" @visibilitychange.document="onVisible()">
+<div class="lo-screen bp-screen" data-book x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
+     :class="{ 'is-spread': spreadOn, 'is-edit': mode === 'edit', 'is-open': Boolean(open), 'has-marks': pageMarks }" :data-fit="fit" :data-mode="mode"
+     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @visibilitychange.document="onVisible()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
+  {# the render's faces for the live pages (publishing.fonts.browser_font_css): the same families as the PDF #}
+  <style data-font-css x-text="fontCss">{{ config.fontCss }}</style>
 
-  {# ------------------------------------------------------------ toolbar hanging from the top bar (= bk-toolbar) #}
-  <div class="lo-toolbar">
-    <div class="lo-toolbar-start">
-      <div class="segmented" role="group" aria-label="عدد الصفحات المعروضة" data-spread-toggle>
-        <button type="button" :aria-pressed="!spread" aria-pressed="true" @click="setSpread(false)" title="صفحة واحدة (S)">صفحة</button>
-        <button type="button" :aria-pressed="spread" aria-pressed="false" @click="setSpread(true)" title="صفحتان متقابلتان (S)">صفحتان</button>
-      </div>
-      <div class="segmented" role="group" aria-label="مقاس العرض" data-fit-toggle>
-        <button type="button" :aria-pressed="fit === 'height'" aria-pressed="true" @click="setFit('height')" title="ملء الارتفاع (1)">ملء الارتفاع</button>
-        <button type="button" :aria-pressed="fit === 'width'" aria-pressed="false" @click="setFit('width')" title="ملء العرض (2)">ملء العرض</button>
-        <button type="button" :aria-pressed="fit === 'actual'" aria-pressed="false" @click="setFit('actual')" title="الحجم الحقيقي (3)"><bdi>100 %</bdi></button>
-      </div>
-    </div>
-    <div class="lo-toolbar-mid">
-      {# quiet pills: updating, stale, failed (click retries); the poll trouble pills (= bk-poll) #}
-      <button type="button" class="lo-pill lo-render" :class="'is-' + renderPill.state" x-show="renderPill.text" x-cloak :disabled="!renderPill.action || retrying" @click="retry()" data-render-pill>
-        <span class="lo-pill-dot" aria-hidden="true"></span>
-        <span role="status" aria-live="polite" x-text="renderPill.text"></span>
-      </button>
-      <button type="button" class="bk-poll" x-show="pollState === 'error'" x-cloak @click="pollNow()" title="إعادة محاولة التحديث الآن">
-        <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
-      </button>
-      <a class="bk-poll" x-show="pollState === 'auth'" x-cloak href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
-        <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
-      </a>
-    </div>
-    <div class="lo-toolbar-end">
-      <span class="bk-counter lo-counter" x-show="counterText" x-cloak aria-live="polite">
-        <span x-text="counterText"></span>
-        <span class="lo-counter-chapter" x-show="counterChapter"><span aria-hidden="true">·</span> <span class="lo-counter-title" x-text="counterChapter && counterChapter.title"></span> <span class="num">ص <bdi x-text="counterChapter && (counterChapter.first + '–' + counterChapter.last)"></bdi></span></span>
-      </span>
-      <label class="bk-jump lo-jump">
-        <span class="sr-only">الانتقال إلى صفحة</span>
-        <input type="text" inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة" x-ref="jump" autocomplete="off"
-               @keydown.enter.prevent="jump($el.value); $el.value = ''" @blur="if ($el.value.trim()) { jump($el.value); $el.value = ''; }" @keydown.escape.stop="$el.value = ''; $el.blur()">
-        <kbd class="kbd" aria-hidden="true">G</kbd>
-      </label>
-    </div>
-  </div>
+  {% include "editor/_book_toolbar.html" %}
 
-  {# ------------------------------------------------------------ banners: a failed render while older pages stay on screen #}
+  {# ------------------------------------------------------------ banners: the review drift (D41), a save conflict, a re-assembly, a failed layout #}
   <div class="lo-banners">
-    <div class="banner banner-danger" role="alert" x-show="errorText && phase === 'pages'" x-cloak>
+    <div class="banner" x-show="driftChapter" x-cloak data-drift-banner>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">
+        <span x-text="driftText"></span>
+        <template x-for="(n, i) in (driftChapter ? driftChapter.pages : [])" :key="n">
+          <span><a class="bp-drift-page" :href="reviewUrl(n)"><bdi class="num" x-text="n"></bdi></a><span x-show="i < driftChapter.pages.length - 1">، </span></span>
+        </template>
+      </span>
+      {% if can_edit %}
+      <button type="button" class="btn btn-sm" :disabled="reassembly.running" @click="reassembleChapter()">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة تجميع الفصل من المراجعة</span>
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="dismissDrift()">الاحتفاظ بالنص</button>
+      {% endif %}
+    </div>
+    <div class="banner banner-danger" role="alert" x-show="conflict.open" x-cloak data-conflict-banner>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow">تغيّر هذا الفصل في نافذة أخرى. أعد التحميل لأخذ نصّها، أو احتفظ بنصّك وتُحفظ نسختها أولًا.</span>
+      <button type="button" class="btn btn-sm" @click="reloadConflict()">إعادة التحميل</button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="keepMine()">الاحتفاظ بنصّي</button>
+    </div>
+    <div class="banner banner-info" x-show="reassembly.running" x-cloak>
+      <span class="lo-pill-dot is-live" aria-hidden="true"></span>
+      <span class="grow">تُعاد قراءة هذا الفصل من صفحات المراجعة؛ النص الحالي يُحفظ نسخةً قبل استبداله.</span>
+    </div>
+    <div class="banner banner-danger" role="alert" x-show="reassembly.error" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow" x-text="reassembly.error"></span>
+      {% if can_edit %}<button type="button" class="btn btn-sm" @click="reassembleChapter()">إعادة المحاولة</button>{% endif %}
+    </div>
+    <div class="banner banner-danger" role="alert" x-show="errorText && phase === 'pages'" x-cloak data-render-error>
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
       <span class="grow"><span x-text="errorText"></span> بقيت الصفحات السابقة كما هي.</span>
       {% if can_edit %}
@@ -148,29 +144,26 @@ preview_pages (the cached pages: static thumbs). Western digits everywhere; numb
     </div>
   </div>
 
-  {# ------------------------------------------------------------ the pages beside the side panel (D34) #}
+  {# ------------------------------------------------------------ the live pages beside the side panel #}
   <div class="lo-layout">
     <div class="lo-main">
-      <section class="lo-viewer" aria-label="عارض الصفحات">
+      <section class="lo-viewer" aria-label="صفحات الكتاب">
         <div class="lo-stage" x-ref="stage" tabindex="-1" :class="turnClass" :style="sheetStyle" @wheel="onStageWheel($event)" @pointerdown="onStagePointerDown($event)" @pointerup="onStagePointerUp($event)" @pointercancel="swipeCancel()">
           <div class="lo-canvas" data-canvas>
             <div class="lo-spread" data-spread>
-              {# skeleton pages with the shimmer while nothing is cached #}
+              {# skeleton pages with the shimmer until the first layout arrives #}
               <template x-if="phase === 'skeleton'">
                 <figure class="lo-sheet lo-sheet-right is-skeleton" aria-hidden="true" data-skeleton><span class="lo-skel-title"></span><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span><span class="lo-skel-num"></span></figure>
               </template>
-              <template x-if="phase === 'skeleton' && spreadOn">
-                <figure class="lo-sheet lo-sheet-left is-skeleton" aria-hidden="true"><span class="lo-skel-title"></span><span style="width:94%"></span><span style="width:87%"></span><span style="width:52%"></span><span style="width:91%"></span><span style="width:96%"></span><span style="width:89%"></span><span style="width:70%"></span><span class="lo-skel-num"></span></figure>
-              </template>
-              {# the real pages: right (even) and left (odd) sheets; one sheet in single mode #}
-              <figure class="lo-sheet lo-sheet-right" :class="{ 'is-empty': !rightPage, 'is-loading': isLoading(rightPage), 'is-fresh': rightPage && rightPage.scope === 'chapter' }" x-show="phase === 'pages'"{% if not first_page %} x-cloak{% endif %} data-sheet="right">
-                <img class="lo-page" :alt="rightPage ? 'صفحة ' + rightPage.n : ''" :src="rightPage ? rightPage.url : ''" :srcset="srcset(rightPage)" decoding="async" @load="onLoad('right')" @error="onLoad('right')"{% if first_page %} src="{{ first_page.url }}" srcset="{{ first_page.url }} 1x, {{ first_page.url2x }} 2x" alt="صفحة {{ first_page.n }}"{% endif %}>
+              {# the live pages: the even (verso) page on the right, the odd (recto) on the left; one sheet in single mode #}
+              <figure class="lo-sheet lo-sheet-right" :class="{ 'is-empty': !rightPage }" x-show="phase === 'pages'" x-cloak data-sheet="right" :aria-label="rightPage ? 'صفحة ' + rightPage.n : ''">
+                <div class="lp-page" @click="onSheetClick($event, 'right')" @dblclick="onSheetDblClick($event, 'right')"><div class="lp-lines" data-lines></div><div class="lp-edit" data-edit-host></div></div>
               </figure>
-              <figure class="lo-sheet lo-sheet-left" :class="{ 'is-empty': !leftPage, 'is-loading': isLoading(leftPage), 'is-fresh': leftPage && leftPage.scope === 'chapter' }" x-show="phase === 'pages' && spreadOn" x-cloak data-sheet="left">
-                <img class="lo-page" :alt="leftPage ? 'صفحة ' + leftPage.n : ''" :src="leftPage ? leftPage.url : ''" :srcset="srcset(leftPage)" decoding="async" @load="onLoad('left')" @error="onLoad('left')">
+              <figure class="lo-sheet lo-sheet-left" :class="{ 'is-empty': !leftPage }" x-show="phase === 'pages' && spreadOn" x-cloak data-sheet="left" :aria-label="leftPage ? 'صفحة ' + leftPage.n : ''">
+                <div class="lp-page" @click="onSheetClick($event, 'left')" @dblclick="onSheetDblClick($event, 'left')"><div class="lp-lines" data-lines></div><div class="lp-edit" data-edit-host></div></div>
               </figure>
             </div>
-            {# a failed render with nothing cached: the designed error state #}
+            {# a failed first render with nothing laid out: the designed error state #}
             <div class="empty-state lo-state-error" x-show="phase === 'error'" x-cloak role="alert" data-error-state>
               <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
               <h2 class="empty-title" x-text="errorText"></h2>
@@ -193,46 +186,12 @@ preview_pages (the cached pages: static thumbs). Western digits everywhere; numb
       </section>
     </div>
 
-    <aside class="bk-side lo-side" aria-label="تنسيق الكتاب وصفحاته">
-      {# the footprint: the page count with the delta since the last change, «يُحسب…» while the book render runs, the chapters #}
-      <div class="lo-footprint" role="group" aria-label="حجم الكتاب" data-footprint>
-        <div class="lo-footprint-head">
-          <span class="lo-footprint-count" x-show="footprint.count" x-text="footprint.text"></span>
-          <span class="lo-footprint-count is-empty" x-show="!footprint.count && !footprint.computing">لم تُخرَج الصفحات بعد</span>
-          <bdi class="lo-delta num" x-show="footprint.deltaText" x-text="footprint.deltaText" title="الفرق عن الإخراج السابق"></bdi>
-          <span class="lo-pill is-saving lo-computing" x-show="footprint.computing"><span class="lo-pill-dot" aria-hidden="true"></span><span>يُحسب…</span></span>
-        </div>
-        <ol class="lo-chapters" data-chapters>
-          <template x-for="row in footprint.rows" :key="row.id">
-            <li class="lo-chapter" :class="{ 'is-current': row.current, 'is-fresh': row.fresh }">
-              <button type="button" class="lo-chapter-btn" @click="goToChapter(row.id)" :disabled="row.first === null" :title="row.first === null ? 'لم تُخرَج صفحات هذا الفصل بعد' : 'الانتقال إلى أول صفحة في الفصل'">
-                <span class="lo-chapter-title" x-text="row.title"></span>
-                <span class="lo-chapter-pages num">
-                  <bdi x-show="row.pages !== null" x-text="row.pages"></bdi>
-                  <bdi class="lo-delta" x-show="row.delta" x-text="deltaText(row.delta)"></bdi>
-                  <span class="lo-chapter-range meta" x-show="row.first !== null">ص <bdi x-text="row.first + '–' + row.last"></bdi></span>
-                </span>
-              </button>
-            </li>
-          </template>
-        </ol>
-      </div>
-
-      {# the panel's two faces: the stylesheet, the filmstrip #}
-      <div class="segmented lo-side-tabs" role="tablist" aria-label="محتوى اللوحة" data-panel-tabs>
-        <button type="button" role="tab" :aria-selected="panel === 'style'" :aria-pressed="panel === 'style'" @click="setPanel('style')">التنسيق</button>
-        <button type="button" role="tab" :aria-selected="panel === 'pages'" :aria-pressed="panel === 'pages'" @click="setPanel('pages')">الصفحات <bdi class="num" x-text="pageCount || ''"></bdi></button>
-      </div>
-      <div class="lo-side-body" x-show="panel === 'style'" role="tabpanel">
-        {% include "editor/_layout_panel.html" %}
-      </div>
-      <nav class="lo-film" aria-label="شريط الصفحات" x-show="panel === 'pages'" x-cloak role="tabpanel">
-        <div class="lo-film-track" x-ref="film" data-film-track>{% for p in preview_pages %}<button type="button" class="lo-thumb" data-index="{{ forloop.counter0 }}" data-number="{{ p.n }}" title="صفحة {{ p.n }}" aria-label="صفحة {{ p.n }}"><span class="lo-thumb-img"><img src="{{ p.url }}" alt="" loading="lazy" decoding="async"></span><span class="lo-thumb-num num">{{ p.n }}</span></button>{% endfor %}</div>
-      </nav>
-    </aside>
+    {% include "editor/_book_side.html" %}
   </div>
+
+  {% include "editor/_book_overlays.html" %}
 </div>
 {% endif %}
 {% endblock %}
 
-{% block scripts %}<script src="{% static 'src/js/layout.js' %}"></script>{% endblock %}
+{% block scripts %}<script src="{% static 'dist/editor.js' %}"></script>{% endblock %}

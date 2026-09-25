@@ -1,11 +1,14 @@
-// The TipTap schema of the chapter editor: the Phase 4 nodes one to one (PHASE4_SPEC §2.8, PHASE5_SPEC §4).
+// The TipTap schema of the book page's editors: the Phase 4 nodes one to one (PHASE4_SPEC §2.8, PHASE5_SPEC §9.2).
 //   blocks   title, heading (levels 1–2), paragraph (style null | quote | verse | center), separator (atom)
 //   inline   text, hardBreak, pageBreak (a scan page mark, atom), footnote (atom with its own inline content)
 //   marks    bold, italic, uncertain
-// Every block carries id, sourcePages, sourceLineIds, reviewed and suggestedRole and keeps them through edits
-// (a split copies the source attrs, never the id). Plugins: fresh ids for new and duplicated blocks and notes,
-// sequential footnote numbers as a `data-seq` decoration, the caret block (`is-caret`), the find highlights,
-// and the uncertain mark dropped from a word the owner retypes. The shortcuts of the toolbar live here too.
+// Every block carries id, sourcePages, sourceLineIds, reviewed, suggestedRole and the D47 flags breakBefore /
+// keepWithNext, and keeps them through edits (a split copies the source attrs, never the id). Plugins: fresh
+// ids for new and duplicated blocks and notes, footnote numbers as a `data-seq` decoration, the caret block
+// (`is-caret`), the find highlights, and the uncertain mark dropped from a word the owner retypes.
+// `extensions` is a whole chapter's schema; `blockExtensions` the one-block editor's (D47: a paragraph opened in
+// place on its page) — a document of exactly one block whose edges (Enter, Backspace at the start, the arrows
+// past its first or last line, Esc, undo) are reported to the page through `onBoundary`.
 import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -49,6 +52,9 @@ const sourceAttributes = () => ({
     renderHTML: (attrs) => (attrs.reviewed === false ? { 'data-reviewed': 'false' } : {}),
   },
   suggestedRole: { default: null, rendered: false },
+  // D47: «ابدأ صفحة جديدة» / «مع التالية» (true / false as saved; null: not set)
+  breakBefore: { default: null, rendered: false },
+  keepWithNext: { default: null, rendered: false },
 });
 
 // ---------------------------------------------------------------- nodes
@@ -490,3 +496,127 @@ export const extensions = ({ onFootnote } = {}) => [
 ];
 
 export const noteExtensions = ({ onSubmit } = {}) => [NoteDoc, Text, HardBreak, Bold, Italic, Uncertain, NoteKeys.configure({ onSubmit })];
+
+// ---------------------------------------------------------------- the one-block editor (D47)
+export const BlockDoc = Node.create({ name: 'doc', topNode: true, content: 'block' });
+export const NUMBERS_META = 'ed:numbers';
+
+// Footnote calls show the number printed on the page (`numberOf(id)`, from the page layout), else their order.
+export function pageNumbersPlugin(numberOf) {
+  const build = (doc) => {
+    const decos = [];
+    let n = 0;
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'footnote') {
+        n += 1;
+        const printed = numberOf ? numberOf(node.attrs.id) : '';
+        decos.push(Decoration.node(pos, pos + node.nodeSize, { 'data-seq': String(printed || n) }));
+        return false;
+      }
+      return true;
+    });
+    return DecorationSet.create(doc, decos);
+  };
+  return new Plugin({
+    key: numbersKey,
+    state: {
+      init: (_config, state) => build(state.doc),
+      apply: (tr, decos) => (tr.docChanged || tr.getMeta(NUMBERS_META) ? build(tr.doc) : decos),
+    },
+    props: { decorations(state) { return this.getState(state); } },
+  });
+}
+
+// Every key the block cannot answer alone goes to `handle(name, editor)` first (true: handled). The style keys
+// of the toolbar stay here (a separator is a boundary: it adds a block after this one).
+export const BlockKeys = Extension.create({
+  name: 'edBlockKeys',
+  priority: 1000,
+  addOptions() {
+    return { handle: null };
+  },
+  addKeyboardShortcuts() {
+    const to = (name) => () => (this.options.handle ? Boolean(this.options.handle(name, this.editor)) : false);
+    const set = (style) => () => this.editor.commands.setBlockStyle(style);
+    return {
+      Enter: to('Enter'),
+      Backspace: to('Backspace'),
+      Delete: to('Delete'),
+      ArrowUp: to('ArrowUp'),
+      ArrowDown: to('ArrowDown'),
+      ArrowLeft: to('ArrowLeft'),
+      ArrowRight: to('ArrowRight'),
+      Escape: to('Escape'),
+      'Mod-z': to('undo'),
+      'Mod-Z': to('redo'),
+      'Shift-Mod-z': to('redo'),
+      'Mod-y': to('redo'),
+      'Mod-s': to('save'),
+      'Mod-Alt-1': set('heading1'),
+      'Mod-Alt-2': set('heading2'),
+      'Mod-Alt-0': set('paragraph'),
+      'Mod-Alt-3': set('quote'),
+      'Mod-Alt-4': set('verse'),
+      'Mod-Alt-5': set('center'),
+      'Mod-Alt-6': to('separator'),
+      'Mod-Shift-f': to('footnote'),
+      'Mod-Shift-F': to('footnote'),
+    };
+  },
+});
+
+export const BlockPlugins = Extension.create({
+  name: 'edBlockPlugins',
+  addOptions() {
+    return { numberOf: null };
+  },
+  addProseMirrorPlugins() {
+    return [uniqueIdsPlugin(), pageNumbersPlugin(this.options.numberOf), findPlugin(), resolveOnTypePlugin()];
+  },
+  addCommands() {
+    return {
+      setBlockStyle: (style) => ({ chain }) => {
+        if (style === 'heading1' || style === 'heading2') return chain().setNode('heading', { level: style === 'heading1' ? 1 : 2 }).run();
+        if (style === 'title') return chain().setNode('title').run();
+        if (style === 'paragraph') return chain().setNode('paragraph', { style: null }).run();
+        if (PARAGRAPH_STYLES.includes(style)) return chain().setNode('paragraph', { style }).run();
+        return false;
+      },
+    };
+  },
+});
+
+export const blockExtensions = ({ handle, numberOf } = {}) => [
+  BlockDoc, Text, Paragraph, Heading, Title, Separator, HardBreak, PageBreak, Footnote, Bold, Italic, Uncertain,
+  BlockPlugins.configure({ numberOf }), BlockKeys.configure({ handle }),
+];
+
+// ---------------------------------------------------------------- plain offsets ↔ positions (D47)
+// A plain offset counts a footnote call as one position (= editor.document.inline_text); in the document the
+// call is a node of its own size. `start` is the position where the textblock's content begins.
+const plainLength = (child) => (child.isText ? child.text.length : 1);
+export function posOfOffset(block, offset, start = 1) {
+  let pos = start;
+  let left = Math.max(0, Number(offset) || 0);
+  for (let i = 0; i < block.childCount; i += 1) {
+    const child = block.child(i);
+    const len = plainLength(child);
+    if (left < len || (left === len && child.isText)) return child.isText ? pos + left : pos + (left > 0 ? child.nodeSize : 0);
+    left -= len;
+    pos += child.nodeSize;
+  }
+  return pos;
+}
+export function offsetOfPos(block, pos, start = 1) {
+  let at = start;
+  let off = 0;
+  for (let i = 0; i < block.childCount; i += 1) {
+    const child = block.child(i);
+    if (pos <= at) return off;
+    const end = at + child.nodeSize;
+    if (pos < end) return child.isText ? off + (pos - at) : off + 1;
+    off += plainLength(child);
+    at = end;
+  }
+  return off;
+}

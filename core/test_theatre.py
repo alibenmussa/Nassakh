@@ -197,11 +197,25 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     book, pages = _book([(Page.Status.OCR_DONE, "final"), (Page.Status.REVIEWED, "final")])
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     # every primary candidate is rendered role-gated and toggled from the poll (one visible per state)
-    for state in ("start", "guides", "review", "copy", "editor"):
+    for state in ("start", "guides", "review", "copy", "book"):
         assert f"x-show=\"d.primary === '{state}'\"" in body, state
     assert "data-review-next" in body and "الصفحة التالية للمراجعة" in body
-    # Phase 5: «فتح المحرّر» is the primary once the manuscript is fresh; the menu reaches the layout page
-    assert 'data-editor-open title="تحرير نص الكتاب فصلًا فصلًا"' in body and ':href="d.editorUrl"' in body
+    # Phase 5 (D47): «فتح الكتاب» is the primary once the manuscript is fresh: the book page, the only place
+    # to
+    # preview and edit; nothing links to the old editor address
+    primary = body[body.index("data-book-open") - 120 : body.index("data-book-open") + 200]
+    assert (
+        "x-show=\"d.primary === 'book'\"" in primary
+        and ':href="d.layoutUrl"' in primary
+        and "<span>فتح الكتاب</span>" in primary
+    )
+    assert (
+        "d.editorUrl" not in body
+        and ':href="editorUrl"' not in body
+        and "/editor/" not in body
+        and "فتح المحرّر" not in body
+        and "data-editor-open" not in body
+    )
     assert "x-text=\"d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'\"" in body
     # status chip, progress bar, poll pill, «⋯» menu with copy / guides / rerun forms / all books
     assert 'class="bk-status"' in body and 'aria-label="نسبة إتمام المعالجة"' in body
@@ -218,9 +232,12 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "كل الكتب" in menu
     )
     assert "نسخ نص الكتاب" in menu and "x-show=\"d.primary !== 'copy'\"" in menu
-    assert "تنسيق الكتاب ومعاينته" in menu and "data-layout-open" in menu and ':href="d.layoutUrl"' in menu
-    assert "فتح المحرّر" in menu and "d.primary !== 'editor'" in menu
-    # the side panel's «الكتاب» block (PHASE5 §5): trim and page count, the drift line (D41), both links
+    # «⋯»: «الكتاب» → the book page, hidden while it is the primary
+    item = menu[menu.index("data-book-menu-item") - 200 : menu.index("data-book-menu-item") + 160]
+    assert ':href="d.layoutUrl"' in item and "d.primary !== 'book'" in item and "<span>الكتاب</span>" in item
+    assert "تنسيق الكتاب ومعاينته" not in menu
+    # the side panel's «الكتاب» block (PHASE5 §5, §9): trim and page count, the drift line (D41), the book
+    # page
     side = body[body.index('<aside class="bk-side"') :]
     assert side.index('class="bk-manuscript"') < side.index('class="bk-book"') < side.index("bk-attention")
     book_block = side[side.index('class="bk-book"') : side.index("bk-attention")]
@@ -229,18 +246,20 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and 'x-text="bookLine"' in book_block
         and ':class="bookDot"' in book_block
     )
+    assert 'x-text="driftLine"' in book_block
     assert (
-        'x-text="driftLine"' in book_block and 'class="link bk-book-layout" :href="layoutUrl"' in book_block
-    )
-    assert (
-        "تنسيق الكتاب ومعاينته" in book_block and 'class="link bk-book-edit" :href="editorUrl"' in book_block
+        '<a class="link bk-book-open" :href="layoutUrl" x-show="layoutUrl" data-book-link>فتح الكتاب</a>'
+        in book_block
     )
     config = json.loads(
         re.search(r'<script id="dashboard-config" type="application/json">(.*?)</script>', body, re.S).group(
             1
         )
     )
-    assert config["editorUrls"]["layout"] == reverse("editor:layout", args=[book.pk])
+    assert (
+        config["editorUrls"]["layout"] == reverse("editor:layout", args=[book.pk])
+        and "editor" not in config["editorUrls"]
+    )
     assert (
         config["editor"] == {"edited": False, "version": 0, "drift_pages": []}
         and config["layout"]["trim"] == "17x24"
@@ -262,8 +281,10 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     client.force_login(_user("reader", "proofreader"))
     body = client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "d.primary === 'start'" not in body and 'name="stage"' not in body and "fac-restore" not in body
-    assert "d.primary === 'editor'" not in body and "bk-book-edit" not in body  # no editor for a proofreader
-    assert "تنسيق الكتاب ومعاينته" in body and "bk-book-layout" in body  # the layout page is for everyone
+    assert "d.primary === 'book'" not in body  # the manuscript stays a proofreader's primary
+    assert (
+        "data-book-menu-item" in body and "data-book-link" in body
+    )  # the book page (read-only) is for everyone
 
 
 def test_dashboard_stays_light_with_800_sheet_placeholders(editor_client):
@@ -728,13 +749,13 @@ dash.review = { reviewed: 2, total: 2, unresolved_total: 0, next_review_url: nul
 dash.canEdit = false; dash.status = 'uploaded'; states.push(dash.primary);
 out.primary = states;
 out.statusText = [dash.statusText, (dash.active = false, dash.statusText)];
-// --- Phase 5: the editor is the primary once the manuscript is fresh (and after edits, with the drift resolved
+// --- Phase 5: the book page is the primary once the manuscript is fresh (and after edits, with the drift resolved
 // per chapter, D41); the «الكتاب» line follows the newest render; a proofreader or a missing URL keeps the manuscript
 const fresh = { exists: true, active: false, stale: false, stale_pages: [], run: { status: 'done' }, warnings_count: 2, stats: { pages_included: 214 } };
 const p5cfg = { active: false, status: 'reviewing', review: { reviewed: 2, total: 2, unresolved_total: 0, next_review_url: null }, manuscript: fresh, manuscriptUrls: { page: '/books/1/manuscript/' },
-  editorUrls: { editor: '/books/1/editor/', layout: '/books/1/layout/' }, editor: { edited: false, version: 1, drift_pages: [] }, layout: { trim: '17x24', trim_label: '17×24 سم', page_count: null, rendering: true } };
+  editorUrls: { layout: '/books/1/layout/' }, editor: { edited: false, version: 1, drift_pages: [] }, layout: { trim: '17x24', trim_label: '17×24 سم', page_count: null, rendering: true } };
 const p5 = mk(p5cfg);
-const p5fresh = [p5.primary, p5.manuscriptLine, p5.bookLine, p5.bookDot, p5.driftLine, p5.editorUrl, p5.layoutUrl, p5.manuscriptActive];
+const p5fresh = [p5.primary, p5.manuscriptLine, p5.bookLine, p5.bookDot, p5.driftLine, p5.editorUrl === undefined, p5.layoutUrl, p5.manuscriptActive];
 p5.apply({ total: 2, percent: 100, flags: 0, status: 'reviewing', status_label: 'قيد المراجعة', dot: 'dot-accent', by_status: {}, active: false, pages: [],
   manuscript: { ...fresh, stale: true, stale_pages: [3, 7] }, editor: { edited: true, version: 5, drift_pages: [3, 7] }, layout: { trim: 'a5', trim_label: 'A5', page_count: 412, rendering: false } });
 const p5drift = [p5.primary, p5.manuscriptLine, p5.manuscriptDot, p5.bookLine, p5.bookDot, p5.driftLine];
@@ -1302,20 +1323,21 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "copy",
     ]
     assert out["statusText"] == ["قيد المعالجة · 2 من 4 صفحة", "قيد التعرّف"]
-    # Phase 5: the editor primary once the manuscript is fresh; after edits the drift line (D41) and the
+    # Phase 5 (D47): the book page primary once the manuscript is fresh; after edits the drift line (D41)
+    # and the
     # «الكتاب» line from the poll; a proofreader or a missing URL keeps the manuscript; a run keeps it too
     assert out["phase5"]["fresh"] == [
-        "editor",
+        "book",
         "مُجمَّعة · 214 صفحة · ملاحظتان",
         "17×24 سم · يُحسب…",
         "dot-accent",
         "",
-        "/books/1/editor/",
+        True,
         "/books/1/layout/",
         False,
     ]
     assert out["phase5"]["drift"] == [
-        "editor",
+        "book",
         "مُحرَّرة · 214 صفحة · ملاحظتان",
         "dot-success",
         "A5 · 412 صفحة",
