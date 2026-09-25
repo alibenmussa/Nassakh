@@ -29,6 +29,9 @@ dependencies = [
     "accelerate",
     "safetensors",
     "huggingface_hub",
+    "weasyprint>=65",
+    "ebooklib>=0.18",
+    "fonttools>=4.55",
 ]
 
 [project.optional-dependencies]

@@ -12,7 +12,13 @@
   "devDependencies": {
     "@fontsource/ibm-plex-sans-arabic": "^5.2.5",
     "@tailwindcss/cli": "^4.1.0",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-character-count": "^3.31.3",
+    "@tiptap/extension-placeholder": "^3.31.3",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
     "alpinejs": "^3.14.0",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.1.0"
   }
 }

@@ -253,3 +253,12 @@ unmatched Tesseract words they sit on (garbage line starts, rescued lines); visi
 a line that still looks merged gets the attention flag «سطران مطبوعان في سطر واحد». `manage.py rebuild_lines` applies
 this to existing pages from their stored runs without calling a model, skipping pages with any review edit.
 
+## D40–D46 — Phase 5: editor, stylesheet, real-page preview (2026-09-25)
+Owner decisions, detailed in `docs/PHASE5_SPEC.md` §0: one chapter edited at a time (D40); after the first editor save
+the manuscript is the source of truth and review drift is resolved per chapter (D41); WeasyPrint renders pages behind
+one engine interface, never the browser (D42); one neutral book model feeds the HTML/PDF renderer now and the Word
+renderer first in Phase 6, EPUB after (D43); footprint rendered in the background and cached by hash (D44); trim
+presets with 17×24 cm default, fonts Amiri (vendored) + Simplified Arabic, Traditional Arabic, Times New Roman and
+Lotus loaded from the Mac's font folders, Aref Ruqaa dropped (D45); footnotes numbered per page in every format, the
+PDF via a two-pass render because WeasyPrint's footnote counter is document-level (D46).
+
