@@ -1,16 +1,22 @@
 // Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22).
 //   manuscriptView(config) – the view: polling while a run is on (the steps ticking, the reveal), the document
-//                            swapped in place after re-runs (scroll anchored, changed blocks flashing), seams
-//                            with their join / split override, block tools and menu, the source drawer, the
-//                            side panel (contents with scroll spy, warnings), jump, copy and the keyboard map
+//                            swapped in place after re-runs (scroll anchored, focus restored, changed blocks
+//                            flashing), the block «⋯» and its menu, the seam menu, the footnote popover, the
+//                            source drawer, the side panel (contents with scroll spy, warnings), jump, copy and
+//                            the keyboard map
 //   manuscriptBar          – the top-bar controls (base.html header_actions, outside the root) reading
 //                            Alpine.store('manuscript').view
 // Config (assembly.views.manuscript): { bookId, title, state, urls, canEdit, canReview, pageCount, countsText }.
 // The document is server-rendered (assembly/render.py) and swapped as one fragment: nothing inside the host
-// carries an Alpine binding (x-ignore); hover, focus, clicks and keys are delegated on the host, and the
-// floating tools (block «⋯», block menu, seam card, note popover) are single elements moved to their anchor.
+// carries an Alpine binding (x-ignore); hover, focus, clicks and keys are delegated on the host.
+// One overlay (`pop`, the .ms-pop element) serves the block menu, the seam menu and the footnote: at most one
+// is open, placed against the visible column like the review screen's word popover (below the anchor, flipped
+// above near the bottom, never across an edge), closed by a click outside, Esc, scrolling it away, a resize,
+// the document swap or opening another. Hover only previews (the «⋯» button, the source badge): every action
+// is a click or a key.
 // Motion (DESIGN.md §8, D24): the reveal (blocks rising in, join markers stitching), the flash after a
-// re-run and the skeleton shimmer only; prefers-reduced-motion drops them all (manuscript.css).
+// re-run, the pending shimmer of the block whose re-run is on and the skeleton shimmer only;
+// prefers-reduced-motion drops them all (manuscript.css).
 (function () {
   'use strict';
 
@@ -23,12 +29,14 @@
   const reducedMotion = () => {
     try { return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (_) { return false; }
   };
+  const isRtl = () => {
+    try { return !(document.documentElement && document.documentElement.dir === 'ltr'); } catch (_) { return true; }
+  };
   const storage = {
     get(key, fallback) { try { const v = window.localStorage.getItem(key); return v == null ? fallback : v; } catch (_) { return fallback; } },
     set(key, value) { try { window.localStorage.setItem(key, value); } catch (_) { /* private mode */ } },
   };
   const SEAMS_KEY = 'nassakh.manuscript.seams'; // '1' (default) | '0'
-  const TAB_KEY = 'nassakh.manuscript.tab';
   const POLL_MS = 700; // §4.2: the steps tick every 700 ms
   const POLL_MAX_MS = 5000;
   const FAILURES_BEFORE_NOTICE = 3;
@@ -36,12 +44,13 @@
   const REVEAL_BLOCKS = 40; // the first blocks rise in with a 16 ms stagger (≤ 1 s in all)
   const REVEAL_MS = 1400; // the reveal classes are dropped after the stagger and the stitches (400 ms) ended
   const PULSE_MS = 500;
-  const CARD_CLOSE_MS = 180; // hover intent: the card survives the gap between the seam and the card
-  const NOTE_CLOSE_MS = 180;
+  const TOOLS_CLOSE_MS = 180; // hover intent: the «⋯» survives the gap between the block and the button
   const TICK_MS = 30000; // «قبل 5 دقائق» refreshes
-  const POP_EDGE = 8;
-  const CARD_W = 300;
-  const NOTE_W = 360;
+  const POP_EDGE = 8; // the overlay keeps 8 px from the edges of the visible column (= review POP_EDGE)
+  const POP_GAP = 6;
+  const POP_SIZE = { menu: [250, 262], seam: [260, 200], note: [360, 96] }; // [w, h] before the first measure
+  const TOOLS_TOP = 22; // the «⋯» button sits 22 px under the block's top, 24 px square (manuscript.css)
+  const TOOLS_SIZE = 24;
   const TOOLBAR_H = 44;
   const TOPBAR_H = 52;
   const STAGES = [
@@ -99,6 +108,8 @@
   const fill = (template, n) => String(template || '').replace('__n__', String(n));
   const hasClass = (el, cls) => Boolean(el && el.classList && el.classList.contains(cls));
   const attr = (el, name) => (el && typeof el.getAttribute === 'function' ? el.getAttribute(name) : null) || '';
+  const setAttr = (el, name, value) => { if (el && typeof el.setAttribute === 'function') el.setAttribute(name, value); };
+  const isDisabled = (el) => Boolean(el && (el.disabled || (typeof el.hasAttribute === 'function' && el.hasAttribute('disabled'))));
   const q = (root, sel) => (root && typeof root.querySelector === 'function' ? root.querySelector(sel) : null);
   const qa = (root, sel) => (root && typeof root.querySelectorAll === 'function' ? Array.from(root.querySelectorAll(sel)) : []);
   const closest = (el, sel) => (el && typeof el.closest === 'function' ? el.closest(sel) : null);
@@ -109,10 +120,38 @@
   const linesOf = (el) => attr(el, 'data-lines').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
   const kids = (el) => Array.from(el && el.children ? el.children : []); // HTMLCollection has no forEach / find
   const nodes = (el) => Array.from(el && el.childNodes ? el.childNodes : []);
+  const later = (fn) => { if (typeof queueMicrotask === 'function') queueMicrotask(fn); else Promise.resolve().then(fn); };
+
+  // Placement of the overlay (pure, = review placePop): below the anchor, flipped above when it would leave the
+  // visible column and there is more room above, its start edge on the anchor's start edge (RTL: the right),
+  // never across a side edge. `a` anchor rect, `view` the visible area, `col` the column rect (the positioned
+  // parent), `size` [w, h]. Returns { style, above } with the offsets relative to the column.
+  function placeAgainst(a, view, col, size, rtl) {
+    const w = Math.min(size[0], Math.max(120, view.right - view.left));
+    const h = size[1];
+    let top = a.bottom + POP_GAP;
+    let above = false;
+    if (top + h > view.bottom) {
+      const roomAbove = a.top - POP_GAP - view.top;
+      const roomBelow = view.bottom - top;
+      if (roomAbove >= h || roomAbove > roomBelow) { top = Math.max(view.top, a.top - POP_GAP - h); above = true; } else top = Math.max(view.top, view.bottom - h);
+    }
+    let style;
+    if (rtl) {
+      let right = Math.min(a.right, view.right);
+      if (right - w < view.left) right = Math.min(view.right, view.left + w);
+      style = `top:${Math.round(top - col.top)}px;right:${Math.round(col.right - right)}px`;
+    } else {
+      let left = Math.max(a.left, view.left);
+      if (left + w > view.right) left = Math.max(view.left, view.right - w);
+      style = `top:${Math.round(top - col.top)}px;left:${Math.round(left - col.left)}px`;
+    }
+    return { style, above };
+  }
 
   // Keyboard map (§4.2), pure so the tests can exercise it. ctx: inField (typing in a field), inMenu (the
-  // focus is inside a menu or the drawer, which keep their own arrows), hasBlock (a block is focused: ↓/↑
-  // move between blocks only then, so the page still scrolls with the arrows before any block is chosen).
+  // focus is inside the overlay, a menu or the drawer, which keep their own arrows), hasBlock (a block is
+  // focused: ↓/↑ move between blocks only then, so the page still scrolls with the arrows before any block is chosen).
   function keyAction(ev, ctx) {
     const k = ev.key;
     const code = ev.code || '';
@@ -202,7 +241,7 @@
   }
 
   window.NassakhManuscript = Object.assign(window.NassakhManuscript || {}, {
-    keyAction, arCount, relativeTime, manuscriptText, textOfBlock, parseFragment, parsePageNumber, STAGE_KEYS,
+    keyAction, arCount, relativeTime, manuscriptText, textOfBlock, parseFragment, parsePageNumber, placeAgainst, STAGE_KEYS,
   });
 
   document.addEventListener('alpine:init', () => {
@@ -216,7 +255,7 @@
       // Non-reactive plumbing lives in the closure: the host, the block index, timers, caches.
       const urls = cfg.urls || {};
       let host = null; // [data-ms-host]
-      let column = null; // .ms-column, the positioned parent of the floating tools
+      let column = null; // .ms-column, the positioned parent of the floating tools and the overlay
       let article = null;
       let blocks = []; // block elements in document order
       const blockIndex = new Map(); // block id → index in `blocks`
@@ -228,15 +267,14 @@
       let pollGen = 0;
       let reloadGen = 0;
       let failures = 0;
-      let cardTimer = null;
-      let noteTimer = null;
       let toolsTimer = null;
       let flashTimer = null;
       let revealTimer = null;
       let pulseTimer = null;
       let tickTimer = null;
       let bound = false;
-      let returnFocus = null; // where the focus goes back to when the drawer or the menu closes
+      let justOpened = false; // the overlay opened in this event turn: the outside-click of the same click is not a close
+      let returnTo = null; // block id the focus goes back to when the drawer closes
       let pendingAnchor = null; // block ids to anchor the scroll on after the swap that follows a post
       let waitingRun = null; // the run id a post started
       let lastFlash = [];
@@ -256,17 +294,20 @@
         hasDocument: false,
         loadedVersion: 0,
         seams: storage.get(SEAMS_KEY, '1') !== '0',
-        tab: storage.get(TAB_KEY, 'toc') === 'notes' ? 'notes' : 'toc',
         sideOpen: false,
         countsText: cfg.countsText || '',
         warnings: [], // the run's warnings in document order (from the fragment's meta)
         warningsTotal: 0,
         toc: [],
+        tocCount: 0,
         focused: null, // focused block id
+        pending: null, // the block whose re-run is on (is-pending)
         tools: { blockId: null, style: '' },
-        menu: { open: false, blockId: null, style: '', src: '', reviewed: true, role: 'body', reviewUrl: '', lines: [] },
-        card: { open: false, page: 0, from: 0, mode: '', decision: '', text: '', action: '', actionLabel: '', style: '', seamId: '' },
-        notePop: { open: false, note: '', number: '', html: '', orphan: false, style: '' },
+        // the one overlay: kind 'menu' (block menu, anchored at the «⋯»), 'seam' (seam menu) or 'note' (footnote)
+        pop: { kind: null, anchorId: '', style: '', above: false },
+        menu: { blockId: null, src: '', reviewed: true, role: 'body', reviewUrl: '', lines: [] },
+        seam: { page: 0, from: 0, mode: '', decision: 'auto', text: '', state: '' },
+        note: { id: '', number: '', html: '', orphan: false, found: false },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
         convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
         busy: false, // an override is on the wire or its run is on: no second post meanwhile
@@ -289,7 +330,7 @@
         },
         destroy() {
           this.stopPolling();
-          [cardTimer, noteTimer, toolsTimer, flashTimer, revealTimer, pulseTimer].forEach((t) => clearTimeout(t));
+          [toolsTimer, flashTimer, revealTimer, pulseTimer].forEach((t) => clearTimeout(t));
           if (tickTimer && typeof clearInterval === 'function') clearInterval(tickTimer);
           if (spy) spy.disconnect();
           listeners.forEach(([el, ev, fn]) => el.removeEventListener(ev, fn));
@@ -347,17 +388,24 @@
           }
           if (run && run.status === 'error') {
             this.phase = this.hasDocument ? 'ready' : 'error';
-            if (waitingRun !== null) { waitingRun = null; pendingAnchor = null; this.busy = false; toast(run.error || 'فشل التجميع'); }
+            if (waitingRun !== null) { this.endWait(); toast(run.error || 'فشل التجميع'); }
             if (!opts.initial) this.liveMessage = run.error || 'فشل التجميع';
             return;
           }
           if (s.exists) {
             if (!opts.initial && Number(s.version) !== this.loadedVersion) { this.reload({ reveal: !this.hasDocument, anchor: pendingAnchor }); return; }
             this.phase = this.hasDocument ? 'ready' : (opts.initial ? 'ready' : 'assembling');
-            if (waitingRun !== null) { waitingRun = null; pendingAnchor = null; this.busy = false; }
+            if (waitingRun !== null) this.endWait();
             return;
           }
           this.phase = 'empty';
+        },
+        // A post's run ended (the swap landed, or it failed): the pending block and the busy flag are released.
+        endWait() {
+          waitingRun = null;
+          pendingAnchor = null;
+          this.busy = false;
+          this.clearPending();
         },
         schedulePoll(ms) {
           clearTimeout(pollTimer);
@@ -401,6 +449,7 @@
           this.convert.error = '';
         },
         openConvert() {
+          this.closePop();
           this.resetConvert();
           this.convert.open = true;
           if (this.$nextTick) this.$nextTick(() => focusEl(q(document, '.ms-convert [role="radio"][aria-checked="true"]') || q(document, '.ms-convert-actions button')));
@@ -436,14 +485,27 @@
           this.liveMessage = 'بدأ التجميع';
           this.pollNow();
         },
-        // A seam / role / suggestion post: 202, then the document re-runs and swaps in place.
-        async postRun(url, body, anchor) {
-          if (this.busy) return false;
+        // A seam / role / suggestion post: 202, then the document re-runs and swaps in place. `pendingId` is the
+        // block shown as pending meanwhile; `anchor` the block ids to keep in place across the swap.
+        async postRun(url, body, anchor, pendingId) {
+          if (this.busy) { toast('انتظر انتهاء التجميع الجاري'); return false; }
           this.busy = true;
+          this.markPending(pendingId || (anchor && anchor[0]) || null);
           const r = await api(url, { method: 'POST', body });
-          if (!r.ok) { this.busy = false; toast(r.message); return false; }
+          if (!r.ok) { this.busy = false; this.clearPending(); toast(r.message); return false; }
           this.beginRun(r.data, anchor);
           return true;
+        },
+        markPending(id) {
+          this.clearPending();
+          const b = id ? this.blockById(id) : null;
+          if (b && b.classList) b.classList.add('is-pending');
+          this.pending = b ? id : null;
+        },
+        clearPending() {
+          const b = this.pending ? this.blockById(this.pending) : null;
+          if (b && b.classList) b.classList.remove('is-pending');
+          this.pending = null;
         },
 
         // ------------------------------------------------------------ the fragment: load, swap, index
@@ -458,22 +520,25 @@
             if (!this.hasDocument) { this.phase = 'error'; this.state = Object.assign({}, this.state, { run: Object.assign({}, this.run || {}, { status: 'error', error: 'تعذّر تحميل المخطوطة.' }) }); }
             else this.phase = 'ready';
             toast(r.message);
-            waitingRun = null;
-            pendingAnchor = null;
-            this.busy = false;
+            this.endWait();
             return false;
           }
           this.swapFragment(r.data, opts);
           return true;
         },
-        // Replace the document with a rendered fragment: the scroll stays on the same block, the blocks whose
-        // markup changed flash once; the first document rises in (the reveal).
+        // Replace the document with a rendered fragment: the scroll stays on the same block, the focus returns
+        // to the same block (the «⋯» with it), the blocks whose markup changed flash once; the first document
+        // rises in (the reveal). Every floating thing closes: it pointed at elements that are gone.
         swapFragment(html, opts = {}) {
           if (!host) this.bindDom();
           if (!host) return;
           const before = new Map();
           if (this.hasDocument) blocks.forEach((b) => before.set(attr(b, 'data-block'), b.innerHTML));
           const anchor = this.anchorBefore(opts.anchor);
+          const hadFocus = this.focusInDocument();
+          this.closePop();
+          this.hideTools(true);
+          this.pending = null;
           const frag = (window.NassakhManuscript.parseFragment || parseFragment)(html);
           host.textContent = '';
           Array.from(frag.childNodes || []).forEach((node) => host.appendChild(node));
@@ -485,14 +550,27 @@
           if (before.size) this.flashChanged(before);
           if (opts.reveal) this.playReveal();
           this.setupSpy();
-          this.hideTools();
-          this.closeMenu();
-          this.hideCard();
-          this.hideNote();
+          this.restoreFocus(anchor, hadFocus);
           waitingRun = null;
           pendingAnchor = null;
           this.busy = false;
           this.liveMessage = before.size ? 'حُدّثت المخطوطة' : 'اكتمل التجميع';
+        },
+        // Whether the keyboard focus sits in the document (a block, a seam, a reference): then it is put back
+        // on the same block after the swap; a focus in the toolbar, the panel or the drawer is left alone.
+        focusInDocument() {
+          const active = typeof document !== 'undefined' ? document.activeElement : null;
+          if (!active || typeof active.closest !== 'function') return false;
+          return Boolean(closest(active, '[data-ms-host], .ms-tools, .ms-pop'));
+        },
+        restoreFocus(anchor, hadFocus) {
+          const id = this.focused && blockIndex.has(this.focused) ? this.focused : (anchor && anchor.ids.find((c) => blockIndex.has(c))) || null;
+          this.focused = id;
+          const block = id ? this.blockById(id) : null;
+          if (!block) return false;
+          if (hadFocus) focusEl(block, { preventScroll: true });
+          this.showTools(block);
+          return true;
         },
         // The host, the column and the side hosts are found by selector: init runs before the x-refs exist.
         bindDom() {
@@ -507,10 +585,8 @@
           this.hasDocument = Boolean(article);
           this.setupSpy();
           listen(host, 'mouseover', (e) => this.onHostOver(e));
-          listen(host, 'mouseout', (e) => this.onHostOut(e));
           listen(host, 'mouseleave', () => this.hideToolsSoon());
           listen(host, 'focusin', (e) => this.onHostFocusIn(e));
-          listen(host, 'focusout', (e) => this.onHostFocusOut(e));
           listen(host, 'click', (e) => this.onHostClick(e));
           listen(host, 'keydown', (e) => this.onHostKey(e));
         },
@@ -520,10 +596,10 @@
           return q(root, `[data-ms-${name}-host]`);
         },
         adoptParts(root) {
-          const parts = { toc: this.sideHost('toc'), warnings: this.sideHost('warnings'), stats: this.sideHost('stats') };
+          const parts = { toc: this.sideHost('toc'), warnings: this.sideHost('warnings') };
           qa(root, '[data-ms-part]').forEach((part) => {
             const target = parts[attr(part, 'data-ms-part')];
-            if (!target) return;
+            if (!target) { if (typeof part.remove === 'function') part.remove(); return; }
             target.textContent = '';
             target.appendChild(part);
           });
@@ -541,6 +617,7 @@
           this.warnings = Array.isArray(meta.warnings) ? meta.warnings : [];
           this.warningsTotal = this.warnings.length;
           this.toc = Array.isArray(meta.toc) ? meta.toc : [];
+          this.tocCount = this.toc.reduce((n, h) => n + 1 + (Array.isArray(h.children) ? h.children.length : 0), 0);
           if (meta.assembledAt) this.state = Object.assign({}, this.state, { assembled_at: meta.assembledAt, exists: true, version: this.loadedVersion });
           warnCursor = -1;
         },
@@ -563,6 +640,11 @@
         },
         blockCount() { return blocks.length; },
         firstBlockOfPage(n) { return pageFirst.get(Number(n)) || null; },
+        neighbours(id) {
+          const i = blockIndex.get(id);
+          if (i === undefined) return [id];
+          return [id, i > 0 ? attr(blocks[i - 1], 'data-block') : null, i + 1 < blocks.length ? attr(blocks[i + 1], 'data-block') : null].filter(Boolean);
+        },
         // The block to keep in place across a swap: the given candidates (the seam's block, then its
         // neighbours), else the first block under the toolbar.
         anchorBefore(candidates) {
@@ -571,8 +653,7 @@
           if (!ids.length) {
             const top = TOPBAR_H + TOOLBAR_H;
             const first = blocks.find((b) => rect(b).bottom > top) || blocks[0];
-            const i = blockIndex.get(attr(first, 'data-block'));
-            ids = [attr(first, 'data-block'), i > 0 ? attr(blocks[i - 1], 'data-block') : null, i + 1 < blocks.length ? attr(blocks[i + 1], 'data-block') : null].filter(Boolean);
+            ids = this.neighbours(attr(first, 'data-block'));
           }
           return { ids, top: rect(this.blockById(ids[0])).top };
         },
@@ -608,109 +689,183 @@
           }, REVEAL_MS);
         },
 
+        // ------------------------------------------------------------ the overlay: one element, one open at a time
+        // The visible part of the column: under the top bar and the toolbar, inside the window, 8 px from the edges.
+        visibleArea() {
+          const c = rect(column);
+          const W = (typeof window !== 'undefined' && window.innerWidth) || 1200;
+          const H = (typeof window !== 'undefined' && window.innerHeight) || 800;
+          return { top: TOPBAR_H + TOOLBAR_H + POP_EDGE, bottom: H - POP_EDGE, left: Math.max(c.left, 0) + POP_EDGE, right: Math.min(c.right, W) - POP_EDGE };
+        },
+        // The element the open overlay hangs from, looked up afresh (never a reference that a swap detached).
+        anchorEl() {
+          const kind = this.pop.kind;
+          const id = this.pop.anchorId;
+          if (kind === 'menu') return this.blockById(id);
+          if (kind === 'seam') return this.seamEl(id);
+          if (kind === 'note') return this.refEl(id);
+          return null;
+        },
+        // The rect to place against: the block menu hangs from the «⋯» button (a fixed spot in the start
+        // margin, computed rather than measured: the button moves only on the next paint), the others from
+        // the seam or the reference itself.
+        anchorRect() {
+          const el = this.anchorEl();
+          if (!el) return null;
+          const r = rect(el);
+          if (this.pop.kind !== 'menu') return r;
+          const c = rect(column);
+          const top = r.top + TOOLS_TOP;
+          const right = isRtl() ? c.right : c.left + TOOLS_SIZE;
+          return { top, bottom: top + TOOLS_SIZE, right, left: right - TOOLS_SIZE, width: TOOLS_SIZE, height: TOOLS_SIZE };
+        },
+        placePop() {
+          const a = this.anchorRect();
+          if (!a) return false;
+          const node = this.$refs && this.$refs.pop;
+          const guess = POP_SIZE[this.pop.kind] || POP_SIZE.menu;
+          const size = [node && node.offsetWidth ? node.offsetWidth : guess[0], node && node.offsetHeight ? node.offsetHeight : guess[1]];
+          const placed = placeAgainst(a, this.visibleArea(), rect(column), size, isRtl());
+          this.pop = Object.assign({}, this.pop, placed);
+          return true;
+        },
+        openPop(kind, anchorId, opts = {}) {
+          const same = this.pop.kind === kind && this.pop.anchorId === anchorId;
+          if (!same) this.setExpanded(false);
+          this.pop = { kind, anchorId, style: this.pop.style, above: false };
+          this.setExpanded(true);
+          justOpened = true;
+          later(() => { justOpened = false; });
+          this.placePop(); // a first placement from the size guess, then the measured one on the next tick
+          if (this.$nextTick) {
+            this.$nextTick(() => {
+              if (this.pop.kind !== kind || this.pop.anchorId !== anchorId) return;
+              this.placePop();
+              if (opts.focus) this.focusPopItem(0);
+            });
+          }
+          return true;
+        },
+        // Close the overlay (no-op when none is open); `refocus` puts the focus back on its anchor.
+        closePop(refocus) {
+          const kind = this.pop.kind;
+          if (!kind) return null;
+          const el = this.anchorEl();
+          this.setExpanded(false);
+          if (kind === 'note') qa(article, '.ms-note.is-hot').forEach((n) => n.classList.remove('is-hot'));
+          this.pop = { kind: null, anchorId: '', style: this.pop.style, above: false };
+          if (refocus && el) focusEl(el, { preventScroll: true });
+          return kind;
+        },
+        setExpanded(on) {
+          const el = this.anchorEl();
+          if (el && this.pop.kind !== 'menu') setAttr(el, 'aria-expanded', on ? 'true' : 'false');
+        },
+        // A click anywhere outside the overlay closes it; the click that opened it (a seam, a reference, the
+        // «⋯») is not a close, however the event reaches the document.
+        onPopOutside() {
+          if (!this.pop.kind || justOpened) return false;
+          this.closePop();
+          return true;
+        },
+        popItems() {
+          const node = this.$refs && this.$refs.pop;
+          return qa(node, '.menu-item, .ms-pop-note-link').filter((el) => !isDisabled(el));
+        },
+        focusPopItem(i) {
+          const items = this.popItems();
+          if (!items.length) return false;
+          focusEl(items[(i + items.length) % items.length]);
+          return true;
+        },
+        movePop(dir) {
+          const items = this.popItems();
+          if (!items.length) return false;
+          const active = typeof document !== 'undefined' ? document.activeElement : null;
+          const i = items.indexOf(active);
+          return this.focusPopItem(i === -1 ? (dir > 0 ? 0 : -1) : i + dir);
+        },
+        // Scrolling the anchor out of the visible column closes the overlay (it scrolls with the column
+        // meanwhile, being positioned inside it).
+        onScroll() {
+          if (!this.pop.kind) return false;
+          const a = this.anchorRect();
+          const view = this.visibleArea();
+          if (!a || a.bottom < view.top - POP_EDGE || a.top > view.bottom + POP_EDGE) { this.closePop(); return true; }
+          return false;
+        },
+        onResize() {
+          if (this.tools.blockId) { const b = this.blockById(this.tools.blockId); if (b) this.showTools(b); }
+          if (this.pop.kind) this.placePop();
+        },
+
         // ------------------------------------------------------------ seams
         setSeams(on) {
           this.seams = Boolean(on);
           storage.set(SEAMS_KEY, this.seams ? '1' : '0');
-          if (!this.seams) this.hideCard();
+          if (!this.seams && this.pop.kind === 'seam') this.closePop();
         },
         toggleSeams() { this.setSeams(!this.seams); },
         seamInfo(el) {
           return { page: parseInt(attr(el, 'data-page'), 10) || 0, from: parseInt(attr(el, 'data-from'), 10) || 0, mode: attr(el, 'data-mode'), decision: attr(el, 'data-decision') || 'auto' };
         },
-        // The hover card's text and action (§4.2): join → «فصل هنا», split → «وصل بما قبلها».
-        seamCard(el) {
-          const s = this.seamInfo(el);
-          const override = s.decision === 'override' ? ' · قرار يدوي' : '';
-          if (s.mode === 'join') return { ...s, text: `وُصلت الفقرة بين الصفحتين ${s.from} و${s.page}${override}`, action: 'split', actionLabel: 'فصل هنا' };
-          if (s.mode === 'split') return { ...s, text: `فاصل بين الصفحتين ${s.from} و${s.page}${override}`, action: 'join', actionLabel: 'وصل بما قبلها' };
-          return { ...s, text: `صفحة ${s.page - 1} غير مُضمَّنة`, action: '', actionLabel: '' };
+        // What the seam menu says (§4.2): the decision, plainly, then the state (automatic or manual).
+        seamText(s) {
+          if (s.mode === 'join') return { text: `وُصلت الفقرة بين الصفحتين ${s.from} و${s.page}`, state: s.decision === 'override' ? 'قرار يدوي' : 'تلقائي' };
+          if (s.mode === 'split') return { text: `فُصلت الفقرة عند الصفحة ${s.page}`, state: s.decision === 'override' ? 'قرار يدوي' : 'تلقائي' };
+          return { text: `صفحة ${s.page - 1} غير مُضمَّنة`, state: '' };
         },
-        showCard(el) {
-          clearTimeout(cardTimer);
-          if (!this.seams) return;
-          const info = this.seamCard(el);
-          const r = rect(el);
-          const c = rect(column);
-          const left = clamp(r.left - c.left + r.width / 2 - CARD_W / 2, POP_EDGE, Math.max(POP_EDGE, c.width - CARD_W - POP_EDGE));
-          this.card = { open: true, page: info.page, from: info.from, mode: info.mode, decision: info.decision, text: info.text, action: info.action, actionLabel: info.actionLabel, style: `top:${Math.round(r.bottom - c.top + 6)}px;left:${Math.round(left)}px`, seamId: `${info.mode}-${info.page}` };
-        },
-        hideCard(refocus) {
-          clearTimeout(cardTimer);
-          const wasOpen = this.card.open;
-          this.card = Object.assign({}, this.card, { open: false });
-          if (refocus && wasOpen) focusEl(this.seamEl(this.card.page));
-        },
-        keepCard() { clearTimeout(cardTimer); },
-        closeCardSoon() { clearTimeout(cardTimer); cardTimer = setTimeout(() => this.hideCard(), CARD_CLOSE_MS); },
         seamEl(page) { return q(article, `.ms-seam[data-page="${page}"]`); },
-        // The override of the open card's seam (or of a seam element): the anchor is the block that holds it.
-        applySeam() { return this.postSeam(this.card.page, this.card.action); },
-        resetSeam() { return this.postSeam(this.card.page, 'auto'); },
-        applySeamFor(el) {
-          const info = this.seamCard(el);
-          if (!info.action) return Promise.resolve(false);
-          return this.postSeam(info.page, info.action);
+        // The seam menu: from a click or Enter on a join marker or a split hairline (missing pages have none).
+        openSeamMenu(el, opts = {}) {
+          const s = this.seamInfo(el);
+          if (!this.seams || !s.page || (s.mode !== 'join' && s.mode !== 'split')) return false;
+          this.seam = Object.assign(s, this.seamText(s));
+          return this.openPop('seam', String(s.page), opts);
         },
-        resetSeamFor(el) {
-          const info = this.seamInfo(el);
-          if (info.decision !== 'override') return Promise.resolve(false);
-          return this.postSeam(info.page, 'auto');
+        // A choice in the seam menu: the mode already in effect (the checked item), or «تلقائي» on an automatic
+        // decision, just closes it; else the override posts and the block re-runs.
+        chooseSeam(mode) {
+          const s = this.seam;
+          const already = mode === 'auto' ? s.decision !== 'override' : mode === s.mode;
+          this.closePop(true);
+          if (!mode || already) return Promise.resolve(false);
+          return this.postSeam(s.page, mode);
         },
+        // The override of a seam: the anchor (and the pending block) is the block that holds it, or for a split
+        // hairline (it sits between blocks) the first block of the page.
         postSeam(page, mode) {
           if (!this.canEdit || !page || !mode) return Promise.resolve(false);
           const el = this.seamEl(page);
-          const block = closest(el, '.ms-block'); // null for a split marker (it sits between blocks)
-          const ids = [];
-          if (block) {
-            const i = blockIndex.get(attr(block, 'data-block'));
-            ids.push(attr(block, 'data-block'));
-            if (i > 0) ids.push(attr(blocks[i - 1], 'data-block'));
-            if (i + 1 < blocks.length) ids.push(attr(blocks[i + 1], 'data-block'));
-          } else {
+          const block = closest(el, '.ms-block');
+          let ids = [];
+          if (block) ids = this.neighbours(attr(block, 'data-block'));
+          else {
             const first = this.firstBlockOfPage(page);
             if (first) { const i = blockIndex.get(first); if (i > 0) ids.push(attr(blocks[i - 1], 'data-block')); ids.push(first); }
           }
-          this.hideCard();
           this.liveMessage = mode === 'auto' ? `أُعيد القرار التلقائي لفاصل الصفحة ${page}` : mode === 'join' ? `تُوصل الفقرة عبر الصفحة ${page}` : `تُفصل الفقرة عند الصفحة ${page}`;
-          return this.postRun(urls.seams, { page, mode }, ids);
+          return this.postRun(urls.seams, { page, mode }, ids, block ? attr(block, 'data-block') : this.firstBlockOfPage(page));
         },
 
-        // ------------------------------------------------------------ blocks: hover / focus tools, menu, roles
+        // ------------------------------------------------------------ blocks: the «⋯», the menu, roles
         onHostOver(e) {
-          const t = e.target;
-          const seam = closest(t, '.ms-seam');
-          if (seam) { this.showCard(seam); return; }
-          const ref = closest(t, '.ms-ref');
-          if (ref) { this.showNote(ref); return; }
-          const block = closest(t, '.ms-block');
-          if (block) this.showTools(block);
-        },
-        onHostOut(e) {
-          const t = e.target;
-          const to = e.relatedTarget;
-          if (closest(t, '.ms-seam') && !closest(to, '.ms-seam')) this.closeCardSoon();
-          if (closest(t, '.ms-ref') && !closest(to, '.ms-ref')) this.closeNoteSoon();
+          const block = closest(e.target, '.ms-block');
+          if (block && attr(block, 'data-block') !== this.tools.blockId) this.showTools(block);
+          else if (block) clearTimeout(toolsTimer);
         },
         onHostFocusIn(e) {
           const t = e.target;
-          const seam = closest(t, '.ms-seam');
-          if (seam) { this.showCard(seam); return; }
           const ref = closest(t, '.ms-ref');
-          if (ref) { this.showNote(ref); return; }
+          if (ref) { this.openNote(ref); return; }
+          if (closest(t, '.ms-seam')) return;
           const block = closest(t, '.ms-block');
           if (block) { this.focused = attr(block, 'data-block'); this.showTools(block); }
-        },
-        onHostFocusOut(e) {
-          const t = e.target;
-          const to = e.relatedTarget;
-          if (closest(t, '.ms-seam') && !closest(to, '.ms-card')) this.closeCardSoon();
-          if (closest(t, '.ms-ref')) this.closeNoteSoon();
         },
         onHostClick(e) {
           const t = e.target;
           const ref = closest(t, '.ms-ref');
-          if (ref) { e.preventDefault(); this.goToNote(attr(ref, 'data-note')); return; }
+          if (ref) { e.preventDefault(); this.openNote(ref); return; }
           const back = closest(t, '.ms-note-num');
           if (back) { e.preventDefault(); this.backToRef(attr(back, 'data-ref')); return; }
           const suggest = closest(t, '.ms-suggest-btn');
@@ -721,40 +876,41 @@
             return;
           }
           const seam = closest(t, '.ms-seam');
-          if (seam) { e.preventDefault(); this.applySeamFor(seam); }
+          if (seam) { e.preventDefault(); if (this.pop.kind === 'seam' && this.pop.anchorId === attr(seam, 'data-page')) this.closePop(); else this.openSeamMenu(seam); }
         },
         onHostKey(e) {
           const t = e.target;
           const seam = closest(t, '.ms-seam');
           if (seam) {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.applySeamFor(seam); }
-            else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); this.resetSeamFor(seam); }
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.openSeamMenu(seam, { focus: true }); }
             return;
           }
           if (closest(t, 'button, a')) return; // refs, chips and back links keep their native keys
           const block = closest(t, '.ms-block');
-          if (block && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); this.openMenu(attr(block, 'data-block')); }
+          if (block && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); this.openMenu(attr(block, 'data-block'), { focus: true }); }
         },
-        showTools(block) {
+        // The «⋯» follows the hovered / focused block, except while a menu is open (it keeps its block) unless
+        // `force`: the menu itself moving to another block.
+        showTools(block, force) {
           clearTimeout(toolsTimer);
           const id = attr(block, 'data-block');
-          if (this.menu.open && this.menu.blockId !== id) return; // the open menu keeps its block
+          if (this.pop.kind === 'menu' && this.pop.anchorId !== id && !force) return;
           const previous = this.tools.blockId ? this.blockById(this.tools.blockId) : null;
           if (previous && previous !== block && previous.classList) previous.classList.remove('is-tools');
           if (block.classList) block.classList.add('is-tools');
           const top = Math.round(rect(block).top - rect(column).top);
           this.tools = { blockId: id, style: `top:${top}px` };
         },
-        hideTools() {
+        hideTools(force) {
           clearTimeout(toolsTimer);
-          if (this.menu.open) return;
+          if (this.pop.kind === 'menu' && !force) return;
           const previous = this.tools.blockId ? this.blockById(this.tools.blockId) : null;
           if (previous && previous.classList) previous.classList.remove('is-tools');
           this.tools = { blockId: null, style: '' };
         },
         hideToolsSoon() {
           clearTimeout(toolsTimer);
-          toolsTimer = setTimeout(() => { if (!this.focused || this.focused !== this.tools.blockId) this.hideTools(); }, CARD_CLOSE_MS);
+          toolsTimer = setTimeout(() => { if (!this.focused || this.focused !== this.tools.blockId) this.hideTools(); }, TOOLS_CLOSE_MS);
         },
         keepTools() { clearTimeout(toolsTimer); },
         focusBlock(id, opts = {}) {
@@ -770,11 +926,13 @@
           if (!blocks.length) return false;
           let i = this.focused && blockIndex.has(this.focused) ? blockIndex.get(this.focused) + dir : (dir > 0 ? 0 : blocks.length - 1);
           i = clamp(i, 0, blocks.length - 1);
+          this.closePop();
           return this.focusBlock(attr(blocks[i], 'data-block'), { instant: true });
         },
         goToBlock(id, opts = {}) {
           const el = this.blockById(id);
           if (!el) { toast('لم تُعثر على الفقرة في المخطوطة'); return false; }
+          this.closePop();
           if (opts.focus !== false) this.focusBlock(id, { block: 'center' });
           else if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' });
           if (el.classList) {
@@ -784,34 +942,27 @@
           }
           return true;
         },
-        openMenu(id) {
+        // The block menu, from the «⋯» (a click) or Enter on the focused block (the first item takes the focus).
+        openMenu(id, opts = {}) {
           const block = this.blockById(id);
-          if (!block) return;
-          this.showTools(block);
-          returnFocus = block;
+          if (!block) return false;
+          this.showTools(block, true);
           const pages = pagesOf(block);
-          const btn = this.$refs && this.$refs.toolsBtn;
-          const top = Math.round((btn ? rect(btn).bottom : rect(block).top + 44) - rect(column).top + 4);
           this.menu = {
-            open: true,
             blockId: id,
-            style: `top:${top}px`,
             src: attr(block, 'data-src'),
             reviewed: attr(block, 'data-reviewed') !== 'false',
             role: ROLE_OF_TAG[block.tagName] || 'body',
             reviewUrl: this.reviewUrl(pages[0]),
             lines: linesOf(block),
           };
-          if (this.$nextTick) this.$nextTick(() => focusEl(q(this.$refs && this.$refs.menu, '.menu-item')));
+          return this.openPop('menu', id, opts);
         },
         toggleMenu(id) {
-          if (this.menu.open && (!id || this.menu.blockId === id)) this.closeMenu(true); else this.openMenu(id || this.tools.blockId);
+          const target = id || this.tools.blockId;
+          if (this.pop.kind === 'menu' && this.pop.anchorId === target) this.closePop(true); else if (target) this.openMenu(target);
         },
-        closeMenu(refocus) {
-          const wasOpen = this.menu.open;
-          this.menu = Object.assign({}, this.menu, { open: false });
-          if (wasOpen && refocus) focusEl(returnFocus);
-        },
+        closeMenu(refocus) { return this.pop.kind === 'menu' ? this.closePop(refocus) : null; },
         // The block's lines take the role (through the review service, D38), then the document re-runs.
         setRole(id, role) {
           const block = this.blockById(id);
@@ -819,10 +970,8 @@
           const current = ROLE_OF_TAG[block.tagName] || 'body';
           this.closeMenu(true);
           if (role === current) return Promise.resolve(false);
-          const i = blockIndex.get(id);
-          const ids = [id, i > 0 ? attr(blocks[i - 1], 'data-block') : null, i + 1 < blocks.length ? attr(blocks[i + 1], 'data-block') : null].filter(Boolean);
           this.liveMessage = role === 'body' ? 'تصير الفقرة محتوى' : role === 'heading' ? 'تصير الفقرة عنوانًا رئيسيًا' : 'تصير الفقرة عنوانًا فرعيًا';
-          return this.postRun(urls.roles, { line_ids: linesOf(block), role }, ids);
+          return this.postRun(urls.roles, { line_ids: linesOf(block), role }, this.neighbours(id), id);
         },
         acceptSuggestion(id) { return this.setRole(id, 'heading'); },
         dismissSuggestion(id) {
@@ -830,46 +979,30 @@
           const i = blockIndex.get(id);
           const ids = i === undefined ? [id] : [id, i > 0 ? attr(blocks[i - 1], 'data-block') : null].filter(Boolean);
           this.liveMessage = 'أُهمل الاقتراح';
-          return this.postRun(urls.suggestions, { block_id: id, action: 'dismiss' }, ids);
+          return this.postRun(urls.suggestions, { block_id: id, action: 'dismiss' }, ids, id);
         },
 
-        // ------------------------------------------------------------ footnotes: popover, jumps
+        // ------------------------------------------------------------ footnotes: the popover, the jumps
         noteEl(noteId) { return q(article, `.ms-note[data-note="${noteId}"]`); },
         refEl(noteId) { return q(article, `.ms-ref[data-note="${noteId}"]`); },
-        showNote(ref) {
-          clearTimeout(noteTimer);
+        // The note of a reference in the overlay (a click, or the focus landing on the reference); the chapter's
+        // notes list keeps it too, marked while the popover is open.
+        openNote(ref) {
           const noteId = attr(ref, 'data-note');
+          if (!noteId) return false;
+          // the same reference again (a click after the focus that opened it) goes through openPop too: the
+          // outside-click of that click must not close what is open
           const li = this.noteEl(noteId);
           const body = li ? kids(li).find((c) => hasClass(c, 'ms-note-body')) : null;
           qa(article, '.ms-note.is-hot').forEach((n) => n.classList.remove('is-hot'));
           if (li && li.classList) li.classList.add('is-hot');
-          const r = rect(ref);
-          const c = rect(column);
-          const width = Math.min(NOTE_W, Math.max(120, c.width - 2 * POP_EDGE));
-          const left = clamp(r.left - c.left + r.width / 2 - width / 2, POP_EDGE, Math.max(POP_EDGE, c.width - width - POP_EDGE));
-          const viewportH = (typeof window !== 'undefined' && window.innerHeight) || 800;
-          const above = r.bottom + 160 > viewportH;
-          const top = above ? Math.round(r.top - c.top) : Math.round(r.bottom - c.top + 6);
-          this.notePop = {
-            open: true,
-            note: noteId,
-            number: attr(ref, 'data-number'),
-            html: body ? body.innerHTML : '',
-            orphan: attr(ref, 'data-orphan') === 'true',
-            style: `top:${top}px;left:${Math.round(left)}px;width:${Math.round(width)}px${above ? ';transform:translateY(-100%) translateY(-6px)' : ''}`,
-          };
+          this.note = { id: noteId, number: attr(ref, 'data-number'), html: body ? body.innerHTML : '', orphan: attr(ref, 'data-orphan') === 'true', found: Boolean(li) };
+          return this.openPop('note', noteId);
         },
-        hideNote() {
-          clearTimeout(noteTimer);
-          if (this.notePop.open) qa(article, '.ms-note.is-hot').forEach((n) => n.classList.remove('is-hot'));
-          this.notePop = Object.assign({}, this.notePop, { open: false });
-        },
-        keepNote() { clearTimeout(noteTimer); },
-        closeNoteSoon() { clearTimeout(noteTimer); noteTimer = setTimeout(() => this.hideNote(), NOTE_CLOSE_MS); },
         goToNote(noteId) {
           const li = this.noteEl(noteId);
           if (!li) return false;
-          this.hideNote();
+          this.closePop();
           if (typeof li.scrollIntoView === 'function') li.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' });
           focusEl(q(li, '.ms-note-num'));
           if (li.classList) { li.classList.add('is-pulse'); clearTimeout(pulseTimer); pulseTimer = setTimeout(() => li.classList.remove('is-pulse'), PULSE_MS); }
@@ -878,6 +1011,7 @@
         backToRef(noteId) {
           const ref = this.refEl(noteId);
           if (!ref) return false;
+          this.closePop();
           if (typeof ref.scrollIntoView === 'function') ref.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' });
           focusEl(ref);
           return true;
@@ -892,20 +1026,21 @@
         async openSource(id) {
           const block = this.blockById(id || this.focused);
           if (!block) { toast('حدّد فقرة أولًا (J / K)'); return false; }
-          this.closeMenu();
-          returnFocus = block;
+          this.closePop();
+          returnTo = attr(block, 'data-block');
           const pages = pagesOf(block);
-          this.drawer = { open: true, blockId: attr(block, 'data-block'), pages, index: 0, lines: linesOf(block), sheet: null, loading: true, error: '' };
+          this.drawer = { open: true, blockId: returnTo, pages, index: 0, lines: linesOf(block), sheet: null, loading: true, error: '' };
           this.liveMessage = `الأصل: صفحة ${pages[0] || ''}`;
           if (this.$nextTick) this.$nextTick(() => focusEl(this.$refs && this.$refs.drawerClose));
           await this.loadSheet(pages[0]);
           return true;
         },
+        // Closing returns the focus to the block it opened from, looked up by id: a swap meanwhile is no matter.
         closeDrawer() {
           if (!this.drawer.open) return;
           this.drawer = Object.assign({}, this.drawer, { open: false });
-          const target = returnFocus;
-          if (target) focusEl(target, { preventScroll: true });
+          const target = returnTo ? this.blockById(returnTo) : null;
+          if (target) { this.focused = returnTo; focusEl(target, { preventScroll: true }); this.showTools(target); }
         },
         drawerStep(dir) {
           const i = this.drawer.index + dir;
@@ -951,10 +1086,6 @@
         },
 
         // ------------------------------------------------------------ side panel: contents, warnings, scroll spy
-        setTab(name) {
-          this.tab = name === 'notes' ? 'notes' : 'toc';
-          storage.set(TAB_KEY, this.tab);
-        },
         onSideClick(e) {
           const t = e.target;
           const goto = closest(t, '[data-goto]');
@@ -968,7 +1099,6 @@
           const w = this.warnings[i];
           if (!w) return false;
           warnCursor = i;
-          this.setTab('notes');
           const hostEl = this.sideHost('warnings');
           qa(hostEl, '.ms-warn.is-current').forEach((el) => el.classList.remove('is-current'));
           const row = q(hostEl, `.ms-warn[data-warn="${i}"]`);
@@ -1036,12 +1166,6 @@
             if (link && typeof link.scrollIntoView === 'function') link.scrollIntoView({ block: 'nearest' });
           }
         },
-        onResize() {
-          if (this.tools.blockId) { const b = this.blockById(this.tools.blockId); if (b) this.showTools(b); }
-          if (this.menu.open) this.menu = Object.assign({}, this.menu, { open: false });
-          this.hideCard();
-          this.hideNote();
-        },
 
         // ------------------------------------------------------------ jump, copy, keyboard
         jumpTarget(value) {
@@ -1057,6 +1181,7 @@
           return n;
         },
         focusJump() {
+          this.closePop();
           const field = this.$refs && this.$refs.jump;
           if (field && field.focus) { field.focus(); if (field.select) field.select(); }
         },
@@ -1069,17 +1194,17 @@
           try { return await window.Nassakh.copyText(text); } finally { this.copying = false; }
         },
         openSheet() {
+          this.closePop();
           this.sheetOpen = true;
           if (this.$nextTick) this.$nextTick(() => focusEl(this.$refs && this.$refs.sheetClose));
         },
         closeSheet() { this.sheetOpen = false; },
+        // The layers, top-most first: the sheet, the convert popover, the overlay (its kind), the drawer.
         topLayer() {
           if (this.sheetOpen) return 'sheet';
           if (this.convert.open) return 'convert';
-          if (this.menu.open) return 'menu';
+          if (this.pop.kind) return this.pop.kind;
           if (this.drawer.open) return 'drawer';
-          if (this.card.open) return 'card';
-          if (this.notePop.open) return 'note';
           return null;
         },
         // Esc closes the top-most layer only (DESIGN.md §10).
@@ -1087,17 +1212,15 @@
           const layer = this.topLayer();
           if (layer === 'sheet') this.closeSheet();
           else if (layer === 'convert') this.closeConvert();
-          else if (layer === 'menu') this.closeMenu(true);
+          else if (layer === 'menu' || layer === 'seam' || layer === 'note') this.closePop(true);
           else if (layer === 'drawer') this.closeDrawer();
-          else if (layer === 'card') this.hideCard(true);
-          else if (layer === 'note') this.hideNote();
           return layer;
         },
         keyAction,
         onKey(e) {
           const t = e.target;
           const inField = Boolean(t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable));
-          const inMenu = Boolean(closest(t, '.menu, .ms-drawer, .ms-card, .rv-modal'));
+          const inMenu = Boolean(closest(t, '.menu, .ms-pop, .ms-drawer, .rv-modal'));
           const action = keyAction(e, { inField, inMenu, hasBlock: Boolean(this.focused) });
           if (!action) return;
           if (action === 'blur') { if (t && t.blur) t.blur(); return; }

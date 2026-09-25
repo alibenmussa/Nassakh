@@ -132,7 +132,8 @@ def _text_html(node: dict, ctx: _Ctx) -> str:
 
 
 def _seam_html(attrs: dict, ctx: _Ctx) -> str:
-    """The inline join marker of a `pageBreak` node: a hairline with the new page's number."""
+    """The inline join marker of a `pageBreak` node: a hairline with the new page's number. A button
+    (click / Enter) opening the seam menu of the view: split here, join, back to the automatic decision."""
     page = int(attrs.get("page") or 0)
     seam = ctx.seams.get(page, {})
     from_page = seam.get("from_page") or page - 1
@@ -143,7 +144,8 @@ def _seam_html(attrs: dict, ctx: _Ctx) -> str:
     return (
         f'<span class="ms-seam" role="button" tabindex="0" data-page="{page}" data-from="{_attr(from_page)}"'
         f' data-mode="join" data-decision="{_attr(decision)}" data-reason="{_attr(reason)}"'
-        f' data-printed="{_attr(printed)}" aria-label="{_attr(label)}"><bdi>{page}</bdi></span>'
+        f' data-printed="{_attr(printed)}" aria-haspopup="menu" aria-label="{_attr(label)}">'
+        f"<bdi>{page}</bdi></span>"
     )
 
 
@@ -253,7 +255,8 @@ def _split_html(seam: dict) -> str:
         f' data-decision="{_attr(decision)}" data-reason="{_attr(reason)}">'
         f'<span class="ms-seam ms-seam-split ms-split-page" role="button" tabindex="0" data-page="{page}"'
         f' data-from="{_attr(from_page)}" data-mode="split" data-decision="{_attr(decision)}"'
-        f' data-reason="{_attr(reason)}" aria-label="{_attr(label)}">ص <bdi>{page}</bdi></span></div>'
+        f' data-reason="{_attr(reason)}" aria-haspopup="menu" aria-label="{_attr(label)}">'
+        f"ص <bdi>{page}</bdi></span></div>"
     )
 
 

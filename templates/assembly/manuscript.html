@@ -4,10 +4,11 @@
 Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22). Context:
 book, state (assembly.services.manuscript_state), can_edit, can_review, assembling, failed, config (the Alpine
 component's start), and the fragment context of assembly/render.py (has_document, document_html, outline,
-warning_groups, stats_rows, counts_text, meta). The top-bar controls live in header_actions (outside the
-component root) and read the view through Alpine.store('manuscript').view; everything else is the
-`manuscriptView` component in static/src/js/manuscript.js; styles in static/src/components/manuscript.css.
+warning_groups, counts_text, meta). The top-bar controls live in header_actions (outside the component root) and
+read the view through Alpine.store('manuscript').view; everything else is the `manuscriptView` component in
+static/src/js/manuscript.js; styles in static/src/components/manuscript.css.
 The document host is x-ignore: the fragment is static markup, hover / focus / clicks are delegated.
+One floating element (.ms-pop) serves the block menu, the seam menu and the footnote: at most one is open.
 {% endcomment %}
 {% block head_title %}المخطوطة · {{ book.title }} · نسّاخ{% endblock %}
 {% block title %}<span class="title-page">المخطوطة</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
@@ -86,7 +87,7 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
 {{ config|json_script:"manuscript-config" }}
 <div class="ms-screen" data-manuscript x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
      :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy }"
-     @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()">
+     @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()" @scroll.window.passive="onScroll()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
   {# ------------------------------------------------------------ toolbar hanging from the top bar (= bk-toolbar) #}
@@ -199,57 +200,81 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
         {# x-cloak, :class, x-ref), so a cloak here would never lift; manuscript.js sets its classes (is-reveal) itself #}
         <div class="ms-host" x-ignore data-ms-host>{% if has_document %}{% include "assembly/_document.html" %}{% endif %}</div>
 
-        {# block tools: one floating «⋯» in the start margin of the hovered / focused block #}
-        <div class="ms-tools" x-show="tools.blockId" x-cloak :style="tools.style" @mouseenter="keepTools()">
-          <button type="button" class="btn-icon btn-icon-sm ms-tools-btn" x-ref="toolsBtn" aria-haspopup="menu" :aria-expanded="menu.open" title="قائمة الفقرة" aria-label="قائمة الفقرة" @click="toggleMenu(tools.blockId)">
+        {# block tools: one floating «⋯» in the start margin of the hovered / focused block (= rv-line-tools) #}
+        <div class="ms-tools" x-show="tools.blockId" x-cloak :style="tools.style" @mouseenter="keepTools()" @mouseleave="hideToolsSoon()">
+          <button type="button" class="btn-icon btn-icon-sm ms-tools-btn" x-ref="toolsBtn" aria-haspopup="menu" :aria-expanded="pop.kind === 'menu' && pop.anchorId === tools.blockId" title="قائمة الفقرة (Enter)" aria-label="قائمة الفقرة" @click="toggleMenu(tools.blockId)">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
           </button>
         </div>
-        <div class="menu ms-block-menu" role="menu" x-ref="menu" x-show="menu.open" x-cloak :style="menu.style" @click.outside="closeMenu()" @keydown.escape.stop.prevent="closeMenu(true)" x-transition.opacity.duration.120ms>
-          <div class="menu-label">ص <bdi class="num" x-text="menu.src"></bdi><span x-show="!menu.reviewed"> · لم تُراجَع بعد</span></div>
-          <button type="button" class="menu-item" role="menuitem" @click="openSource(menu.blockId)">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
-            <span>عرض الأصل</span>
-            <kbd class="kbd ms-auto">O</kbd>
-          </button>
-          <div class="menu-sep" role="separator"></div>
-          <div class="menu-label">نوع الفقرة</div>
-          <template x-for="r in roles" :key="r.value">
-            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
-              <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
-              <span x-text="r.label"></span>
-            </button>
+
+        {# the one overlay (= rv-pop): the block menu, the seam menu or the footnote, placed against the visible column #}
+        <div class="menu ms-pop" x-ref="pop" x-show="pop.kind" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-note': pop.kind === 'note' }"
+             :role="pop.kind === 'note' ? 'dialog' : 'menu'" :aria-label="pop.kind === 'menu' ? 'قائمة الفقرة' : pop.kind === 'seam' ? 'فاصل الصفحة' : 'الحاشية'"
+             @click.outside="onPopOutside($event)" @keydown.escape.stop.prevent="closePop(true)"
+             @keydown.arrow-down.prevent="movePop(1)" @keydown.arrow-up.prevent="movePop(-1)">
+          <template x-if="pop.kind === 'menu'">
+            <div>
+              <div class="menu-label">ص <bdi class="num" x-text="menu.src"></bdi><span x-show="!menu.reviewed"> · لم تُراجَع بعد</span></div>
+              <button type="button" class="menu-item" role="menuitem" @click="openSource(menu.blockId)">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
+                <span>عرض الأصل</span>
+                <kbd class="kbd ms-auto">O</kbd>
+              </button>
+              <div class="menu-sep" role="separator"></div>
+              <div class="menu-label">نوع الفقرة</div>
+              <template x-for="r in roles" :key="r.value">
+                <button type="button" class="menu-item" role="menuitemradio" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
+                  <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
+                  <span x-text="r.label"></span>
+                </button>
+              </template>
+              <div class="menu-sep" role="separator"></div>
+              <a class="menu-item" role="menuitem" :href="menu.reviewUrl">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+                <span>فتح في المراجعة</span>
+              </a>
+            </div>
           </template>
-          <div class="menu-sep" role="separator"></div>
-          <a class="menu-item" role="menuitem" :href="menu.reviewUrl">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
-            <span>فتح في المراجعة</span>
-          </a>
-        </div>
-
-        {# seam card: what happened at this page boundary and the override #}
-        <div class="ms-card" role="group" aria-label="فاصل صفحة" x-ref="card" x-show="card.open" x-cloak :style="card.style" @mouseenter="keepCard()" @mouseleave="closeCardSoon()" @keydown.escape.stop.prevent="hideCard(true)">
-          <span class="ms-card-text" x-text="card.text"></span>
-          {% if can_edit %}
-          <span class="ms-card-actions">
-            <button type="button" class="btn btn-sm" x-show="card.action" :disabled="busy" @click="applySeam()" x-text="card.actionLabel"></button>
-            <button type="button" class="btn btn-ghost btn-sm" x-show="card.decision === 'override'" :disabled="busy" @click="resetSeam()" title="إلغاء التعديل اليدوي والعودة إلى القرار التلقائي">تلقائي</button>
-          </span>
-          {% endif %}
-        </div>
-
-        {# footnote popover on hover / focus of a reference #}
-        <div class="ms-note-pop" role="tooltip" x-ref="notePop" x-show="notePop.open" x-cloak :style="notePop.style" @mouseenter="keepNote()" @mouseleave="closeNoteSoon()">
-          <span class="ms-note-pop-num num"><bdi x-text="notePop.number"></bdi></span>
-          <span class="ms-note-pop-text" x-html="notePop.html"></span>
-          <span class="ms-note-pop-flag" x-show="notePop.orphan">بلا علامة في المتن</span>
+          <template x-if="pop.kind === 'seam'">
+            <div>
+              <div class="menu-label ms-pop-state"><span x-text="seam.text"></span><span class="ms-pop-decision" :class="{ 'is-override': seam.decision === 'override' }" x-text="seam.state"></span></div>
+              {% if can_edit %}
+              <button type="button" class="menu-item" role="menuitemradio" :aria-checked="seam.mode === 'split' ? 'true' : 'false'" :disabled="busy" @click="chooseSeam('split')">
+                <span class="ms-role-check" aria-hidden="true" x-text="seam.mode === 'split' ? '✓' : ''"></span>
+                <span>فصل هنا</span>
+              </button>
+              <button type="button" class="menu-item" role="menuitemradio" :aria-checked="seam.mode === 'join' ? 'true' : 'false'" :disabled="busy" @click="chooseSeam('join')">
+                <span class="ms-role-check" aria-hidden="true" x-text="seam.mode === 'join' ? '✓' : ''"></span>
+                <span>وصل بما قبلها</span>
+              </button>
+              <div class="menu-sep" role="separator"></div>
+              <button type="button" class="menu-item" role="menuitem" :disabled="busy || seam.decision !== 'override'" @click="chooseSeam('auto')" title="إلغاء القرار اليدوي والعودة إلى القرار التلقائي">
+                <span class="ms-role-check" aria-hidden="true"></span>
+                <span>تلقائي</span>
+              </button>
+              <div class="menu-sep" role="separator"></div>
+              {% endif %}
+              <a class="menu-item" role="menuitem" :href="reviewUrl(seam.page)">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
+                <span>فتح الصفحة <bdi class="num" x-text="seam.page"></bdi> في المراجعة</span>
+              </a>
+            </div>
+          </template>
+          <template x-if="pop.kind === 'note'">
+            <div class="ms-pop-note">
+              <span class="ms-pop-note-num num"><bdi x-text="note.number"></bdi></span>
+              <span class="ms-pop-note-text" x-show="note.html" x-html="note.html"></span>
+              <span class="ms-pop-note-text meta" x-show="!note.html">لا نصّ لهذه الحاشية في القائمة.</span>
+              <span class="ms-pop-note-flag" x-show="note.orphan">بلا علامة في المتن</span>
+              <button type="button" class="link ms-pop-note-link" x-show="note.found" @click="goToNote(note.id)">إلى موضعها في القائمة</button>
+            </div>
+          </template>
         </div>
       </div>
     </div>
 
-    {# ------------------------------------------------------------ side panel (end side, = bk-side): sections with the dashboard's heads #}
-    {# the steps while a run is on, then the contents / notes tabs (the review segmented control) over one list, then the numbers #}
-    <aside class="ms-side" aria-label="محتويات المخطوطة وملاحظاتها">
+    {# ------------------------------------------------------------ side panel (end side, = bk-side): the steps while a run is on, the contents, the warnings #}
+    <aside class="bk-side ms-side" aria-label="محتويات المخطوطة وملاحظاتها">
       <button type="button" class="btn btn-sm ms-side-toggle" @click="sideOpen = !sideOpen" :aria-expanded="sideOpen">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
         <span>المحتويات والملاحظات</span>
@@ -266,21 +291,13 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
             </template>
           </ol>
         </div>
-        <div class="ms-side-main" x-show="phase !== 'assembling' || hasDocument">
-          <div class="ms-side-section ms-side-lists">
-            <div class="segmented ms-tabs" role="tablist" aria-label="لوحة المخطوطة">
-              <button type="button" role="tab" id="ms-tab-toc" aria-controls="ms-panel-toc" :aria-selected="tab === 'toc'" :class="{ 'is-selected': tab === 'toc' }" @click="setTab('toc')">المحتويات</button>
-              <button type="button" role="tab" id="ms-tab-notes" aria-controls="ms-panel-notes" :aria-selected="tab === 'notes'" :class="{ 'is-selected': tab === 'notes' }" @click="setTab('notes')">ملاحظات <bdi class="num" x-text="warningsTotal">{{ warnings_total|default:0 }}</bdi></button>
-            </div>
-            <div class="ms-side-scroll">
-              <div class="ms-toc-host" id="ms-panel-toc" role="tabpanel" aria-labelledby="ms-tab-toc" data-ms-toc-host x-show="tab === 'toc'" @click="onSideClick($event)"></div>
-              <div class="ms-warn-host" id="ms-panel-notes" role="tabpanel" aria-labelledby="ms-tab-notes" data-ms-warnings-host x-show="tab === 'notes'" x-cloak @click="onSideClick($event)"></div>
-            </div>
-          </div>
-          <div class="ms-side-section ms-side-stats" role="group" aria-label="أرقام المخطوطة">
-            <div class="bk-side-head"><span>الأرقام</span></div>
-            <div class="ms-stats-host" data-ms-stats-host></div>
-          </div>
+        <nav class="ms-side-section ms-side-toc" aria-label="المحتويات" x-show="hasDocument"{% if not has_document %} x-cloak{% endif %}>
+          <div class="bk-side-head"><span>المحتويات</span><bdi class="num" x-show="tocCount" x-text="tocCount">{{ outline|length }}</bdi></div>
+          <div class="ms-toc-host" data-ms-toc-host @click="onSideClick($event)"></div>
+        </nav>
+        <div class="ms-side-section ms-side-warnings" role="group" aria-label="الملاحظات" x-show="hasDocument"{% if not has_document %} x-cloak{% endif %}>
+          <div class="bk-side-head"><span>الملاحظات</span><bdi class="num" x-text="warningsTotal">{{ warnings_total|default:0 }}</bdi></div>
+          <div class="ms-warn-host" data-ms-warnings-host @click="onSideClick($event)"></div>
         </div>
       </div>
     </aside>
@@ -342,9 +359,11 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة، فتح في المراجعة</dd>
         <dt><kbd class="kbd">O</kbd></dt><dd>عرض أصل الفقرة المحدَّدة</dd>
         <dt><kbd class="kbd">]</kbd> / <kbd class="kbd">[</kbd></dt><dd>الملاحظة التالية / السابقة</dd>
-        <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>فصل الفقرة أو وصلها، و<kbd class="kbd">⌫</kbd> يعيد القرار التلقائي</dd>
+        <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>قائمة الفاصل: فصل هنا، وصل بما قبلها، تلقائي</dd>
+        <dt><span class="meta">Enter على رقم حاشية</span></dt><dd>عرض نصّ الحاشية</dd>
+        <dt><kbd class="kbd">↓</kbd> / <kbd class="kbd">↑</kbd> <span class="meta">داخل قائمة</span></dt><dd>التنقّل بين عناصرها</dd>
         <dt><kbd class="kbd">C</kbd></dt><dd>نسخ نص المخطوطة</dd>
-        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق الأصل والقوائم</dd>
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو الأصل</dd>
         <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
       </dl>
     </div>

@@ -1,8 +1,10 @@
 /* Manuscript view (Phase 4, PHASE4_SPEC §4.2). Classes are prefixed ms-. The chrome carries the review
    screen's and the dashboard's vocabulary one to one (shared values are marked `= rv-…` / `= bk-…`); the
-   document column is set in Amiri, the book face. Motion: the reveal (blocks rising in, join markers
-   stitching), the flash after a re-run, the skeleton shimmer and the pill's dot; chrome 120–200 ms ease-out on
-   opacity / transform (DESIGN.md §8). prefers-reduced-motion drops every one of them (static states). */
+   document column is set in Amiri, the book face. One overlay (.ms-pop, the shared .menu placed like the
+   review screen's rv-pop) serves the block menu, the seam menu and the footnote. Motion: the reveal (blocks
+   rising in, join markers stitching), the flash after a re-run, the pending shimmer of a block whose re-run is
+   on, the skeleton shimmer and the pill's dot; chrome 120–200 ms ease-out on opacity / transform (DESIGN.md §8).
+   prefers-reduced-motion drops every one of them (static states). */
 @font-face {
   font-family: "Amiri";
   font-style: normal;
@@ -257,7 +259,7 @@
     cursor: pointer;
     transition: background-color 120ms ease;
   }
-  .ms-ref:hover, .ms-ref:focus-visible { background: var(--color-accent-soft); outline: none; }
+  .ms-ref:hover, .ms-ref:focus-visible, .ms-ref[aria-expanded="true"] { background: var(--color-accent-soft); outline: none; }
   .ms-ref:focus-visible { box-shadow: var(--ring); }
   .ms-ref.is-orphan { color: var(--color-warning-text); background: var(--color-warning-bg); }
   .ms-ref.is-orphan:hover, .ms-ref.is-orphan:focus-visible { background: var(--color-warning-border); }
@@ -281,9 +283,9 @@
     transition: background-color 120ms ease, color 120ms ease;
   }
   .ms-seam::before { content: ""; width: 1px; height: 1.25em; background: var(--color-border-strong); transition: background-color 200ms ease, transform 200ms ease; }
-  .ms-seam:hover, .ms-seam:focus-visible { background: var(--color-accent-soft); color: var(--color-accent-text); outline: none; }
+  .ms-seam:hover, .ms-seam:focus-visible, .ms-seam[aria-expanded="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); outline: none; }
   .ms-seam:focus-visible { box-shadow: var(--ring); }
-  .ms-seam:hover::before, .ms-seam:focus-visible::before { background: var(--color-accent); }
+  .ms-seam:hover::before, .ms-seam:focus-visible::before, .ms-seam[aria-expanded="true"]::before { background: var(--color-accent); }
   /* an override shows a small dot */
   .ms-seam[data-decision="override"]::after { content: ""; width: 5px; height: 5px; border-radius: var(--radius-pill); background: var(--color-accent); }
   /* a split: a faint full-width hairline with «ص 13» at the start; a missing page reads amber */
@@ -302,6 +304,13 @@
   .ms-host.is-reveal .ms-block.is-rise { animation: ms-rise 320ms ease-out both; animation-delay: calc(var(--i, 0) * 16ms); }
   /* after a re-run, the blocks whose markup changed flash once */
   .ms-block.is-flash { animation: ms-flash 600ms ease-out both; }
+  /* the block whose action is on the wire, until the swap: muted gray with a slow shimmer (the skeleton's) */
+  .ms-block.is-pending {
+    color: var(--color-text-3);
+    background: linear-gradient(90deg, transparent 20%, var(--color-bg-muted) 50%, transparent 80%);
+    background-size: 200% 100%;
+    animation: ms-shimmer 1.6s linear infinite;
+  }
 
   /* ------------------------------------------------------------ notes after each chapter */
   .ms-notes {
@@ -325,50 +334,32 @@
   .ms-note[data-orphan="true"] .ms-note-num { color: var(--color-warning-text); }
   .ms-note-flag { flex: none; align-self: center; font: 500 11px/1.4 var(--font-sans); color: var(--color-warning-text); white-space: nowrap; }
 
-  /* ------------------------------------------------------------ floating tools (single elements moved to their anchor) */
+  /* ------------------------------------------------------------ the «⋯» and the overlay */
+  /* the «⋯» sits in the start margin, 22 px under the block's top (= rv-line-tools); manuscript.js places the
+     block menu against this spot, so the two numbers are shared (TOOLS_TOP / TOOLS_SIZE) */
   .ms-tools { position: absolute; inset-inline-start: 0; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; padding-top: 22px; animation: ms-fade-in 120ms ease-out both; }
   .ms-tools-btn { width: 24px; height: 24px; }
-  .ms-block-menu { position: absolute; inset-inline-start: 0; z-index: 40; }
-  .ms-block-menu .menu-item[disabled] { opacity: 0.45; cursor: default; }
-  .ms-role-check { display: inline-block; width: 14px; color: var(--color-accent-text); } /* = rv-role-check */
-  .ms-card {
-    position: absolute;
-    z-index: 30;
-    width: 300px;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px 10px;
-    padding: 8px 10px;
-    background: var(--color-surface);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-pop);
-    font-size: 12.5px;
-    color: var(--color-text-2);
-    animation: ms-pop-in 150ms ease-out both;
-  }
-  .ms-card-text { flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
-  .ms-card-actions { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; }
-  .ms-note-pop {
-    position: absolute;
-    z-index: 30;
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 10px 12px;
-    background: var(--color-surface);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-pop);
-    font-family: var(--ms-font);
-    font-size: 15px;
-    line-height: 1.7;
-    text-align: start;
-    animation: ms-pop-in 150ms ease-out both;
-    pointer-events: auto;
-  }
-  .ms-note-pop-num { flex: none; color: var(--color-accent-text); font: 600 12px/1.7 var(--font-sans); }
-  .ms-note-pop-text { flex: 1; min-width: 0; }
-  .ms-note-pop-flag { flex: none; font: 500 11px/1.4 var(--font-sans); color: var(--color-warning-text); }
+  .ms-tools-btn[aria-expanded="true"] { background: var(--color-active); color: var(--color-text); }
+  /* the one overlay (= rv-pop): the shared menu, absolutely placed inside the column; `is-above` when flipped */
+  .ms-pop { position: absolute; z-index: 40; width: 250px; max-width: 250px; transform-origin: top right; animation: ms-pop-in 150ms ease-out both; }
+  .ms-pop.is-above { transform-origin: bottom right; animation-name: ms-pop-in-up; }
+  .ms-pop .menu-item[disabled] { opacity: 0.45; cursor: default; }
+  .ms-pop .menu-item .icon { color: var(--color-text-3); }
+  .ms-pop .menu-item .kbd { margin-inline-start: auto; }
+  .ms-role-check { display: inline-block; width: 14px; flex: none; color: var(--color-accent-text); } /* = rv-role-check */
+  /* the seam menu's head: the decision in words, its state (automatic or manual) after a dot */
+  .ms-pop-state { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-variant-numeric: tabular-nums; }
+  .ms-pop-decision { color: var(--color-text-3); font-weight: 400; }
+  .ms-pop-decision::before { content: "·"; margin-inline-end: 6px; }
+  .ms-pop-decision.is-override { color: var(--color-accent-text); font-weight: 500; }
+  /* the footnote: the book face, the number at the start, the orphan flag and the link to the list */
+  .ms-pop.is-note { width: 360px; max-width: min(360px, calc(100vw - 32px)); padding: 10px 12px; }
+  .ms-pop-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-family: var(--ms-font); font-size: 15px; line-height: 1.7; text-align: start; }
+  .ms-pop-note-num { flex: none; color: var(--color-accent-text); font: 600 12px/1.7 var(--font-sans); }
+  .ms-pop-note-text { flex: 1 1 200px; min-width: 0; }
+  .ms-pop-note-flag { flex: none; font: 500 11px/1.4 var(--font-sans); color: var(--color-warning-text); }
+  .ms-pop-note-link { flex: none; margin-inline-start: auto; border: 0; background: none; padding: 0; font: 500 11.5px/1.4 var(--font-sans); cursor: pointer; }
+  .ms-pop-note-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 3px; }
 
   /* ------------------------------------------------------------ skeleton (= rv-skeleton, the assembling reveal) */
   .ms-skeleton { display: flex; flex-direction: column; gap: 22px; padding: 12px 0 40px; }
@@ -384,33 +375,23 @@
   .ms-skeleton p span:nth-child(odd) { animation-delay: 80ms; }
   .ms-skeleton-title { width: 46%; height: 22px; margin: 0 auto 10px; }
 
-  /* ------------------------------------------------------------ side panel (= bk-side, D34) */
-  /* The dashboard panel one to one: sticky under the toolbar, a hairline on its inner edge, 22 px between
-     sections, `bk-side-head` heads, 12.5 px rows. The contents / notes tabs are the review segmented control. */
+  /* ------------------------------------------------------------ side panel (bk-side, D34) */
+  /* The dashboard's panel (theatre.css .bk-side: sticky under the toolbar, a hairline on its inner edge, 22 px
+     between sections, bk-side-head heads, 12–12.5 px chrome) scrolling as one column when it is taller than
+     the window. Sections: the steps while a run is on, the contents, the warnings. */
   .ms-side {
-    position: sticky;
     top: calc(var(--topbar-height) + var(--ms-toolbar-h) + 20px);
     max-height: calc(100dvh - var(--topbar-height) - var(--ms-toolbar-h) - 40px);
-    display: flex;
-    flex-direction: column;
-    gap: 22px;
-    min-width: 0;
-    min-height: 0;
-    padding-inline-start: 20px;
-    border-inline-start: 1px solid var(--color-border);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-inline-end: 6px;
     font-size: 12.5px;
   }
   .ms-side-toggle { display: none; align-self: flex-start; }
-  .ms-side-body, .ms-side-main { display: flex; flex-direction: column; gap: 22px; min-height: 0; }
-  .ms-side-section { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-  .ms-side-lists { flex: 1 1 auto; }
-  .ms-tabs { align-self: flex-start; }
-  .ms-tabs > button { padding: 0 10px; }
-  .ms-tabs > button .num { font-weight: 400; color: var(--color-text-3); }
-  .ms-tabs > .is-selected .num { color: var(--color-text-2); }
-  /* one scrolling list under the tabs; rows bleed 8 px so their text lines up with the heads */
-  .ms-side-scroll { flex: 1 1 auto; min-height: 0; max-height: 52dvh; margin-inline: -8px 0; padding-inline: 8px 4px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-  .ms-side-empty { margin: 4px 0; font-size: 12px; line-height: 1.6; }
+  .ms-side-body { display: flex; flex-direction: column; gap: 22px; min-height: 0; }
+  .ms-side-section { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .ms-side-empty { margin: 0; font-size: 12px; line-height: 1.6; }
   /* the steps while a run is on (= bk-count rows with a mark instead of the dot) */
   .ms-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
   .ms-step { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--color-text-3); transition: color 200ms ease; }
@@ -432,9 +413,10 @@
   .ms-step.is-done { color: var(--color-text-2); }
   .ms-step.is-done .ms-step-mark { background: var(--color-success); border-color: transparent; animation: ms-stamp-in 300ms ease-out both; }
   .ms-step.is-done .ms-step-mark .icon { opacity: 1; }
-  /* contents: the headings as a tree, the current chapter marked (scroll spy); rows = bk-attention summary */
-  .ms-toc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-  .ms-toc-list.is-nested { margin-top: 1px; }
+  /* contents: the headings as a tree, the current chapter marked (scroll spy); rows bleed 8 px so the text lines
+     up with the head (= bk-attention summary) */
+  .ms-toc-list { list-style: none; margin: 0 -8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .ms-toc-list.is-nested { margin: 1px 0 0; }
   .ms-toc-link {
     display: flex;
     align-items: baseline;
@@ -453,8 +435,9 @@
   .ms-toc-item.is-l2 > .ms-toc-link { padding-inline-start: 22px; font-size: 12px; font-weight: 400; }
   .ms-toc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .ms-toc-page { flex: none; color: var(--color-text-3); font-size: 11.5px; font-weight: 400; }
-  /* notes grouped by code: the group head = bk-attention summary, the rows = bk-attention-row */
-  .ms-warnings { display: flex; flex-direction: column; gap: 4px; }
+  /* warnings grouped by code: the group head = bk-attention summary, the rows = bk-attention-row (12.5 px,
+     a hairline between rows), each with the page, «انتقال» and «مراجعة» as links */
+  .ms-warnings { display: flex; flex-direction: column; gap: 2px; margin-inline-start: -8px; }
   .ms-warn-group > summary {
     display: flex;
     align-items: center;
@@ -472,14 +455,13 @@
   .ms-warn-group > summary::-webkit-details-marker { display: none; }
   .ms-warn-group > summary:hover { background: var(--color-hover); color: var(--color-text); }
   .ms-warn-group[open] > summary { background: var(--color-active); color: var(--color-text); }
-  .ms-warn-group > summary .num { color: var(--color-text-3); font-weight: 400; }
-  .ms-warn-list { list-style: none; margin: 2px 0 6px; padding: 0 8px; display: flex; flex-direction: column; }
+  .ms-warn-group > summary .num { color: var(--color-text-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .ms-warn-list { list-style: none; margin: 0 0 4px; padding: 0 8px; display: flex; flex-direction: column; }
   .ms-warn {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 2px 8px;
-    min-height: 36px;
-    padding: 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 0;
     border-bottom: 1px solid var(--color-border);
     font-size: 12.5px;
     line-height: 1.45;
@@ -487,17 +469,11 @@
   }
   .ms-warn:last-child { border-bottom: 0; }
   .ms-warn.is-current { margin-inline: -8px; padding-inline: 8px; border-radius: var(--radius-sm); background: var(--color-accent-soft); }
-  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .ms-warn-msg { color: var(--color-text); }
-  .ms-warn-actions { grid-column: 2; display: flex; align-items: center; gap: 2px; margin-inline-start: -8px; }
-  .ms-warn-actions .btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
-  /* the run's numbers under a hairline (= bk-summary-review + bk-counts rows) */
-  .ms-side-stats { padding-top: 12px; border-top: 1px solid var(--color-border); }
-  .ms-stats { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; }
-  .ms-stat { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--color-text); font-weight: 500; }
-  .ms-stat dt { flex: 1; min-width: 0; }
-  .ms-stat dd { margin: 0; font-variant-numeric: tabular-nums; }
-  .ms-stat.is-zero { color: var(--color-text-3); font-weight: 400; }
+  .ms-warn-actions { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ms-warn-link { border: 0; background: none; padding: 0; font: inherit; font-weight: 500; cursor: pointer; }
+  .ms-warn-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 3px; }
 
   /* ------------------------------------------------------------ the source drawer («عرض الأصل») */
   .ms-drawer {
@@ -553,6 +529,7 @@
   @keyframes ms-flash { from { background-color: var(--color-accent-soft); } to { background-color: transparent; } }
   @keyframes ms-pulse-bg { from { background: var(--color-accent-soft); } to { background: transparent; } }
   @keyframes ms-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @keyframes ms-pop-in-up { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
   @keyframes ms-stamp-in { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   @keyframes ms-drawer-in { from { transform: translateX(100%); } to { transform: none; } }
   @keyframes ms-drawer-in-ltr { from { transform: translateX(-100%); } to { transform: none; } }
@@ -569,24 +546,23 @@
     .ms-screen { --ms-gutter: 44px; }
     .ms-toolbar { flex-wrap: wrap; height: auto; min-height: var(--ms-toolbar-h); padding: 6px 16px; margin-inline: -16px; }
     .ms-layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-    .ms-side { order: -1; position: static; max-height: none; padding-inline-start: 0; border-inline-start: 0; }
+    .ms-side { order: -1; position: static; max-height: none; overflow: visible; padding-inline: 0; border-inline-start: 0; }
     .ms-side-toggle { display: inline-flex; }
     .ms-side-body { display: none; gap: 14px; padding-top: 12px; }
     .ms-side-body.is-open { display: flex; }
-    .ms-side-main { gap: 14px; }
-    .ms-side-scroll { max-height: 40dvh; }
     .ms-drawer { inset-inline: 0; width: auto; max-width: none; }
     .ms-block::before { font-size: 10px; width: calc(var(--ms-gutter) - 8px); }
-    .ms-card { width: min(300px, calc(100vw - 32px)); }
+    .ms-pop { max-width: calc(100vw - 32px); }
   }
   @media (prefers-reduced-motion: reduce) {
     .ms-host.is-reveal .ms-block.is-rise { animation: none; }
     .ms-host.is-reveal .ms-seam.is-stitch::before { animation: none; }
     .ms-block.is-flash { animation: none; background-color: var(--color-accent-soft); }
     .ms-block.is-pulse, .ms-note.is-pulse { animation: none; }
+    .ms-block.is-pending { animation: none; background: var(--color-bg-muted); }
     .ms-skeleton span, .ms-sheet-skeleton { animation: none; }
     .ms-pill.is-saving .ms-pill-dot { animation: none; }
     .ms-step.is-current .ms-step-mark, .ms-step.is-done .ms-step-mark { animation: none; }
-    .ms-drawer, .ms-card, .ms-note-pop, .ms-convert, .ms-tools { animation: none; }
+    .ms-drawer, .ms-pop, .ms-convert, .ms-tools { animation: none; }
   }
 }

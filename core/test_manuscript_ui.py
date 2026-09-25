@@ -1,8 +1,10 @@
 """Manuscript view (Phase 4, PHASE4_SPEC §4): the rendered templates for every state (Django test client on
 a small real book), the renderer's contract and escaping (`assembly.render`), the compiled CSS, and — under
 Node with a tiny DOM, a fragment parser and a selector engine — the `manuscriptView` Alpine component
-(polling to done and the reveal, the seam override with the scroll anchor, the source drawer and the focus
-return, suggestions, the block menu, the keyboard map) plus the dashboard's manuscript logic in books.js."""
+(polling to done and the reveal, the one overlay: placement against the visible column, one open at a time,
+the outside click, scroll-away, the seam menu and its override with the scroll anchor and the focus restored
+after the swap, the block menu, the footnote, the source drawer, suggestions, the keyboard map) plus the
+dashboard's manuscript logic in books.js."""
 
 from __future__ import annotations
 
@@ -152,9 +154,11 @@ def test_manuscript_view_never_assembled_shows_the_empty_state_with_options(edit
     # the document host is empty, the layout cloaked; the top bar has the popover for editors
     assert '<div class="ms-host" x-ignore data-ms-host></div>' in body and "<article" not in body
     assert 'class="menu ms-convert"' in body and "manuscriptBar" in body and "src/js/manuscript.js" in body
-    # a proofreader sees no options and no convert: the editor starts the conversion
+    # a proofreader sees no options and no convert: the editor starts the conversion; the seam menu offers
+    # the review link only
     body = _view(_logged(proofreader), f.book)
     assert "يبدأ التحويل محرّر الكتاب" in body and 'class="menu ms-convert"' not in body
+    assert "chooseSeam(" not in body and "فتح الصفحة" in body
     assert "v.primary === 'convert'" not in body and "v.primary === 'copy'" in body
     assert _json_script(body, "manuscript-config")["canEdit"] is False
     # the proofreader may still set roles (the review permission)
@@ -212,7 +216,7 @@ def test_document_host_carries_no_alpine_directive_besides_x_ignore(editor):
     run.delete()
     services.start_assembly(f.book, editor)
     fragment = client.get(reverse("assembly:document", args=[f.book.pk])).content.decode()
-    assert fragment.startswith('<article class="ms-doc"') and 'data-ms-part="stats"' in fragment
+    assert fragment.startswith('<article class="ms-doc"') and 'data-ms-part="warnings"' in fragment
     assert 'id="ms-meta"' in fragment and _json_script(fragment, "ms-meta")["version"] == 1
     # ... and the view rendered afterwards holds the same document inside the bare host
     body = _view(client, f.book)
@@ -240,37 +244,55 @@ def test_manuscript_view_ready_renders_the_document_the_panel_and_the_chrome(edi
     assert '<span class="ms-seam" role="button" tabindex="0" data-page="2"' in host
     assert '<button type="button" class="ms-ref" id="ref-n' in host and '<ol class="ms-notes"' in host
     assert '<mark class="ms-uncertain">' in host
-    assert (
-        'data-ms-part="toc"' in host and 'data-ms-part="warnings"' in host and 'data-ms-part="stats"' in host
-    )
-    assert 'data-goto="h' in host and "الفصل الأول" in host
+    assert 'data-ms-part="toc"' in host and 'data-ms-part="warnings"' in host
+    assert 'data-ms-part="stats"' not in host  # the numbers live in the toolbar's counts line only
+    assert 'data-goto="h' in host and "الفصل الأول" in host and 'data-count="1"' in host
     assert (
         'data-code="page_unreviewed"' in host
         and f'href="{reverse("review:page", args=[f.book.pk, 2])}"' in host
     )
-    assert ">انتقال</button>" in host and ">مراجعة</a>" in host
+    assert 'class="link ms-warn-link" data-goto="' in host and ">انتقال</button>" in host
+    assert ">مراجعة</a>" in host and "ms-warn-page" in host
     meta = _json_script(body, "ms-meta")
     assert meta["version"] == 1 and meta["countsText"] == config["countsText"]
     assert [w["code"] for w in meta["warnings"]] == ["page_unreviewed", "uncertain_words"]
     assert meta["toc"][0]["text"] == "الفصل الأول" and meta["seams"][0]["mode"] == "join"
-    # the chrome: toolbar (seams segmented, counts, jump with G), tabs, stats host, drawer, sheet, bar
+    # the chrome: toolbar (seams segmented, counts, jump with G), the side panel in the dashboard's vocabulary
+    # (bk-side, bk-side-head sections: the steps, the contents, the warnings; no tabs, no numbers), the one
+    # overlay (the shared menu) with its three faces, the drawer, the sheet, the bar
     assert "data-seam-toggle" in body and 'title="إظهار فواصل الصفحات (S)"' in body
     assert 'placeholder="إلى صفحة…"' in body and '<kbd class="kbd" aria-hidden="true">G</kbd>' in body
-    assert 'role="tablist" aria-label="لوحة المخطوطة"' in body and "المحتويات" in body
+    start = body.index('<aside class="bk-side ms-side"')
+    side = body[start : body.index("</aside>", start)]
+    assert side.count('class="bk-side-head"') == 3 and "tablist" not in side and "الأرقام" not in side
+    assert (
+        "<span>التجميع</span>" in side
+        and "<span>المحتويات</span>" in side
+        and "<span>الملاحظات</span>" in side
+    )
+    assert 'aria-label="المحتويات" x-show="hasDocument">' in side  # not cloaked: the document is there
+    assert 'aria-label="خطوات التجميع" x-show="phase === \'assembling\'" x-cloak>' in side
+    assert 'data-ms-toc-host @click="onSideClick($event)"' in side and "data-ms-warnings-host" in side
+    assert 'x-text="tocCount">1</bdi>' in side and 'x-text="warningsTotal">2</bdi>' in side
     assert (
         'class="ms-drawer" role="dialog"' in body
         and 'x-ref="drawerClose"' in body
         and "فتح في المراجعة" in body
     )
-    assert 'class="ms-card" role="group"' in body and 'class="ms-note-pop" role="tooltip"' in body
-    assert 'class="menu ms-block-menu" role="menu"' in body and "عرض الأصل" in body and "نوع الفقرة" in body
+    assert body.count('class="menu ms-pop" x-ref="pop" x-show="pop.kind" x-cloak') == 1
+    assert "x-if=\"pop.kind === 'menu'\"" in body and "عرض الأصل" in body and "نوع الفقرة" in body
+    assert "x-if=\"pop.kind === 'seam'\"" in body and "فصل هنا" in body and "وصل بما قبلها" in body
+    assert "@click=\"chooseSeam('auto')\"" in body and "x-if=\"pop.kind === 'note'\"" in body
+    assert '@click.outside="onPopOutside($event)"' in body and '@scroll.window.passive="onScroll()"' in body
+    assert "ms-card" not in body and "ms-note-pop" not in body and "ms-block-menu" not in body
+    assert "Enter على فاصل صفحة" in body and "Enter على رقم حاشية" in body and "⌫" not in body
     assert "x-show=\"v.primary === 'reassemble'\"" in body and "x-show=\"v.primary === 'copy'\"" in body
     assert "خيارات التجميع…" in body and "نسخ نص المخطوطة" in body and "لوحة الكتاب" in body
     assert 'x-text="v.pill.text"' in body and "اختصارات لوحة المفاتيح" in body
     # the fragment endpoint serves the same parts on its own
     fragment = _logged(editor).get(reverse("assembly:document", args=[f.book.pk])).content.decode()
     assert fragment.startswith('<article class="ms-doc"') and 'id="ms-meta"' in fragment
-    assert 'data-ms-part="stats"' in fragment and "<html" not in fragment
+    assert 'data-ms-part="warnings"' in fragment and "<html" not in fragment
     empty = Factory("فارغ")
     assert _logged(editor).get(reverse("assembly:document", args=[empty.book.pk])).status_code == 404
 
@@ -537,7 +559,7 @@ def test_render_document_contract_escaping_seams_notes_and_marks():
         and 'data-page="2" data-from="1" data-mode="join" data-decision="auto" data-reason="geometry"'
         in seam.group(1)
     )
-    assert 'aria-label="وُصلت الفقرة بين الصفحتين 1 و2"' in seam.group(1)
+    assert 'aria-haspopup="menu" aria-label="وُصلت الفقرة بين الصفحتين 1 و2"' in seam.group(1)
     split = re.search(
         r'<div class="ms-split" data-page="3" data-from="2" data-mode="split" data-decision="override"[^>]*>'
         r"(.*?)</div>",
@@ -548,7 +570,7 @@ def test_render_document_contract_escaping_seams_notes_and_marks():
         and 'class="ms-seam ms-seam-split ms-split-page" role="button" tabindex="0" data-page="3"'
         in split.group(1)
     )
-    assert "ص <bdi>3</bdi>" in split.group(1)
+    assert "ص <bdi>3</bdi>" in split.group(1) and 'aria-haspopup="menu"' in split.group(1)
     assert html.index('<div class="ms-split" data-page="3"') < html.index('id="b-p40"')
     missing = re.search(
         r'<div class="ms-split is-missing" role="note" data-page="5"[^>]*data-mode="missing"[^>]*'
@@ -691,16 +713,26 @@ def test_compiled_css_font_and_static_states():
     assert re.search(r"\.ms-drawer\{[^}]*width:clamp\(360px,42vw,760px\)", css)
     assert re.search(r"\.ms-uncertain\{[^}]*border-bottom:1\.5px solid var\(--color-warning\)", css)
     assert re.search(r"\.ms-seam\[data-decision=\"?override\"?\]:after\{[^}]*border-radius", css)
+    # the one overlay is the shared menu, absolutely placed, flipped with is-above; the pending shimmer
+    pop = re.search(r"\.ms-pop\{([^}]*)\}", css).group(1)
+    assert "position:absolute" in pop and "z-index:40" in pop and "width:250px" in pop
+    assert re.search(r"\.ms-pop\.is-above\{[^}]*ms-pop-in-up", css)
+    assert re.search(r"\.ms-block\.is-pending\{[^}]*color:var\(--color-text-3\)", css)
+    assert ".ms-card{" not in css and ".ms-note-pop{" not in css and ".ms-tabs" not in css
+    # the side panel: the dashboard's bk-side, scrolling as one column
+    side = re.search(r"\.ms-side\{top:calc\(([^}]*)\}", css).group(1)
+    assert "overflow-y:auto" in side and "overscroll-behavior:contain" in side
     assert "@keyframes ms-stitch{" in css and "@keyframes ms-rise{" in css and "@keyframes ms-flash{" in css
     reduced = css[css.index("@media (prefers-reduced-motion:reduce){.ms-host") :]
     for needle in (
         ".ms-host.is-reveal .ms-block.is-rise",
         ".ms-seam.is-stitch:before",
         ".ms-block.is-flash",
+        ".ms-block.is-pending",
         ".ms-skeleton span",
-        ".ms-drawer",
+        ".ms-drawer,.ms-pop",
     ):
-        assert needle in reduced[:900], needle
+        assert needle in reduced[:1000], needle
     assert re.search(r"@media \(max-width:900px\)\{[^@]*\.ms-side\{[^}]*order:-1", css)
     # the vendored face and its licence
     assert (FONTS / "Amiri-Regular.ttf").stat().st_size > 500_000 and (
@@ -823,15 +855,16 @@ globalThis.fetch = async (url, init) => {
   return { ok: false, status: 404, json: async () => ({ detail: 'لا' }) };
 };
 const page = (fragmentHtml) => {
-  const root = parse(`<div data-manuscript><div class="ms-column"><div class="ms-host" data-ms-host>${fragmentHtml}</div></div><aside><div data-ms-toc-host></div><div data-ms-warnings-host></div><div data-ms-stats-host></div></aside></div>`).children[0];
+  const root = parse(`<div data-manuscript><div class="ms-column" data-rect="column"><div class="ms-host" data-ms-host>${fragmentHtml}</div></div><aside><div data-ms-toc-host></div><div data-ms-warnings-host></div></aside></div>`).children[0];
   return root;
 };
 const make = (state, fragmentHtml) => {
   const root = page(fragmentHtml);
   const c = reg.manuscriptView(clone({ ...fixture.config, state }));
   c.$el = root; c.$nextTick = (fn) => fn();
-  c.$refs = { jump: { focus: () => focused.push('jump'), select: () => {} }, drawerClose: new Element('button'), toolsBtn: new Element('button'), menu: root, sheetClose: new Element('button') };
+  c.$refs = { jump: { focus: () => focused.push('jump'), select: () => {} }, drawerClose: new Element('button'), toolsBtn: new Element('button'), pop: parse('<div class="ms-pop"><button class="menu-item" data-rect="i0">a</button><button class="menu-item" disabled="">b</button><a class="menu-item" data-rect="i2" href="#">c</a></div>').children[0], sheetClose: new Element('button') };
   c.$refs.drawerClose.setAttribute('x-ref', 'drawerClose'); c.$refs.toolsBtn.setAttribute('data-rect', 'tools');
+  c.$refs.pop.querySelectorAll('[data-rect]').forEach((el) => { el.focus = () => { globalThis.document.activeElement = el; focused.push(el.getAttribute('data-rect')); }; });
   c.init();
   return { c, root };
 };
@@ -842,7 +875,8 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   const { c, root } = make(fixture.state_ready, fixture.fragment_v1);
   out.ready = { phase: c.phase, hasDocument: c.hasDocument, version: c.loadedVersion, blocks: c.blockCount(), counts: c.countsText, warnings: c.warningsTotal,
     toc: root.querySelector('[data-ms-toc-host] [data-ms-part="toc"]') !== null, warnHost: root.querySelectorAll('[data-ms-warnings-host] .ms-warn').length,
-    stats: root.querySelector('[data-ms-stats-host] .ms-stat[data-stat="footnotes"] bdi').textContent, metaLeft: root.querySelector('[data-ms-host] script') === null,
+    tocCount: c.tocCount, warnLinks: root.querySelectorAll('[data-ms-warnings-host] .ms-warn-link').length, statsLeft: root.querySelector('[data-ms-host] [data-ms-part]') === null, metaLeft: root.querySelector('[data-ms-host] script') === null,
+    idle: { pop: c.pop.kind, tools: c.tools.blockId, drawer: c.drawer.open, sheet: c.sheetOpen, convert: c.convert.open, pending: c.pending },
     pill: c.pill, primary: c.primary, page3: c.firstBlockOfPage(3), page2: c.firstBlockOfPage(2), page4: c.firstBlockOfPage(4), steps: c.steps.length };
   // ---- keyboard map (pure) and dispatch
   const ka = NassakhManuscript.keyAction; const base = { inField: false, inMenu: false, hasBlock: false };
@@ -858,31 +892,59 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   key('ArrowDown'); out.arrowDown = c.focused;
   // ---- warnings: ] steps through the notes after the focused block, the row is marked, the block focused
   c.focusBlock('h1');
-  key(']'); out.warn1 = { cursor: c.warningCursor(), tab: c.tab, focused: c.focused, current: root.querySelector('.ms-warn.is-current') && root.querySelector('.ms-warn.is-current').getAttribute('data-warn') };
+  key(']'); out.warn1 = { cursor: c.warningCursor(), focused: c.focused, current: root.querySelector('.ms-warn.is-current') && root.querySelector('.ms-warn.is-current').getAttribute('data-warn') };
   key(']'); out.warn2 = { cursor: c.warningCursor(), focused: c.focused };
   key('['); out.warn3 = c.warningCursor();
-  // ---- the seam card and the override: click on the join marker posts split, the anchor is its block
+  // rects: the column (its right edge 800, scrolled 200 px), the blocks (and p10 by its lines, so the re-rendered
+  // p10 lands 60 px lower after the split: the anchor's shift), the seam markers by page
+  Object.assign(RECTS, { column: { top: -200, left: 100, width: 700, height: 3000 }, h1: { top: -300, left: 0, width: 600, height: 40 }, p10: { top: 120, left: 0, width: 600, height: 200 }, 'p10@10,11': { top: 180, left: 0, width: 600, height: 120 }, p40: { top: 340, left: 0, width: 600, height: 40 }, p50: { top: 400, left: 0, width: 600, height: 80 }, h70: { top: 500, left: 0, width: 600, height: 40 }, p80: { top: 560, left: 0, width: 600, height: 60 },
+    2: { top: 200, left: 300, width: 24, height: 18 }, 3: { top: 330, left: 700, width: 40, height: 22 } });
+  // ---- the seam menu: a click on the join marker opens it (never applies anything), placed under the marker
+  // with its start edge on the marker's; the same click again closes it; the decision reads plainly
   const seam2 = root.querySelector('.ms-seam[data-page="2"]');
-  c.showCard(seam2); out.card = { open: c.card.open, text: c.card.text, action: c.card.action, label: c.card.actionLabel, decision: c.card.decision };
-  const seam3 = root.querySelector('.ms-seam[data-page="3"]');
-  out.cardSplit = c.seamCard(seam3);
-  // rects by block (and by its lines, so the re-rendered p10 lands 60 px lower after the split: the anchor's shift)
-  Object.assign(RECTS, { h1: { top: -300, left: 0, width: 600, height: 40 }, p10: { top: 120, left: 0, width: 600, height: 200 }, 'p10@10,11': { top: 180, left: 0, width: 600, height: 120 }, p40: { top: 340, left: 0, width: 600, height: 40 }, p50: { top: 400, left: 0, width: 600, height: 80 }, h70: { top: 500, left: 0, width: 600, height: 40 }, p80: { top: 560, left: 0, width: 600, height: 60 } });
-  stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v2; calls.length = 0; scrolls.length = 0;
+  const click = (el) => c.onHostClick({ target: el, preventDefault: () => {} });
+  click(seam2);
+  out.seamMenu = { kind: c.pop.kind, anchor: c.pop.anchorId, text: c.seam.text, state: c.seam.state, mode: c.seam.mode, decision: c.seam.decision, style: c.pop.style, above: c.pop.above, expanded: seam2.getAttribute('aria-expanded'), posts: posts().length, layer: c.topLayer() };
+  click(seam2); out.seamToggle = { kind: c.pop.kind, expanded: seam2.getAttribute('aria-expanded') };
+  out.splitMenu = (c.openSeamMenu(root.querySelector('.ms-seam[data-page="3"]')), { text: c.seam.text, state: c.seam.state, style: c.pop.style });
+  // ---- the outside click: the click that opened the overlay never closes it, the next one does
+  click(seam2); out.outsideSameTurn = [c.onPopOutside(), c.pop.kind];
+  await flush(); out.outsideLater = [c.onPopOutside(), c.pop.kind];
+  // ---- one at a time: the block menu replaces the seam menu, the marker's aria-expanded drops; the menu hangs
+  // from the «⋯» spot computed from the block (not the button's stale rect), flipped above near the bottom
+  click(seam2); c.openMenu('p40');
+  out.replace = { kind: c.pop.kind, anchor: c.pop.anchorId, seamExpanded: seam2.getAttribute('aria-expanded'), style: c.pop.style, above: c.pop.above, tools: c.tools.blockId, src: c.menu.src, role: c.menu.role, reviewed: c.menu.reviewed, reviewUrl: c.menu.reviewUrl, lines: c.menu.lines };
+  c.openMenu('p80'); out.flip = { style: c.pop.style, above: c.pop.above, anchor: c.pop.anchorId };
+  // the «⋯» stays on the menu's block while another block is hovered; it hides only when the menu closes
+  c.onHostOver({ target: root.querySelector('[data-block="p50"]') }); out.toolsKept = c.tools.blockId;
+  c.hideTools(); out.toolsKeptHidden = c.tools.blockId;
+  // ---- scroll-away: the anchor leaving the visible column closes the overlay; a small scroll keeps it
+  out.scrollKeep = [c.onScroll(), c.pop.kind];
+  RECTS.p80.top = -900; out.scrollAway = [c.onScroll(), c.pop.kind, c.tools.blockId]; RECTS.p80.top = 560;
+  // ---- the menu's arrows move between its enabled items, wrapping; Esc closes it and refocuses the block
+  focused.length = 0; c.openMenu('p10', { focus: true }); c.movePop(1); c.movePop(1); c.movePop(1); c.movePop(-1);
+  out.popKeys = { focused: focused.slice(), closed: c.closeTop(), back: focused.slice(-1)[0], kind: c.pop.kind };
+  // ---- the override: «فصل هنا» from the seam menu posts split, the block holding the seam is pending, the
+  // focus (on p10) and the «⋯» are back on p10 after the swap, the scroll moved by the anchor's shift
+  click(seam2); out.sameChoice = [await c.chooseSeam('join'), await (click(seam2), c.chooseSeam('auto')), posts().length, c.pop.kind];
+  c.focusBlock('p10'); click(seam2);
+  stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v2; calls.length = 0; scrolls.length = 0; focused.length = 0;
   stateGate = deferred(); // the 202 landed, the state poll is on the wire: the run shows as active meanwhile
-  c.onHostClick({ target: seam2, preventDefault: () => {} });
+  const choice = c.chooseSeam('split');
+  out.seamChosen = { kind: c.pop.kind, refocus: focused[0] };
   await flush();
-  out.seamPost = { post: posts()[0].slice(1, 3), busy: c.busy, phase: c.phase, active: c.active, pill: c.pill.text, csrf: 'X-CSRFToken' in (posts()[0][3] || {}) };
-  stateGate.release(); stateGate = null;
+  out.seamPost = { post: posts()[0].slice(1, 3), busy: c.busy, phase: c.phase, active: c.active, pill: c.pill.text, csrf: 'X-CSRFToken' in (posts()[0][3] || {}), pending: c.pending, pendingClass: root.querySelector('[data-block="p10"]').classList.contains('is-pending') };
+  out.busyGuard = [await c.postSeam(3, 'join'), calls.filter((x) => x[0] === 'toast').pop()[1]];
+  stateGate.release(); stateGate = null; await choice;
   await flush(); await flush(); await flush();
   // the swap: the new block p20 is in, p10 kept its id, the scroll moved by the anchor's shift, changed blocks flash
   out.afterSeam = { ids: ids(root), version: c.loadedVersion, busy: c.busy, phase: c.phase, reqs: reqs(), scrolls: scrolls.slice(), flashing: c.flashingIds().sort(), seam2: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-mode'),
-    decision: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-decision'), live: c.liveMessage, counts: c.countsText, focused: c.focused };
-  // ---- the block menu and the roles post: the block's line ids, the anchor around it
-  c.openMenu('p40'); out.menu = { open: c.menu.open, src: c.menu.src, role: c.menu.role, reviewed: c.menu.reviewed, reviewUrl: c.menu.reviewUrl, lines: c.menu.lines };
-  calls.length = 0; stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v2;
-  const rp = c.setRole('p40', 'heading'); out.roleMenuClosed = c.menu.open; await rp; await flush(); await flush(); await flush();
-  out.rolePost = { post: posts()[0].slice(1, 3), busy: c.busy };
+    decision: root.querySelector('.ms-seam[data-page="2"]').getAttribute('data-decision'), live: c.liveMessage, counts: c.countsText, focused: c.focused, active: document.activeElement === root.querySelector('[data-block="p10"]'), tools: c.tools.blockId, pending: c.pending, pendingLeft: root.querySelectorAll('.is-pending').length, pop: c.pop.kind };
+  // ---- the block menu and the roles post: the block's line ids, the anchor around it, the block pending
+  c.openMenu('p40'); calls.length = 0; stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v2; stateGate = deferred();
+  const rp = c.setRole('p40', 'heading'); out.roleMenuClosed = c.pop.kind; await flush(); out.rolePending = c.pending;
+  stateGate.release(); stateGate = null; await rp; await flush(); await flush(); await flush();
+  out.rolePost = { post: posts()[0].slice(1, 3), busy: c.busy, pending: c.pending };
   calls.length = 0; out.sameRole = await c.setRole('p40', 'body') === false && posts().length === 0;
   // ---- suggestions: ✓ posts the heading role, × the dismissal
   calls.length = 0;
@@ -903,13 +965,20 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   calls.length = 0; scrolled.length = 0;
   out.jump = { ok: c.jump('٣'), scrolled: scrolled[0], bad: c.jump('9'), toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
   await c.copyText(); out.copy = calls.filter((x) => x[0] === 'copy').pop()[1];
+  // ---- footnotes: a click (or the focus landing) on a reference opens the note in the overlay, the list's
+  // row lit; the same reference again keeps it; the link jumps to the list, the list's number back to the text
   const ref = root.querySelector('.ms-ref[data-note="n30"]');
-  c.showNote(ref); out.note = { open: c.notePop.open, number: c.notePop.number, html: c.notePop.html, hot: root.querySelector('.ms-note[data-note="n30"]').classList.contains('is-hot') };
-  focused.length = 0; c.onHostClick({ target: ref, preventDefault: () => {} }); out.noteJump = { focus: focused[0], popClosed: !c.notePop.open };
-  c.onHostClick({ target: root.querySelector('.ms-note-num[data-ref="n30"]'), preventDefault: () => {} }); out.noteBack = focused.slice(-1)[0];
-  // ---- Esc closes the top layer only: menu, then the card
-  c.openMenu('p10'); c.showCard(root.querySelector('.ms-seam[data-page="3"]'));
-  out.escLayers = [c.closeTop(), c.closeTop(), c.closeTop()];
+  Object.assign(RECTS, { 1: { top: 250, left: 400, width: 14, height: 14 } }); // the reference's rect (keyed by its data-page)
+  c.onHostFocusIn({ target: ref });
+  out.note = { kind: c.pop.kind, anchor: c.pop.anchorId, number: c.note.number, html: c.note.html, found: c.note.found, orphan: c.note.orphan, hot: root.querySelector('.ms-note[data-note="n30"]').classList.contains('is-hot'), expanded: ref.getAttribute('aria-expanded'), style: c.pop.style };
+  click(ref); out.noteAgain = c.pop.kind;
+  focused.length = 0; c.goToNote('n30'); out.noteJump = { focus: focused[0], popClosed: c.pop.kind === null, hot: root.querySelector('.ms-note[data-note="n30"]').classList.contains('is-hot'), expanded: ref.getAttribute('aria-expanded') };
+  click(root.querySelector('.ms-note-num[data-ref="n30"]')); out.noteBack = focused.slice(-1)[0];
+  // ---- Esc closes the top layer only: the overlay (whatever it shows), then the drawer
+  await c.openSource('p10'); c.openMenu('p10'); const esc1 = c.closeTop(); click(seam2); const esc2 = c.closeTop(); click(ref); const esc3 = c.closeTop();
+  out.escLayers = [esc1, esc2, esc3, c.closeTop(), c.closeTop()];
+  // ---- hiding the seams closes an open seam menu
+  click(seam2); c.setSeams(false); out.seamsOffCloses = [c.pop.kind, c.openSeamMenu(seam2)]; c.setSeams(true);
   // ---- helpers
   out.rel = [NassakhManuscript.relativeTime('2026-09-24T10:00:00Z', Date.parse('2026-09-24T10:00:20Z')), NassakhManuscript.relativeTime('2026-09-24T10:00:00Z', Date.parse('2026-09-24T10:05:00Z')),
     NassakhManuscript.relativeTime('2026-09-24T10:00:00Z', Date.parse('2026-09-24T12:00:00Z')), NassakhManuscript.relativeTime('2026-09-24T10:00:00Z', Date.parse('2026-09-27T10:00:00Z')),
@@ -925,7 +994,7 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   await a.c.poll(); await flush(); await flush(); await flush();
   out.done = { phase: a.c.phase, hasDocument: a.c.hasDocument, blocks: a.c.blockCount(), reveal: a.c.reveal, rise: a.root.querySelectorAll('.ms-block.is-rise').length, i1: a.root.querySelector('[data-block="p10"]').style['--i'],
     stitch: a.root.querySelectorAll('.ms-seam.is-stitch').length, pill: a.c.pill.state, live: a.c.liveMessage, polling: timers.filter((t) => t.ms === 700).length, toc: a.root.querySelectorAll('[data-ms-toc-host] .ms-toc-link').length, primary: a.c.primary,
-    hostReveal: a.root.querySelector('[data-ms-host]').classList.contains('is-reveal'), stepsDone: a.c.stepsDone, stats: a.root.querySelectorAll('[data-ms-stats-host] .ms-stat').length };
+    hostReveal: a.root.querySelector('[data-ms-host]').classList.contains('is-reveal'), stepsDone: a.c.stepsDone, tocCount: a.c.tocCount, warnRows: a.root.querySelectorAll('[data-ms-warnings-host] .ms-warn').length };
   const revealEnd = timers.find((t) => t.ms === 1400); revealEnd.fn();
   out.revealEnded = { reveal: a.c.reveal, hostReveal: a.root.querySelector('[data-ms-host]').classList.contains('is-reveal'), rise: a.root.querySelectorAll('.ms-block.is-rise').length };
   // ---- stale responses: an older fragment that lands after a newer one is dropped
@@ -933,8 +1002,6 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   fragment = fixture.fragment_v2; await a.c.reload();
   gate.release(); await slow; await flush();
   out.staleReload = { slow: await slow, version: a.c.loadedVersion, ids: ids(a.root) };
-  // ---- the tabs persist
-  a.c.setTab('notes'); out.tab = { tab: a.c.tab, stored: store['nassakh.manuscript.tab'] }; a.c.setTab('toc');
   // ---- a failed run with no document: the error state; with a document the old one stays
   const e = make(fixture.state_queued, ''); stateQueue = [fixture.state_failed]; await e.c.poll();
   out.failedEmpty = { phase: e.c.phase, pill: e.c.pill, headline: e.c.errorHeadline, primary: e.c.primary };
@@ -945,7 +1012,7 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   out.stale = { stale: st.c.stale, text: st.c.staleText, pages: st.c.stalePages, pill: st.c.pill, primary: st.c.primary, url: st.c.reviewUrl(4) };
   // ---- a proofreader: no override posts, roles allowed
   const pr = make(fixture.state_ready, fixture.fragment_v1); pr.c.canEdit = false; calls.length = 0;
-  out.proofreader = { seam: await pr.c.postSeam(2, 'split'), dismiss: await pr.c.dismissSuggestion('p40'), posts: posts().length, primary: pr.c.primary };
+  out.proofreader = { seam: await pr.c.postSeam(2, 'split'), dismiss: await pr.c.dismissSuggestion('p40'), posts: posts().length, primary: pr.c.primary, menu: pr.c.openSeamMenu(pr.root.querySelector('.ms-seam[data-page="2"]')) };
   // ---- the convert popover: options from the state, submit posts assemble and the run begins
   const cv = make(fixture.state_empty, ''); calls.length = 0;
   cv.c.openConvert(); out.convertOpen = { open: cv.c.convert.open, options: clone(cv.c.convert.options), unreviewed: cv.c.convert.unreviewed, label: cv.c.convert.label, phase: cv.c.phase, primary: cv.c.primary };
@@ -1137,9 +1204,20 @@ def test_manuscript_component_under_node(tmp_path):
     assert (
         out["ready"]["toc"] is True
         and out["ready"]["warnHost"] == 5
-        and out["ready"]["stats"] == "2"
+        and out["ready"]["warnLinks"] == 8  # 4 rows with a page: «انتقال» + «مراجعة»; the book-level row none
+        and out["ready"]["tocCount"] == 2
+        and out["ready"]["statsLeft"] is True
         and out["ready"]["metaLeft"] is True
     )
+    # nothing floats on load (the empty card): no overlay, no «⋯», no drawer, no sheet, no pending block
+    assert out["ready"]["idle"] == {
+        "pop": None,
+        "tools": None,
+        "drawer": False,
+        "sheet": False,
+        "convert": False,
+        "pending": None,
+    }
     assert (
         out["ready"]["pill"]["state"] == "saved"
         and out["ready"]["pill"]["text"].startswith("مُجمَّعة ")
@@ -1177,20 +1255,62 @@ def test_manuscript_component_under_node(tmp_path):
     assert out["moveBack"] == "h1" and out["arrowDown"] == "p10"
     # warnings: ] after h1 lands on the warning of the nearest later block in document order (p10's uncertain
     # words, index 4 in the stored list); the next ] continues through the list, [ steps back
-    assert out["warn1"] == {"cursor": 4, "tab": "notes", "focused": "p10", "current": "4"}
+    assert out["warn1"] == {"cursor": 4, "focused": "p10", "current": "4"}
     assert out["warn2"] == {"cursor": 0, "focused": "p10"} and out["warn3"] == 4
-    # the seam card and the override
-    assert out["card"] == {
-        "open": True,
+    # the seam menu: a click opens it (no post), placed 6 px under the marker (top 218 → 224, column top -200
+    # → 424); its right edge would sit on the marker's (324) but the 260 px menu would then cross the column's
+    # left edge (108), so it is pushed to 368 (→ 800 - 368 = 432); the same click closes it
+    assert out["seamMenu"] == {
+        "kind": "seam",
+        "anchor": "2",
         "text": "وُصلت الفقرة بين الصفحتين 1 و2",
-        "action": "split",
-        "label": "فصل هنا",
+        "state": "تلقائي",
+        "mode": "join",
         "decision": "auto",
+        "style": "top:424px;right:432px",
+        "above": False,
+        "expanded": "true",
+        "posts": 0,
+        "layer": "seam",
     }
-    assert (
-        out["cardSplit"]["text"] == "فاصل بين الصفحتين 2 و3 · قرار يدوي"
-        and out["cardSplit"]["actionLabel"] == "وصل بما قبلها"
-    )
+    assert out["seamToggle"] == {"kind": None, "expanded": "false"}
+    assert out["splitMenu"] == {
+        "text": "فُصلت الفقرة عند الصفحة 3",
+        "state": "قرار يدوي",
+        "style": "top:558px;right:60px",  # the marker's right (740) is inside the column's visible edge (792)
+    }
+    # the click that opened the overlay is not a close; the next outside click is
+    assert out["outsideSameTurn"] == [False, "seam"] and out["outsideLater"] == [True, None]
+    # one at a time: the block menu replaced the seam menu; it hangs from the «⋯» spot (p40 top 340 + 22 + 24
+    # + 6 = 392 → 592) at the column's start edge (right 8), computed from the block, not the button's rect
+    assert out["replace"] == {
+        "kind": "menu",
+        "anchor": "p40",
+        "seamExpanded": "false",
+        "style": "top:592px;right:8px",
+        "above": False,
+        "tools": "p40",
+        "src": "3",
+        "role": "body",
+        "reviewed": False,
+        "reviewUrl": "/books/1/review/3/",
+        "lines": [40],
+    }
+    # near the bottom (p80 at 560: below would end at 874 > 792) the menu flips above the «⋯»
+    assert out["flip"] == {"style": "top:514px;right:8px", "above": True, "anchor": "p80"}
+    assert out["toolsKept"] == "p80" and out["toolsKeptHidden"] == "p80"
+    assert out["scrollKeep"] == [False, "menu"] and out["scrollAway"] == [True, None, "p80"]
+    # Enter opens with the first item focused; arrows: the third (the disabled second skipped), wrapping to
+    # the first, the third again, back to the first; Esc closes and refocuses the block
+    assert out["popKeys"] == {
+        "focused": ["i0", "i2", "i0", "i2", "i0"],
+        "closed": "menu",
+        "back": "p10",
+        "kind": None,
+    }
+    # choosing what is already the case posts nothing; «تلقائي» on an automatic decision neither
+    assert out["sameChoice"] == [False, False, 0, None]
+    assert out["seamChosen"] == {"kind": None, "refocus": "2"}
     assert out["seamPost"] == {
         "post": ["/api/books/1/manuscript/seams/", {"page": 2, "mode": "split"}],
         "busy": True,
@@ -1198,7 +1318,10 @@ def test_manuscript_component_under_node(tmp_path):
         "active": True,
         "pill": "قيد التجميع…",
         "csrf": True,
+        "pending": "p10",
+        "pendingClass": True,
     }
+    assert out["busyGuard"] == [False, "انتظر انتهاء التجميع الجاري"]
     after = out["afterSeam"]
     assert (
         after["ids"] == ["h1", "p10", "p20", "p40", "p50", "h70", "p80"]
@@ -1216,18 +1339,20 @@ def test_manuscript_component_under_node(tmp_path):
         and after["counts"] == "4 صفحات · فصل واحد · حاشيتان"
         and after["focused"] == "p10"
     )
-    # the block menu and the roles post
-    assert out["menu"] == {
-        "open": True,
-        "src": "3",
-        "role": "body",
-        "reviewed": False,
-        "reviewUrl": "/books/1/review/3/",
-        "lines": [40],
-    }
-    assert out["roleMenuClosed"] is False and out["rolePost"] == {
+    # the focus and the «⋯» are back on the re-rendered p10, the pending mark is gone, nothing floats
+    assert (
+        after["active"] is True
+        and after["tools"] == "p10"
+        and after["pending"] is None
+        and after["pendingLeft"] == 0
+        and after["pop"] is None
+    )
+    # the block menu and the roles post: the menu closes at once, the block is pending until the swap
+    assert out["roleMenuClosed"] is None and out["rolePending"] == "p40"
+    assert out["rolePost"] == {
         "post": ["/api/books/1/manuscript/roles/", {"line_ids": [40], "role": "heading"}],
         "busy": False,
+        "pending": None,
     }
     assert out["sameRole"] is True
     assert out["suggest"] == {
@@ -1271,14 +1396,26 @@ def test_manuscript_component_under_node(tmp_path):
         "نص يذكر (7) مرات[2]\n\nمبحث\n\nالخاتمة.\n\n"
         "[1] انظر <script>alert(1)</script> المصدر\n\n[2] حاشية يتيمة"
     )
+    # the footnote in the overlay: under the reference (250 + 14 + 6 = 270 → 470); 360 px wide it would cross
+    # the column's left edge from the reference's right (414), so it is pushed to 468 (→ 332); the list's row
+    # lit; the link to the list closes it and focuses the row's number
     assert out["note"] == {
-        "open": True,
+        "kind": "note",
+        "anchor": "n30",
         "number": "1",
         "html": "انظر &lt;script&gt;alert(1)&lt;/script&gt; المصدر",
+        "found": True,
+        "orphan": False,
         "hot": True,
+        "expanded": "true",
+        "style": "top:470px;right:332px",
     }
-    assert out["noteJump"] == {"focus": "n30", "popClosed": True} and out["noteBack"] == "n30"
-    assert out["escLayers"] == ["menu", "card", None]
+    assert out["noteAgain"] == "note"
+    assert out["noteJump"] == {"focus": "n30", "popClosed": True, "hot": False, "expanded": "false"}
+    assert out["noteBack"] == "n30"
+    # Esc: the overlay first (whatever it shows), then the drawer, then nothing
+    assert out["escLayers"] == ["menu", "seam", "note", "drawer", None]
+    assert out["seamsOffCloses"] == [None, False]
     assert out["rel"] == ["قبل لحظات", "قبل 5 دقائق", "قبل ساعتين", "قبل 3 أيام", "في 2026-08-01", ""]
     assert out["arCount"] == ["صفحة واحدة", "صفحتان", "4 صفحات", "214 صفحة"]
     # polling to done: the steps tick, then the reveal
@@ -1316,12 +1453,12 @@ def test_manuscript_component_under_node(tmp_path):
     )
     assert done["polling"] == 0 and done["toc"] == 2 and done["primary"] == "copy"
     # the host (x-ignore: no Alpine binding) gets its reveal class from the component and loses it after
-    assert done["hostReveal"] is True and done["stepsDone"] == 7 and done["stats"] == 9
+    assert done["hostReveal"] is True and done["stepsDone"] == 7
+    assert done["tocCount"] == 2 and done["warnRows"] == 5
     assert out["revealEnded"] == {"reveal": False, "hostReveal": False, "rise": 0}
     # an older fragment landing after a newer one is dropped: the document stays at version 2
     assert out["staleReload"]["slow"] is False and out["staleReload"]["version"] == 2
     assert out["staleReload"]["ids"] == ["h1", "p10", "p20", "p40", "p50", "h70", "p80"]
-    assert out["tab"] == {"tab": "notes", "stored": "notes"}
     # failures, stale, permissions, the convert popover
     assert (
         out["failedEmpty"]["phase"] == "error"
@@ -1345,7 +1482,14 @@ def test_manuscript_component_under_node(tmp_path):
         "primary": "reassemble",
         "url": "/books/1/review/4/",
     }
-    assert out["proofreader"] == {"seam": False, "dismiss": False, "posts": 0, "primary": "copy"}
+    # a proofreader may open the seam menu (the review link) but never posts an override
+    assert out["proofreader"] == {
+        "seam": False,
+        "dismiss": False,
+        "posts": 0,
+        "primary": "copy",
+        "menu": True,
+    }
     assert out["convertOpen"] == {
         "open": True,
         "options": {"footnote_numbering": "chapter", "include_unreviewed": True, "strip_tatweel": True},

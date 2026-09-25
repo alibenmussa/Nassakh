@@ -1,9 +1,9 @@
 {% comment %}The manuscript fragment (PHASE4_SPEC §4.3): the document rendered by assembly/render.py, then the parts
-of the side panel (outline, warnings, stats) and the meta JSON the Alpine component reads. Served on its own by
+of the side panel (contents, warnings) and the meta JSON the Alpine component reads. Served on its own by
 `assembly:document` after a re-run and swapped in place by manuscript.js (adoptParts moves the side-panel parts into
 their hosts). Static markup only: no Alpine bindings inside, clicks are delegated. Context: render.fragment_context
 (+ book for the review links).{% endcomment %}{% if has_document %}{{ document_html|safe }}
-<nav class="ms-toc" data-ms-part="toc" aria-label="المحتويات">
+<nav class="ms-toc" data-ms-part="toc" data-count="{{ outline|length }}" aria-label="المحتويات">
   {% if outline %}
   <ol class="ms-toc-list">
     {% for h in outline %}
@@ -22,7 +22,7 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
     {% endfor %}
   </ol>
   {% else %}
-  <p class="ms-side-empty meta">لا عناوين بعد. من قائمة الفقرة «⋯» اختر «عنوان رئيسي» لتصير فصلًا وتظهر هنا.</p>
+  <p class="ms-side-empty meta">لا عناوين بعد: من قائمة الفقرة «⋯» اختر «عنوان رئيسي» لتظهر هنا.</p>
   {% endif %}
 </nav>
 <div class="ms-warnings" data-ms-part="warnings">
@@ -32,11 +32,11 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
     <ul class="ms-warn-list">
       {% for w in g.items %}
       <li class="ms-warn" data-warn="{{ w.index }}"{% if w.blockId %} data-block="{{ w.blockId }}"{% endif %}{% if w.page %} data-page="{{ w.page }}"{% endif %}>
-        <span class="ms-warn-page num">{% if w.page %}ص <bdi>{{ w.page }}</bdi>{% else %}الكتاب{% endif %}</span>
         <span class="ms-warn-msg">{{ w.message }}</span>
         <span class="ms-warn-actions">
-          {% if w.blockId %}<button type="button" class="btn btn-ghost btn-sm" data-goto="{{ w.blockId }}" data-warn-index="{{ w.index }}">انتقال</button>{% endif %}
-          {% if w.page %}<a class="btn btn-ghost btn-sm" href="{% url 'review:page' book.pk w.page %}">مراجعة</a>{% endif %}
+          {% if w.page %}<span class="ms-warn-page num">ص <bdi>{{ w.page }}</bdi></span>{% endif %}
+          {% if w.blockId %}<button type="button" class="link ms-warn-link" data-goto="{{ w.blockId }}" data-warn-index="{{ w.index }}">انتقال</button>{% endif %}
+          {% if w.page %}<a class="link ms-warn-link" href="{% url 'review:page' book.pk w.page %}">مراجعة</a>{% endif %}
         </span>
       </li>
       {% endfor %}
@@ -46,7 +46,4 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
   <p class="ms-side-empty meta">لا ملاحظات على هذا التجميع.</p>
   {% endfor %}
 </div>
-<dl class="ms-stats" data-ms-part="stats">
-  {% for r in stats_rows %}<div class="ms-stat{% if not r.value %} is-zero{% endif %}" data-stat="{{ r.key }}"><dt class="grow">{{ r.label }}</dt><dd><bdi class="num">{{ r.value }}</bdi></dd></div>{% endfor %}
-</dl>
 {{ meta|json_script:"ms-meta" }}{% endif %}
