@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-kraken/
 *.egg-info/
 build/
 .pytest_cache/
@@ -31,3 +32,17 @@ playground/poc/overlays/
 playground/poc/models/
 playground/poc/tmp/
 playground/poc/regions/
+
+# Model weights fetched by `make kraken` (D50)
+models/
+
+# Digits experiment: environments, models, crops and intermediate files (the scripts, labels, results and
+# REPORT.md are kept; crops/ and sheets/ are rebuilt by collect.py from the database)
+playground/digits/.venv-*/
+playground/digits/models/
+playground/digits/crops/
+playground/digits/sheets/
+playground/digits/lines*.json
+playground/digits/areas_*.json
+playground/digits/results_lines_*.json
+playground/digits/*.err

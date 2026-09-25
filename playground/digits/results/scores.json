@@ -1,0 +1,1106 @@
+{
+ "stored: Qari v0.3 (page)": {
+  "A": {
+   "crops": 116,
+   "exact": 43.1,
+   "numbers": 38.9,
+   "nothing": 0.9,
+   "reversed": 1
+  },
+  "W": {
+   "crops": 72,
+   "exact": 90.3,
+   "numbers": 95.1,
+   "nothing": 0.0,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 81.0,
+    "numbers": 81.0,
+    "nothing": 4.8,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 30.6,
+    "numbers": 27.6,
+    "nothing": 0.0,
+    "reversed": 1
+   },
+   "20": {
+    "crops": 44,
+    "exact": 36.4,
+    "numbers": 32.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "stored: Qari v0.2 (page)": {
+  "A": {
+   "crops": 116,
+   "exact": 39.7,
+   "numbers": 35.9,
+   "nothing": 3.4,
+   "reversed": 1
+  },
+  "W": {
+   "crops": 72,
+   "exact": 90.3,
+   "numbers": 93.9,
+   "nothing": 0.0,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 57.1,
+    "numbers": 57.1,
+    "nothing": 14.3,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 32.7,
+    "numbers": 29.3,
+    "nothing": 2.0,
+    "reversed": 1
+   },
+   "20": {
+    "crops": 44,
+    "exact": 36.4,
+    "numbers": 32.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: base_x1_R": {
+  "A": {
+   "crops": 116,
+   "exact": 92.2,
+   "numbers": 90.8,
+   "nothing": 0.9,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 66.7,
+   "numbers": 73.2,
+   "nothing": 4.2,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 95.2,
+    "numbers": 95.2,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 93.9,
+    "numbers": 93.1,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 88.6,
+    "numbers": 86.0,
+    "nothing": 2.3,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: base_x1_L": {
+  "A": {
+   "crops": 116,
+   "exact": 87.9,
+   "numbers": 87.0,
+   "nothing": 0.9,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 66.7,
+   "numbers": 73.2,
+   "nothing": 4.2,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 95.2,
+    "numbers": 95.2,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 83.7,
+    "numbers": 84.5,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 88.6,
+    "numbers": 86.0,
+    "nothing": 2.3,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: base_x2_R": {
+  "A": {
+   "crops": 116,
+   "exact": 92.2,
+   "numbers": 90.8,
+   "nothing": 0.9,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 70.8,
+   "numbers": 76.8,
+   "nothing": 2.8,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 95.2,
+    "numbers": 95.2,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 95.9,
+    "numbers": 94.8,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 86.4,
+    "numbers": 84.0,
+    "nothing": 2.3,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: base_x2_L": {
+  "A": {
+   "crops": 116,
+   "exact": 87.1,
+   "numbers": 86.3,
+   "nothing": 0.9,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 70.8,
+   "numbers": 76.8,
+   "nothing": 2.8,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 95.2,
+    "numbers": 95.2,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 100.0,
+    "numbers": 100.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 83.7,
+    "numbers": 84.5,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 86.4,
+    "numbers": 84.0,
+    "nothing": 2.3,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: jawi_x1_R": {
+  "A": {
+   "crops": 116,
+   "exact": 69.8,
+   "numbers": 68.7,
+   "nothing": 1.7,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 81.9,
+   "numbers": 85.4,
+   "nothing": 0.0,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 85.7,
+    "numbers": 85.7,
+    "nothing": 4.8,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 61.2,
+    "numbers": 60.3,
+    "nothing": 2.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 72.7,
+    "numbers": 72.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: jawi_x1_L": {
+  "A": {
+   "crops": 116,
+   "exact": 69.8,
+   "numbers": 68.7,
+   "nothing": 1.7,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 81.9,
+   "numbers": 85.4,
+   "nothing": 0.0,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 85.7,
+    "numbers": 85.7,
+    "nothing": 4.8,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 61.2,
+    "numbers": 60.3,
+    "nothing": 2.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 72.7,
+    "numbers": 72.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: jawi_x2_R": {
+  "A": {
+   "crops": 116,
+   "exact": 72.4,
+   "numbers": 70.2,
+   "nothing": 1.7,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 80.6,
+   "numbers": 86.6,
+   "nothing": 1.4,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 85.7,
+    "numbers": 85.7,
+    "nothing": 4.8,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 61.2,
+    "numbers": 60.3,
+    "nothing": 2.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 79.5,
+    "numbers": 76.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "kraken: jawi_x2_L": {
+  "A": {
+   "crops": 116,
+   "exact": 72.4,
+   "numbers": 70.2,
+   "nothing": 1.7,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 80.6,
+   "numbers": 86.6,
+   "nothing": 1.4,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 85.7,
+    "numbers": 85.7,
+    "nothing": 4.8,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 61.2,
+    "numbers": 60.3,
+    "nothing": 2.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 79.5,
+    "numbers": 76.0,
+    "nothing": 0.0,
+    "reversed": 0
+   }
+  }
+ },
+ "qari: qari_v03_x1": {
+  "A": {
+   "crops": 116,
+   "exact": 12.1,
+   "numbers": 12.2,
+   "nothing": 32.8,
+   "reversed": 1
+  },
+  "W": {
+   "crops": 72,
+   "exact": 87.5,
+   "numbers": 98.8,
+   "nothing": 0.0,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 9.5,
+    "numbers": 9.5,
+    "nothing": 33.3,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 10.2,
+    "numbers": 10.3,
+    "nothing": 38.8,
+    "reversed": 1
+   },
+   "20": {
+    "crops": 44,
+    "exact": 15.9,
+    "numbers": 16.0,
+    "nothing": 27.3,
+    "reversed": 0
+   }
+  }
+ },
+ "qari: qari_v03_x4": {
+  "A": {
+   "crops": 116,
+   "exact": 15.5,
+   "numbers": 14.5,
+   "nothing": 33.6,
+   "reversed": 2
+  },
+  "W": {
+   "crops": 72,
+   "exact": 84.7,
+   "numbers": 96.3,
+   "nothing": 2.8,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 14.3,
+    "numbers": 14.3,
+    "nothing": 38.1,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 14.3,
+    "numbers": 13.8,
+    "nothing": 34.7,
+    "reversed": 2
+   },
+   "20": {
+    "crops": 44,
+    "exact": 18.2,
+    "numbers": 16.0,
+    "nothing": 31.8,
+    "reversed": 0
+   }
+  }
+ },
+ "qari: qari_v02_x1": {
+  "A": {
+   "crops": 116,
+   "exact": 12.9,
+   "numbers": 13.7,
+   "nothing": 31.0,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 88.9,
+   "numbers": 95.1,
+   "nothing": 1.4,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 9.5,
+    "numbers": 9.5,
+    "nothing": 42.9,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 12.2,
+    "numbers": 13.8,
+    "nothing": 30.6,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 15.9,
+    "numbers": 16.0,
+    "nothing": 27.3,
+    "reversed": 0
+   }
+  }
+ },
+ "qari: qari_v02_x4": {
+  "A": {
+   "crops": 116,
+   "exact": 16.4,
+   "numbers": 16.8,
+   "nothing": 32.8,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 87.5,
+   "numbers": 92.7,
+   "nothing": 1.4,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 19.0,
+    "numbers": 19.0,
+    "nothing": 42.9,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 16.3,
+    "numbers": 19.0,
+    "nothing": 30.6,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 15.9,
+    "numbers": 14.0,
+    "nothing": 31.8,
+    "reversed": 0
+   }
+  }
+ },
+ "qari_lines: qari_v03_line_x2": {
+  "A": {
+   "crops": 116,
+   "exact": 16.4,
+   "numbers": 29.8,
+   "nothing": 15.5,
+   "reversed": 3
+  },
+  "W": {
+   "crops": 72,
+   "exact": 38.9,
+   "numbers": 72.0,
+   "nothing": 15.3,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 9.5,
+    "numbers": 28.6,
+    "nothing": 28.6,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 10.2,
+    "numbers": 25.9,
+    "nothing": 20.4,
+    "reversed": 2
+   },
+   "20": {
+    "crops": 44,
+    "exact": 25.0,
+    "numbers": 34.0,
+    "nothing": 4.5,
+    "reversed": 1
+   }
+  }
+ },
+ "qari_lines: qari_v02_line_x2": {
+  "A": {
+   "crops": 116,
+   "exact": 13.8,
+   "numbers": 24.4,
+   "nothing": 15.5,
+   "reversed": 1
+  },
+  "W": {
+   "crops": 72,
+   "exact": 33.3,
+   "numbers": 69.5,
+   "nothing": 16.7,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 14.3,
+    "numbers": 33.3,
+    "nothing": 14.3,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 14.3,
+    "numbers": 25.9,
+    "nothing": 18.4,
+    "reversed": 1
+   },
+   "20": {
+    "crops": 44,
+    "exact": 11.4,
+    "numbers": 18.0,
+    "nothing": 13.6,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: app": {
+  "A": {
+   "crops": 116,
+   "exact": 0.9,
+   "numbers": 1.5,
+   "nothing": 62.9,
+   "reversed": 3
+  },
+  "W": {
+   "crops": 72,
+   "exact": 9.7,
+   "numbers": 11.0,
+   "nothing": 86.1,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 52.4,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 50.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 2.0,
+    "numbers": 3.4,
+    "nothing": 59.2,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 72.7,
+    "reversed": 3
+   }
+  }
+ },
+ "tesseract: base_x1": {
+  "A": {
+   "crops": 116,
+   "exact": 6.0,
+   "numbers": 5.3,
+   "nothing": 52.6,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 62.5,
+   "numbers": 64.6,
+   "nothing": 11.1,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 9.5,
+    "numbers": 9.5,
+    "nothing": 52.4,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 63.3,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 11.4,
+    "numbers": 10.0,
+    "nothing": 43.2,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: base_x3": {
+  "A": {
+   "crops": 116,
+   "exact": 8.6,
+   "numbers": 7.6,
+   "nothing": 50.0,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 54.2,
+   "numbers": 56.1,
+   "nothing": 22.2,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 19.0,
+    "numbers": 19.0,
+    "nothing": 42.9,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 4.1,
+    "numbers": 3.4,
+    "nothing": 51.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 9.1,
+    "numbers": 8.0,
+    "nothing": 54.5,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: digits_x1": {
+  "A": {
+   "crops": 116,
+   "exact": 9.5,
+   "numbers": 9.2,
+   "nothing": 25.0,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 59.7,
+   "numbers": 53.7,
+   "nothing": 4.2,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 19.0,
+    "numbers": 19.0,
+    "nothing": 14.3,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 4.1,
+    "numbers": 5.2,
+    "nothing": 34.7,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 11.4,
+    "numbers": 10.0,
+    "nothing": 20.5,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: digits_x3": {
+  "A": {
+   "crops": 116,
+   "exact": 8.6,
+   "numbers": 7.6,
+   "nothing": 25.0,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 40.3,
+   "numbers": 35.4,
+   "nothing": 12.5,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 19.0,
+    "numbers": 19.0,
+    "nothing": 14.3,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 4.1,
+    "numbers": 3.4,
+    "nothing": 30.6,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 9.1,
+    "numbers": 8.0,
+    "nothing": 25.0,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: digits_x3_w": {
+  "A": {
+   "crops": 116,
+   "exact": 0.0,
+   "numbers": 0.0,
+   "nothing": 37.9,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 66.7,
+   "numbers": 58.5,
+   "nothing": 1.4,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 19.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 100.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 51.0,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 29.5,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: context_x3": {
+  "A": {
+   "crops": 116,
+   "exact": 8.6,
+   "numbers": 7.6,
+   "nothing": 27.6,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 43.1,
+   "numbers": 41.5,
+   "nothing": 12.5,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 19.0,
+    "numbers": 19.0,
+    "nothing": 19.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 0.0,
+    "numbers": 0.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 4.1,
+    "numbers": 3.4,
+    "nothing": 30.6,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 9.1,
+    "numbers": 8.0,
+    "nothing": 29.5,
+    "reversed": 0
+   }
+  }
+ },
+ "tesseract: fas_x3": {
+  "A": {
+   "crops": 116,
+   "exact": 30.2,
+   "numbers": 26.7,
+   "nothing": 11.2,
+   "reversed": 0
+  },
+  "W": {
+   "crops": 72,
+   "exact": 34.7,
+   "numbers": 31.7,
+   "nothing": 15.3,
+   "reversed": 0
+  },
+  "books": {
+   "13": {
+    "crops": 21,
+    "exact": 52.4,
+    "numbers": 52.4,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "17": {
+    "crops": 2,
+    "exact": 50.0,
+    "numbers": 50.0,
+    "nothing": 0.0,
+    "reversed": 0
+   },
+   "19": {
+    "crops": 49,
+    "exact": 14.3,
+    "numbers": 12.1,
+    "nothing": 14.3,
+    "reversed": 0
+   },
+   "20": {
+    "crops": 44,
+    "exact": 36.4,
+    "numbers": 32.0,
+    "nothing": 13.6,
+    "reversed": 0
+   }
+  }
+ }
+}

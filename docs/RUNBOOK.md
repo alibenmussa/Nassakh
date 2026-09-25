@@ -33,6 +33,7 @@ brew services start redis
 # Project
 cp .env.example .env                         # DATABASE_URL=postgres://localhost:5433/nassakh; set SECRET_KEY
 make install                                 # uv pip install (+dev extras) · npm install · npm run build
+make kraken                                  # Kraken for Arabic-Indic numbers (D50): .venv-kraken/ + models/kraken/
 make db                                      # createdb nassakh (on the port in DATABASE_URL) + migrate (24 migrations)
 make seed-groups                             # admin / editor / proofreader groups (also created by a migration)
 make superuser                               # first user; superusers pass every role check
@@ -65,6 +66,8 @@ create books, start processing, re-run stages, apply guides and change preproces
 | `OCR_MODELS_DIR` | `playground/poc/models` | model directories, relative to the repo or absolute |
 | `OCR_PRIMARY` / `OCR_SECONDARY` | `qari_v03` / `qari_v02` | engine names from `ocr.engines.registry` |
 | `TESSERACT_LANGS` | `ara+eng` | D17 |
+| `NUMBERS_PASS` | `true` | the numbers pass after Qari (D50): Kraken reads the Arabic-Indic numbers of each finalised page |
+| `KRAKEN_PYTHON` / `KRAKEN_MODEL` | `.venv-kraken/bin/python` / `models/kraken/all_arabic_scripts.mlmodel` | Kraken's own environment and model (`make kraken`) |
 
 ## 3. Running
 
@@ -409,6 +412,17 @@ lines), «غير المؤكَّدة» (remaining OCR-uncertain words with their 
 «⋯» holds snapshots, digit conversion, chapter re-assembly after review drift, the PDF of the last render and the shortcut
 sheet (?). After the first save the manuscript is the source of truth (D41); a full «إعادة التجميع» from the manuscript view
 replaces the edited text but keeps it as a snapshot that is never pruned.
+
+### The numbers pass (D50)
+Every OCR model misreads Arabic-Indic digits; Kraken with the OpenITI printed Arabic-script model reads them far better
+(92 % of 116 real numbers against Qari's 43 %, `playground/digits/REPORT.md`). After Qari finalises a page, `read_numbers`
+(default queue, so `make worker`) runs Kraken on the page's number words, for books detected as printing Arabic-Indic
+digits (from Qari's own readings). A number Kraken read shows one reading, «Kraken», in review and in «غير المؤكَّدة»:
+confirm it (1 or Enter) or type the true number. Reviewed lines, resolved words and approved pages are never touched;
+Qari's readings stay on the token (`qari`) and the run is recorded (`OcrRun` engine `kraken`). Books printed with Western
+digits keep Qari's numbers (it reads those better). Kraken needs its own environment (it pins torch ≤ 2.9): `make kraken`
+once; without it the pass is skipped. For pages OCR'd before: `manage.py read_numbers --book ID [--page N]` (about 2 s
+a page); re-assemble the book afterwards to bring the numbers into the manuscript.
 
 **Known limits.** WeasyPrint cannot fake bold or italic: Lotus (no bold file) prints headings regular, Arabic italic prints
 upright. A single footnote longer than a page spills over. Word export (Phase 6) paginates slightly differently, so its page

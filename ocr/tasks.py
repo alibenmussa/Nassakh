@@ -1,4 +1,5 @@
-"""OCR tasks (spec §7): `ocr_page_fast` (default queue), `ocr_page_full` and `warm_up_engines` (gpu queue).
+"""OCR tasks (spec §7): `ocr_page_fast` (default queue), `ocr_page_full` and `warm_up_engines` (gpu queue),
+`read_numbers` (default queue, D50: Kraken reads the Arabic-Indic numbers of a finalised page).
 
 Tasks call the services and return the `page_id` they received so they chain
 (`layout_page → ocr_page_fast → ocr_page_full`). `OSError` is retried twice (network/storage
@@ -77,6 +78,25 @@ def ocr_page_fast(self, page_id: int) -> int:
 def ocr_page_full(self, page_id: int) -> int:
     """Dual-model OCR and finalisation for one page (gpu queue; models stay resident)."""
     return _run_stage(self, page_id, STAGE_FULL, services.run_full_ocr, HEADLINE_FULL)
+
+
+@shared_task(bind=True, max_retries=1, autoretry_for=(OSError,), retry_backoff=True)
+def read_numbers(self, page_id: int) -> int:
+    """The numbers pass of one finalised page (D50). A failure is logged and the page keeps Qari's
+    numbers: the pass only ever improves a page, it never blocks it."""
+    from . import numbers
+
+    page = Page.objects.select_related("book", "preprocess").filter(pk=page_id).first()
+    if page is None or page.is_excluded:
+        return page_id
+    try:
+        done = numbers.read_page_numbers(page)
+        log.info("read_numbers: page %s: %s", page_id, done.as_dict())
+    except OSError:
+        raise  # retried once
+    except Exception:  # noqa: BLE001 - Qari's numbers stay; the log says why
+        log.exception("read_numbers: page %s failed", page_id)
+    return page_id
 
 
 @shared_task(bind=True)

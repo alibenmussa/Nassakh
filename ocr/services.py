@@ -1316,7 +1316,8 @@ def finalize_page(page: Page) -> ComposedPage | None:
     done). A first or last line of the page that is only a page number is dropped (no Line row, not
     in the text): without a page-number region its digits go to `printed_number`; with one, only a
     line repeating the voted number is dropped and the vote is never overwritten. Returns what
-    `compose_page` built (None for a page whose reviewed lines were kept).
+    `compose_page` built (None for a page whose reviewed lines were kept). New lines then go to the
+    numbers pass (`ocr.numbers.schedule`, D50).
     """
     if _has_review_work(page):
         _keep_reviewed_lines(page)
@@ -1352,6 +1353,9 @@ def finalize_page(page: Page) -> ComposedPage | None:
             fields += ["status", "error_from", "error_message"]
         page.save(update_fields=fields)
     _refresh_book_status(page)
+    from . import numbers  # the numbers pass reads the new lines' Arabic-Indic numbers (D50)
+
+    numbers.schedule(page)
     log.info(
         "page %s finalised: %d lines, %d tokens (%d low), fallback=%s, merged=%s, sources=%s",
         page.pk,

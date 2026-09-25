@@ -171,8 +171,14 @@ def _readings(token: dict, word: str, labels: dict[str, str], normalize=None) ->
         text = normalize(str(value or "")) if value else ""
         if text and text not in (seen for _engine, seen in rows):
             rows.append((engine, text))
+    kraken = token.get("src") == "kraken"  # a number Kraken read (D50): its reading is the only one
     return [
-        {"engine": engine, "label": labels[engine], "text": text, "current": text == word}
+        {
+            "engine": engine,
+            "label": "Kraken" if kraken and engine == "primary" else labels[engine],
+            "text": text,
+            "current": text == word,
+        }
         for engine, text in rows
     ]
 

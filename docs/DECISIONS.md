@@ -299,3 +299,18 @@ allowed; the chapter's own title, lower or taller, is kept and counts, as does a
 option «حذف الترويسات المتكرّرة», on by default. On «كتابي» (81 pages) it removed 60 heads, joins across pages went
 from 9 to 39 and heading suggestions from 57 (mostly heads) to 10 real titles. Also: warning groups open only when
 short, the side panel scrolls as one column, and menus opened by click take the focus.
+
+## D50 — Kraken reads the Arabic-Indic numbers; its reading is the only one offered (2026-09-26, amends D17)
+Measured on 222 labelled number crops from nine books (`playground/digits/REPORT.md`): on Arabic-Indic digits Qari v0.3
+gets 43 % of the numbers exactly right, Qari v0.2 40 %, Tesseract 1–9 % (30 % with its Persian model), PaddleOCR 37–52 %,
+and Kraken with the OpenITI printed Arabic-script base model (Zenodo 7050270, CC0, 16 MB) 92 %, at 6 ms a number on the
+CPU. On Western digits Qari stays best (90 % against Kraken's 71 %: it turns slashes and full stops into digits). Owner
+decision: in books printed with Arabic-Indic digits Kraken's reading is the only option; the reviewer confirms it or types
+the true number. The numbers pass (`ocr.numbers`, task `read_numbers`) runs after Qari finalises a page: the book's
+digits are told from Qari's own readings (v0.2 writes 90–100 % of them Arabic-Indic in such books, 0–12 % otherwise);
+each number word is read in its word box (91 % on the labels), a number without a box in the gap between its boxed
+neighbours when Kraken's digit runs match Qari's (55 %; otherwise Qari's reading stays). Numbers stay low-confidence (D17).
+Kraken 6 pins torch ≤ 2.9 and the project runs 2.14, so it runs in its own environment (`make kraken`, `.venv-kraken/`)
+through a small runner process, one call per page. Next: numbers found from the ink (half of the number words have no
+word box), Kraken fine-tuned on reviewed lines, and numbers Qari wrote as letters («(ع ه – ه م)» for «(٧٥٤–٧٧٥م)»).
+

@@ -46,7 +46,8 @@ DEFAULT_REGION_KIND = Region.Kind.BODY  # lines without a region (text-layer pag
 MAX_TYPED_WORDS = 6
 MAX_TYPED_CHARS = 120
 MAX_LINE_CHARS = 2000
-TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "res")
+# `src`: "kraken" for a number the numbers pass read (D50): its one reading, confirmed or typed
+TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "res", "src")
 
 
 class ReviewError(Exception):

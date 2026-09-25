@@ -7,12 +7,19 @@ DB_URL  := $(shell grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2-)
 PGPORT  ?= $(shell echo "$(DB_URL)" | sed -nE 's,.*:([0-9]+)/.*,\1,p')
 export PGPORT
 
-.PHONY: install db migrate superuser seed-groups web worker gpu-worker css css-watch editor test lint
+.PHONY: install kraken db migrate superuser seed-groups web worker gpu-worker css css-watch editor test lint
 
 install:            ## Python deps (+dev extras) and the frontend build
 	uv pip install --python .venv/bin/python -r pyproject.toml --extra dev
 	npm install --no-audit --no-fund
 	npm run build
+
+kraken:             ## Kraken reads Arabic-Indic numbers (D50): its own environment (torch <= 2.9) and the model
+	test -x .venv-kraken/bin/python || uv venv .venv-kraken --python 3.11
+	uv pip install --python .venv-kraken/bin/python "kraken>=6.0.3,<7" Pillow
+	mkdir -p models/kraken
+	test -s models/kraken/all_arabic_scripts.mlmodel || curl -L -o models/kraken/all_arabic_scripts.mlmodel \
+		"https://zenodo.org/records/7050270/files/all_arabic_scripts.mlmodel?download=1"
 
 db:                 ## create the Postgres database (if missing) and migrate
 	@psql -lqt | cut -d '|' -f 1 | grep -qw $(DB_NAME) || createdb $(DB_NAME)

@@ -25,4 +25,4 @@ LOGGING["root"]["level"] = "WARNING"  # noqa: F405
 
 # Editor saves do not render previews in the background during tests (eager Celery would run them
 # inline); the publishing tests call the renders, or turn this on, where they check them.
-NASSAKH = {**NASSAKH, "PREVIEW_AUTORENDER": False}  # noqa: F405
+NASSAKH = {**NASSAKH, "PREVIEW_AUTORENDER": False, "NUMBERS_PASS": False}  # noqa: F405

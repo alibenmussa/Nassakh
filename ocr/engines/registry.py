@@ -18,7 +18,7 @@ from .base import OcrEngine
 
 log = logging.getLogger(__name__)
 
-ENGINE_NAMES: tuple[str, ...] = ("qari_v03", "qari_v02", "tesseract", "pdf_text", "fake")
+ENGINE_NAMES: tuple[str, ...] = ("qari_v03", "qari_v02", "tesseract", "pdf_text", "kraken", "fake")
 VLM_NAMES: tuple[str, ...] = ("qari_v03", "qari_v02")
 
 _cache: dict[str, OcrEngine] = {}
@@ -45,6 +45,10 @@ def build_engine(name: str) -> OcrEngine:
         from .pdf_text import PdfTextEngine
 
         return PdfTextEngine()
+    if name == "kraken":
+        from .kraken import KrakenEngine
+
+        return KrakenEngine()
     if name == "fake":
         from .fake import FakeEngine
 
@@ -89,6 +93,9 @@ def available_engines() -> list[str]:
                 names.append(name)
         elif name == "tesseract":
             if shutil.which("tesseract"):
+                names.append(name)
+        elif name == "kraken":
+            if build_engine(name).is_prepared():
                 names.append(name)
         else:
             names.append(name)
