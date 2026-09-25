@@ -7,7 +7,7 @@ DB_URL  := $(shell grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2-)
 PGPORT  ?= $(shell echo "$(DB_URL)" | sed -nE 's,.*:([0-9]+)/.*,\1,p')
 export PGPORT
 
-.PHONY: install db migrate superuser seed-groups web worker gpu-worker css css-watch test lint
+.PHONY: install db migrate superuser seed-groups web worker gpu-worker css css-watch editor test lint
 
 install:            ## Python deps (+dev extras) and the frontend build
 	uv pip install --python .venv/bin/python -r pyproject.toml --extra dev
@@ -38,6 +38,9 @@ gpu-worker:         ## GPU worker: the OCR models, one process, models resident
 
 css:                ## build static/dist/app.css once
 	npm run build:css
+
+editor:             ## build the TipTap editor bundle static/dist/editor.js
+	npm run build:editor
 
 css-watch:          ## rebuild the CSS on every template change
 	npm run watch:css

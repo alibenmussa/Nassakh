@@ -1,0 +1,20 @@
+{% comment %}One face menu of the «الخطوط» section (PHASE5_SPEC §5): a menu button showing the chosen face in that
+face, a popover with a sample line per face and «غير مثبّت» on a face missing from this Mac. Context: role
+(body | latin | heading), label. The Latin menu offers the faces with Latin glyphs only (Lotus has none, D45).{% endcomment %}
+<div class="lo-font" data-font-role="{{ role }}" x-data="{ open: false, above: false }" @keydown.escape.window="open = false">
+  <span class="lo-stepper-label" id="lo-font-label-{{ role }}">{{ label }}</span>
+  {# the menu opens upwards when the scrolling panel has no room below the button (it would clip the menu) #}
+  <button type="button" class="lo-font-btn" :class="{ 'is-missing': !fontInstalled(value(fontField('{{ role }}'))) }" @click="above = fontMenuAbove($el); open = !open" :aria-expanded="open" aria-haspopup="menu" aria-labelledby="lo-font-label-{{ role }}">
+    <span class="lo-font-name" :style="faceStyle(value(fontField('{{ role }}')))" x-text="fontLabel(value(fontField('{{ role }}')))"></span>
+    <span class="badge badge-warning" x-show="!fontInstalled(value(fontField('{{ role }}')))">غير مثبّت</span>
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+  </button>
+  <div class="menu menu-popover lo-font-menu" :class="{ 'is-above': above }" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+    <template x-for="f in fontChoices('{{ role }}')" :key="f.key">
+      <button type="button" class="menu-item lo-font-item" role="menuitemradio" :aria-checked="value(fontField('{{ role }}')) === f.key" :class="{ 'is-missing': !f.installed }" @click="setField(fontField('{{ role }}'), f.key); open = false">
+        <span class="lo-font-sample" :style="faceStyle(f.key)" x-text="sample('{{ role }}')"></span>
+        <span class="lo-font-meta"><span x-text="f.label"></span><span class="badge badge-warning" x-show="!f.installed">غير مثبّت</span></span>
+      </button>
+    </template>
+  </div>
+</div>

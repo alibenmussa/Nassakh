@@ -305,6 +305,11 @@ def _abandoned(run: AssemblyRun) -> bool:
     return run.created_at is not None and timezone.now() - run.created_at > ABANDONED_AFTER
 
 
+def is_chapter_run(run: AssemblyRun) -> bool:
+    """True for a run that re-assembles one chapter of an edited manuscript (settings `scope: chapter`)."""
+    return isinstance(run.settings, dict) and run.settings.get("scope") == "chapter"
+
+
 def _queue_run(book: Book, user, mutate=None, changed: bool = False) -> tuple[AssemblyRun, bool]:
     """Apply `mutate(settings)` to the book's assembly settings and find or create the run to report.
 
@@ -330,7 +335,10 @@ def _queue_run(book: Book, user, mutate=None, changed: bool = False) -> tuple[As
             AssemblyRun.objects.filter(pk__in=lost).update(
                 status=AssemblyRun.Status.ERROR, error=ABANDONED_ERROR, finished_at=timezone.now()
             )
-        live = [run for run in active if run.pk not in lost]
+        # A chapter re-assembly (D41, `editor.services.reassemble_chapter`) is not this book's
+        # assembly: a full run is queued beside it; whichever saves last, the full run's text stays
+        # (a chapter run that finds a newer run on the manuscript changes nothing).
+        live = [run for run in active if run.pk not in lost and not is_chapter_run(run)]
         queued = next((run for run in live if run.status == AssemblyRun.Status.QUEUED), None)
         if queued is not None:
             return queued, False
@@ -564,12 +572,20 @@ def _save(
                     updated_by=run.created_by,
                 )
             else:
+                edited = manuscript.origin == Manuscript.Origin.EDITOR
                 ManuscriptSnapshot.objects.create(
                     manuscript=manuscript,
                     document=manuscript.document,
                     version=manuscript.version,
-                    label=f"قبل إعادة التجميع · الإصدار {manuscript.version}",
-                    reason=ManuscriptSnapshot.Reason.REASSEMBLY,
+                    label=(
+                        f"النص المحرَّر قبل إعادة التجميع · الإصدار {manuscript.version}"
+                        if edited
+                        else f"قبل إعادة التجميع · الإصدار {manuscript.version}"
+                    ),
+                    # an edited text (D41) is kept for good: re-assembly snapshots are pruned
+                    reason=ManuscriptSnapshot.Reason.MANUAL
+                    if edited
+                    else ManuscriptSnapshot.Reason.REASSEMBLY,
                     created_by=run.created_by,
                 )
                 prune_snapshots(manuscript)

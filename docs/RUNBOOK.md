@@ -385,7 +385,40 @@ rebuilds it and keeps the previous one as a snapshot (the last 10).
 
 From the shell: `manage.py assemble <book_id> --dry-run` prints stats and warnings without writing.
 
-## 12. Troubleshooting
+## 12. Phase 5 — editor, book stylesheet and page preview
+
+Upgrading: `make install` (WeasyPrint, ebooklib, fonttools, TipTap and esbuild are new), then `make migrate` (new
+`editor.0002_stylesheet_snapshot_reason_edit`, `publishing.0001_initial`), then `npm run build` (the CSS and the editor
+bundle `static/dist/editor.js`; both are committed, so this is only needed after changing the sources). The worker must run
+(`make worker`): page renders are Celery tasks on the default queue.
+
+**Fonts (D45).** Amiri is vendored. Simplified Arabic, Traditional Arabic and Times New Roman are read from the Mac's font
+folders; copy `Lotus.ttf` into `~/Library/Fonts` once. A font that is not installed shows «غير مثبّت» in the stylesheet panel
+and the pages fall back to Amiri. Lotus has no Latin glyphs: Latin text and digits use the stylesheet's Latin face.
+
+**Editing.** Dashboard → «فتح المحرّر» (the primary once the manuscript is fresh). The editor opens one chapter at a time
+(D40); the chapters panel switches, ⌘[ / ⌘] too. Autosave 1.5 s after a change (pill «محفوظ»); ⌘S saves now. Style picker
+(⌘⌥1 chapter heading, ⌘⌥2 subheading, ⌘⌥0 paragraph, ⌘⌥3–6 quote / verse / centred note / separator), ⌘B / ⌘I, ⌘⇧F footnote,
+⌘F find & replace («مطابقة التشكيل», «توحيد الألف», «كلمة كاملة», scope this chapter or the whole book), «⋯» → snapshots
+(«نسخة محفوظة…»), «تحويل الأرقام», the shortcut sheet with ?. The caret's paragraph shows «ص N» and its scan in «الأصل»; O
+opens the source drawer. After the first save the manuscript is the source of truth (D41): review edits show a drift banner
+with «إعادة تجميع الفصل من المراجعة» / «الاحتفاظ بالنص»; a full «إعادة التجميع» from the manuscript view replaces the edited
+text but keeps it as a snapshot that is never pruned.
+
+**Layout and preview.** «⋯» → «تنسيق الكتاب ومعاينته» (or `/books/<id>/layout/`, «معاينة الصفحات» from the editor). The side
+panel sets trim (17×24 default, A4, A5, B5, 14×21, 12×17, custom), margins (live diagram), fonts (body, Latin, headings, with
+sample lines), text size and spacing, running header, page numbers, chapter opening on the recto, contents page, source page
+marks. Every change saves and re-renders: the chapter under your eyes first, then the whole book in the background (D44); the
+footprint block shows the page count and the delta per change and per chapter. The viewer is the dashboard's (←/→, wheel,
+touch, filmstrip in the «الصفحات» tab, G jump, S spread, 1/2/3 fit height / width / 100 %, E opens the editor on the current
+chapter). Footnotes are numbered per page (D46, a two-pass render), running headers and page numbers follow the settings.
+Rendered pages and the PDF live under `media/books/<id>/preview/<hash>/`; old hashes are removed when a new render lands.
+
+**Known limits.** WeasyPrint cannot fake bold or italic: Lotus (no bold file) prints headings regular, Arabic italic prints
+upright. A single footnote longer than a page spills over. Word export (Phase 6) paginates slightly differently, so its page
+count can differ from the preview's.
+
+## 13. Troubleshooting
 
 | Symptom | Fix |
 |---|---|

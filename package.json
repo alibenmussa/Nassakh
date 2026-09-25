@@ -2,12 +2,13 @@
   "name": "nassakh-frontend",
   "private": true,
   "type": "module",
-  "description": "Build-time tooling for the Nassakh UI: Tailwind v4 CSS and vendored Alpine.js / fonts. Node is not needed at runtime.",
+  "description": "Build-time tooling for the Nassakh UI: Tailwind v4 CSS, the TipTap editor bundle (esbuild) and vendored Alpine.js / fonts. Node is not needed at runtime.",
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "build:css": "tailwindcss -i static/src/app.css -o static/dist/app.css --minify",
+    "build:editor": "node scripts/build-editor.mjs",
     "watch:css": "tailwindcss -i static/src/app.css -o static/dist/app.css --watch",
-    "build": "npm run vendor && npm run build:css"
+    "build": "npm run vendor && npm run build:css && npm run build:editor"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-sans-arabic": "^5.2.5",

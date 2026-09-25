@@ -1,0 +1,113 @@
+{% comment %}The stylesheet panel (PHASE5_SPEC §5), the side-panel sections of the layout page (= bk-side): «القطع»
+(the presets as a segmented list with a page-shape glyph, the custom fields), «الهوامش» (four steppers beside a
+live spread diagram drawn with CSS), «الخطوط» (three face menus with a sample line each), «النص» (sizes,
+leading, indent) and «الصفحة» (running header, page number, chapter opening, front matter, source page marks).
+Every change saves through bookLayout.setField (one debounced PUT) and re-renders. Context: can_edit.{% endcomment %}
+<fieldset class="lo-panel" {% if not can_edit %}disabled{% endif %} data-layout-panel>
+  <legend class="sr-only">تنسيق الكتاب</legend>
+  {% if not can_edit %}<p class="lo-readonly meta">التنسيق يغيّره محرّر الكتاب؛ يمكنك تصفّح الصفحات.</p>{% endif %}
+
+  {# ---------------------------------------------------------- القطع #}
+  <section class="lo-section" aria-labelledby="lo-head-trim">
+    <div class="bk-side-head"><span id="lo-head-trim">القطع</span><span class="lo-head-meta" x-text="trimLabel"></span></div>
+    <div class="lo-trims" role="radiogroup" aria-label="القطع" data-trims>
+      <template x-for="t in trims" :key="t.key">
+        <button type="button" class="lo-trim" role="radio" :aria-checked="sheet.trim === t.key" @click="setTrim(t.key)">
+          <span class="lo-trim-glyph" aria-hidden="true" :style="t.width_mm ? trimGlyphStyle(t) : 'aspect-ratio: 5 / 7; border-style: dashed'"></span>
+          <span class="lo-trim-label" x-text="t.label"></span>
+          <span class="lo-trim-size num" x-show="t.width_mm"><bdi x-text="fmt(t.width_mm) + '×' + fmt(t.height_mm)"></bdi> مم</span>
+        </button>
+      </template>
+    </div>
+    <div class="lo-grid" x-show="sheet.trim === 'custom'" x-cloak>
+      {% include "editor/_layout_stepper.html" with field="width_mm" label="العرض" unit="مم" %}
+      {% include "editor/_layout_stepper.html" with field="height_mm" label="الارتفاع" unit="مم" %}
+    </div>
+    <p class="field-error" x-show="errors.trim || errors.width_mm || errors.height_mm" x-text="errors.trim || errors.width_mm || errors.height_mm"></p>
+  </section>
+
+  {# ---------------------------------------------------------- الهوامش: steppers beside the live spread diagram #}
+  <section class="lo-section" aria-labelledby="lo-head-margins">
+    <div class="bk-side-head"><span id="lo-head-margins">الهوامش</span><span class="lo-head-meta">النص <bdi class="num" x-text="textAreaText"></bdi></span></div>
+    <div class="lo-diagram" :style="diagramStyle" :data-focus="focusMargin" aria-hidden="true" data-diagram>
+      <span class="lo-diagram-page is-verso"><span class="lo-diagram-block"><i></i><i></i><i></i><i></i></span></span>
+      <span class="lo-diagram-page is-recto"><span class="lo-diagram-block"><i></i><i></i><i></i><i></i></span></span>
+    </div>
+    <div class="lo-grid">
+      {% include "editor/_layout_stepper.html" with field="top_mm" label="أعلى" unit="مم" %}
+      {% include "editor/_layout_stepper.html" with field="bottom_mm" label="أسفل" unit="مم" %}
+      {% include "editor/_layout_stepper.html" with field="inner_mm" label="داخلي" unit="مم" %}
+      {% include "editor/_layout_stepper.html" with field="outer_mm" label="خارجي" unit="مم" %}
+    </div>
+    <p class="help">الهامش الداخلي عند الكعب في كل صفحة؛ الهوامش متناظرة بين اليمين واليسار.</p>
+    <p class="field-error" x-show="errors.top_mm || errors.bottom_mm || errors.inner_mm || errors.outer_mm" x-text="errors.top_mm || errors.bottom_mm || errors.inner_mm || errors.outer_mm"></p>
+  </section>
+
+  {# ---------------------------------------------------------- الخطوط #}
+  <section class="lo-section" aria-labelledby="lo-head-fonts">
+    <div class="bk-side-head"><span id="lo-head-fonts">الخطوط</span></div>
+    {% include "editor/_layout_font.html" with role="body" label="المتن" %}
+    {% include "editor/_layout_font.html" with role="latin" label="النص اللاتيني والأرقام" %}
+    {% include "editor/_layout_font.html" with role="heading" label="العناوين" %}
+    <p class="lo-note" x-show="missingFontText" x-text="missingFontText" data-missing-fonts></p>
+    <p class="field-error" x-show="errors.body_font || errors.latin_font || errors.heading_font" x-text="errors.body_font || errors.latin_font || errors.heading_font"></p>
+  </section>
+
+  {# ---------------------------------------------------------- النص #}
+  <section class="lo-section" aria-labelledby="lo-head-text">
+    <div class="bk-side-head"><span id="lo-head-text">النص</span></div>
+    <div class="lo-grid">
+      {% include "editor/_layout_stepper.html" with field="body_size_pt" label="حجم المتن" unit="نقطة" %}
+      {% include "editor/_layout_stepper.html" with field="line_height" label="تباعد الأسطر" %}
+      {% include "editor/_layout_stepper.html" with field="indent_em" label="إزاحة أول السطر" unit="em" %}
+      {% include "editor/_layout_stepper.html" with field="footnote_size_pt" label="حجم الحواشي" unit="نقطة" %}
+      {% include "editor/_layout_stepper.html" with field="heading_scale.h1" label="عنوان الفصل" unit="×" error="heading_scale" %}
+      {% include "editor/_layout_stepper.html" with field="heading_scale.h2" label="عنوان فرعي" unit="×" error="heading_scale" %}
+    </div>
+    <p class="help">أحجام العناوين أضعاف حجم المتن.</p>
+    <p class="field-error" x-show="errors.body_size_pt || errors.line_height || errors.indent_em || errors.footnote_size_pt || errors.heading_scale" x-text="errors.body_size_pt || errors.line_height || errors.indent_em || errors.footnote_size_pt || errors.heading_scale"></p>
+  </section>
+
+  {# ---------------------------------------------------------- الصفحة #}
+  <section class="lo-section" aria-labelledby="lo-head-page">
+    <div class="bk-side-head"><span id="lo-head-page">الصفحة</span></div>
+    <div class="lo-field">
+      <span class="lo-stepper-label">الترويسة</span>
+      <div class="segmented lo-seg" role="group" aria-label="الترويسة">
+        <template x-for="c in choices.running_header || []" :key="c.value">
+          <button type="button" :aria-pressed="sheet.running_header === c.value" @click="setField('running_header', c.value)" x-text="c.label"></button>
+        </template>
+      </div>
+    </div>
+    <div class="lo-field">
+      <label class="lo-stepper-label" for="lo-page-number">رقم الصفحة</label>
+      <select id="lo-page-number" class="select" :value="sheet.page_number" @change="setField('page_number', $el.value)">
+        <template x-for="c in choices.page_number || []" :key="c.value">
+          <option :value="c.value" :selected="sheet.page_number === c.value" x-text="c.label"></option>
+        </template>
+      </select>
+    </div>
+    <div class="lo-field">
+      <span class="lo-stepper-label">بداية الفصل</span>
+      <div class="segmented lo-seg" role="group" aria-label="بداية الفصل">
+        <template x-for="c in choices.chapter_opening || []" :key="c.value">
+          <button type="button" :aria-pressed="sheet.chapter_opening === c.value" @click="setField('chapter_opening', c.value)" x-text="c.label"></button>
+        </template>
+      </div>
+    </div>
+    <div class="lo-field">
+      <label class="lo-stepper-label" for="lo-footnote-numbering">ترقيم الحواشي</label>
+      <select id="lo-footnote-numbering" class="select" :value="sheet.footnote_numbering" @change="setField('footnote_numbering', $el.value)">
+        <template x-for="c in choices.footnote_numbering || []" :key="c.value">
+          <option :value="c.value" :selected="sheet.footnote_numbering === c.value" x-text="c.label"></option>
+        </template>
+      </select>
+    </div>
+    <div class="lo-checks">
+      <label class="lo-check"><input type="checkbox" :checked="sheet.front_matter && sheet.front_matter.title_page" @change="setField('front_matter.title_page', $el.checked)"><span>صفحة العنوان</span></label>
+      <label class="lo-check"><input type="checkbox" :checked="sheet.front_matter && sheet.front_matter.contents" @change="setField('front_matter.contents', $el.checked)"><span>صفحة المحتويات</span></label>
+      <label class="lo-check"><input type="checkbox" :checked="sheet.print_source_pages" @change="setField('print_source_pages', $el.checked)"><span>أرقام الصفحات الأصلية في الهامش</span></label>
+    </div>
+    <p class="field-error" x-show="errors.running_header || errors.page_number || errors.chapter_opening || errors.footnote_numbering || errors.front_matter" x-text="errors.running_header || errors.page_number || errors.chapter_opening || errors.footnote_numbering || errors.front_matter"></p>
+  </section>
+</fieldset>

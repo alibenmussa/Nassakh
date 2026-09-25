@@ -197,9 +197,11 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     book, pages = _book([(Page.Status.OCR_DONE, "final"), (Page.Status.REVIEWED, "final")])
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     # every primary candidate is rendered role-gated and toggled from the poll (one visible per state)
-    for state in ("start", "guides", "review", "copy"):
+    for state in ("start", "guides", "review", "copy", "editor"):
         assert f"x-show=\"d.primary === '{state}'\"" in body, state
     assert "data-review-next" in body and "الصفحة التالية للمراجعة" in body
+    # Phase 5: «فتح المحرّر» is the primary once the manuscript is fresh; the menu reaches the layout page
+    assert 'data-editor-open title="تحرير نص الكتاب فصلًا فصلًا"' in body and ':href="d.editorUrl"' in body
     assert "x-text=\"d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'\"" in body
     # status chip, progress bar, poll pill, «⋯» menu with copy / guides / rerun forms / all books
     assert 'class="bk-status"' in body and 'aria-label="نسبة إتمام المعالجة"' in body
@@ -216,6 +218,33 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "كل الكتب" in menu
     )
     assert "نسخ نص الكتاب" in menu and "x-show=\"d.primary !== 'copy'\"" in menu
+    assert "تنسيق الكتاب ومعاينته" in menu and "data-layout-open" in menu and ':href="d.layoutUrl"' in menu
+    assert "فتح المحرّر" in menu and "d.primary !== 'editor'" in menu
+    # the side panel's «الكتاب» block (PHASE5 §5): trim and page count, the drift line (D41), both links
+    side = body[body.index('<aside class="bk-side"') :]
+    assert side.index('class="bk-manuscript"') < side.index('class="bk-book"') < side.index("bk-attention")
+    book_block = side[side.index('class="bk-book"') : side.index("bk-attention")]
+    assert (
+        'aria-label="الكتاب"' in book_block
+        and 'x-text="bookLine"' in book_block
+        and ':class="bookDot"' in book_block
+    )
+    assert (
+        'x-text="driftLine"' in book_block and 'class="link bk-book-layout" :href="layoutUrl"' in book_block
+    )
+    assert (
+        "تنسيق الكتاب ومعاينته" in book_block and 'class="link bk-book-edit" :href="editorUrl"' in book_block
+    )
+    config = json.loads(
+        re.search(r'<script id="dashboard-config" type="application/json">(.*?)</script>', body, re.S).group(
+            1
+        )
+    )
+    assert config["editorUrls"]["layout"] == reverse("editor:layout", args=[book.pk])
+    assert (
+        config["editor"] == {"edited": False, "version": 0, "drift_pages": []}
+        and config["layout"]["trim"] == "17x24"
+    )
     # banners follow the poll, the review summary lives in the strip
     assert (
         "x-show=\"status === 'error'\"" in body
@@ -233,6 +262,8 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     client.force_login(_user("reader", "proofreader"))
     body = client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "d.primary === 'start'" not in body and 'name="stage"' not in body and "fac-restore" not in body
+    assert "d.primary === 'editor'" not in body and "bk-book-edit" not in body  # no editor for a proofreader
+    assert "تنسيق الكتاب ومعاينته" in body and "bk-book-layout" in body  # the layout page is for everyone
 
 
 def test_dashboard_stays_light_with_800_sheet_placeholders(editor_client):
@@ -697,6 +728,22 @@ dash.review = { reviewed: 2, total: 2, unresolved_total: 0, next_review_url: nul
 dash.canEdit = false; dash.status = 'uploaded'; states.push(dash.primary);
 out.primary = states;
 out.statusText = [dash.statusText, (dash.active = false, dash.statusText)];
+// --- Phase 5: the editor is the primary once the manuscript is fresh (and after edits, with the drift resolved
+// per chapter, D41); the «الكتاب» line follows the newest render; a proofreader or a missing URL keeps the manuscript
+const fresh = { exists: true, active: false, stale: false, stale_pages: [], run: { status: 'done' }, warnings_count: 2, stats: { pages_included: 214 } };
+const p5cfg = { active: false, status: 'reviewing', review: { reviewed: 2, total: 2, unresolved_total: 0, next_review_url: null }, manuscript: fresh, manuscriptUrls: { page: '/books/1/manuscript/' },
+  editorUrls: { editor: '/books/1/editor/', layout: '/books/1/layout/' }, editor: { edited: false, version: 1, drift_pages: [] }, layout: { trim: '17x24', trim_label: '17×24 سم', page_count: null, rendering: true } };
+const p5 = mk(p5cfg);
+const p5fresh = [p5.primary, p5.manuscriptLine, p5.bookLine, p5.bookDot, p5.driftLine, p5.editorUrl, p5.layoutUrl, p5.manuscriptActive];
+p5.apply({ total: 2, percent: 100, flags: 0, status: 'reviewing', status_label: 'قيد المراجعة', dot: 'dot-accent', by_status: {}, active: false, pages: [],
+  manuscript: { ...fresh, stale: true, stale_pages: [3, 7] }, editor: { edited: true, version: 5, drift_pages: [3, 7] }, layout: { trim: 'a5', trim_label: 'A5', page_count: 412, rendering: false } });
+const p5drift = [p5.primary, p5.manuscriptLine, p5.manuscriptDot, p5.bookLine, p5.bookDot, p5.driftLine];
+p5.editor = { edited: false, version: 1, drift_pages: [] };
+const p5stale = [p5.primary, p5.manuscriptLine, p5.driftLine];
+p5.manuscript = fresh; p5.canEdit = false;
+const p5reader = p5.primary;
+p5.layout = { trim: '17x24', trim_label: '17×24 سم', page_count: null, rendering: false };
+out.phase5 = { fresh: p5fresh, drift: p5drift, stale: p5stale, reader: p5reader, noUrl: mk({ ...p5cfg, editorUrls: {} }).primary, noPages: p5.bookLine, running: mk({ ...p5cfg, manuscript: { ...fresh, active: true } }).primary };
 // end of processing: no reload, effects stop, toast with the next review page
 const dEnd = mk();
 dEnd.apply({ total: 3, percent: 100, flags: 0, status: 'ready_for_review', status_label: 'جاهز للمراجعة', dot: 'dot-success', by_status: {}, active: false, review: { reviewed: 0, total: 2, unresolved_total: 4, next_review_url: '/books/1/review/1/' }, pages: [] });
@@ -1255,6 +1302,32 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "copy",
     ]
     assert out["statusText"] == ["قيد المعالجة · 2 من 4 صفحة", "قيد التعرّف"]
+    # Phase 5: the editor primary once the manuscript is fresh; after edits the drift line (D41) and the
+    # «الكتاب» line from the poll; a proofreader or a missing URL keeps the manuscript; a run keeps it too
+    assert out["phase5"]["fresh"] == [
+        "editor",
+        "مُجمَّعة · 214 صفحة · ملاحظتان",
+        "17×24 سم · يُحسب…",
+        "dot-accent",
+        "",
+        "/books/1/editor/",
+        "/books/1/layout/",
+        False,
+    ]
+    assert out["phase5"]["drift"] == [
+        "editor",
+        "مُحرَّرة · 214 صفحة · ملاحظتان",
+        "dot-success",
+        "A5 · 412 صفحة",
+        "dot-success",
+        "تغيّر نص صفحتان في المراجعة بعد التحرير",
+    ]
+    assert out["phase5"]["stale"] == ["reassemble", "تغيّر نص صفحتان بعد التجميع", ""]
+    assert out["phase5"]["reader"] == "manuscript" and out["phase5"]["noUrl"] == "manuscript"
+    assert (
+        out["phase5"]["noPages"] == "17×24 سم · لم تُخرَج صفحاته بعد"
+        and out["phase5"]["running"] == "manuscript"
+    )
     # the end of processing: no reload, a toast with the review entry, the primary swaps
     assert out["end"] == {
         "active": False,

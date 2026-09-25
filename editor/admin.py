@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Manuscript, ManuscriptSnapshot
+from .models import Manuscript, ManuscriptSnapshot, StyleSheet
 
 
 @admin.register(Manuscript)
@@ -22,3 +22,13 @@ class ManuscriptSnapshotAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at",)
     list_select_related = ("manuscript", "created_by")
     date_hierarchy = "created_at"
+
+
+@admin.register(StyleSheet)
+class StyleSheetAdmin(admin.ModelAdmin):
+    list_display = ("book", "trim", "width_mm", "height_mm", "body_font", "body_size_pt", "updated_at")
+    list_filter = ("trim", "body_font", "running_header", "page_number", "chapter_opening")
+    search_fields = ("book__title",)
+    raw_id_fields = ("book",)
+    readonly_fields = ("updated_at",)
+    list_select_related = ("book",)

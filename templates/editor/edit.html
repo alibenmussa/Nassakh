@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+Chapter editor (Phase 5, docs/PHASE5_SPEC.md §4): a modern Word, simpler. Context: book, exists (a manuscript
+exists), can_edit, config (editor.services.page_config: bookId, title, chapter, chapters, canEdit, stylesheet, faces,
+autosaveMs, urls). The top-bar controls live in header_actions (outside the component root) and read the page through
+Alpine.store('editor').view; everything else is the `bookEditor` component in static/src/js/editor.js; the editor
+itself is the TipTap bundle static/dist/editor.js (window.NassakhEditor); styles in static/src/components/editor.css.
+One floating element (.ed-pop) serves the footnote editor and the word readings: at most one is open.
+{% endcomment %}
+{% block head_title %}المحرّر · {{ book.title }} · نسّاخ{% endblock %}
+{% block title %}<span class="title-page">المحرّر</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+
+{% block header_actions %}
+<div class="ed-bar" x-data="editorBar">
+  <template x-if="v">
+    <div class="ed-bar-inner">
+      <a class="btn btn-ghost btn-sm ed-bar-dash" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
+      <span class="ed-bar-chapter meta" x-show="v.chapterTitle" x-text="v.chapterTitle" :title="v.chapterTitle"></span>
+
+      {# the save pill (= rv-save): unsaved, saving, saved, failed (a click retries), a conflict #}
+      <button type="button" class="ed-pill" :class="'is-' + v.pill.state" :disabled="v.pill.state !== 'error'" x-show="v.pill.text" role="status" aria-live="polite" @click="v.saveNow()" :title="v.save.message || ''">
+        <span class="ed-pill-dot" aria-hidden="true"></span>
+        <span x-text="v.pill.text"></span>
+      </button>
+
+      {% if can_edit %}
+      <div class="ed-history" role="group" aria-label="التراجع والإعادة">
+        <button type="button" class="btn-icon btn-icon-sm" title="تراجع (⌘Z)" aria-label="تراجع" :disabled="!v.canUndo" @click="v.undo()">
+          <svg class="icon" aria-hidden="true"><use href="#i-undo"/></svg>
+        </button>
+        <button type="button" class="btn-icon btn-icon-sm" title="إعادة (⇧⌘Z)" aria-label="إعادة" :disabled="!v.canRedo" @click="v.redo()">
+          <svg class="icon" aria-hidden="true"><use href="#i-redo"/></svg>
+        </button>
+      </div>
+      {% endif %}
+
+      <a class="btn btn-primary btn-sm" :href="v.layoutUrl" x-show="v.phase === 'ready'" title="الصفحات الحقيقية لهذا الفصل بتنسيق الكتاب">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-eye"/></svg>
+        <span>معاينة الصفحات</span>
+      </a>
+
+      {# «⋯» menu: the book's layout, snapshots, digits, the chapter's re-assembly, the manuscript, the dashboard #}
+      <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
+        <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
+          <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
+        </button>
+        <div class="menu menu-popover ed-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms
+             @keydown.arrow-down.prevent="v.moveIn($el, 1)" @keydown.arrow-up.prevent="v.moveIn($el, -1)">
+          <a class="menu-item" role="menuitem" :href="v.layoutUrl || '{% url 'editor:layout' book.pk %}'">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+            <span>تنسيق الكتاب</span>
+          </a>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSnapshots()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
+            <span>نسخة محفوظة…</span>
+          </button>
+          {% if can_edit %}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openDigits()">
+            <span class="ed-menu-glyph" aria-hidden="true">0</span>
+            <span>تحويل الأرقام…</span>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" x-show="v.chapter && v.chapter.drift" :disabled="v.reassembly.running" @click="open = false; v.reassembleChapter()">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>إعادة تجميع الفصل من المراجعة</span>
+          </button>
+          {% endif %}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
+            <span class="ed-menu-glyph" aria-hidden="true">?</span>
+            <span>اختصارات لوحة المفاتيح</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
+          <a class="menu-item" role="menuitem" href="{% url 'assembly:manuscript' book.pk %}">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+            <span>المخطوطة</span>
+          </a>
+          <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
+            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+            <span>لوحة الكتاب</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+{% endblock %}
+
+{% block content %}
+{{ config|json_script:"editor-config" }}
+{% if not exists %}
+<div class="stack" data-editor-page>
+  {% url 'assembly:manuscript' book.pk as manuscript_url %}
+  {% include "partials/_empty_state.html" with title="لا توجد مخطوطة بعد" text="حوّل الكتاب إلى مخطوطة أولًا، ثم افتحه في المحرّر." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-book" %}
+</div>
+{% else %}
+<div class="ed-screen" data-editor x-data="bookEditor(JSON.parse(document.getElementById('editor-config').textContent))"
+     :class="{ 'is-loading': phase === 'loading', 'is-readonly': readOnly, 'has-find': find.open, 'has-drawer': drawerOpen, 'is-busy': reassembly.running }" :style="screenStyle"
+     @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()" @scroll.window.passive="onScroll()" @beforeunload.window="guardUnload($event)">
+  <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
+  {# the stylesheet's faces for the sheet: local() rules built from the config (editor.js fontCss) #}
+  <style x-text="fontCss"></style>
+
+  {# ------------------------------------------------------------ toolbar hanging from the top bar (= bk-toolbar) #}
+  {% include "editor/_toolbar.html" %}
+
+  {# ------------------------------------------------------------ find & replace (= review popover style, under the toolbar) #}
+  {% include "editor/_find.html" %}
+
+  {# ------------------------------------------------------------ banners: review drift (D41), a save conflict, the chapter's re-assembly #}
+  <div class="ed-banners">
+    <div class="banner ed-drift" x-show="chapter && chapter.drift" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">
+        <span x-text="driftText"></span>
+        <span class="ed-drift-pages" x-show="driftPages.length">
+          <template x-for="(n, i) in driftPages" :key="n">
+            <span><a class="ed-drift-page" :href="reviewUrl(n)"><bdi class="num" x-text="n"></bdi></a><span x-show="i < driftPages.length - 1">، </span></span>
+          </template>
+        </span>
+        <span x-show="!driftPages.length"> يبقى النص المحرَّر حتى تختار.</span>
+      </span>
+      {% if can_edit %}
+      <button type="button" class="btn btn-sm" :disabled="reassembly.running" @click="reassembleChapter()">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+        <span>إعادة تجميع الفصل من المراجعة</span>
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="dismissDrift()">الاحتفاظ بالنص</button>
+      {% endif %}
+    </div>
+    <div class="banner banner-danger ed-conflict" role="alert" x-show="conflict.open" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow">تغيّر هذا الفصل في نافذة أخرى. أعد التحميل لأخذ نصّها، أو احتفظ بنصّك وتُحفظ نسختها أولًا.</span>
+      <button type="button" class="btn btn-sm" @click="reloadConflict()">إعادة التحميل</button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="keepMine()">الاحتفاظ بنصّي</button>
+    </div>
+    <div class="banner banner-info ed-reassembling" x-show="reassembly.running" x-cloak>
+      <span class="ed-pill-dot is-live" aria-hidden="true"></span>
+      <span class="grow">تُعاد قراءة هذا الفصل من صفحات المراجعة؛ النص الحالي يُحفظ نسخةً قبل استبداله.</span>
+    </div>
+    <div class="banner banner-danger" role="alert" x-show="reassembly.error" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow" x-text="reassembly.error"></span>
+      {% if can_edit %}<button type="button" class="btn btn-sm" @click="reassembleChapter()">إعادة المحاولة</button>{% endif %}
+    </div>
+  </div>
+
+  {# ------------------------------------------------------------ the editor could not load: a designed error state #}
+  <div class="empty-state ed-state-error" x-show="phase === 'error'" x-cloak role="alert">
+    <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+    <h2 class="empty-title" x-text="errorHeadline"></h2>
+    <p class="empty-text">أعد تحميل الصفحة، وإن تكرّر الخطأ فراجع سجل الخادم.</p>
+    <a class="btn" href="">إعادة التحميل</a>
+  </div>
+
+  {# ------------------------------------------------------------ the sheet beside the side panel (D34 layout) #}
+  <div class="ed-layout" x-show="phase !== 'error'">
+    <div class="ed-main">
+      <div class="ed-column" x-ref="column">
+        <div class="ed-stage">
+          {# the page-shaped sheet: the trim width at the zoom, the margins as the measure, the book face (editor.css) #}
+          <div class="ed-sheet" x-ref="sheet" :style="sheetStyle" dir="rtl">
+            {# the loading skeleton: the editor mounts here and replaces it #}
+            <div class="ed-skeleton" x-show="phase === 'loading'" aria-hidden="true">
+              <span class="ed-skeleton-title"></span>
+              <p><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span></p>
+              <p><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span></p>
+              <p><span style="width:94%"></span><span style="width:87%"></span><span style="width:52%"></span></p>
+            </div>
+          </div>
+        </div>
+        <p class="ed-status meta" x-text="statusText" aria-live="polite"></p>
+
+        {# the one overlay (= rv-pop): the footnote's editor or the word's readings, placed against the visible column #}
+        <div class="menu ed-pop" x-ref="pop" x-show="pop.kind" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-note': pop.kind === 'note', 'is-word': pop.kind === 'word' }"
+             role="dialog" :aria-label="pop.kind === 'note' ? 'الحاشية' : 'قراءات الكلمة'"
+             @click.outside="onPopOutside($event)" @keydown.escape.stop.prevent="closePop(true)">
+          <template x-if="pop.kind === 'note'">
+            <div class="ed-note">
+              <div class="ed-note-head">
+                <span class="ed-note-num">الحاشية <bdi class="num" x-text="note.seq"></bdi></span>
+                <span class="meta num" x-show="note.sourcePage">ص <bdi x-text="note.sourcePage"></bdi></span>
+                <span class="ed-note-flag" x-show="note.orphan">بلا علامة في الأصل</span>
+                <span class="ed-note-tools">
+                  {% if can_edit %}
+                  <button type="button" class="btn-icon btn-icon-sm ed-glyph" title="غامق (⌘B)" aria-label="غامق" @click="noteBold()"><span class="ed-glyph-b" aria-hidden="true">B</span></button>
+                  <button type="button" class="btn-icon btn-icon-sm ed-glyph" title="مائل (⌘I)" aria-label="مائل" @click="noteItalic()"><span class="ed-glyph-i" aria-hidden="true">I</span></button>
+                  <button type="button" class="btn-icon btn-icon-sm ed-note-delete" title="حذف الحاشية" aria-label="حذف الحاشية" @click="deleteNote()">
+                    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+                  </button>
+                  {% endif %}
+                </span>
+              </div>
+              <div class="ed-note-host" x-ref="noteHost"></div>
+              <p class="ed-note-hint meta">{% if can_edit %}Enter للعودة إلى النص · ⇧Enter سطر جديد · {% endif %}Esc للإغلاق</p>
+            </div>
+          </template>
+          <template x-if="pop.kind === 'word'">
+            <div class="ed-word" @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)">
+              <div class="rv-pop-title">{% if can_edit %}اختر القراءة الصحيحة{% else %}قراءات هذه الكلمة{% endif %}</div>
+              <template x-for="(r, i) in word.readings" :key="r.value + i">
+                <button type="button" class="rv-opt" :class="{ 'is-current': r.value === word.text }" @click="chooseReading(r.value)" :title="r.label"{% if not can_edit %} disabled{% endif %}>
+                  <bdi class="rv-opt-value" x-text="r.value"></bdi>
+                  <span class="rv-opt-label" x-text="r.label"></span>
+                </button>
+              </template>
+              <p class="rv-pop-note" x-show="word.loading">تُقرأ قراءات الكلمة من صفحة المراجعة…</p>
+              <p class="rv-pop-note" x-show="!word.loading && !word.readings.length">لا قراءات أخرى لهذه الكلمة في صفحة المراجعة.</p>
+              {% if can_edit %}
+              <form class="rv-typed" @submit.prevent="submitTyped()">
+                <div class="rv-pop-sep" aria-hidden="true"></div>
+                <label class="sr-only" for="ed-word-typed">تصحيح</label>
+                <input id="ed-word-typed" class="input" x-ref="wordTyped" x-model="word.typed" placeholder="تصحيح…" autocomplete="off" spellcheck="false" dir="auto">
+                <button type="submit" class="btn btn-sm">تصحيح</button>
+              </form>
+              <button type="button" class="rv-act" @click="acceptWord()"><span class="rv-act-label">قبول الكلمة كما هي</span></button>
+              {% endif %}
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    {# ------------------------------------------------------------ side panel (end side, = bk-side): the chapters, the source, the warnings #}
+    {% include "editor/_side.html" %}
+  </div>
+
+  {# ------------------------------------------------------------ the source drawer («عرض الأصل», = ms-drawer): the scan with the block's lines #}
+  <aside class="ed-drawer" role="dialog" aria-modal="false" aria-label="الأصل" x-show="drawerOpen" x-cloak @keydown.escape.stop.prevent="closeDrawer()">
+    <div class="ed-drawer-head">
+      <h2 class="section-title">الأصل</h2>
+      <span class="meta num" x-show="sourcePage">ص <bdi x-text="sourcePage"></bdi></span>
+      <div class="ed-drawer-pager" role="group" aria-label="صفحات الفقرة" x-show="source.pages.length > 1">
+        <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة السابقة" :disabled="source.index <= 0" @click="sourceStep(-1)">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+        </button>
+        <span class="meta num"><bdi x-text="source.index + 1"></bdi> / <bdi x-text="source.pages.length"></bdi></span>
+        <button type="button" class="btn-icon btn-icon-sm" aria-label="الصفحة التالية" :disabled="source.index >= source.pages.length - 1" @click="sourceStep(1)">
+          <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+        </button>
+      </div>
+      <a class="btn btn-ghost btn-sm ed-drawer-review" :href="reviewUrl(sourcePage)" x-show="sourcePage">فتح في المراجعة</a>
+      <button type="button" class="btn-icon" x-ref="drawerClose" aria-label="إغلاق" title="إغلاق (Esc)" @click="closeDrawer()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <div class="ed-drawer-body">
+      <div class="ed-sheet-skeleton" x-show="source.loading" aria-hidden="true"></div>
+      <div class="empty-state ed-drawer-error" x-show="source.error && !source.loading" x-cloak>
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
+        <p class="empty-text" x-text="source.error"></p>
+        <button type="button" class="btn btn-sm" @click="loadSource(sourcePage, true)">إعادة المحاولة</button>
+      </div>
+      <template x-if="source.sheet && !source.loading">
+        <div class="ed-scan" dir="ltr" :style="'--ar:' + sourceAspect">
+          <img class="ed-scan-img" :src="source.sheet.display_url || source.sheet.scan_url" :alt="'صورة الصفحة ' + sourcePage" decoding="async">
+          <div class="ed-scan-empty" x-show="!source.sheet.display_url && !source.sheet.scan_url"><span class="meta">لا صورة لهذه الصفحة بعد.</span></div>
+          <div class="ed-scan-overlay" aria-hidden="true">
+            <template x-for="b in sourceBoxes()" :key="b.id">
+              <div class="ed-band" :style="boxStyle(b.bbox)"></div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  </aside>
+
+  {% include "editor/_dialogs.html" %}
+
+  {# the undo toast (DESIGN.md §6): one action, replaces the shared toast while it shows #}
+  <div class="toast ed-toast" role="status" aria-live="polite" x-show="$store.editorToast.visible" x-cloak x-transition.opacity.duration.200ms>
+    <span class="grow" x-text="$store.editorToast.message"></span>
+    <button type="button" class="btn" x-show="$store.editorToast.action" @click="$store.editorToast.run()">تراجع</button>
+    <button type="button" class="toast-close" aria-label="إغلاق" @click="$store.editorToast.hide()">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}<script src="{% static 'dist/editor.js' %}"></script>{% endblock %}

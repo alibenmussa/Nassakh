@@ -678,6 +678,9 @@ def book_progress(book: Book) -> dict:
     flags or are in error. `active` is true while the book is processing or in OCR. `review` is
     `review.services.book_review_summary` (reviewed / total pages, unresolved words, next URL).
     `manuscript` is `assembly.services.manuscript_state` (exists, latest run, stale pages, …).
+    `editor` is `{edited, version, drift_pages}` (D41: after the first editor save, the pages changed in
+    review since) and `layout` `{trim, trim_label, page_count, rendering, rendered_at}` (the newest book
+    render, D44); neither costs a query before the first assembly.
     """
     by_status: dict[str, int] = {status: 0 for status in Page.Status.values}
     flags = 0
@@ -688,13 +691,18 @@ def book_progress(book: Book) -> dict:
         flags += 1 if page_flags or status == Page.Status.ERROR else 0
         rows.append((pk, number, status))
     from assembly.services import manuscript_state  # other apps: lazy imports
+    from editor.services import editor_state
+    from publishing.engine import layout_state
     from review.services import book_review_summary
 
     failed = book.status == Book.Status.ERROR
+    manuscript = manuscript_state(book, rows)
     return {
         **_progress_payload(book, by_status, flags),
         "review": book_review_summary(book),
-        "manuscript": manuscript_state(book, rows),
+        "manuscript": manuscript,
+        "editor": editor_state(book, manuscript),
+        "layout": layout_state(book, bool(manuscript.get("exists"))),
         "error_headline": _headline(book.error_message) if failed else "",
         "error_detail": _detail(book.error_message) if failed else "",
     }
@@ -966,9 +974,13 @@ def book_dashboard(book: Book) -> dict:
     """Everything the dashboard template needs, including the Alpine component's initial state.
 
     `config.manuscript` is the compact manuscript state (as in the progress poll) and
-    `config.manuscriptUrls` the assemble / state / manuscript URLs (`assembly.services.manuscript_urls`).
+    `config.manuscriptUrls` the assemble / state / manuscript URLs (`assembly.services.manuscript_urls`);
+    `config.editor` / `config.layout` the editor and layout states of the progress poll and
+    `config.editorUrls` the editor, layout, chapters, stylesheet and preview URLs
+    (`editor.services.editor_urls`).
     """
     from assembly.services import manuscript_urls  # other app: lazy import
+    from editor.services import editor_urls
 
     progress = book_progress(book)
     by_status = progress["by_status"]
@@ -1007,6 +1019,9 @@ def book_dashboard(book: Book) -> dict:
         "review": progress["review"],
         "manuscript": progress["manuscript"],
         "manuscriptUrls": manuscript_urls(book),
+        "editor": progress["editor"],
+        "layout": progress["layout"],
+        "editorUrls": editor_urls(book),
         "sheetsUrl": reverse("api:book_sheets", args=[book.pk]),
         "sheetsMax": SHEETS_MAX,
         "statusLabels": {status: str(label) for status, label in Page.Status.choices},
@@ -1028,6 +1043,9 @@ def book_dashboard(book: Book) -> dict:
         "review": progress["review"],
         "manuscript": progress["manuscript"],
         "manuscript_urls": config["manuscriptUrls"],
+        "editor": progress["editor"],
+        "layout": progress["layout"],
+        "editor_urls": config["editorUrls"],
         "config": config,
     }
 

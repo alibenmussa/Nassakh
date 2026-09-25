@@ -1,0 +1,45 @@
+{% comment %}Find & replace (PHASE5_SPEC §4): a panel under the toolbar. Live in the chapter (the count follows the query,
+Enter next, ⇧Enter previous), the whole book through the server. Inside the bookEditor component (edit.html).{% endcomment %}
+<div class="ed-find" x-ref="findPanel" x-show="find.open" x-cloak role="search" aria-label="بحث واستبدال" @keydown.escape.stop.prevent="closeFind(true)">
+  <div class="ed-find-row">
+    <label class="ed-find-field">
+      <span class="sr-only">البحث عن</span>
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+      <input type="text" class="ed-find-input" x-ref="findQuery" x-model="find.query" placeholder="بحث…" autocomplete="off" spellcheck="false" dir="auto" @input="onFindInput()" @keydown="onFindKey($event)">
+      <span class="ed-find-count meta" x-text="findCountText" aria-live="polite"></span>
+    </label>
+    <div class="ed-find-nav" role="group" aria-label="التنقّل بين المطابقات">
+      <button type="button" class="btn-icon btn-icon-sm" title="المطابقة السابقة (⇧Enter)" aria-label="المطابقة السابقة" :disabled="!find.total || find.scope === 'book'" @click="findStep(-1)">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+      </button>
+      <button type="button" class="btn-icon btn-icon-sm" title="المطابقة التالية (Enter)" aria-label="المطابقة التالية" :disabled="!find.total || find.scope === 'book'" @click="findStep(1)">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+      </button>
+    </div>
+    {% if can_edit %}
+    <div class="segmented ed-find-scope" role="group" aria-label="نطاق البحث">
+      <button type="button" :aria-pressed="find.scope === 'chapter'" @click="setFindScope('chapter')">هذا الفصل</button>
+      <button type="button" :aria-pressed="find.scope === 'book'" @click="setFindScope('book')">الكتاب كلّه</button>
+    </div>
+    {% endif %}
+    <button type="button" class="btn-icon btn-icon-sm ed-find-close" aria-label="إغلاق" title="إغلاق (Esc)" @click="closeFind(true)">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+  <div class="ed-find-row ed-find-options">
+    <label class="check"><input type="checkbox" x-model="find.matchTashkeel" @change="runFind()"> <span>مطابقة التشكيل</span></label>
+    <label class="check"><input type="checkbox" x-model="find.foldAlef" @change="runFind()"> <span>توحيد الألف</span></label>
+    <label class="check"><input type="checkbox" x-model="find.wholeWord" @change="runFind()"> <span>كلمة كاملة</span></label>
+  </div>
+  {% if can_edit %}
+  <div class="ed-find-row ed-find-replace">
+    <label class="ed-find-field">
+      <span class="sr-only">الاستبدال بـ</span>
+      <input type="text" class="ed-find-input" x-model="find.replacement" placeholder="استبدال بـ…" autocomplete="off" spellcheck="false" dir="auto" @keydown.enter.prevent="replaceOne()">
+    </label>
+    <button type="button" class="btn btn-sm" :disabled="!find.total || find.scope === 'book' || find.busy" @click="replaceOne()">استبدال</button>
+    <button type="button" class="btn btn-sm" :disabled="find.busy || (find.scope === 'book' ? !find.bookTotal : !find.total)" @click="replaceAll()">استبدال الكل</button>
+    <span class="meta ed-find-note" x-show="find.scope === 'book'">الاستبدال في الكتاب كلّه يُحفظ نسخةً قبله؛ يمكن التراجع من التنبيه.</span>
+  </div>
+  {% endif %}
+</div>

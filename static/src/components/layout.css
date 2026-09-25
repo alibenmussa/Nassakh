@@ -1,0 +1,414 @@
+/* Layout page (Phase 5, PHASE5_SPEC §5): the book's stylesheet beside its real pages. The dashboard viewer's
+   look one to one (theatre.css: the toolbar hanging from the top bar, one page fitted to the window, the turn
+   buttons, the side panel, the filmstrip; shared values duplicated verbatim and marked `= bk-…`), the review
+   screen's pills (= rv-save) and shimmer. Motion: turns (200 ms out, an entrance from the other side), the pill's
+   pulse and the skeleton shimmer only; prefers-reduced-motion drops them. Page and spread geometry is physical
+   (an Arabic spread: the recto on the left, the spine in the middle); the chrome is logical. */
+@layer components {
+  /* ------------------------------------------------------------ the screen takes the window (= bk-dashboard.is-viewer) */
+  .main:has(> .lo-screen) { flex: none; height: calc(100dvh - var(--topbar-height)); min-height: 0; padding-top: 0; padding-bottom: 16px; }
+  .lo-screen {
+    --lo-toolbar-h: 44px;
+    --lo-side-w: clamp(250px, 21vw, 320px); /* wider than --bk-side-w: the panel holds controls */
+    --lo-gutter: 52px; /* room for the turn buttons on both sides of the stage */
+    flex: 1 1 0;
+    min-height: 460px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .lo-screen.is-saving .lo-panel { cursor: progress; }
+
+  /* ------------------------------------------------------------ top bar (header_actions, = ms-bar) */
+  .lo-bar { display: flex; align-items: center; min-width: 0; }
+  .lo-bar-inner { display: flex; align-items: center; gap: 10px; min-width: 0; position: relative; }
+  .lo-pill { /* = rv-save */
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    font-size: 12px;
+    color: var(--color-text-3);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transition: color 120ms ease, background-color 120ms ease;
+    cursor: default;
+  }
+  .lo-pill:disabled { opacity: 1; }
+  .lo-pill-dot { width: 6px; height: 6px; flex: none; border-radius: var(--radius-pill); background: var(--color-neutral); }
+  .lo-pill.is-saving { color: var(--color-text-2); }
+  .lo-pill.is-saving .lo-pill-dot { background: var(--color-accent); animation: lo-pulse 900ms ease-in-out infinite; }
+  .lo-pill.is-saved { color: var(--color-text-2); }
+  .lo-pill.is-saved .lo-pill-dot { background: var(--color-success); }
+  .lo-pill.is-warn, .lo-pill.is-invalid { color: var(--color-warning-text); background: var(--color-warning-bg); }
+  .lo-pill.is-warn .lo-pill-dot, .lo-pill.is-invalid .lo-pill-dot { background: var(--color-warning); }
+  .lo-pill.is-error { color: var(--color-danger-text); background: var(--color-danger-bg); }
+  .lo-pill.is-error .lo-pill-dot { background: var(--color-danger); }
+  .lo-pill:not(:disabled) { cursor: pointer; }
+  .lo-pill.is-error:not(:disabled):hover { background: var(--color-danger-border); }
+  .lo-pill.is-warn:not(:disabled):hover { background: var(--color-warning-border); }
+  .lo-pill:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .lo-menu { width: 264px; max-width: 264px; inset-inline-start: auto; inset-inline-end: 0; } /* = bk-menu */
+  .lo-menu .menu-item .icon { color: var(--color-text-3); }
+  .lo-keys { display: flex; flex-direction: column; gap: 5px; padding: 2px 8px 8px; font-size: 12px; color: var(--color-text-2); }
+  .lo-keys span { display: flex; align-items: center; gap: 4px; }
+
+  /* ------------------------------------------------------------ toolbar (= bk-toolbar) */
+  .lo-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+    height: var(--lo-toolbar-h);
+    margin-inline: -32px;
+    padding: 0 32px;
+    background: color-mix(in srgb, var(--color-bg) 92%, transparent);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .lo-toolbar-start, .lo-toolbar-end { display: flex; align-items: center; gap: 8px; min-width: 0; flex: none; }
+  .lo-toolbar-mid { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+  .lo-toolbar-end { margin-inline-start: auto; }
+  .lo-counter { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; }
+  .lo-counter-chapter { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; color: var(--color-text-3); }
+  .lo-counter-title { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lo-banners { display: flex; flex-direction: column; gap: 8px; flex: none; }
+  .lo-banners:empty { display: none; }
+
+  /* ------------------------------------------------------------ the pages beside the side panel (= bk-layout in the viewer) */
+  .lo-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--lo-side-w); grid-template-rows: minmax(0, 1fr); gap: 24px; align-items: stretch; }
+  .lo-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .lo-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .lo-stage { position: relative; flex: 1; min-height: 0; display: flex; touch-action: pan-y pinch-zoom; outline: none; }
+  .lo-canvas {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    container-type: size;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+  }
+  .lo-spread {
+    flex: 1 0 auto;
+    display: flex;
+    align-items: safe center;
+    justify-content: safe center;
+    gap: var(--lo-gap, 12px);
+    padding: 12px var(--lo-gutter);
+    transition: transform 260ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 260ms ease-out;
+  }
+  /* RTL: the next page arrives from the left and the old one leaves to the right (= bk-stage.is-out-next) */
+  .lo-stage.is-out-next .lo-spread { transform: translateX(3%); opacity: 0; transition: transform 200ms ease-in, opacity 200ms ease-in; }
+  .lo-stage.is-out-prev .lo-spread { transform: translateX(-3%); opacity: 0; transition: transform 200ms ease-in, opacity 200ms ease-in; }
+  .lo-stage.is-in-next .lo-spread { transform: translateX(-3%); opacity: 0; transition: none; }
+  .lo-stage.is-in-prev .lo-spread { transform: translateX(3%); opacity: 0; transition: none; }
+  /* one sheet: the trim's aspect, fitted to the stage both ways; a spread halves the width */
+  .lo-sheet {
+    position: relative;
+    flex: none;
+    margin: 0;
+    aspect-ratio: var(--lo-ar, 0.7083);
+    width: min(calc((100cqh - 24px) * var(--lo-ar, 0.7083)), calc(100cqw - 2 * var(--lo-gutter)));
+    border-radius: 2px;
+    background: var(--color-bg-muted);
+    box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.08);
+    overflow: hidden;
+  }
+  .lo-screen.is-spread .lo-sheet { width: min(calc((100cqh - 24px) * var(--lo-ar, 0.7083)), calc((100cqw - 2 * var(--lo-gutter) - var(--lo-gap, 12px)) / 2)); }
+  .lo-screen[data-fit="width"] .lo-sheet { width: calc(100cqw - 2 * var(--lo-gutter)); }
+  .lo-screen[data-fit="width"].is-spread .lo-sheet { width: calc((100cqw - 2 * var(--lo-gutter) - var(--lo-gap, 12px)) / 2); }
+  .lo-screen[data-fit="actual"] .lo-sheet { width: calc(var(--lo-w, 170) * 1mm); } /* the trim at 96 dpi */
+  .lo-page { display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .lo-sheet.is-empty { visibility: hidden; } /* keeps its place: page 1 sits on the left of its spread */
+  .lo-sheet.is-loading .lo-page { opacity: 0; }
+  .lo-sheet.is-loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, var(--color-bg-muted) 25%, var(--color-bg-subtle) 50%, var(--color-bg-muted) 75%); /* = rv-skeleton */
+    background-size: 200% 100%;
+    animation: lo-shimmer 1.4s linear infinite;
+  }
+  /* skeleton pages with the shimmer while nothing is cached */
+  .lo-sheet.is-skeleton { display: flex; flex-direction: column; gap: 3.6%; padding: 12% 12% 9%; background: #fff; }
+  .lo-sheet.is-skeleton > span {
+    display: block;
+    flex: none;
+    height: 2.2%;
+    min-height: 5px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--color-bg-muted) 25%, var(--color-bg-subtle) 50%, var(--color-bg-muted) 75%);
+    background-size: 200% 100%;
+    animation: lo-shimmer 1.4s linear infinite;
+  }
+  .lo-sheet.is-skeleton > span:nth-child(odd) { animation-delay: 80ms; }
+  .lo-sheet.is-skeleton .lo-skel-title { width: 46%; height: 3.4%; margin: 0 auto 4%; }
+  .lo-sheet.is-skeleton .lo-skel-num { width: 7%; margin: auto auto 0; }
+  .lo-turn { z-index: 5; } /* = bk-turn, placed against .lo-stage */
+  .lo-state-error { margin: auto; }
+  .lo-state-error .icon-lg { color: var(--color-danger); }
+
+  /* ------------------------------------------------------------ the side panel (= bk-side in the viewer: one scrolling column) */
+  .lo-side {
+    position: static;
+    gap: 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    padding-inline-end: 6px;
+    font-size: 12.5px;
+  }
+  .lo-side-tabs { flex: none; align-self: stretch; }
+  .lo-side-tabs > button { flex: 1; }
+  .lo-side-tabs .num { color: var(--color-text-3); font-size: 11.5px; }
+  .lo-side-body { display: flex; flex-direction: column; gap: 22px; min-height: 0; }
+  .lo-panel { display: flex; flex-direction: column; gap: 24px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  .lo-panel:disabled .lo-trim, .lo-panel:disabled .lo-stepper-box, .lo-panel:disabled .lo-font-btn, .lo-panel:disabled .lo-seg, .lo-panel:disabled .lo-check { opacity: 0.6; cursor: default; }
+  .lo-readonly { margin: 0; }
+  .lo-section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .lo-section .help { margin: 0; line-height: 1.5; }
+  .lo-section .field-error { margin: 0; }
+  .lo-head-meta { font-weight: 400; color: var(--color-text-3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* the footprint: «412 صفحة» with the delta since the last change, «يُحسب…», one row per chapter */
+  .lo-footprint { display: flex; flex-direction: column; gap: 8px; flex: none; padding-bottom: 14px; border-bottom: 1px solid var(--color-border); }
+  .lo-footprint-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; }
+  .lo-footprint-count { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); font-variant-numeric: tabular-nums; }
+  .lo-footprint-count.is-empty { font-size: 12.5px; font-weight: 400; color: var(--color-text-3); }
+  .lo-delta { display: inline-block; padding: 0 6px; border-radius: var(--radius-pill); background: var(--color-bg-muted); color: var(--color-text-2); font-size: 11.5px; line-height: 18px; direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
+  .lo-computing { height: 20px; padding-inline: 6px; }
+  .lo-chapters { list-style: none; margin: 0 -8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; max-height: 30vh; overflow-y: auto; scrollbar-width: thin; }
+  .lo-chapter-btn {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 28px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-2);
+    font-size: 12.5px;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .lo-chapter-btn:hover { background: var(--color-hover); color: var(--color-text); }
+  .lo-chapter-btn:disabled { opacity: 0.5; cursor: default; }
+  .lo-chapter-btn:disabled:hover { background: none; }
+  .lo-chapter.is-current .lo-chapter-btn { background: var(--color-active); color: var(--color-text); font-weight: 550; }
+  .lo-chapter-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lo-chapter-pages { flex: none; display: inline-flex; align-items: baseline; gap: 6px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .lo-chapter.is-current .lo-chapter-pages { color: var(--color-text-2); }
+  .lo-chapter-pages > bdi:first-child { min-width: 2ch; text-align: end; color: inherit; font-weight: 500; }
+  .lo-chapter.is-fresh .lo-chapter-title::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-inline-start: 6px; border-radius: var(--radius-pill); background: var(--color-accent); vertical-align: middle; } /* rendered ahead of the book */
+
+  /* ------------------------------------------------------------ «القطع»: the presets as a segmented list with a page glyph */
+  .lo-trims { display: flex; flex-direction: column; gap: 2px; margin: 0 -8px 0 0; }
+  .lo-trim {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .lo-trim:hover { background: var(--color-hover); color: var(--color-text); }
+  .lo-trim[aria-checked="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); }
+  .lo-trim-glyph { flex: none; height: 20px; border: 1.5px solid currentColor; border-radius: 2px; opacity: 0.75; }
+  .lo-trim-size { margin-inline-start: auto; font-weight: 400; font-size: 11.5px; color: var(--color-text-3); }
+  .lo-trim[aria-checked="true"] .lo-trim-size { color: inherit; opacity: 0.8; }
+
+  /* ------------------------------------------------------------ steppers (styled like the jump field, = bk-jump) */
+  .lo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+  .lo-stepper { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .lo-stepper-label { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
+  .lo-stepper-box { position: relative; display: flex; align-items: center; height: 34px; border-radius: var(--radius-md); background: var(--color-bg-muted); transition: box-shadow 120ms ease; }
+  .lo-stepper-box:focus-within { box-shadow: var(--ring); }
+  .lo-stepper-box input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    padding: 0 2px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 13px;
+    text-align: center;
+    direction: ltr;
+    font-variant-numeric: tabular-nums;
+  }
+  .lo-stepper-box input:focus { outline: none; }
+  .lo-step {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin: 3px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-2);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
+  .lo-step:hover { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-sm); }
+  .lo-step:active { background: var(--color-bg-subtle); }
+  .lo-step:disabled { opacity: 0.45; cursor: default; box-shadow: none; background: transparent; }
+  .lo-stepper-unit { flex: none; padding-inline-end: 8px; font-size: 11px; color: var(--color-text-3); }
+  .lo-stepper.is-invalid .lo-stepper-box { box-shadow: inset 0 0 0 1px var(--color-danger); }
+
+  /* ------------------------------------------------------------ «الهوامش»: the live spread diagram (physical geometry) */
+  .lo-diagram { display: flex; justify-content: center; align-items: flex-start; padding: 4px 0 2px; }
+  .lo-diagram-page { position: relative; height: 96px; aspect-ratio: var(--lo-ar, 0.7083); background: #fff; border: 1px solid var(--color-border-strong); box-shadow: var(--shadow-sm); }
+  .lo-diagram-page.is-verso { border-left-width: 0; } /* RTL: the first page sits on the right, its spine edge is its left */
+  .lo-diagram-block {
+    position: absolute;
+    top: calc(var(--lo-t, 0.083) * 100%);
+    bottom: calc(var(--lo-b, 0.092) * 100%);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 9% 0;
+    background: var(--color-accent-soft);
+    border: 1px dashed rgba(37, 99, 235, 0.35);
+    transition: top 160ms ease, bottom 160ms ease, left 160ms ease, right 160ms ease;
+  }
+  .is-verso .lo-diagram-block { left: calc(var(--lo-i, 0.13) * 100%); right: calc(var(--lo-o, 0.106) * 100%); }
+  .is-recto .lo-diagram-block { left: calc(var(--lo-o, 0.106) * 100%); right: calc(var(--lo-i, 0.13) * 100%); }
+  .lo-diagram-block i { display: block; height: 2px; margin: 0 12%; border-radius: 1px; background: rgba(37, 99, 235, 0.32); }
+  .lo-diagram-block i:last-child { width: 50%; }
+  /* the margin stepper with the focus lights its band on both pages */
+  .lo-diagram-page::before, .lo-diagram-page::after { content: ""; position: absolute; display: none; background: rgba(217, 119, 6, 0.2); pointer-events: none; }
+  .lo-diagram[data-focus="top"] .lo-diagram-page::before { display: block; left: 0; right: 0; top: 0; height: calc(var(--lo-t, 0.083) * 100%); }
+  .lo-diagram[data-focus="bottom"] .lo-diagram-page::before { display: block; left: 0; right: 0; bottom: 0; height: calc(var(--lo-b, 0.092) * 100%); }
+  .lo-diagram[data-focus="inner"] .lo-diagram-page.is-verso::after { display: block; top: 0; bottom: 0; left: 0; width: calc(var(--lo-i, 0.13) * 100%); }
+  .lo-diagram[data-focus="inner"] .lo-diagram-page.is-recto::after { display: block; top: 0; bottom: 0; right: 0; width: calc(var(--lo-i, 0.13) * 100%); }
+  .lo-diagram[data-focus="outer"] .lo-diagram-page.is-verso::after { display: block; top: 0; bottom: 0; right: 0; width: calc(var(--lo-o, 0.106) * 100%); }
+  .lo-diagram[data-focus="outer"] .lo-diagram-page.is-recto::after { display: block; top: 0; bottom: 0; left: 0; width: calc(var(--lo-o, 0.106) * 100%); }
+
+  /* ------------------------------------------------------------ «الخطوط»: menus with a sample line per face */
+  .lo-font { position: relative; display: flex; flex-direction: column; gap: 4px; }
+  .lo-font-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-muted);
+    color: var(--color-text);
+    text-align: start;
+    cursor: pointer;
+    transition: box-shadow 120ms ease;
+  }
+  .lo-font-btn:hover { box-shadow: inset 0 0 0 1px var(--color-border-strong); }
+  .lo-font-btn:focus-visible { outline: none; box-shadow: var(--ring); }
+  .lo-font-btn .icon { color: var(--color-text-3); margin-inline-start: auto; }
+  .lo-font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 1.2; }
+  .lo-font-menu { position: absolute; top: 100%; inset-inline-start: 0; margin-top: 4px; width: 100%; min-width: 240px; max-width: none; }
+  .lo-font-menu.is-above { top: auto; bottom: calc(100% - 22px); margin-top: 0; margin-bottom: 4px; } /* above the button, under its label */
+  .lo-font-item { height: auto; padding: 6px 8px; flex-direction: column; align-items: stretch; gap: 2px; }
+  .lo-font-item[aria-checked="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); }
+  .lo-font-item.is-missing .lo-font-sample { color: var(--color-text-3); }
+  .lo-font-sample { font-size: 17px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lo-font-meta { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--color-text-3); }
+  .lo-note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-warning-text); }
+
+  /* ------------------------------------------------------------ «الصفحة»: segmented controls, selects, checks */
+  .lo-field { display: flex; flex-direction: column; gap: 4px; }
+  .lo-seg { display: flex; }
+  .lo-seg > button { flex: 1; padding: 0 6px; font-size: 12px; }
+  .lo-checks { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+  .lo-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+
+  /* ------------------------------------------------------------ the filmstrip (= bk-film / bk-thumb) */
+  .lo-film { flex: none; display: flex; flex-direction: column; min-height: 0; }
+  .lo-film-track { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); align-content: start; gap: 12px 8px; padding: 5px 5px 12px; }
+  .lo-thumb {
+    position: relative;
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: none;
+    cursor: pointer;
+    transition: transform 150ms ease, box-shadow 150ms ease;
+  }
+  .lo-thumb-img {
+    display: block;
+    width: 100%;
+    aspect-ratio: var(--thumb-ar, 0.7083);
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+    background: var(--color-bg-muted);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(16, 16, 20, 0.08);
+  }
+  .lo-thumb-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .lo-thumb:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+  .lo-thumb:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .lo-thumb.is-current { box-shadow: 0 0 0 2px var(--color-accent); }
+  .lo-thumb.is-current:hover { transform: none; }
+  .lo-thumb-num {
+    position: absolute;
+    bottom: 3px;
+    inset-inline-start: 3px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: rgba(20, 20, 24, 0.74);
+    color: #fff;
+    font-size: 10.5px;
+    line-height: 15px;
+  }
+  .lo-thumb.is-fresh::after { content: ""; position: absolute; top: -3px; inset-inline-end: -3px; width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-surface); }
+
+  /* ------------------------------------------------------------ keyframes (= rv-…) */
+  @keyframes lo-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
+  @keyframes lo-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+  /* ------------------------------------------------------------ responsive + reduced motion */
+  @media (max-width: 1180px) {
+    .lo-screen { --lo-side-w: clamp(236px, 26vw, 300px); }
+    .lo-counter-title { max-width: 14ch; }
+  }
+  @media (max-width: 900px) {
+    .lo-toolbar { flex-wrap: wrap; height: auto; min-height: var(--lo-toolbar-h); padding: 0 16px; margin-inline: -16px; }
+    .lo-toolbar-start, .lo-toolbar-end, .lo-toolbar-mid { height: 40px; }
+    .lo-toolbar-mid { order: 3; flex: 1 0 100%; }
+    .lo-screen { --lo-gutter: 44px; }
+    .lo-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+    .lo-side { max-height: 42vh; padding-inline-start: 0; border-inline-start: 0; gap: 10px; }
+    .lo-footprint { padding-bottom: 8px; }
+    .lo-chapters { max-height: 18vh; }
+    .lo-film-track { display: flex; align-items: center; gap: 10px; height: 76px; padding: 6px 4px; overflow-x: auto; overflow-y: hidden; }
+    .lo-thumb { width: auto; flex: none; }
+    .lo-thumb-img { width: auto; height: 58px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lo-spread, .lo-stage.is-out-next .lo-spread, .lo-stage.is-out-prev .lo-spread { transition: none; }
+    .lo-pill.is-saving .lo-pill-dot { animation: none; }
+    .lo-sheet.is-skeleton > span, .lo-sheet.is-loading::after { animation: none; }
+    .lo-diagram-block { transition: none; }
+    .lo-thumb { transition: none; }
+  }
+}

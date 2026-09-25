@@ -1,0 +1,92 @@
+{% comment %}The editor's dialogs (= rv-modal): the snapshots («نسخة محفوظة…»: save as, the list with restore), the digit
+conversion, the shortcut sheet. Inside the bookEditor component (edit.html).{% endcomment %}
+{# ------------------------------------------------------------ snapshots #}
+<div class="rv-scrim" x-show="snapshots.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeSnapshots()">
+  <div class="rv-modal ed-snapshots" role="dialog" aria-modal="true" aria-labelledby="ed-snap-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeSnapshots()">
+    <div class="rv-modal-head">
+      <h2 class="rv-modal-title" id="ed-snap-title">النسخ المحفوظة</h2>
+      <button type="button" class="btn-icon" x-ref="snapshotsClose" aria-label="إغلاق" @click="closeSnapshots()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    {% if can_edit %}
+    <form class="ed-snap-form" @submit.prevent="createSnapshot()">
+      <label class="sr-only" for="ed-snap-label">اسم النسخة</label>
+      <input id="ed-snap-label" type="text" class="input" x-ref="snapshotLabel" x-model="snapshots.label" placeholder="حفظ نسخة باسم…" autocomplete="off" maxlength="200">
+      <button type="submit" class="btn" :disabled="snapshots.busy">حفظ نسخة الآن</button>
+    </form>
+    <p class="help">تُحفظ نسخة تلقائيًا قبل كل استبدال شامل وتحويل للأرقام واستعادة وإعادة تجميع؛ النسخ اليدوية لا تُحذف.</p>
+    {% endif %}
+    <p class="field-error" x-show="snapshots.error" x-text="snapshots.error"></p>
+    <div class="ed-snap-skeleton" x-show="snapshots.loading" aria-hidden="true"><span></span><span></span></div>
+    <ul class="ed-snap-list" x-show="!snapshots.loading">
+      <template x-for="s in snapshots.list" :key="s.id">
+        <li class="ed-snap" :class="{ 'is-current': s.current }">
+          <span class="ed-snap-body">
+            <span class="ed-snap-label" x-text="s.label || ('الإصدار ' + s.version)"></span>
+            <span class="meta"><span x-text="s.reason_label"></span><span x-show="s.created_by"> · <bdi x-text="s.created_by"></bdi></span> · <span x-text="relativeTime(s.created_at)"></span> · الإصدار <bdi class="num" x-text="s.version"></bdi></span>
+          </span>
+          <span class="badge" x-show="s.current">الحالية</span>
+          {% if can_edit %}<button type="button" class="btn btn-sm" x-show="!s.current" :disabled="snapshots.busy" @click="restoreSnapshot(s.id)">استعادة</button>{% endif %}
+        </li>
+      </template>
+      <li class="meta ed-snap-empty" x-show="!snapshots.list.length">لا نسخ محفوظة بعد.</li>
+    </ul>
+  </div>
+</div>
+
+{# ------------------------------------------------------------ digit conversion #}
+{% if can_edit %}
+<div class="rv-scrim" x-show="digits.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeDigits()">
+  <div class="rv-modal ed-digits" role="dialog" aria-modal="true" aria-labelledby="ed-digits-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeDigits()">
+    <h2 class="rv-modal-title" id="ed-digits-title">تحويل الأرقام</h2>
+    <p class="meta">تُحوَّل أرقام النص وعلامات الحواشي؛ تُحفظ نسخة قبل التحويل ويمكن التراجع من التنبيه.</p>
+    <div class="ed-digits-group">
+      <span class="group-label">النمط</span>
+      <div class="segmented ed-digits-seg" role="group" aria-label="نمط الأرقام">
+        <button type="button" x-ref="digitsFirst" :aria-pressed="digits.style === 'western'" @click="digits.style = 'western'">غربية <bdi class="num">0-9</bdi></button>
+        <button type="button" :aria-pressed="digits.style === 'arabic_indic'" @click="digits.style = 'arabic_indic'">عربية هندية <bdi>٠-٩</bdi></button>
+      </div>
+    </div>
+    <div class="ed-digits-group">
+      <span class="group-label">النطاق</span>
+      <div class="segmented ed-digits-seg" role="group" aria-label="نطاق التحويل">
+        <button type="button" :aria-pressed="digits.scope === 'chapter'" @click="digits.scope = 'chapter'">هذا الفصل</button>
+        <button type="button" :aria-pressed="digits.scope === 'book'" @click="digits.scope = 'book'">الكتاب كلّه</button>
+      </div>
+    </div>
+    <div class="rv-modal-actions">
+      <button type="button" class="btn" @click="closeDigits()">إلغاء</button>
+      <button type="button" class="btn btn-primary btn-sm" :disabled="digits.busy" @click="convertDigits()">تحويل</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ------------------------------------------------------------ shortcut sheet (= rv-shortcuts) #}
+<div class="rv-scrim" x-show="sheetOpen" x-cloak x-transition.opacity.duration.150ms @click.self="closeSheet()">
+  <div class="rv-modal rv-shortcuts" role="dialog" aria-modal="true" aria-labelledby="ed-sheet-title" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeSheet()">
+    <div class="rv-modal-head">
+      <h2 class="rv-modal-title" id="ed-sheet-title">اختصارات لوحة المفاتيح</h2>
+      <button type="button" class="btn-icon" x-ref="sheetClose" aria-label="إغلاق" @click="closeSheet()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <dl class="rv-keys">
+      <dt><kbd class="kbd">⌘S</kbd></dt><dd>الحفظ الآن (يُحفظ تلقائيًا بعد ثانية ونصف من آخر تغيير)</dd>
+      <dt><kbd class="kbd">⌘Z</kbd> / <kbd class="kbd">⇧⌘Z</kbd></dt><dd>تراجع / إعادة</dd>
+      <dt><kbd class="kbd">⌘F</kbd></dt><dd>بحث واستبدال؛ <kbd class="kbd">Enter</kbd> المطابقة التالية، <kbd class="kbd">⇧Enter</kbd> السابقة</dd>
+      <dt><kbd class="kbd">⌘B</kbd> / <kbd class="kbd">⌘I</kbd></dt><dd>غامق / مائل</dd>
+      <dt><kbd class="kbd">⌘⌥1</kbd> / <kbd class="kbd">⌘⌥2</kbd> / <kbd class="kbd">⌘⌥0</kbd></dt><dd>عنوان فصل / عنوان فرعي / فقرة</dd>
+      <dt><kbd class="kbd">⌘⌥3</kbd> / <kbd class="kbd">⌘⌥4</kbd> / <kbd class="kbd">⌘⌥5</kbd> / <kbd class="kbd">⌘⌥6</kbd></dt><dd>اقتباس / شعر / ملاحظة وسط / فاصل</dd>
+      <dt><kbd class="kbd">⌘⇧F</kbd></dt><dd>إدراج حاشية عند المؤشّر وفتح محرّرها</dd>
+      <dt><kbd class="kbd">⇧Enter</kbd></dt><dd>سطر جديد داخل الفقرة (شطرا البيت في الشعر)</dd>
+      <dt><kbd class="kbd">O</kbd> <span class="meta">خارج النص</span> أو <kbd class="kbd">⌘⇧O</kbd></dt><dd>عرض أصل الفقرة التي فيها المؤشّر</dd>
+      <dt><kbd class="kbd">⌘[</kbd> / <kbd class="kbd">⌘]</kbd></dt><dd>الفصل السابق / التالي</dd>
+      <dt><span class="meta">نقرة على رقم حاشية</span></dt><dd>محرّر الحاشية الصغير</dd>
+      <dt><span class="meta">نقرة على كلمة بخط كهرماني</span></dt><dd>قراءات الكلمة غير المحسومة والتصحيح</dd>
+      <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو الأصل أو البحث، ثم الخروج من النص</dd>
+      <dt><kbd class="kbd">?</kbd> <span class="meta">خارج النص</span></dt><dd>هذه القائمة</dd>
+    </dl>
+  </div>
+</div>

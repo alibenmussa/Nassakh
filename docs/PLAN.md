@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phases 1-3 built and reviewed; Phase 4 (assembly, manuscript view) built 2026-09-24, awaiting the owner's test; decisions D1–D39.** Phase specs in `docs/PHASE2_SPEC.md`, `docs/PHASE3_SPEC.md`, `docs/DASHBOARD_SPEC.md`, `docs/PHASE4_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
+Status: **Phases 1-4 built and reviewed; Phase 5 (chapter editor, book stylesheet, WeasyPrint page preview) built and verified 2026-09-25, awaiting the owner's test; decisions D1–D46.** Phase specs in `docs/PHASE2_SPEC.md`, `docs/PHASE3_SPEC.md`, `docs/DASHBOARD_SPEC.md`, `docs/PHASE4_SPEC.md`, `docs/PHASE5_SPEC.md`. Run instructions in `docs/RUNBOOK.md`. Phase 6 order: Word first, then PDF, then EPUB.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 

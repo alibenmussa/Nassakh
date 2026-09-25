@@ -207,6 +207,9 @@ document.addEventListener('alpine:init', () => {
     review: cfg.review || null, // {reviewed, total, unresolved_total, next_review_url} from the progress poll
     manuscript: cfg.manuscript || null, // assembly.services.manuscript_state (compact), refreshed by the poll
     manuscriptUrls: cfg.manuscriptUrls || {},
+    editor: cfg.editor || null, // Phase 5: {edited, version, drift_pages} (D41), refreshed by the poll
+    layout: cfg.layout || null, // Phase 5: {trim, trim_label, page_count, rendering, rendered_at}, refreshed by the poll
+    editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: editor, layout, …
     convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
@@ -352,6 +355,8 @@ document.addEventListener('alpine:init', () => {
       if (d.error_detail !== undefined) this.errorDetail = d.error_detail || '';
       if (d.review) this.review = d.review;
       if (d.manuscript) this.manuscript = d.manuscript;
+      if (d.editor) this.editor = d.editor;
+      if (d.layout) this.layout = d.layout;
       this.active = Boolean(d.active);
       const changed = [];
       const added = [];
@@ -501,9 +506,10 @@ document.addEventListener('alpine:init', () => {
       const s = this.reviewSummary;
       return s.total > 0 && s.reviewed >= s.total;
     },
-    // Exactly one primary button per state (§2.1.5, PHASE4 §4.1), chosen from the poll without a reload:
-    // once every page is reviewed, convert (or re-assemble a stale / failed manuscript) for editors, open a
-    // fresh manuscript for everyone, else copy the book's text.
+    // Exactly one primary button per state (§2.1.5, PHASE4 §4.1, PHASE5 §3), chosen from the poll without a
+    // reload: once every page is reviewed, convert (or re-assemble a stale / failed manuscript) for editors;
+    // once the manuscript is fresh, editors open the chapter editor (after the first edit the review drift
+    // is resolved per chapter there, D41), everyone else the manuscript; else copy the book's text.
     get primary() {
       if (this.canEdit && (this.status === 'uploaded' || this.status === 'error')) return 'start';
       if (this.canEdit && this.status === 'needs_guides' && cfg.guidesUrl) return 'guides';
@@ -511,6 +517,7 @@ document.addEventListener('alpine:init', () => {
       if (this.allReviewed) {
         const m = this.manuscript || {};
         if (m.active) return this.manuscriptUrl ? 'manuscript' : '';
+        if (this.canEdit && m.exists && !this.manuscriptFailed && (!m.stale || this.edited) && this.editorUrl) return 'editor';
         if (m.exists && !m.stale && !this.manuscriptFailed) return this.manuscriptUrl ? 'manuscript' : 'copy';
         if (this.canEdit) return m.exists ? 'reassemble' : 'convert';
         if (m.exists && this.manuscriptUrl) return 'manuscript';
@@ -530,16 +537,20 @@ document.addEventListener('alpine:init', () => {
     get manuscriptUrl() {
       return this.manuscriptUrls.page || '';
     },
-    // the side panel's state line: «مُجمَّعة · 214 صفحة · 3 ملاحظات», «تغيّر نص 4 صفحات بعد التجميع», «قيد التجميع»
+    get manuscriptActive() {
+      return Boolean((this.manuscript || {}).active);
+    },
+    // the side panel's state line: «مُجمَّعة · 214 صفحة · 3 ملاحظات», «تغيّر نص 4 صفحات بعد التجميع», «قيد التجميع»;
+    // after the first editor save the manuscript is the source of truth: «مُحرَّرة …» and the drift line (D41)
     get manuscriptLine() {
       const m = this.manuscript || {};
       if (m.active) return 'قيد التجميع';
       if (this.manuscriptFailed) return 'فشل التجميع';
-      if (m.exists && m.stale) return `تغيّر نص ${arCount((m.stale_pages || []).length, PAGE_FORMS)} بعد التجميع`;
+      if (m.exists && m.stale && !this.edited) return `تغيّر نص ${arCount((m.stale_pages || []).length, PAGE_FORMS)} بعد التجميع`;
       if (m.exists) {
         const pages = (m.stats && m.stats.pages_included) || 0;
         const notes = m.warnings_count || 0;
-        return `مُجمَّعة · ${arCount(pages, PAGE_FORMS)} · ${notes ? arCount(notes, NOTE_FORMS) : 'بلا ملاحظات'}`;
+        return `${this.edited ? 'مُحرَّرة' : 'مُجمَّعة'} · ${arCount(pages, PAGE_FORMS)} · ${notes ? arCount(notes, NOTE_FORMS) : 'بلا ملاحظات'}`;
       }
       return 'لم تُجمَّع بعد';
     },
@@ -547,9 +558,37 @@ document.addEventListener('alpine:init', () => {
       const m = this.manuscript || {};
       if (m.active) return 'dot-accent';
       if (this.manuscriptFailed) return 'dot-danger';
-      if (m.exists && m.stale) return 'dot-warning';
+      if (m.exists && m.stale && !this.edited) return 'dot-warning';
       if (m.exists) return 'dot-success';
       return 'dot-neutral';
+    },
+    // ------------------------------------------------------------ the editor and the book's form (Phase 5)
+    get edited() {
+      return Boolean(this.editor && this.editor.edited);
+    },
+    get editorUrl() {
+      return this.editorUrls.editor || '';
+    },
+    get layoutUrl() {
+      return this.editorUrls.layout || '';
+    },
+    // D41: «تغيّر نص 4 صفحات في المراجعة بعد التحرير» once review corrections stop flowing into the manuscript
+    get driftLine() {
+      const pages = this.edited && this.editor.drift_pages ? this.editor.drift_pages.length : 0;
+      return pages ? `تغيّر نص ${arCount(pages, PAGE_FORMS)} في المراجعة بعد التحرير` : '';
+    },
+    // the «الكتاب» block: «17×24 سم · 412 صفحة», «17×24 سم · يُحسب…», «17×24 سم · لم تُخرَج صفحاته بعد»
+    get bookLine() {
+      const l = this.layout || {};
+      const trim = l.trim_label || '';
+      const count = Number(l.page_count) || 0;
+      const state = l.rendering && !count ? 'يُحسب…' : count ? arCount(count, PAGE_FORMS) : 'لم تُخرَج صفحاته بعد';
+      return trim ? `${trim} · ${state}` : state;
+    },
+    get bookDot() {
+      const l = this.layout || {};
+      if (l.rendering) return 'dot-accent';
+      return Number(l.page_count) > 0 ? 'dot-success' : 'dot-neutral';
     },
     // the convert popover (assembly/_convert_popover.html): the options remembered per book (D38)
     openConvert() {

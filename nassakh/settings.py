@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "review",
     "assembly",
     "editor",
+    "publishing",
 ]
 
 MIDDLEWARE = [
@@ -148,6 +149,18 @@ NASSAKH = {
     "MAX_NEW_TOKENS": {"page": 3000, "body": 2500, "footnote": 1000, "other": 600},
     # Word chooser for uncertain words during finalisation (D26): "none" disables the hook.
     "WORD_CHOOSER": env("WORD_CHOOSER", default="none"),
+    # Book faces not vendored (D45) are looked up in these folders (publishing.fonts).
+    "FONT_DIRS": env.list(
+        "FONT_DIRS",
+        default=[
+            "~/Library/Fonts",
+            "/Library/Fonts",
+            "/System/Library/Fonts/Supplemental",
+            "/System/Library/Fonts",
+        ],
+    ),
+    # Render the edited chapter and the book in the background after editor saves (D44, debounced).
+    "PREVIEW_AUTORENDER": env.bool("PREVIEW_AUTORENDER", default=True),
 }
 
 # ---------------------------------------------------------------- rest framework
@@ -183,7 +196,20 @@ LOGGING = {
         # Project apps log at INFO; the root handler prints them.
         **{
             name: {"level": "INFO", "propagate": True}
-            for name in ("core", "accounts", "books", "processing", "ocr", "review", "assembly", "editor")
+            for name in (
+                "core",
+                "accounts",
+                "books",
+                "processing",
+                "ocr",
+                "review",
+                "assembly",
+                "editor",
+                "publishing",
+            )
         },
+        # WeasyPrint logs every layout step at INFO; its warnings (unsupported CSS) still show.
+        "weasyprint": {"level": "WARNING", "propagate": True},
+        "fontTools": {"level": "WARNING", "propagate": True},
     },
 }

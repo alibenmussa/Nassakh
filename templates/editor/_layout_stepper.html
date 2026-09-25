@@ -1,0 +1,16 @@
+{% comment %}One stepper of the stylesheet panel (PHASE5_SPEC §5), styled like the dashboard's jump field: a label,
+[−] a numeric field [+] and the unit. Context: field (a dotted path of the stylesheet, e.g. "top_mm" or
+"heading_scale.h1"), label, unit (optional), error (the key of `errors`, default = field). Numbers are parsed
+by bookLayout.setField (Eastern digits welcome), clamped to the field's limits and saved after a short quiet;
+↑/↓ step, Enter commits. Western digits in the field (dir=ltr).{% endcomment %}
+<div class="lo-stepper" data-field="{{ field }}" :class="{ 'is-invalid': errors['{{ error|default:field }}'] }">
+  <span class="lo-stepper-label" id="lo-label-{{ field|slugify }}">{{ label }}</span>
+  <span class="lo-stepper-box" @focusin="focusField('{{ field }}')" @focusout="focusField('')">
+    <button type="button" class="lo-step" tabindex="-1" aria-label="{{ label }}: أقل" @click="step('{{ field }}', -1)">−</button>
+    <input type="text" inputmode="decimal" dir="ltr" autocomplete="off" aria-labelledby="lo-label-{{ field|slugify }}" :value="fmt(value('{{ field }}'))"
+           @change="setField('{{ field }}', $el.value)" @keydown.enter.prevent="setField('{{ field }}', $el.value); $el.blur()"
+           @keydown.up.prevent="step('{{ field }}', 1)" @keydown.down.prevent="step('{{ field }}', -1)" @keydown.escape.stop="$el.blur()">
+    <button type="button" class="lo-step" tabindex="-1" aria-label="{{ label }}: أكثر" @click="step('{{ field }}', 1)">+</button>
+    {% if unit %}<span class="lo-stepper-unit">{{ unit }}</span>{% endif %}
+  </span>
+</div>

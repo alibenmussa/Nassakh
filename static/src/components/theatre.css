@@ -99,6 +99,12 @@
   .bk-manuscript-open, .bk-manuscript-convert { font-size: 12.5px; font-weight: 500; }
   .bk-manuscript-convert { padding: 0; border: 0; background: none; cursor: pointer; }
   .bk-manuscript-convert:hover { text-decoration: underline; }
+  /* Phase 5 (PHASE5_SPEC §5): the «الكتاب» block, trim and page count, the drift line, the layout and editor links */
+  .bk-book { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .bk-book .bk-side-head { align-self: stretch; }
+  .bk-book-line { color: var(--color-text); font-weight: 500; white-space: normal; font-variant-numeric: tabular-nums; }
+  .bk-book-drift { color: var(--color-warning-text); white-space: normal; }
+  .bk-book-layout, .bk-book-edit { font-size: 12.5px; font-weight: 500; }
 
   /* ------------------------------------------------------------ sticky toolbar (§2.2) */
   .bk-toolbar {
@@ -718,9 +724,9 @@
     .bk-side { position: static; gap: 10px; padding-inline-start: 0; border-inline-start: 0; }
     .bk-dashboard:not(.is-viewer) .bk-side { order: -1; }
     .bk-dashboard.is-viewer .bk-counts { display: none; }
-    .bk-summary, .bk-counts, .bk-summary-review, .bk-manuscript { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-    .bk-summary-review, .bk-manuscript { padding-top: 0; border-top: 0; }
-    .bk-manuscript .bk-side-head { display: none; }
+    .bk-summary, .bk-counts, .bk-summary-review, .bk-manuscript, .bk-book { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+    .bk-summary-review, .bk-manuscript, .bk-book { padding-top: 0; border-top: 0; }
+    .bk-manuscript .bk-side-head, .bk-book .bk-side-head { display: none; }
     .bk-film .bk-side-head { display: none; }
     .bk-film-track { display: flex; align-items: center; gap: 10px; height: 76px; padding: 6px 4px; overflow-x: auto; overflow-y: hidden; }
     .bk-thumb { width: auto; flex: none; }
