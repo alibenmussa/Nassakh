@@ -262,3 +262,16 @@ presets with 17×24 cm default, fonts Amiri (vendored) + Simplified Arabic, Trad
 Lotus loaded from the Mac's font folders, Aref Ruqaa dropped (D45); footnotes numbered per page in every format, the
 PDF via a two-pass render because WeasyPrint's footnote counter is document-level (D46).
 
+## D47 — One book page with live pages: edit on the real layout (2026-09-25, amends D40 and PHASE5 §4–§5)
+Owner decision after testing Phase 5: the layout page is the book's only page; the separate editor page goes (it was not
+formatted to the page). The page on screen must show the same text and the same footprint as the export. So the stage no
+longer shows images: every WeasyPrint render also exports its layout (each line's box, text runs, block id and character
+range; footnote area, running header, page number), and the page draws those exact lines as positioned text in the same
+fonts (the dashboard's text-mirrors-its-page technique). Edit mode (toggle «معاينة | تحرير», E, double-click in preview)
+lets a click place the caret on any line; the paragraph under it becomes editable in place, flowing live while the lines
+below shift; after a short pause the chapter is re-laid-out by WeasyPrint and the pages refresh with the engine's breaks,
+page count and per-page footnote numbers. Later pages renumber (and swap sides) from the chapter's page delta at once;
+books without chapter breaks re-lay-out forward until the pages converge; the whole book is confirmed in the background.
+One side panel with icon tabs: الفصول, الصفحات, بحث, التنسيق, الفقرة, الأصل (unchanged), غير المؤكَّدة. Also: page break
+before a paragraph and keep-with-next, widows/orphans and headings kept with the next line by default, book details
+(title and copyright pages), page checks. `/books/<id>/editor/` redirects to the book page. Spell check: not wanted.

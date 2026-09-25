@@ -186,3 +186,67 @@ zoom), nothing they don't need (no ribbon, no per-paragraph fonts, no colours). 
       chapters open on the recto when set.
 - [ ] A review edit after editing shows the drift and per-chapter re-assembly works, keeping a snapshot.
 - [ ] Reduced motion, keyboard reach, RTL, Western digits, Arabic copy throughout.
+
+## 9. Amendment D47 — one book page with live pages (supersedes §4 and the editor page of §7)
+
+The book page `/books/<id>/layout/` (title «الكتاب») is the only place to preview and edit. `/books/<id>/editor/`
+redirects there with `?mode=edit` and the chapter.
+
+### 9.1 Layout export (backend)
+- Every WeasyPrint render (chapter or book) also produces a **layout**: per page `{n, side: "right"|"left", width_pt,
+  height_pt, margins, lines: [...], header: {...}|null, number: {...}|null, footnote_rule: {x, y, w}|null}`; each line
+  `{block, kind: "body"|"heading"|"note"|"title"|..., x, y, w, h, baseline, dir: "rtl"|"ltr", justify: bool, start, end,
+  runs: [{text, font, size_pt, weight, italic, sup: bool, note: id|null}]}` in points from the page's top-left, where
+  `start`/`end` are character offsets into the block's plain text (footnote calls counted as one object placeholder, their
+  note text laid out as lines with `block = note id`). Extracted from WeasyPrint's box tree (`document.pages[i]._page_box`:
+  LineBox / TextBox positions, `element.get('data-block')`); the renderer tags blocks and notes with `data-block` and each
+  footnote call with `data-note`. Stored per render as `layout.json` beside the page images; served per page range.
+- **Fast re-layout**: `relayout_chapter(book, chapter_id, version)` renders layout only (no rasterisation) on a dedicated
+  Celery queue `layout` (the default worker consumes `default,layout`); images for the filmstrip follow in a separate low
+  priority task. Target: < 1 s for a 30-page chapter. A newer request for the same chapter supersedes a queued one.
+- **Offsets across chapters**: the chapter render uses the first page number and side from the current layout of the
+  chapters before it; when a chapter's page count changes, later chapters' numbers shift by the delta and their sides
+  flip on an odd delta (mirrored margins swap; with recto chapter openings a blank page appears or disappears). The
+  service returns `{chapter pages, delta, shifted_from, blank_changes}` so the client can renumber at once; the full book
+  layout is confirmed in the background. Books without chapter page breaks (sections): re-lay-out forward section by
+  section until a section's first line lands on the same page and position as before (convergence), capped at the book.
+- **Paragraph attributes** in the document schema: `breakBefore: bool` («ابدأ صفحة جديدة»), `keepWithNext: bool`; the
+  stylesheet gains `widows`, `orphans` (default 2) and `keep_headings` (default true).
+- **Book details** in `StyleSheet.front_matter.fields`: title, subtitle, author, editor, translator, publisher, city,
+  year, edition, isbn, rights (title and author default from the Book); the renderer prints a title page and a
+  copyright page when enabled (also used by the Word/EPUB metadata in Phase 6).
+- **Page checks** returned with each render: `[{code, page, block, message}]` for a footnote that overflowed its page, a
+  missing font, a chapter ending on an almost empty page, a heading at the foot of a page.
+- **Uncertain words** API `api:uncertain`: every remaining `uncertain` mark in the manuscript as `{chapter, block, start,
+  end, word, page, context, readings: [{engine, label, text}]}` (readings resolved from the source lines' tokens), plus
+  accept / choose-reading / type endpoints that edit the manuscript (version-checked) and trigger the re-layout.
+
+### 9.2 The page (UI)
+- **Stage**: the dashboard viewer (turns, keys, wheel, spread, fit modes) drawing **live pages**: a white page of the trim
+  proportions scaled to the fit, its lines absolutely positioned from the layout (same `@font-face` families as the render,
+  each line `width = w`, justified when `justify`, runs with their weight/italic/superscript), the footnote rule, footnote
+  lines, running header and page number. Pages outside the viewport are not in the DOM. Text is selectable.
+- **Modes**: segmented «معاينة | تحرير» in the toolbar, E toggles; double-click in preview enters edit at the clicked line.
+  In edit mode a click maps the point to (block, offset) via `caretPositionFromPoint` on the line text + the line's `start`,
+  and opens that paragraph as an in-place editor (a one-block TipTap instance from the bundle, same width, face, size, line
+  height, indent) over its lines; the lines below on that page shift by the height difference while typing; a paragraph
+  that continues on the next page hides its continuation while open. Enter at the end creates the next paragraph, Backspace
+  at the start merges with the previous, ↑ on the first line / ↓ on the last line move to the neighbouring block, Esc
+  closes the paragraph then leaves edit mode. After a 500 ms pause: patch the chapter JSON, PUT it (version, 409 banner),
+  request the re-layout, then swap the affected pages in place with the new layout (no jump, the open paragraph stays open
+  at the caret), update footprint and page numbers.
+- **Toolbar in edit mode**: undo/redo (per chapter), style picker, B / I, «حاشية», «فواصل الصفحات الأصلية»; the primary
+  «تم». Preview: spread, fit, jump, counter, «تحرير». Top bar: title «الكتاب», save pill, render pill, «⋯» (snapshots,
+  «تحويل الأرقام», chapter re-assembly on drift, «إخراج PDF» from the last render, «المخطوطة», «لوحة الكتاب»).
+- **One side panel** (end side, the dashboard's .bk-side look, one scrolling column) with an **icon tab bar** (icon +
+  tooltip, active tab labelled, badges): «الفصول» (footprint with delta, chapters with page ranges and drift, page checks),
+  «الصفحات» (thumbnails), «بحث» (find & replace over the chapter model; matches listed with page numbers; click turns to
+  the page and highlights the line; replace re-lays-out), «التنسيق» (accordions: القطع، الهوامش، الخطوط، النص، الصفحة،
+  بيانات الكتاب), «الفقرة» (style, «ابدأ صفحة جديدة», «مع التالية», source pages), «الأصل» (exactly the editor page's pane:
+  scan thumbnail with the block's line bands, pager, «عرض الأصل» drawer, review link), «غير المؤكَّدة» (the uncertain list
+  grouped by chapter and page with context; click turns to the page and selects the word; readings / typed correction /
+  accept in place; count badge). Preview opens «التنسيق», edit opens «الأصل»; the owner's choice is remembered per mode.
+- **Space**: on this page the app's navigation sidebar folds into an icon rail (toggle to expand).
+- **Keyboard**: preview ←/→, PageUp/Down, Home/End, G, S, 1/2/3, E, ?; edit ⌘S, ⌘Z/⇧⌘Z, ⌘F, ⌘B/⌘I, ⌘⌥1/2/0/3–6 styles,
+  ⌘⇧F footnote, ⌘[ / ⌘], O source, Esc. Nothing fires inside fields.
+
