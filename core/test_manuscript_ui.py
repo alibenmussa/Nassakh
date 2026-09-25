@@ -159,7 +159,8 @@ def test_manuscript_view_never_assembled_shows_the_empty_state_with_options(edit
     body = _view(_logged(proofreader), f.book)
     assert "يبدأ التحويل محرّر الكتاب" in body and 'class="menu ms-convert"' not in body
     assert "chooseSeam(" not in body and "فتح الصفحة" in body
-    assert "v.primary === 'convert'" not in body and "v.primary === 'copy'" in body
+    assert "v.primary === 'convert'" not in body and "v.primary === 'book'" in body
+    assert "نسخ نص المخطوطة" not in body and "copyText" not in body  # D49: the book is exported, never copied
     assert _json_script(body, "manuscript-config")["canEdit"] is False
     # the proofreader may still set roles (the review permission)
     assert _json_script(body, "manuscript-config")["canReview"] is True
@@ -286,8 +287,14 @@ def test_manuscript_view_ready_renders_the_document_the_panel_and_the_chrome(edi
     assert '@click.outside="onPopOutside($event)"' in body and '@scroll.window.passive="onScroll()"' in body
     assert "ms-card" not in body and "ms-note-pop" not in body and "ms-block-menu" not in body
     assert "Enter على فاصل صفحة" in body and "Enter على رقم حاشية" in body and "⌫" not in body
-    assert "x-show=\"v.primary === 'reassemble'\"" in body and "x-show=\"v.primary === 'copy'\"" in body
-    assert "خيارات التجميع…" in body and "نسخ نص المخطوطة" in body and "لوحة الكتاب" in body
+    # D49: the primary leads on to the book page (or re-assembles a stale text); nothing copies the book
+    assert "x-show=\"v.primary === 'reassemble'\"" in body and "x-show=\"v.primary === 'book'\"" in body
+    assert "data-book-open" in body and ':href="v.bookUrl"' in body and "فتح الكتاب" in body
+    assert _json_script(body, "manuscript-config")["urls"]["book"] == reverse(
+        "editor:layout", args=[f.book.pk]
+    )
+    assert "خيارات التجميع…" in body and "نسخ نص المخطوطة" not in body and "لوحة الكتاب" in body
+    assert "حذف الترويسات المتكرّرة" in body
     assert 'x-text="v.pill.text"' in body and "اختصارات لوحة المفاتيح" in body
     # the fragment endpoint serves the same parts on its own
     fragment = _logged(editor).get(reverse("assembly:document", args=[f.book.pk])).content.decode()
@@ -305,7 +312,9 @@ def test_manuscript_view_stale_and_failed_states(editor):
     body = _view(_logged(editor), f.book)
     state = _json_script(body, "manuscript-config")["state"]
     assert state["stale"] is True and state["stale_pages"] == [1]
-    assert 'class="banner ms-stale" x-show="stale"' in body and 'x-text="staleText"' in body
+    assert 'class="banner ms-stale" x-show="stale && !edited"' in body and 'x-text="staleText"' in body
+    assert 'class="banner ms-edited" x-show="edited && !active"' in body and 'x-text="editedText"' in body
+    assert state["edited"] is False
     assert ':href="reviewUrl(n)"' in body and "إعادة التجميع" in body
     # a failed run after a manuscript: the document stays, the banner offers a retry
     AssemblyRun.objects.create(
@@ -841,10 +850,12 @@ const posts = () => calls.filter((x) => x[0] === 'POST');
 const reqs = () => calls.filter((x) => x[0] === 'GET').map((x) => x[1]);
 // fetch routes: the state answers in sequence, the document the current fragment, sheets the page, posts 202
 let stateQueue = []; let fragment = fixture.fragment_v1; let sheet = fixture.sheet; let stateGate = null; let docGate = null;
+let respond409 = false; // the next posts answer as the server does over a text edited meanwhile (D49)
 const deferred = () => { let release; const done = new Promise((r) => { release = r; }); return { release, done }; };
 globalThis.fetch = async (url, init) => {
   const method = (init && init.method) || 'GET';
   calls.push([method, url, init && init.body ? JSON.parse(init.body) : null, init && init.headers]);
+  if (method === 'POST' && respond409) return { ok: false, status: 409, json: async () => ({ detail: 'حُرِّر نص هذا الكتاب', edited: true }) };
   if (method === 'POST') return { ok: true, status: 202, json: async () => ({ run_id: 9, status: 'done', stage: 'save', manuscript_url: '/books/1/manuscript/', state_url: '/api/books/1/manuscript/state/' }) };
   if (url.startsWith('/api/books/1/manuscript/state/')) { if (stateGate) await stateGate.done; const s = stateQueue.length > 1 ? stateQueue.shift() : stateQueue[0]; return { ok: true, status: 200, json: async () => clone(s) }; }
   if (url.startsWith('/books/1/manuscript/document/')) {
@@ -961,10 +972,9 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   focused.length = 0; key('Escape');
   out.drawerClosed = { open: c.drawer.open, focus: focused[0] };
   out.noFocusSource = (c.focused = null, await c.openSource(null), calls.filter((x) => x[0] === 'toast').pop()[1]);
-  // ---- jump, copy, notes
+  // ---- jump, notes
   calls.length = 0; scrolled.length = 0;
   out.jump = { ok: c.jump('٣'), scrolled: scrolled[0], bad: c.jump('9'), toast: calls.filter((x) => x[0] === 'toast').pop()[1] };
-  await c.copyText(); out.copy = calls.filter((x) => x[0] === 'copy').pop()[1];
   // ---- footnotes: a click (or the focus landing) on a reference opens the note in the overlay, the list's
   // row lit; the same reference again keeps it; the link jumps to the list, the list's number back to the text
   const ref = root.querySelector('.ms-ref[data-note="n30"]');
@@ -1019,9 +1029,24 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   cv.c.convert.options.footnote_numbering = 'book'; stateQueue = [fixture.state_queued];
   await cv.c.submitConvert(); await flush();
   out.convertSubmit = { post: posts()[0].slice(1, 3), open: cv.c.convert.open, phase: cv.c.phase, active: cv.c.active };
-  // ---- the manuscript text of the fixture
-  out.text = NassakhManuscript.manuscriptText(page(fixture.fragment_v1).querySelector('article'));
-  out.textV2 = NassakhManuscript.manuscriptText(page(fixture.fragment_v2).querySelector('article'));
+  // ---- a paragraph that becomes a heading comes back as `h…`: the anchor tries that id first, in its place
+  const an = make(fixture.state_v1, fixture.fragment_v1); await flush();
+  const anchor = an.c.anchorBefore(['h40', 'p40', 'p10']);
+  out.anchorRename = { ids: anchor.ids, same: anchor.tops.h40 === anchor.tops.p40 };
+  // ---- D49: a text edited on the book page: the tools rest, the replacement is confirmed in the popover
+  const ed = make(Object.assign({}, fixture.state_v1, { edited: true }), fixture.fragment_v1); await flush(); calls.length = 0;
+  const seamBefore = posts().length;
+  out.edited = { edited: ed.c.edited, primary: ed.c.primary, pill: ed.c.pill, text: ed.c.editedText, screen: ed.c.$el ? 1 : 0,
+    seam: await ed.c.postSeam(2, 'split'), dismiss: await ed.c.dismissSuggestion('p40'), role: await ed.c.setRole('p40', 'heading'), posts: posts().length - seamBefore };
+  ed.c.reassemble();
+  out.editedReassemble = { open: ed.c.convert.open, edited: ed.c.convert.edited, label: ed.c.convert.label, posts: posts().length - seamBefore };
+  stateQueue = [fixture.state_queued];
+  await ed.c.submitConvert(); await flush();
+  out.editedSubmit = posts().slice(-1)[0].slice(1, 3);
+  // the server finds the text edited meanwhile (409): the popover opens on the replacement
+  const late = make(fixture.state_v1, fixture.fragment_v1); await flush();
+  respond409 = true; await late.c.reassemble(); await flush(); respond409 = false;
+  out.late = { edited: late.c.edited, open: late.c.convert.open, label: late.c.convert.label };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -1119,6 +1144,7 @@ def test_manuscript_component_under_node(tmp_path):
                 "sheets": "/api/books/1/sheets/",
                 "review": "/books/1/review/__n__/",
                 "dashboard": "/books/1/",
+                "book": "/books/1/layout/",
             },
         },
         "fragment_v1": _fragment(doc_v1, WARNINGS, stats, 1),
@@ -1221,7 +1247,7 @@ def test_manuscript_component_under_node(tmp_path):
     assert (
         out["ready"]["pill"]["state"] == "saved"
         and out["ready"]["pill"]["text"].startswith("مُجمَّعة ")
-        and out["ready"]["primary"] == "copy"
+        and out["ready"]["primary"] == "book"
     )
     assert (
         out["ready"]["page3"] == "p40"
@@ -1234,7 +1260,7 @@ def test_manuscript_component_under_node(tmp_path):
         "g": "jump",
         "S": "seams",
         "o": "source",
-        "c": "copy",
+        "c": None,  # D49: nothing copies the book
         "j": "next",
         "k": "prev",
         "down": None,
@@ -1386,16 +1412,6 @@ def test_manuscript_component_under_node(tmp_path):
         "bad": None,
         "toast": "لا نصّ من هذه الصفحة في المخطوطة",
     }
-    assert (
-        out["copy"] == out["textV2"]
-    )  # the copy ran after the split: «ثم» and «تابع الكلام.» are two blocks
-    assert "1966[1] ثم\n\nتابع الكلام.\n\n" in out["textV2"]
-    assert out["text"] == (
-        "كتاب <الاختبار>\n\nالمؤلف & شريكه\n\nالفصل الأول\n\n"
-        "قال الأمير في سنة 1966[1] ثم تابع الكلام.\n\nمقدمة\n\n"
-        "نص يذكر (7) مرات[2]\n\nمبحث\n\nالخاتمة.\n\n"
-        "[1] انظر <script>alert(1)</script> المصدر\n\n[2] حاشية يتيمة"
-    )
     # the footnote in the overlay: under the reference (250 + 14 + 6 = 270 → 470); 360 px wide it would cross
     # the column's left edge from the reference's right (414), so it is pushed to 468 (→ 332); the list's row
     # lit; the link to the list closes it and focuses the row's number
@@ -1451,7 +1467,7 @@ def test_manuscript_component_under_node(tmp_path):
         and done["pill"] == "saved"
         and done["live"] == "اكتمل التجميع"
     )
-    assert done["polling"] == 0 and done["toc"] == 2 and done["primary"] == "copy"
+    assert done["polling"] == 0 and done["toc"] == 2 and done["primary"] == "book"
     # the host (x-ignore: no Alpine binding) gets its reveal class from the component and loses it after
     assert done["hostReveal"] is True and done["stepsDone"] == 7
     assert done["tocCount"] == 2 and done["warnRows"] == 5
@@ -1487,12 +1503,17 @@ def test_manuscript_component_under_node(tmp_path):
         "seam": False,
         "dismiss": False,
         "posts": 0,
-        "primary": "copy",
+        "primary": "book",
         "menu": True,
     }
     assert out["convertOpen"] == {
         "open": True,
-        "options": {"footnote_numbering": "chapter", "include_unreviewed": True, "strip_tatweel": True},
+        "options": {
+            "footnote_numbering": "chapter",
+            "include_unreviewed": True,
+            "strip_tatweel": True,
+            "strip_running_heads": True,
+        },
         "unreviewed": 2,
         "label": "تحويل",
         "phase": "empty",
@@ -1501,12 +1522,37 @@ def test_manuscript_component_under_node(tmp_path):
     assert out["convertSubmit"] == {
         "post": [
             "/api/books/1/assemble/",
-            {"footnote_numbering": "book", "include_unreviewed": True, "strip_tatweel": True},
+            {
+                "footnote_numbering": "book",
+                "include_unreviewed": True,
+                "strip_tatweel": True,
+                "strip_running_heads": True,
+            },
         ],
         "open": False,
         "phase": "assembling",
         "active": True,
     }
+    # D49: over a text edited on the book page the structure tools post nothing, the primary is the book
+    # page, and re-assembling opens the popover whose button confirms the replacement
+    edited = out["edited"]
+    assert edited["edited"] is True and edited["primary"] == "book"
+    assert edited["pill"] == {"state": "saved", "text": "حُرِّر في صفحة الكتاب"}
+    assert edited["text"].startswith("حُرِّر نص الكتاب في صفحة الكتاب")
+    assert edited["seam"] is False and edited["dismiss"] is False and edited["role"] is False
+    assert edited["posts"] == 0
+    assert out["editedReassemble"] == {
+        "open": True,
+        "edited": True,
+        "label": "استبدال النص المحرَّر",
+        "posts": 0,
+    }
+    assert (
+        out["editedSubmit"][0] == "/api/books/1/assemble/"
+        and out["editedSubmit"][1]["replace_edited"] is True
+    )
+    assert out["late"] == {"edited": True, "open": True, "label": "استبدال النص المحرَّر"}
+    assert out["anchorRename"] == {"ids": ["h40", "p40", "p10"], "same": True}
 
 
 # ---------------------------------------------------------------- the dashboard's manuscript logic (books.js)
@@ -1574,13 +1620,23 @@ def test_dashboard_manuscript_logic_under_node(tmp_path):
     assert out["reader"] == ["manuscript", "copy", "manuscript"]
     assert out["open"] == {
         "open": True,
-        "options": {"footnote_numbering": "page", "include_unreviewed": False, "strip_tatweel": True},
+        "options": {
+            "footnote_numbering": "page",
+            "include_unreviewed": False,
+            "strip_tatweel": True,
+            "strip_running_heads": True,
+        },
         "label": "تحويل",
     }
     assert out["submitted"]["call"] == [
         "POST",
         "/api/books/1/assemble/",
-        {"footnote_numbering": "page", "include_unreviewed": False, "strip_tatweel": True},
+        {
+            "footnote_numbering": "page",
+            "include_unreviewed": False,
+            "strip_tatweel": True,
+            "strip_running_heads": True,
+        },
         "tok",
     ]
     assert out["submitted"]["assigned"] == ["/books/1/manuscript/"] and out["submitted"]["open"] is False

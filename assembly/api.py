@@ -2,8 +2,9 @@
 
 GETs need a login; starting a run needs an editor (`core.permissions.IsEditor`), except the line
 roles, which reviewers may set (`CanReview`). Refusals answer `{"detail": <Arabic>}`: 400 for bad
-input, 403 for roles, 404 for another book's line or page (or a book without manuscript yet).
-Every endpoint that starts a run answers 202 `services.run_payload`.
+input, 403 for roles, 404 for another book's line or page (or a book without manuscript yet), 409 for
+a run over a text edited on the book page without `replace_edited: true` (D49). Every endpoint that
+starts a run answers 202 `services.run_payload`.
 
 - POST /api/books/<id>/assemble/              `{footnote_numbering?, include_unreviewed?, strip_tatweel?}`
 - GET  /api/books/<id>/manuscript/state/      → `services.manuscript_state`
@@ -40,12 +41,18 @@ def _book(book_id: int) -> Book:
 
 
 def _refused(exc: services.AssemblyError) -> Response:
-    code = (
-        status.HTTP_404_NOT_FOUND
-        if isinstance(exc, services.AssemblyNotFound)
-        else status.HTTP_400_BAD_REQUEST
-    )
-    return Response({"detail": str(exc)}, status=code)
+    if isinstance(exc, services.AssemblyNotFound):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, services.AssemblyEdited):
+        code = status.HTTP_409_CONFLICT
+    else:
+        code = status.HTTP_400_BAD_REQUEST
+    return Response({"detail": str(exc), "edited": isinstance(exc, services.AssemblyEdited)}, status=code)
+
+
+def _replace(data: dict) -> bool:
+    """Whether the request confirms that an edited text is replaced (D49)."""
+    return services._parse_bool(data.get("replace_edited")) is True
 
 
 def _started(run) -> Response:
@@ -58,7 +65,8 @@ def book_assemble(request: Request, book_id: int) -> Response:
     """Convert the book into its manuscript with the posted options (remembered for the book)."""
     book = _book(book_id)
     try:
-        run = services.start_assembly(book, request.user, _data(request))
+        data = _data(request)
+        run = services.start_assembly(book, request.user, data, replace_edited=_replace(data))
     except services.AssemblyError as exc:
         return _refused(exc)
     return _started(run)
@@ -86,7 +94,9 @@ def manuscript_seam(request: Request, book_id: int) -> Response:
     book = _book(book_id)
     data = _data(request)
     try:
-        run = services.set_seam_override(book, request.user, data.get("page"), str(data.get("mode") or ""))
+        run = services.set_seam_override(
+            book, request.user, data.get("page"), str(data.get("mode") or ""), replace_edited=_replace(data)
+        )
     except services.AssemblyError as exc:
         return _refused(exc)
     return _started(run)
@@ -99,7 +109,8 @@ def manuscript_roles(request: Request, book_id: int) -> Response:
     book = _book(book_id)
     data = _data(request)
     try:
-        run = services.set_block_roles(book, request.user, data.get("line_ids"), str(data.get("role") or ""))
+        lines, role = data.get("line_ids"), str(data.get("role") or "")
+        run = services.set_block_roles(book, request.user, lines, role, replace_edited=_replace(data))
     except services.AssemblyError as exc:
         return _refused(exc)
     return _started(run)
@@ -113,7 +124,11 @@ def manuscript_suggestion(request: Request, book_id: int) -> Response:
     data = _data(request)
     try:
         run = services.dismiss_suggestion(
-            book, request.user, str(data.get("block_id") or ""), str(data.get("action") or "")
+            book,
+            request.user,
+            str(data.get("block_id") or ""),
+            str(data.get("action") or ""),
+            replace_edited=_replace(data),
         )
     except services.AssemblyError as exc:
         return _refused(exc)

@@ -27,7 +27,8 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
 </nav>
 <div class="ms-warnings" data-ms-part="warnings">
   {% for g in warning_groups %}
-  <details class="ms-warn-group" data-code="{{ g.code }}"{% if g.severity == 'warning' %} open{% endif %}>
+  {# a group opens by itself only when it is short: a long one (77 unreviewed pages) is a line to open #}
+  <details class="ms-warn-group" data-code="{{ g.code }}"{% if g.severity == 'warning' and g.count <= 5 %} open{% endif %}>
     <summary class="ms-warn-head"><span class="dot {% if g.severity == 'warning' %}dot-warning{% else %}dot-neutral{% endif %}" aria-hidden="true"></span><span class="grow">{{ g.label }}</span><bdi class="num">{{ g.count }}</bdi></summary>
     <ul class="ms-warn-list">
       {% for w in g.items %}

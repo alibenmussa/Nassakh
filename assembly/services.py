@@ -7,7 +7,9 @@ itself is `assembly.pipeline` (pure functions); `load_book` is its only loader a
 two queries whatever its page count.
 
 Options and overrides live in `Book.assembly_settings` (D38) and are re-applied by every run.
-After a successful run the included pages that were `reviewed` become `assembled` (D36).
+After a successful run the included pages that were `reviewed` become `assembled` (D36) and the book
+render of the new text is asked for (D49). Once the text is edited on the book page (D41) a whole-book
+run replaces the edits, so it is refused unless the request confirms it (`replace_edited`, D49).
 """
 
 from __future__ import annotations
@@ -59,6 +61,9 @@ RUN_ERROR = (
 )
 ABANDONED_ERROR = "توقّف التجميع قبل أن يكتمل؛ أعد المحاولة."
 ENQUEUE_ERROR = "تعذّر إرسال التجميع إلى طابور المهام؛ تحقّق من تشغيل Redis وعامل Celery ثم أعد المحاولة."
+EDITED_ERROR = (
+    "حُرِّر نص هذا الكتاب في صفحة الكتاب، وإعادة تجميعه تستبدل النص المحرَّر بنص الصفحات. أكّد الاستبدال أولًا."
+)
 
 
 class AssemblyError(ValueError):
@@ -67,6 +72,10 @@ class AssemblyError(ValueError):
 
 class AssemblyNotFound(AssemblyError):
     """A line or page that is not part of the book (API 404)."""
+
+
+class AssemblyEdited(AssemblyError):
+    """A whole-book run asked for on a text edited on the book page, without `replace_edited` (API 409)."""
 
 
 def _user_or_none(user):
@@ -279,7 +288,8 @@ def _parse_bool(value) -> bool | None:
 
 
 def clean_options(options) -> dict:
-    """The assembly options of a request (`footnote_numbering`, `include_unreviewed`, `strip_tatweel`).
+    """The assembly options of a request (`footnote_numbering`, `include_unreviewed`, `strip_tatweel`,
+    `strip_running_heads`).
 
     Missing keys are left out; unknown keys are ignored; a bad value raises `AssemblyError`.
     """
@@ -290,7 +300,7 @@ def clean_options(options) -> dict:
         if numbering not in pipeline.NUMBERING_MODES:
             raise AssemblyError("طريقة ترقيم الحواشي غير معروفة.")
         out["footnote_numbering"] = numbering
-    for key in ("include_unreviewed", "strip_tatweel"):
+    for key in ("include_unreviewed", "strip_tatweel", "strip_running_heads"):
         if data.get(key) is None:
             continue
         value = _parse_bool(data[key])
@@ -376,6 +386,17 @@ def _enqueue(run: AssemblyRun) -> None:
         AssemblyRun.objects.filter(pk=run.pk, task_id="").update(task_id=task_id[:64])
 
 
+def is_edited(book: Book) -> bool:
+    """Whether the book's text was saved from the book page since the last whole-book run (D41)."""
+    return Manuscript.objects.filter(book_id=book.pk, origin=Manuscript.Origin.EDITOR).exists()
+
+
+def check_edited(book: Book, replace_edited: bool = False) -> None:
+    """Refuse a whole-book run over an edited text unless the request confirms it (D49)."""
+    if not replace_edited and is_edited(book):
+        raise AssemblyEdited(EDITED_ERROR)
+
+
 def _start(book: Book, user, mutate=None, changed: bool = False) -> AssemblyRun:
     run, created = _queue_run(book, user, mutate, changed)
     if created:
@@ -384,18 +405,19 @@ def _start(book: Book, user, mutate=None, changed: bool = False) -> AssemblyRun:
     return run
 
 
-def start_assembly(book: Book, user, options=None) -> AssemblyRun:
+def start_assembly(book: Book, user, options=None, replace_edited: bool = False) -> AssemblyRun:
     """Merge `options` into `book.assembly_settings` and start a run (or return the active one).
 
     Idempotent: while a run is queued or running it is returned instead of a new one (a running
     run is followed by a new one only when the options changed). The run is enqueued on the default
-    queue; raises `AssemblyError` for a bad option value.
+    queue; raises `AssemblyError` for a bad option value, `AssemblyEdited` over an edited text.
     """
     changes = clean_options(options)
+    check_edited(book, replace_edited)
     return _start(book, user, lambda settings: settings.update(changes))
 
 
-def set_seam_override(book: Book, user, page, mode: str) -> AssemblyRun:
+def set_seam_override(book: Book, user, page, mode: str, replace_edited: bool = False) -> AssemblyRun:
     """Force a join or a split at the boundary before page `page` (`mode="auto"` removes the override).
 
     Stored in `assembly_settings.seams` and re-applied by every run; starts a run.
@@ -410,6 +432,7 @@ def set_seam_override(book: Book, user, page, mode: str) -> AssemblyRun:
         raise AssemblyError("نوع الفاصل غير معروف؛ المتاح: وصل أو فصل أو تلقائي.")
     if not book.pages.filter(number=number, is_excluded=False).exists():
         raise AssemblyNotFound("الصفحة غير موجودة في هذا الكتاب.")
+    check_edited(book, replace_edited)
 
     def mutate(settings: dict) -> None:
         stored = settings.get("seams")
@@ -423,7 +446,9 @@ def set_seam_override(book: Book, user, page, mode: str) -> AssemblyRun:
     return _start(book, user, mutate)
 
 
-def dismiss_suggestion(book: Book, user, block_id: str, action: str = "dismiss") -> AssemblyRun:
+def dismiss_suggestion(
+    book: Book, user, block_id: str, action: str = "dismiss", replace_edited: bool = False
+) -> AssemblyRun:
     """Dismiss the heading suggestion of paragraph `block_id` for good (`dismissed_suggestions`).
 
     Starts a run.
@@ -432,6 +457,7 @@ def dismiss_suggestion(book: Book, user, block_id: str, action: str = "dismiss")
         raise AssemblyError("إجراء غير معروف.")
     if not isinstance(block_id, str) or not re.fullmatch(r"p[0-9]+", block_id):
         raise AssemblyError("معرّف الفقرة غير صالح.")
+    check_edited(book, replace_edited)
 
     def mutate(settings: dict) -> None:
         stored = settings.get("dismissed_suggestions")
@@ -457,7 +483,7 @@ def _line_ids(values) -> list[int]:
     return list(dict.fromkeys(out))
 
 
-def set_block_roles(book: Book, user, line_ids, role: str) -> AssemblyRun:
+def set_block_roles(book: Book, user, line_ids, role: str, replace_edited: bool = False) -> AssemblyRun:
     """Set the role of a block's lines through the review service (one revision per changed line), then
     start a run (D38: a heading is a line fact, recorded and undoable like any review action).
 
@@ -472,6 +498,7 @@ def set_block_roles(book: Book, user, line_ids, role: str) -> AssemblyRun:
     lines = list(Line.objects.filter(pk__in=ids).select_related("page"))
     if len(lines) != len(ids) or any(line.page.book_id != book.pk for line in lines):
         raise AssemblyNotFound("السطر غير موجود في هذا الكتاب.")
+    check_edited(book, replace_edited)  # before any line changes
     try:
         with transaction.atomic():
             for line in sorted(lines, key=lambda item: (item.page.number, item.order, item.pk)):
@@ -523,6 +550,7 @@ def run_assembly(run_id: int) -> AssemblyRun | None:
         )
         _set_stage(run, "save")
         _save(run, book, options, loaded, result, started)
+        _render_pages(run, book)
     except Exception as exc:  # noqa: BLE001 - reported on the run, the old manuscript stays
         log.exception("assembly run %s of book %s failed", run.pk, run.book_id)
         AssemblyRun.objects.filter(pk=run.pk).update(
@@ -533,6 +561,20 @@ def run_assembly(run_id: int) -> AssemblyRun | None:
         )
     run.refresh_from_db()
     return run
+
+
+def _render_pages(run: AssemblyRun, book: Book) -> None:
+    """The book render of the text this run wrote, asked for at once (D49): the book page opens on the
+    new pages (or on their render), and a render left over from the old text is cancelled. Nothing when a
+    newer run had already saved; a failure to ask never fails the run."""
+    from publishing import engine  # other app: lazy import
+
+    if not Manuscript.objects.filter(book_id=book.pk, run_id=run.pk).exists():
+        return
+    try:
+        engine.render_after_assembly(book)
+    except Exception:  # noqa: BLE001 - the run is saved; the book page asks again when it opens
+        log.warning("could not ask for the pages of book %s after run %s", book.pk, run.pk, exc_info=True)
 
 
 def _save(
@@ -702,6 +744,7 @@ def assembly_options(options: Settings) -> dict:
         "footnote_numbering": options.footnote_numbering,
         "include_unreviewed": options.include_unreviewed,
         "strip_tatweel": options.strip_tatweel,
+        "strip_running_heads": options.strip_running_heads,
     }
 
 
@@ -710,7 +753,8 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
 
     `{exists, version, assembled_at, run: {id, status, stage, error} | None, stale, stale_pages,
     warnings_count, stats}` plus `active` (a run is queued or running), `options` (the stored
-    assembly options) and `unreviewed_pages` (pages OCR'd and not reviewed yet). `rows` are the
+    assembly options), `unreviewed_pages` (pages OCR'd and not reviewed yet) and `edited` (the text
+    was saved from the book page since the last whole-book run: D41, D49). `rows` are the
     book's `(id, number, status)` page rows when the caller already has them. A book never assembled
     costs one query (two without `rows`); an assembled one two more (the manuscript with its run, the
     page signatures). The document itself is never loaded here.
@@ -734,6 +778,7 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
         "stats": {},
         "options": assembly_options(options),
         "unreviewed_pages": 0,
+        "edited": False,
     }
     if latest is None and rows is None:
         # Manuscripts are only written by runs: never assembled, so only the pending count is needed.
@@ -750,6 +795,7 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
             "id",
             "book_id",
             "version",
+            "origin",
             "updated_at",
             "run",
             "run__finished_at",
@@ -769,6 +815,7 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
         assembled_at=assembled.isoformat() if assembled else None,
         warnings_count=len(run.warnings or []) if run is not None else 0,
         stats=dict(run.stats or {}) if run is not None else {},
+        edited=manuscript.origin == Manuscript.Origin.EDITOR,
     )
     if run is not None:
         pages = stale_pages(run.included, rows, options)
@@ -786,6 +833,7 @@ def manuscript_urls(book: Book) -> dict:
         "roles": reverse("api:manuscript_roles", args=[book.pk]),
         "suggestions": reverse("api:manuscript_suggestion", args=[book.pk]),
         "page": reverse("assembly:manuscript", args=[book.pk]),
+        "book": reverse("editor:layout", args=[book.pk]),
         "document": reverse("assembly:document", args=[book.pk]),
     }
 

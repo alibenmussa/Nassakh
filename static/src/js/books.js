@@ -210,7 +210,7 @@ document.addEventListener('alpine:init', () => {
     editor: cfg.editor || null, // Phase 5: {edited, version, drift_pages} (D41), refreshed by the poll
     layout: cfg.layout || null, // Phase 5: {trim, trim_label, page_count, rendering, rendered_at}, refreshed by the poll
     editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: layout (the book page), chapters, …
-    convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
+    convert: { open: false, busy: false, error: '', label: 'تحويل', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
     view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
     filter: 'all',
@@ -590,11 +590,13 @@ document.addEventListener('alpine:init', () => {
       return Number(l.page_count) > 0 ? 'dot-success' : 'dot-neutral';
     },
     // the convert popover (assembly/_convert_popover.html): the options remembered per book (D38)
+    // Over a text edited on the book page (D49) the popover says what a run replaces; its button confirms it.
     openConvert() {
       const m = this.manuscript || {};
-      this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, m.options || {});
+      this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, m.options || {});
       this.convert.unreviewed = Number(m.unreviewed_pages) || 0;
-      this.convert.label = m.exists ? 'إعادة التجميع' : 'تحويل';
+      this.convert.edited = Boolean(m.exists && (m.edited || this.edited));
+      this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : m.exists ? 'إعادة التجميع' : 'تحويل';
       this.convert.error = '';
       this.convert.open = true;
     },
@@ -602,13 +604,14 @@ document.addEventListener('alpine:init', () => {
       this.convert.open = false;
     },
     async submitConvert() {
-      const ok = await this.startAssembly(Object.assign({}, this.convert.options));
+      const ok = await this.startAssembly(Object.assign({}, this.convert.options, this.convert.edited ? { replace_edited: true } : {}));
       if (ok) this.convert.open = false;
       return ok;
     },
     reassemble() {
       const m = this.manuscript || {};
-      return this.startAssembly(Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, m.options || {}));
+      if (m.edited || this.edited) { this.openConvert(); return Promise.resolve(false); }
+      return this.startAssembly(Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, m.options || {}));
     },
     // POST assemble, then the manuscript view shows the assembly as it runs (§4.1).
     async startAssembly(options) {
@@ -634,6 +637,11 @@ document.addEventListener('alpine:init', () => {
         message = 'انقطع الاتصال بالخادم. تحقّق من الشبكة ثم أعد المحاولة.';
       }
       this.convert.busy = false;
+      if (!ok && data && data.edited) { // edited meanwhile (another window): the popover asks first
+        this.manuscript = Object.assign({}, this.manuscript || {}, { edited: true });
+        this.openConvert();
+        return false;
+      }
       if (!ok) { this.convert.error = message; toast(message); return false; }
       this.manuscript = Object.assign({}, this.manuscript || {}, { active: true, run: { id: data && data.run_id, status: data && data.status, stage: data && data.stage, error: '' } });
       const target = (data && data.manuscript_url) || this.manuscriptUrl;

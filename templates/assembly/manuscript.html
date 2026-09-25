@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% load nassakh %}
 {% comment %}
-Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22). Context:
+Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2; D49): where the owner checks the book's structure the assembly
+built (chapters and headings, paragraphs across pages, footnotes) before going on to the book page. Context:
 book, state (assembly.services.manuscript_state), can_edit, can_review, assembling, failed, config (the Alpine
 component's start), and the fragment context of assembly/render.py (has_document, document_html, outline,
 warning_groups, counts_text, meta). The top-bar controls live in header_actions (outside the component root) and
@@ -25,7 +26,9 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <span x-text="v.pill.text"></span>
       </span>
 
-      {# the one primary (§4.2): re-assemble when stale or failed, else copy; convert before the first run #}
+      {# the one primary (D49): re-assemble when the pages changed before any edit, or after a failure; else the #}
+      {# next step, the book page; convert before the first run #}
+      <a class="btn btn-ghost btn-sm" x-show="v.hasDocument && v.primary !== 'book' && v.bookUrl" :href="v.bookUrl" x-cloak>فتح الكتاب</a>
       {% if can_edit %}
       <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'reassemble'" @click="v.reassemble()" :disabled="v.busy" title="إعادة تجميع المخطوطة بالخيارات المحفوظة">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
@@ -36,12 +39,12 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <span>تحويل إلى كتاب</span>
       </button>
       {% endif %}
-      <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'copy'" @click="v.copyText()" :disabled="v.copying" title="ينسخ نص المخطوطة كاملًا (C)">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
-        <span>نسخ نص المخطوطة</span>
-      </button>
+      <a class="btn btn-primary btn-sm" x-show="v.primary === 'book'" :href="v.bookUrl" data-book-open title="صفحات الكتاب: تنسيقه وتحرير نصّه على صفحاته">
+        <span>فتح الكتاب</span>
+        <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+      </a>
 
-      {# «⋯» menu: the assembly options, copy, re-assemble, the dashboard #}
+      {# «⋯» menu: the assembly options, re-assemble, the keyboard, the dashboard #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
         <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
@@ -54,15 +57,10 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
           </button>
           <button type="button" class="menu-item" role="menuitem" x-show="v.hasDocument && v.primary !== 'reassemble'" :disabled="v.busy" @click="open = false; v.reassemble()">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-            <span>إعادة التجميع</span>
+            <span x-text="v.edited ? 'إعادة التجميع…' : 'إعادة التجميع'">إعادة التجميع</span>
           </button>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
-          <button type="button" class="menu-item" role="menuitem" x-show="v.hasDocument && v.primary !== 'copy'" :disabled="v.copying" @click="open = false; v.copyText()">
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
-            <span>نسخ نص المخطوطة</span>
-            <kbd class="kbd ms-auto">C</kbd>
-          </button>
           <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
             <span class="ms-menu-glyph" aria-hidden="true">?</span>
             <span>اختصارات لوحة المفاتيح</span>
@@ -86,7 +84,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
 {% block content %}
 {{ config|json_script:"manuscript-config" }}
 <div class="ms-screen" data-manuscript x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
-     :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy }"
+     :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy, 'is-edited': edited }"
      @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()" @scroll.window.passive="onScroll()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
@@ -112,9 +110,13 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
     </div>
   </div>
 
-  {# ------------------------------------------------------------ banners: stale, failed (with a document), poll trouble #}
+  {# ------------------------------------------------------------ banners: edited (D49), stale, failed (with a document), poll trouble #}
   <div class="ms-banners">
-    <div class="banner ms-stale" x-show="stale" x-cloak>
+    <div class="banner ms-edited" x-show="edited && !active" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow" x-text="editedText"></span>
+    </div>
+    <div class="banner ms-stale" x-show="stale && !edited" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
       <span class="grow">
         <span x-text="staleText"></span>
@@ -124,12 +126,6 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
           </template>
         </span>
       </span>
-      {% if can_edit %}
-      <button type="button" class="btn btn-sm" @click="reassemble()" :disabled="busy">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-        <span>إعادة التجميع</span>
-      </button>
-      {% endif %}
     </div>
     <div class="banner banner-danger" role="alert" x-show="failed && hasDocument" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
@@ -223,11 +219,12 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
               <div class="menu-sep" role="separator"></div>
               <div class="menu-label">نوع الفقرة</div>
               <template x-for="r in roles" :key="r.value">
-                <button type="button" class="menu-item" role="menuitemradio" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
+                <button type="button" class="menu-item" role="menuitemradio" x-show="!edited" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
                   <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
                   <span x-text="r.label"></span>
                 </button>
               </template>
+              <p class="ms-pop-hint" x-show="edited">حُرِّر النص؛ يُغيَّر نوع الفقرة في صفحة الكتاب (نمط الفقرة).</p>
               <div class="menu-sep" role="separator"></div>
               <a class="menu-item" role="menuitem" :href="menu.reviewUrl">
                 <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
@@ -238,7 +235,9 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
           <template x-if="pop.kind === 'seam'">
             <div>
               <div class="menu-label ms-pop-state"><span x-text="seam.text"></span><span class="ms-pop-decision" :class="{ 'is-override': seam.decision === 'override' }" x-text="seam.state"></span></div>
+              <p class="ms-pop-hint" x-show="edited">حُرِّر النص؛ تُوصل الفقرات وتُفصل في صفحة الكتاب (Backspace وEnter).</p>
               {% if can_edit %}
+              <template x-if="!edited"><div>
               <button type="button" class="menu-item" role="menuitemradio" :aria-checked="seam.mode === 'split' ? 'true' : 'false'" :disabled="busy" @click="chooseSeam('split')">
                 <span class="ms-role-check" aria-hidden="true" x-text="seam.mode === 'split' ? '✓' : ''"></span>
                 <span>فصل هنا</span>
@@ -252,6 +251,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
                 <span class="ms-role-check" aria-hidden="true"></span>
                 <span>تلقائي</span>
               </button>
+              </div></template>
               <div class="menu-sep" role="separator"></div>
               {% endif %}
               <a class="menu-item" role="menuitem" :href="reviewUrl(seam.page)">
@@ -362,7 +362,6 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>قائمة الفاصل: فصل هنا، وصل بما قبلها، تلقائي</dd>
         <dt><span class="meta">Enter على رقم حاشية</span></dt><dd>عرض نصّ الحاشية</dd>
         <dt><kbd class="kbd">↓</kbd> / <kbd class="kbd">↑</kbd> <span class="meta">داخل قائمة</span></dt><dd>التنقّل بين عناصرها</dd>
-        <dt><kbd class="kbd">C</kbd></dt><dd>نسخ نص المخطوطة</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو الأصل</dd>
         <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
       </dl>

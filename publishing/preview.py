@@ -628,6 +628,15 @@ def schedule_after_edit(book: Book, chapter_id: str | None, version: int) -> Pre
     return relayout
 
 
+def render_after_assembly(book: Book) -> PreviewRender | None:
+    """After a whole-book assembly wrote a new text (D49): the book render at once, not after the settle
+    delay of an edit, so the book page opens on the new pages (or their render); `request_preview`
+    cancels a render left over from the old text. Off with `NASSAKH["PREVIEW_AUTORENDER"]`."""
+    if not settings.NASSAKH.get("PREVIEW_AUTORENDER", True):
+        return None
+    return request_preview(book, PreviewRender.Scope.BOOK)
+
+
 # ====================================================================== read models
 
 

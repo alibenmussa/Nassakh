@@ -283,3 +283,19 @@ the renderer finds each note printed after its call's page, relaxes widows/orpha
 again (at most two passes). A footnote call is 0.62 of the body text size (it had come out 0.62 of the note size), and
 the page editor draws calls and scan-page marks exactly as the engine lays them out, so the paragraph being edited
 breaks its lines where the export does. `ENGINE_VERSION` is `nk-print-4`: every book lays out again when next opened.
+
+## D49 — The manuscript is the structure check before the book (2026-09-25, amends PHASE4_SPEC §4 and D41)
+Owner review of the manuscript view (reliability, simplicity, purpose). Its purpose: between the reviewed pages and the
+book page, check the structure the assembly built (chapters and headings, paragraphs joined across pages, footnotes
+linked to their markers) and fix it at its source (line roles, seam overrides), then go on to the book. So the primary
+is «فتح الكتاب» (re-assembly only when the pages changed before any edit, or after a failure); copying the whole
+text is gone (the book leaves Nassakh as Word, PDF, EPUB in Phase 6). A whole-book run asks for the book render at once,
+cancelling a render left from the old text, so the book page opens on the new manuscript (it had kept the old pages).
+Once the text is edited on the book page it is the book: the view says so, its structure tools rest (headings and
+joins are paragraph styles and Enter/Backspace there), and a whole-book run is refused (409) unless the convert
+popover's «استبدال النص المحرَّر» confirms it (the edited text stays as a snapshot). Assembly now drops running heads
+the layout left in the body: a page's short, narrow first line repeated at the top of at least three pages (OCR slips
+allowed; the chapter's own title, lower or taller, is kept and counts, as does a reviewed heading with that text); an
+option «حذف الترويسات المتكرّرة», on by default. On «كتابي» (81 pages) it removed 60 heads, joins across pages went
+from 9 to 39 and heading suggestions from 57 (mostly heads) to 10 real titles. Also: warning groups open only when
+short, the side panel scrolls as one column, and menus opened by click take the focus.

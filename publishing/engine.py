@@ -228,6 +228,13 @@ def schedule_after_edit(book, chapter_id: str | None, version: int):
     return preview.schedule_after_edit(book, chapter_id, version)
 
 
+def render_after_assembly(book):
+    """The book render right after a whole-book assembly (D49; `preview.render_after_assembly`)."""
+    from . import preview
+
+    return preview.render_after_assembly(book)
+
+
 def request_relayout(book, chapter_id: str, version: int | None = None):
     """The fast re-layout of one chapter (D47, `publishing.relayout`): the row to poll, None when the live
     layout already shows this version of the chapter."""

@@ -149,6 +149,7 @@ def test_normalize_settings_defaults_and_bad_values():
         "footnote_numbering": "page",
         "include_unreviewed": False,
         "strip_tatweel": False,
+        "strip_running_heads": True,
         "seams": {"12": "join", "14": "split"},
         "dismissed_suggestions": ["h9", "p12"],
     }
@@ -809,6 +810,85 @@ def test_dismissed_suggestions_stay_dismissed():
     )
 
 
+def test_a_title_ending_with_a_closing_quote_is_still_suggested():
+    result = run(_suggestion_pages("مختارات من «مروج الذهب»"))
+    assert blocks_of(result)[0]["attrs"]["suggestedRole"] == "heading"
+    assert pipeline.ends_sentence("قال: «انتهى.»") and not pipeline.ends_sentence("كتاب «الذهب»")
+
+
+# ---------------------------------------------------------------- running heads (D49)
+
+HEAD = (0.45, 0.55)  # a running head: narrow, centred, at the very top of the page
+
+
+def _head_book(heads=("المسعودي", "وصف بغداد"), pages=6, opening="وصف بغداد", variant=(4, "السعودي")):
+    """Pages 1–`pages`: each starts with a running head (even pages the book's, odd ones the chapter's),
+    then two full lines; the last line of a page runs on to the next page. Page 1 opens the chapter with
+    its title lower on the page (`opening`); page `variant[0]` carries an OCR slip of the book's head."""
+    out = []
+    for n in range(1, pages + 1):
+        head = heads[0] if n % 2 == 0 else heads[1]
+        if n == variant[0]:
+            head = variant[1]
+        lines = []
+        if n == 1 and opening:
+            lines.append(ln(opening, CENTRED, y=0.1, id=n * 100))
+        else:
+            lines.append(ln(head, HEAD, y=0.01, id=n * 100))
+        lines.append(ln(f"نص الصفحة {n} يبدأ هنا ويمضي", FULL, y=0.2, id=n * 100 + 1))
+        lines.append(ln(f"ويتصل بما في الصفحة {n + 1} من", FULL, y=0.22, id=n * 100 + 2))
+        out.append(pg(n, lines))
+    return out
+
+
+def _texts(result) -> list[str]:
+    return [text_of(node) for node in blocks_of(result)]
+
+
+def test_running_heads_are_dropped_and_the_pages_join_again():
+    result = run(_head_book())
+    texts = _texts(result)
+    assert not [t for t in texts if t.strip() in ("المسعودي", "السعودي")]
+    assert [t for t in texts if t.strip() == "وصف بغداد"] == ["وصف بغداد"]  # page 1: the chapter's own title
+    heads = [w for w in result.warnings if w["code"] == "running_head"]
+    assert [w["message"] for w in heads] == [
+        "حُذفت الترويسة «المسعودي» من أعلى 3 صفحات.",  # «السعودي» on page 4 is the same head
+        "حُذفت الترويسة «وصف بغداد» من أعلى صفحتين.",
+    ] or [w["message"] for w in heads] == [
+        "حُذفت الترويسة «وصف بغداد» من أعلى صفحتين.",
+        "حُذفت الترويسة «المسعودي» من أعلى 3 صفحات.",
+    ]
+    assert result.stats["running_heads"] == 5
+    assert all(w["severity"] == "info" for w in heads)
+    # with the heads gone, a paragraph cut by a page break reads as one (a pageBreak inside)
+    assert result.stats["joins"] >= 4 and any("|" in t for t in texts)
+
+
+def test_running_heads_stay_when_the_option_is_off():
+    result = run(_head_book(), strip_running_heads=False)
+    assert "running_head" not in codes(result) and result.stats["running_heads"] == 0
+    assert [t for t in _texts(result) if t.strip() in ("المسعودي", "السعودي")]
+
+
+def test_a_reviewers_heading_a_boxless_line_and_a_two_page_repeat_are_kept():
+    pages = _head_book(heads=("المسعودي", "رحلة"), pages=4, opening=None, variant=(0, ""))
+    pages[1].lines[0].role = "heading"  # page 2: the reviewer made the top line a heading
+    pages[3].lines[0].box = None  # page 4: no box, nothing to measure
+    result = run(pages)
+    texts = _texts(result)
+    assert "المسعودي" in texts  # only page 2 (a heading) and page 4 (no box) carried it: kept
+    assert texts.count("رحلة") == 2  # pages 1 and 3: two pages are not a running head
+    assert "running_head" not in codes(result)
+
+
+def test_a_reviewed_title_counts_for_its_running_head():
+    title = ln("المسعودي في سطور", CENTRED, y=0.1, role="heading", id=90)
+    first = pg(1, [title, ln("نص الفصل الأول يبدأ هنا", FULL, y=0.2, id=91)])
+    pages = [first] + _head_book(heads=("المسعودي في سطور", "المسعودي في سطور"), pages=3, opening=None)[1:]
+    texts = _texts(run(pages))
+    assert texts.count("المسعودي في سطور") == 1  # the title on page 1; its head on pages 2–3 went
+
+
 def test_no_headings_warning_is_info():
     (warning,) = [w for w in run([pg(1, [ln("نص")])]).warnings if w["code"] == "no_headings"]
     assert warning["severity"] == "info" and warning["page"] is None and warning["blockId"] is None
@@ -879,6 +959,7 @@ def test_stats_count_the_run():
         "footnotes": 1,
         "joins": 1,
         "words": 10,
+        "running_heads": 0,
     }
 
 
@@ -1378,8 +1459,14 @@ def test_manuscript_state_before_any_run_costs_one_query(db, django_assert_num_q
         "stale_pages": [],
         "warnings_count": 0,
         "stats": {},
-        "options": {"footnote_numbering": "page", "include_unreviewed": True, "strip_tatweel": True},
+        "options": {
+            "footnote_numbering": "page",
+            "include_unreviewed": True,
+            "strip_tatweel": True,
+            "strip_running_heads": True,
+        },
         "unreviewed_pages": 1,
+        "edited": False,
     }
     assert services.manuscript_state(f.book)["unreviewed_pages"] == 1
 

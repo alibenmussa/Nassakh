@@ -39,6 +39,7 @@ WARNING_LABELS: dict[str, str] = {
     "page_unreviewed": "صفحات لم تُراجَع بعد",
     "uncertain_words": "كلمات غير مؤكَّدة",
     "empty_page": "صفحات بلا نص",
+    "running_head": "ترويسات حُذفت",
     "no_headings": "لا عناوين رئيسية",
 }
 STAT_LABELS: tuple[tuple[str, str], ...] = (

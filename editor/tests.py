@@ -763,11 +763,81 @@ def test_a_full_reassembly_keeps_the_edited_text_for_good(editor_user):
     chapter = services.chapter_document(book, first)
     chapter["content"]["content"][1]["content"][0]["text"] = "نص محرَّر."
     services.save_chapter(book, first, chapter["content"], chapter["version"], editor_user)
-    assembly_services.start_assembly(book, editor_user, {"strip_tatweel": False})
+    # D49: a whole-book run over the edited text is refused until the replacement is confirmed
+    with pytest.raises(assembly_services.AssemblyEdited):
+        assembly_services.start_assembly(book, editor_user, {"strip_tatweel": False})
+    assert not ManuscriptSnapshot.objects.filter(manuscript__book=book, reason="manual").exists()
+    assembly_services.start_assembly(book, editor_user, {"strip_tatweel": False}, replace_edited=True)
     kept = ManuscriptSnapshot.objects.get(manuscript__book=book, reason="manual")
     assert kept.label.startswith("النص المحرَّر قبل إعادة التجميع") and "نص محرَّر." in json.dumps(
         kept.document, ensure_ascii=False
     )
+
+
+def _edited(user):
+    """An assembled book whose first chapter was then saved from the book page (D41)."""
+    pages, lines = assembled_book(user)
+    first = Manuscript.objects.get(book=pages.book).chapters()[0].id
+    chapter = services.chapter_document(pages.book, first)
+    chapter["content"]["content"][1]["content"][0]["text"] = "نص محرَّر."
+    services.save_chapter(pages.book, first, chapter["content"], chapter["version"], user)
+    return pages, lines
+
+
+def test_manuscript_view_actions_over_an_edited_text_wait_for_the_replacement(editor_user):
+    """D49: once the text is edited on the book page, every whole-book run of the manuscript view is refused
+    (409, `edited`) until the request confirms it; meanwhile no line role, seam or run changes."""
+    from assembly.models import AssemblyRun
+
+    pages, (_one, two, _three) = _edited(editor_user)
+    book = pages.book
+    assert assembly_services.manuscript_state(book)["edited"] is True
+    client = logged(editor_user)
+    line = two.lines.get(order=0)
+    runs = AssemblyRun.objects.filter(book=book).count()
+    settings_before = dict(book.assembly_settings or {})
+    for name, body in (
+        ("api:book_assemble", {}),
+        ("api:manuscript_seam", {"page": 2, "mode": "split"}),
+        ("api:manuscript_roles", {"line_ids": [line.pk], "role": "heading"}),
+        ("api:manuscript_suggestion", {"block_id": f"p{line.pk}", "action": "dismiss"}),
+    ):
+        response = post_json(client, reverse(name, args=[book.pk]), body)
+        assert response.status_code == 409 and response.json()["edited"] is True, name
+    line.refresh_from_db()
+    book.refresh_from_db()
+    assert line.role == "body" and AssemblyRun.objects.filter(book=book).count() == runs
+    assert dict(book.assembly_settings or {}) == settings_before
+    confirmed = post_json(
+        client,
+        reverse("api:manuscript_seam", args=[book.pk]),
+        {"page": 2, "mode": "split", "replace_edited": True},
+    )
+    assert confirmed.status_code == 202
+    assert assembly_services.manuscript_state(book)["edited"] is False  # the run replaced the edited text
+    assert Manuscript.objects.get(book=book).origin == "assembly"
+
+
+def test_a_whole_book_run_asks_for_the_book_pages_at_once(editor_user, monkeypatch):
+    """D49: the book page gets the new text laid out as soon as a run saves (not only when it opens)."""
+    from publishing import engine
+
+    asked = []
+    monkeypatch.setattr(engine, "render_after_assembly", lambda book: asked.append(book.pk))
+    pages, _ = assembled_book(editor_user)
+    assert asked == [pages.book.pk]
+
+
+def test_render_after_assembly_follows_the_autorender_setting(book, monkeypatch):
+    from django.conf import settings as django_settings
+
+    from publishing import preview
+
+    asked = []
+    monkeypatch.setattr(preview, "request_preview", lambda b, scope: asked.append((b.pk, scope)) or "row")
+    assert preview.render_after_assembly(book) is None and asked == []  # tests: autorender off
+    with override_settings(NASSAKH={**django_settings.NASSAKH, "PREVIEW_AUTORENDER": True}):
+        assert preview.render_after_assembly(book) == "row" and asked == [(book.pk, "book")]
 
 
 # ---------------------------------------------------------------- review fixes (Phase 5 backend review)

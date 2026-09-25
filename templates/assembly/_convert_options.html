@@ -1,4 +1,4 @@
-{% comment %}The assembly options (PHASE4_SPEC §4.1): footnote numbering, unreviewed pages, tatweel. Included by the
+{% comment %}The assembly options (PHASE4_SPEC §4.1): footnote numbering, unreviewed pages, tatweel, running heads (D49). Included by the
 convert popover (dashboard and manuscript view) and by the never-assembled empty state. The enclosing Alpine scope
 provides `ms` (the component holding `convert.options` and `convert.unreviewed`).{% endcomment %}
 <div class="ms-convert-fields">
@@ -17,5 +17,9 @@ provides `ms` (the component holding `convert.options` and `convert.unreviewed`)
   <label class="check ms-convert-check">
     <input type="checkbox" x-model="ms.convert.options.strip_tatweel">
     <span>حذف التطويل</span>
+  </label>
+  <label class="check ms-convert-check" title="سطر قصير يتكرّر أعلى الصفحات، مثل اسم الكتاب أو الفصل">
+    <input type="checkbox" x-model="ms.convert.options.strip_running_heads">
+    <span>حذف الترويسات المتكرّرة</span>
   </label>
 </div>

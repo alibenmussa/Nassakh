@@ -2,11 +2,13 @@
 //   manuscriptView(config) – the view: polling while a run is on (the steps ticking, the reveal), the document
 //                            swapped in place after re-runs (scroll anchored, focus restored, changed blocks
 //                            flashing), the block «⋯» and its menu, the seam menu, the footnote popover, the
-//                            source drawer, the side panel (contents with scroll spy, warnings), jump, copy and
-//                            the keyboard map
+//                            source drawer, the side panel (contents with scroll spy, warnings), jump and the
+//                            keyboard map; the top bar's primary leads on to the book page (D49), and once the
+//                            text is edited there the structure tools rest (a run would replace the edits)
 //   manuscriptBar          – the top-bar controls (base.html header_actions, outside the root) reading
 //                            Alpine.store('manuscript').view
-// Config (assembly.views.manuscript): { bookId, title, state, urls, canEdit, canReview, pageCount, countsText }.
+// Config (assembly.views.manuscript): { bookId, title, state, urls (with `book`, the book page), canEdit, canReview,
+// pageCount, countsText }.
 // The document is server-rendered (assembly/render.py) and swapped as one fragment: nothing inside the host
 // carries an Alpine binding (x-ignore); hover, focus, clicks and keys are delegated on the host.
 // One overlay (`pop`, the .ms-pop element) serves the block menu, the seam menu and the footnote: at most one
@@ -119,7 +121,6 @@
   const pagesOf = (el) => attr(el, 'data-pages').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
   const linesOf = (el) => attr(el, 'data-lines').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
   const kids = (el) => Array.from(el && el.children ? el.children : []); // HTMLCollection has no forEach / find
-  const nodes = (el) => Array.from(el && el.childNodes ? el.childNodes : []);
   const later = (fn) => { if (typeof queueMicrotask === 'function') queueMicrotask(fn); else Promise.resolve().then(fn); };
 
   // Placement of the overlay (pure, = review placePop): below the anchor, flipped above when it would leave the
@@ -161,7 +162,6 @@
     if (code === 'KeyG' || k === 'g' || k === 'G') return 'jump';
     if (code === 'KeyS' || k === 's' || k === 'S') return 'seams';
     if (code === 'KeyO' || k === 'o' || k === 'O') return 'source';
-    if (code === 'KeyC' || k === 'c' || k === 'C') return 'copy';
     if (k === ']') return 'nextWarning';
     if (k === '[') return 'prevWarning';
     if (ctx.inMenu) return null;
@@ -172,39 +172,6 @@
     return null;
   }
 
-  // The clipboard text of a block: references as [n], seams and suggestion chips dropped, words kept.
-  function textOfBlock(el) {
-    let out = '';
-    nodes(el).forEach((node) => {
-      if (node.nodeValue !== undefined && node.nodeValue !== null && !node.tagName) { out += node.nodeValue; return; }
-      if (hasClass(node, 'ms-ref')) { out += `[${attr(node, 'data-number')}]`; return; }
-      if (hasClass(node, 'ms-seam') || hasClass(node, 'ms-suggest')) { out += hasClass(node, 'ms-seam') ? ' ' : ''; return; }
-      out += textOfBlock(node);
-    });
-    return out;
-  }
-  const squeeze = (text) => String(text || '').replace(/\s+/g, ' ').trim();
-  // The manuscript as text (§4.2 copy): title, headings and paragraphs separated by blank lines, references
-  // as [n], each chapter's notes after it.
-  function manuscriptText(article) {
-    const out = [];
-    const walkNotes = (list) => {
-      kids(list).forEach((li) => {
-        const body = kids(li).find((c) => hasClass(c, 'ms-note-body'));
-        out.push(`[${attr(li, 'data-number')}] ${squeeze(body ? textOfBlock(body) : '')}`);
-      });
-    };
-    kids(article).forEach((child) => {
-      if (hasClass(child, 'ms-title')) {
-        kids(child).forEach((part) => { const t = squeeze(part.textContent); if (t) out.push(t); });
-      } else if (hasClass(child, 'ms-chapter')) {
-        kids(child).forEach((el) => {
-          if (attr(el, 'data-block')) { const t = squeeze(textOfBlock(el)); if (t) out.push(t); } else if (hasClass(el, 'ms-notes')) walkNotes(el);
-        });
-      } else if (hasClass(child, 'ms-notes')) walkNotes(child);
-    });
-    return out.join('\n\n');
-  }
   // The fragment HTML as DOM nodes (a <template> keeps the scripts inert); the tests replace it.
   function parseFragment(html) {
     const tpl = document.createElement('template');
@@ -241,7 +208,7 @@
   }
 
   window.NassakhManuscript = Object.assign(window.NassakhManuscript || {}, {
-    keyAction, arCount, relativeTime, manuscriptText, textOfBlock, parseFragment, parsePageNumber, placeAgainst, STAGE_KEYS,
+    keyAction, arCount, relativeTime, parseFragment, parsePageNumber, placeAgainst, STAGE_KEYS,
   });
 
   document.addEventListener('alpine:init', () => {
@@ -309,9 +276,9 @@
         seam: { page: 0, from: 0, mode: '', decision: 'auto', text: '', state: '' },
         note: { id: '', number: '', html: '', orphan: false, found: false },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
-        convert: { open: false, busy: false, error: '', label: 'تحويل', options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, unreviewed: 0 },
+        convert: { open: false, busy: false, error: '', label: 'تحويل', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
         busy: false, // an override is on the wire or its run is on: no second post meanwhile
-        copying: false,
+        bookUrl: urls.book || '',
         reveal: false,
         sheetOpen: false,
         pollState: 'ok', // ok | error | auth
@@ -343,6 +310,14 @@
         get assembling() { return this.phase === 'assembling'; },
         get failed() { return Boolean(this.run && this.run.status === 'error') && !this.active; },
         get stale() { return Boolean(this.state.stale) && this.hasDocument && !this.active; },
+        // D49: the text was saved from the book page since the last run: it is the book now; the structure
+        // tools here would re-assemble over it, so they rest and the book page takes the changes
+        get edited() { return Boolean(this.state.edited) && this.hasDocument; },
+        get editedText() {
+          const n = this.stalePages.length;
+          if (this.state.stale && n) return `حُرِّر نص الكتاب في صفحة الكتاب، ثم تغيّر نص ${arCount(n, PAGES)} في المراجعة: تُراجَع الفصول المتأثرة هناك.`;
+          return 'حُرِّر نص الكتاب في صفحة الكتاب، فهو النص المعتمد الآن: تُغيَّر العناوين ووصل الفقرات هناك.';
+        },
         get stalePages() { return Array.isArray(this.state.stale_pages) ? this.state.stale_pages : []; },
         get staleText() {
           const n = this.stalePages.length;
@@ -360,17 +335,19 @@
         get pill() {
           if (this.active) return { state: 'saving', text: 'قيد التجميع…' };
           if (this.failed) return { state: 'error', text: 'فشل التجميع' };
+          if (this.edited) return { state: 'saved', text: 'حُرِّر في صفحة الكتاب' };
           if (this.state.stale && this.hasDocument) return { state: 'warn', text: 'تغيّر النص بعد التجميع' };
           if (this.state.exists && this.state.assembled_at) return { state: 'saved', text: `مُجمَّعة ${relativeTime(this.state.assembled_at, this.now)}` };
           return { state: 'idle', text: '' };
         },
-        // exactly one primary: re-assemble when stale or failed (editors), copy when a document is there,
-        // convert before the first run (editors), nothing while a run is on
+        // exactly one primary (D49): re-assemble when the pages changed before any edit, or after a failure
+        // (editors); else the next step, the book page; convert before the first run (editors); nothing while
+        // a run is on
         get primary() {
           if (this.active) return '';
-          if (this.canEdit && (this.state.stale || this.failed)) return 'reassemble';
-          if (this.hasDocument) return 'copy';
-          if (this.canEdit) return 'convert';
+          if (this.canEdit && (this.failed || (this.state.stale && !this.edited)) && this.hasDocument) return 'reassemble';
+          if (this.hasDocument && this.bookUrl) return 'book';
+          if (this.canEdit && !this.hasDocument) return this.failed ? 'reassemble' : 'convert';
           return '';
         },
         reviewUrl(n) { return n ? fill(urls.review, n) : ''; },
@@ -443,9 +420,10 @@
         // ------------------------------------------------------------ starting runs
         resetConvert() {
           const s = this.state || {};
-          this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true }, s.options || {});
+          this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, s.options || {});
           this.convert.unreviewed = Number(s.unreviewed_pages) || 0;
-          this.convert.label = s.exists ? 'إعادة التجميع' : 'تحويل';
+          this.convert.edited = Boolean(s.edited && s.exists);
+          this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : s.exists ? 'إعادة التجميع' : 'تحويل';
           this.convert.error = '';
         },
         openConvert() {
@@ -457,11 +435,13 @@
         closeConvert() {
           this.convert.open = false;
         },
+        // the popover's button is the one confirmation of replacing an edited text (D49)
         async submitConvert() {
-          const ok = await this.startAssembly(Object.assign({}, this.convert.options));
+          const ok = await this.startAssembly(Object.assign({}, this.convert.options, this.convert.edited ? { replace_edited: true } : {}));
           if (ok) this.convert.open = false;
         },
         reassemble() {
+          if (this.edited) { this.openConvert(); return Promise.resolve(false); }
           return this.startAssembly(Object.assign({}, this.convert.options));
         },
         // POST assemble: the run is shown at once (the steps, or the pill over the old document), then polled.
@@ -471,9 +451,17 @@
           this.convert.error = '';
           const r = await api(urls.assemble, { method: 'POST', body: options || {} });
           this.convert.busy = false;
+          if (r.status === 409 && r.data && r.data.edited) { this.markEdited(); return false; }
           if (!r.ok) { this.convert.error = r.message; toast(r.message); return false; }
           this.beginRun(r.data, null);
           return true;
+        },
+        // The server says the text was edited meanwhile (another window, 409): the tools rest and the popover
+        // offers the replacement.
+        markEdited() {
+          this.state = Object.assign({}, this.state, { edited: true });
+          this.closePop();
+          this.openConvert();
         },
         // A 202 run answer: the state turns active locally until the poll says otherwise.
         beginRun(data, anchor) {
@@ -488,10 +476,12 @@
         // A seam / role / suggestion post: 202, then the document re-runs and swaps in place. `pendingId` is the
         // block shown as pending meanwhile; `anchor` the block ids to keep in place across the swap.
         async postRun(url, body, anchor, pendingId) {
+          if (this.edited) { toast('حُرِّر النص في صفحة الكتاب؛ غيّر البنية هناك'); return false; }
           if (this.busy) { toast('انتظر انتهاء التجميع الجاري'); return false; }
           this.busy = true;
           this.markPending(pendingId || (anchor && anchor[0]) || null);
           const r = await api(url, { method: 'POST', body });
+          if (r.status === 409 && r.data && r.data.edited) { this.busy = false; this.clearPending(); this.markEdited(); toast(r.message); return false; }
           if (!r.ok) { this.busy = false; this.clearPending(); toast(r.message); return false; }
           this.beginRun(r.data, anchor);
           return true;
@@ -647,21 +637,29 @@
         },
         // The block to keep in place across a swap: the given candidates (the seam's block, then its
         // neighbours), else the first block under the toolbar.
+        // Each candidate keeps its own place: the one found after the swap is put back where it was (a block
+        // whose role changed comes back under its other id, `p` ↔ `h`: that id is tried first, in its place).
         anchorBefore(candidates) {
           if (!blocks.length) return null;
-          let ids = Array.isArray(candidates) ? candidates.filter((id) => blockIndex.has(id)) : [];
+          let order = Array.isArray(candidates) ? candidates : [];
+          let ids = order.filter((id) => blockIndex.has(id));
           if (!ids.length) {
             const top = TOPBAR_H + TOOLBAR_H;
             const first = blocks.find((b) => rect(b).bottom > top) || blocks[0];
             ids = this.neighbours(attr(first, 'data-block'));
+            order = ids;
           }
-          return { ids, top: rect(this.blockById(ids[0])).top };
+          const tops = {};
+          ids.forEach((id) => { tops[id] = rect(this.blockById(id)).top; });
+          order.forEach((id, i) => { if (!(id in tops) && order[i + 1] in tops) tops[id] = tops[order[i + 1]]; });
+          return { ids: order.filter((id) => id in tops), tops, top: tops[ids[0]] };
         },
         anchorAfter(anchor) {
           if (!anchor) return;
           const id = anchor.ids.find((candidate) => blockIndex.has(candidate));
           if (!id || typeof window.scrollBy !== 'function') return;
-          const delta = rect(this.blockById(id)).top - anchor.top;
+          const was = anchor.tops && id in anchor.tops ? anchor.tops[id] : anchor.top;
+          const delta = rect(this.blockById(id)).top - was;
           if (Math.abs(delta) > 0.5) window.scrollBy(0, delta);
         },
         flashChanged(before) {
@@ -876,7 +874,8 @@
             return;
           }
           const seam = closest(t, '.ms-seam');
-          if (seam) { e.preventDefault(); if (this.pop.kind === 'seam' && this.pop.anchorId === attr(seam, 'data-page')) this.closePop(); else this.openSeamMenu(seam); }
+          // (a menu button: the focus goes into its menu, arrows and Enter work at once)
+          if (seam) { e.preventDefault(); if (this.pop.kind === 'seam' && this.pop.anchorId === attr(seam, 'data-page')) this.closePop(); else this.openSeamMenu(seam, { focus: true }); }
         },
         onHostKey(e) {
           const t = e.target;
@@ -960,7 +959,7 @@
         },
         toggleMenu(id) {
           const target = id || this.tools.blockId;
-          if (this.pop.kind === 'menu' && this.pop.anchorId === target) this.closePop(true); else if (target) this.openMenu(target);
+          if (this.pop.kind === 'menu' && this.pop.anchorId === target) this.closePop(true); else if (target) this.openMenu(target, { focus: true });
         },
         closeMenu(refocus) { return this.pop.kind === 'menu' ? this.closePop(refocus) : null; },
         // The block's lines take the role (through the review service, D38), then the document re-runs.
@@ -971,7 +970,10 @@
           this.closeMenu(true);
           if (role === current) return Promise.resolve(false);
           this.liveMessage = role === 'body' ? 'تصير الفقرة محتوى' : role === 'heading' ? 'تصير الفقرة عنوانًا رئيسيًا' : 'تصير الفقرة عنوانًا فرعيًا';
-          return this.postRun(urls.roles, { line_ids: linesOf(block), role }, this.neighbours(id), id);
+          // the block comes back under its other id (a paragraph `p…` becomes a heading `h…`): anchored first
+          const renamed = `${role === 'body' ? 'p' : 'h'}${String(id).slice(1)}`;
+          const anchor = renamed === id ? this.neighbours(id) : [renamed, ...this.neighbours(id)];
+          return this.postRun(urls.roles, { line_ids: linesOf(block), role }, anchor, id);
         },
         acceptSuggestion(id) { return this.setRole(id, 'heading'); },
         dismissSuggestion(id) {
@@ -1167,7 +1169,7 @@
           }
         },
 
-        // ------------------------------------------------------------ jump, copy, keyboard
+        // ------------------------------------------------------------ jump, keyboard
         jumpTarget(value) {
           const n = parsePageNumber(value);
           if (!Number.isFinite(n)) return null;
@@ -1184,14 +1186,6 @@
           this.closePop();
           const field = this.$refs && this.$refs.jump;
           if (field && field.focus) { field.focus(); if (field.select) field.select(); }
-        },
-        manuscriptText() { return article ? manuscriptText(article) : ''; },
-        async copyText() {
-          if (this.copying) return false;
-          const text = this.manuscriptText();
-          if (!text) { toast('لا نص لنسخه بعد'); return false; }
-          this.copying = true;
-          try { return await window.Nassakh.copyText(text); } finally { this.copying = false; }
         },
         openSheet() {
           this.closePop();
@@ -1229,7 +1223,6 @@
           if (action === 'jump') { e.preventDefault(); this.focusJump(); return; }
           if (action === 'seams') { this.toggleSeams(); return; }
           if (action === 'source') { if (this.focused) { e.preventDefault(); this.openSource(this.focused); } return; }
-          if (action === 'copy') { this.copyText(); return; }
           if (action === 'next' || action === 'prev') { if (this.moveFocus(action === 'next' ? 1 : -1)) e.preventDefault(); return; }
           if (action === 'nextWarning' || action === 'prevWarning') { e.preventDefault(); this.stepWarning(action === 'nextWarning' ? 1 : -1); }
         },

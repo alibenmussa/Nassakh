@@ -4,6 +4,7 @@ Pure functions over plain dataclasses; no ORM, no I/O. `assembly.services.load_b
 inputs (`PageIn` / `LineIn`, boxes as ratios of the page) and `assemble` runs the steps in order:
 
 1. `select_pages`        which pages are in, which are skipped (and break the join chain)   §2.1
+   `drop_running_heads`  the book's running heads the layout left in the body (D49)
 2. `split_paragraphs`    body lines of one page → paragraphs and headings (geometry first)   §2.3
 3. `join_pages`          seams: the last paragraph of a page joined with the next page's first §2.4
 4. `page_notes`, `link_footnotes`, `attach_orphans`, `number_footnotes`                     §2.5
@@ -20,11 +21,13 @@ the node. Diacritics are never touched; stored lines are never changed (the pipe
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import statistics
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
+from core.arabic import normalize as normalize_arabic
 from core.arabic import to_western_digits
 
 # ====================================================================== constants
@@ -97,6 +100,7 @@ CODE_ORDER: tuple[str, ...] = (
     "page_error",
     "page_unreviewed",
     "empty_page",
+    "running_head",
     "marker_unmatched",
     "note_orphan",
     "uncertain_words",
@@ -145,6 +149,7 @@ class Settings:
     footnote_numbering: str = DEFAULT_NUMBERING
     include_unreviewed: bool = True
     strip_tatweel: bool = True
+    strip_running_heads: bool = True
     seams: dict[str, str] = field(default_factory=dict)
     dismissed_suggestions: frozenset[str] = frozenset()
 
@@ -154,6 +159,7 @@ class Settings:
             "footnote_numbering": self.footnote_numbering,
             "include_unreviewed": self.include_unreviewed,
             "strip_tatweel": self.strip_tatweel,
+            "strip_running_heads": self.strip_running_heads,
             "seams": dict(sorted(self.seams.items(), key=lambda item: int(item[0]))),
             "dismissed_suggestions": sorted(self.dismissed_suggestions),
         }
@@ -212,6 +218,7 @@ def normalize_settings(raw: dict | Settings | None) -> Settings:
         footnote_numbering=numbering if numbering in NUMBERING_MODES else DEFAULT_NUMBERING,
         include_unreviewed=_as_bool(data.get("include_unreviewed"), True),
         strip_tatweel=_as_bool(data.get("strip_tatweel"), True),
+        strip_running_heads=_as_bool(data.get("strip_running_heads"), True),
         seams=seams,
         dismissed_suggestions=ids,
     )
@@ -575,6 +582,16 @@ def ends_terminal(text: str) -> bool:
     return bool(stripped) and stripped[-1] in TERMINAL
 
 
+_RE_CLOSERS_AT_END = re.compile(r"[\s»”)\]]+$")
+
+
+def ends_sentence(text: str) -> bool:
+    """True when `text` ends a sentence (`. ؟ ! :` or `?`, before any closing quote or bracket): a
+    title such as «مختارات من «مروج الذهب»» ends with a quote but not a sentence."""
+    stripped = _RE_CLOSERS_AT_END.sub("", text.translate(_NO_PLACEHOLDERS))
+    return bool(stripped) and stripped[-1] in ".؟!:?"
+
+
 _RE_ENDS_ARABIC_WORD = re.compile(f"[{_AR_LETTERS}][{_AR_MARKS}]*$")
 
 
@@ -685,6 +702,140 @@ def select_pages(pages: Iterable[PageIn], settings: Settings) -> Selection:
         skipped.append(page)
         pending_gap = [*pending_gap, n]
     return Selection(included, skipped, gaps, warnings)
+
+
+# ====================================================================== running heads (D49)
+
+RUNNING_HEAD_PAGES = 3  # the same first line on at least this many pages is a running head
+RUNNING_HEAD_WORDS = 6
+RUNNING_HEAD_WIDTH = 0.6  # at most this share of the text measure
+RUNNING_HEAD_TALLER = 1.25  # a member this much taller than its group's median is a title (kept) ...
+RUNNING_HEAD_LOWER = 0.02  # ... and so is one this much lower on its page (a chapter opening)
+_RE_NOT_LETTER = re.compile(r"[\s0-9]+")
+
+
+def head_key(text: str) -> str:
+    """A first line as running heads are compared: letters folded, no diacritics, digits, punctuation
+    or spaces (the page number printed beside a head is not part of it)."""
+    return _RE_NOT_LETTER.sub("", normalize_arabic(text, "lenient"))
+
+
+def _within(a: str, b: str, limit: int) -> bool:
+    """Whether `a` and `b` are at most `limit` edits apart (Levenshtein, stopping early)."""
+    if abs(len(a) - len(b)) > limit:
+        return False
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        for j, cb in enumerate(b, start=1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        if min(current) > limit:
+            return False
+        previous = current
+    return previous[-1] <= limit
+
+
+def heads_match(a: str, b: str) -> bool:
+    """Two head keys read as the same head: equal, or one OCR slip apart (two for a long head);
+    «المسعودي» and «السعودي» are the same head."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 4:
+        return False
+    return _within(a, b, 1 if max(len(a), len(b)) < 12 else 2)
+
+
+def _head_candidate(page: PageIn) -> LineIn | None:
+    """The page's first body line when it could be a running head: a body line (a reviewer's heading
+    never is) with a box, short and narrow, followed by more text."""
+    body = [line for line in page.lines if line.kind == BODY]
+    if len(body) < 2:
+        return None
+    first = body[0]
+    if first.role != ROLE_BODY or first.box is None or word_count(first.text) > RUNNING_HEAD_WORDS:
+        return None
+    if not head_key(first.text):
+        return None
+    measure = text_measure(body)
+    if measure is not None and first.box[2] - first.box[0] > RUNNING_HEAD_WIDTH * measure.width:
+        return None
+    return first
+
+
+def _pages_phrase(n: int) -> str:
+    if n == 1:
+        return "صفحة واحدة"
+    if n == 2:
+        return "صفحتين"
+    return f"{n} صفحات" if 3 <= n % 100 <= 10 else f"{n} صفحة"
+
+
+def drop_running_heads(pages: Sequence[PageIn]) -> tuple[list[PageIn], list[AssemblyWarning], int]:
+    """The pages without the running heads that the layout left in their body (D49), one info warning
+    per head, and the number of lines dropped.
+
+    A head is a page's first body line (short, narrow, with a box) whose text is the first line of at
+    least `RUNNING_HEAD_PAGES` pages, OCR slips allowed; books alternate two (the book's title and the
+    chapter's), each is found on its own. A member clearly taller or lower than its group is kept: that
+    is the chapter's own title on its first page. That title, or a reviewed heading with the same text,
+    counts as one of the pages (a chapter's head repeats its title), but at least two pages must carry
+    the head. Stored lines are never changed.
+    """
+    found = [(page, line, head_key(line.text)) for page in pages if (line := _head_candidate(page))]
+    lines = [line for page in pages for line in page.lines if line.kind == BODY]
+    titles = [head_key(line.text) for line in lines if line.role != ROLE_BODY]
+    parent = list(range(len(found)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(found)):
+        for j in range(i + 1, len(found)):
+            if root(i) != root(j) and heads_match(found[i][2], found[j][2]):
+                parent[root(j)] = root(i)
+    groups: dict[int, list[int]] = {}
+    for i in range(len(found)):
+        groups.setdefault(root(i), []).append(i)
+    dropped: set[int] = set()
+    warnings: list[AssemblyWarning] = []
+    for members in groups.values():
+        titled = any(heads_match(found[members[0]][2], title) for title in titles if title)
+        if len({found[i][0].number for i in members}) + titled < RUNNING_HEAD_PAGES:
+            continue
+        height = statistics.median(found[i][1].box[3] - found[i][1].box[1] for i in members)
+        top = statistics.median(found[i][1].box[1] for i in members)
+        heads = [
+            i
+            for i in members
+            if found[i][1].box[3] - found[i][1].box[1] <= RUNNING_HEAD_TALLER * height
+            and found[i][1].box[1] <= top + RUNNING_HEAD_LOWER
+        ]
+        numbers = sorted({found[i][0].number for i in heads})
+        titled = titled or len(heads) < len(members)  # the chapter's own title repeats as its head
+        if len(numbers) < 2 or len(numbers) + titled < RUNNING_HEAD_PAGES:
+            continue
+        dropped.update(found[i][1].id for i in heads)
+        texts = [found[i][1].text.strip() for i in heads]
+        text = max(set(texts), key=lambda t: (texts.count(t), -texts.index(t)))
+        warnings.append(
+            AssemblyWarning(
+                "running_head",
+                "info",
+                numbers[0],
+                f"حُذفت الترويسة «{text}» من أعلى {_pages_phrase(len(numbers))}.",
+                line_ids=sorted(found[i][1].id for i in heads),
+            )
+        )
+    if not dropped:
+        return list(pages), [], 0
+
+    def without(page: PageIn) -> PageIn:
+        return dataclasses.replace(page, lines=[line for line in page.lines if line.id not in dropped])
+
+    return [without(page) for page in pages], warnings, len(dropped)
 
 
 # ====================================================================== 2.3 paragraphs inside a page
@@ -1300,8 +1451,8 @@ def number_footnotes(blocks: Sequence[Block], mode: str) -> None:
 
 
 def suggest_headings(blocks: Sequence[Block], dismissed: frozenset[str] | set[str]) -> None:
-    """Mark heading suggestions (never applied): a paragraph of 1–2 centred lines, not ending with
-    terminal punctuation, at most 8 words, followed by a paragraph, and not dismissed."""
+    """Mark heading suggestions (never applied): a paragraph of 1–2 centred lines, not ending a
+    sentence, at most 8 words, followed by a paragraph, and not dismissed."""
     for index, block in enumerate(blocks):
         block.suggested = None
         if block.kind != "paragraph" or not 1 <= len(block.lines) <= MAX_SUGGESTION_LINES:
@@ -1310,7 +1461,7 @@ def suggest_headings(blocks: Sequence[Block], dismissed: frozenset[str] | set[st
             continue
         text = block.rich.plain()
         words = word_count(text)
-        if not words or words > MAX_SUGGESTION_WORDS or ends_terminal(text):
+        if not words or words > MAX_SUGGESTION_WORDS or ends_sentence(text):
             continue
         following = blocks[index + 1] if index + 1 < len(blocks) else None
         if following is None or following.kind != "paragraph":
@@ -1554,6 +1705,10 @@ def assemble(
     line_page = {line.id: page.number for page in selection.included for line in page.lines}
 
     stage("paragraphs")
+    head_warnings: list[AssemblyWarning] = []
+    heads = 0
+    if options.strip_running_heads:
+        selection.included, head_warnings, heads = drop_running_heads(selection.included)
     page_blocks = [(page, split_paragraphs(page)) for page in selection.included]
     empty = [
         AssemblyWarning("empty_page", "info", page.number, f"الصفحة {page.number} بلا نص في المتن.")
@@ -1598,12 +1753,14 @@ def assemble(
             *heading_warnings(blocks),
             *page_warnings,
             *empty,
+            *head_warnings,
             *footnote_warnings,
             *uncertain_warnings(selection.included, blocks),
         ]
     )
     document = build_document(blocks, meta, options, seams)
     stats = compute_stats(selection, blocks, seams)
+    stats["running_heads"] = heads
     return Result(
         document, [w.as_dict() for w in warnings], stats, seams, [page.id for page in selection.included]
     )

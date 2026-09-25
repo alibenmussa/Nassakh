@@ -218,7 +218,7 @@ state. Everything reachable by keyboard.
 ### 4.2 Manuscript view `/books/<id>/manuscript/`
 - **Top bar**: title «المخطوطة» with the book title as meta; a status pill (`= rv-save`): «مُجمَّعة قبل 5 دقائق»,
   «قيد التجميع…», «تغيّر النص بعد التجميع», «فشل التجميع»; the primary: «إعادة التجميع» when stale or failed, else
-  «نسخ نص المخطوطة»; «⋯» menu: assembly options (the same popover), copy, «لوحة الكتاب».
+  «فتح الكتاب» (D49: no copy); «⋯» menu: assembly options (the same popover), re-assembly, «لوحة الكتاب».
 - **Toolbar** (the dashboard's): segmented «فواصل الصفحات: إظهار | إخفاء» (S), jump «إلى صفحة…» (G, scrolls to the
   first block from that page), counts («214 صفحة · 38 فصلًا · 612 حاشية»).
 - **Document column** (max 720 px, centred in its column): the book face (**Amiri**, vendored from the system font
