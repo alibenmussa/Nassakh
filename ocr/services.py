@@ -1217,12 +1217,29 @@ class ComposedPage:
     total_tokens: int
 
 
+def _page_geometry(page: Page) -> tuple[list[dict], np.ndarray | None]:
+    """The page's detected line bands (`Preprocess.line_boxes`) and gray image, which fit Tesseract's
+    word boxes to the printed lines (`alignment.fit_lines`); `[]` / None for what is missing."""
+    try:
+        pre = page.preprocess
+    except ObjectDoesNotExist:
+        return [], None
+    try:
+        gray = _load_field_image(pre.gray_image, "الرمادية")
+    except (OcrError, OSError, ValueError):
+        log.warning("page %s: no gray image to fit the word boxes to", page.pk)
+        gray = None
+    return list(pre.line_boxes or []), gray
+
+
 def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> ComposedPage:
     """Build the lines and the final text of a page from its runs without touching the database.
 
     `region_texts` defaults to `_collect_region_texts(page)` (the latest runs); a dry run passes
-    its own. Tokens go through the word-chooser hook (`ocr.chooser`, D26, off by default). A first
-    or last line of the page that is only a page number is dropped (see `finalize_page`). A region
+    its own. Tesseract's word boxes are fitted to the page's printed lines (its line bands; its gray
+    image splits the ink Tesseract read as one word, `_page_geometry` and `alignment.build_lines`).
+    Tokens go through the word-chooser hook (`ocr.chooser`, D26, off by default). A first or last
+    line of the page that is only a page number is dropped (see `finalize_page`). A region
     whose tokens are anchored well enough (`MIN_ANCHOR_RATIO`) reports its lines that still look
     merged in `merged`; with poor anchoring the line split itself is a guess.
     """
@@ -1235,7 +1252,8 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
     total_tokens = anchored = 0
     has_geometry = False
     order = 0
-    built_per_region = [build_lines(rt.text, rt.alt_text, rt.tess_lines) for rt in region_texts]
+    bands, gray = _page_geometry(page) if any(rt.tess_lines for rt in region_texts) else ([], None)
+    built_per_region = [build_lines(rt.text, rt.alt_text, rt.tess_lines, bands, gray) for rt in region_texts]
     # Safety net: a first / last line of the page that is only a page number is dropped from the
     # lines and the text; its number is kept as metadata (`printed_number`). When the text comes
     # from region crops of a page with a page-number region, that region already holds the number.

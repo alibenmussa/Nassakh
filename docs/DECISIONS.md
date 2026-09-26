@@ -357,3 +357,16 @@ split off a number («2 ه» for «٥٢», «4 ه ق» for «٥٥٤ ق») gets i
 - **D61** PDF for print (TrimBox, optional bleed and crop marks) and for screen (clean outline, RTL reading) are fresh
   final renders through the book page's engine, so they have its pages. No PDF/X or PDF/A claim.
 - D62 (the Word calibration results) is recorded after the owner's calibration pass.
+
+## D63 — Word boxes: clip, fill, clamp, keep marks in their gaps, flag weak boxes (2026-09-26)
+An audit of book 22 (6 pages, 1,462 tokens, every box checked against the ink) found 250 bad word boxes: Tesseract's own
+boxes overrunning the neighbour, unused Tesseract words never given to the tokens of a gap, punctuation paired with any
+mark, Latin-looking misreads paired left to right, and boxes spanning two printed lines. `ocr/alignment.py` now clips a
+box where its right-hand neighbour starts, pairs a gap's unused Tesseract words by position (or splits their ink at clean
+gaps), clamps every word and line box to its printed line band, lets a mark match only a mark of its kind inside the gap
+of its matched neighbours, orders Latin-looking evidence by position under Arabic tokens, and marks a box `bq: "weak"`
+when it overlaps a neighbour by > 30 %, is taller than 1.35 pitches or far wider than its letters. A weak box is drawn
+dashed in review and is never a numbers-pass area. Book 22: right word boxes 1,066 → 1,166, too wide 50 → 13, two-line
+boxes 31 → 0, missing 103 → 61. Book 19 (in memory): boxes overlapping a neighbour 113 → 1. Existing pages change only
+with `manage.py rebuild_lines` (book 22 rebuilt). Next: a position-aware matcher, the dropped-line rescue, an upscaled
+Tesseract pass for low-resolution scans (measured worse alone).

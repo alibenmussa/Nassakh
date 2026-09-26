@@ -758,7 +758,11 @@
 
       boxClass(line, tok, i) {
         const ref = { lineId: line.id, index: i };
-        return { 'is-open': this.isUnresolved(tok), 'is-hot': this.same(this.hot, ref) || this.same(this.focus, ref) };
+        return {
+          'is-open': this.isUnresolved(tok),
+          'is-hot': this.same(this.hot, ref) || this.same(this.focus, ref),
+          'is-weak': tok.bq === 'weak', // the alignment is unsure of this box: drawn dashed
+        };
       },
 
       // D32: what the line is in the book (body text, main heading, subheading); undo restores it.

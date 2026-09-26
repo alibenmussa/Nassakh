@@ -12,7 +12,8 @@ The pass, for one finalised page (`read_page_numbers`):
    books, 0–12 % in Western ones; v0.3 33–82 % against 0 %).
 2. `number_areas`: where each number token sits: its word box, else the gap between its nearest
    neighbours that have one (right to left: the word before it is on its right). Numbers without a
-   box that share a gap share one area.
+   box that share a gap share one area. A box the alignment marked weak (`bq: "weak"`) counts as
+   none, here and in steps 5-6 (`word_box`).
 3. Kraken reads each area as one line (`ocr.engines.kraken`, its own process); `assign` gives its
    digit runs to the area's numbers in order when the counts agree (closing up stray spaces inside a
    number if that makes them agree). A token read in its own word box whose counts do not agree takes
@@ -47,6 +48,8 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+
+from .alignment import WEAK
 
 log = logging.getLogger(__name__)
 
@@ -113,13 +116,21 @@ def is_number(token: dict) -> bool:
     return bool(token.get("digit")) or bool(_DIGIT.search(str(token.get("t") or "")))
 
 
+def word_box(token: dict) -> list | None:
+    """A token's word box, or None without one or when the alignment was unsure of it (`bq: "weak"`,
+    `ocr.alignment.weak_boxes`): such a box is no area to read and no edge of a gap."""
+    box = token.get("bbox")
+    return box if box and token.get("bq") != WEAK else None
+
+
 def number_areas(tokens: list[dict], line_bbox: list[int]) -> list[Area]:
     """The areas of a line's number tokens (reading order, right to left on the page).
 
     A token with a word box is read in that box (the runner adds a margin of 30 % of its height: the
     set-up that read 92 % of the labelled numbers). One without is read in the gap between its nearest
     neighbours that have a box (the word before it is on its right: the gap's right edge is that
-    word's left edge), or the line's edge, at the line's height; tokens of one gap share it.
+    word's left edge), or the line's edge, at the line's height; tokens of one gap share it. A weak
+    box counts as none (`word_box`).
     """
     lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
     areas: list[Area] = []
@@ -127,13 +138,13 @@ def number_areas(tokens: list[dict], line_bbox: list[int]) -> list[Area]:
     for i, token in enumerate(tokens):
         if not is_number(token):
             continue
-        box = token.get("bbox")
+        box = word_box(token)
         if box:
             areas.append(Area([int(v) for v in box], [i]))
             continue
-        right = next((int(tokens[j]["bbox"][0]) for j in range(i - 1, -1, -1) if tokens[j].get("bbox")), lx1)
+        right = next((int(word_box(tokens[j])[0]) for j in range(i - 1, -1, -1) if word_box(tokens[j])), lx1)
         left = next(
-            (int(tokens[j]["bbox"][2]) for j in range(i + 1, len(tokens)) if tokens[j].get("bbox")), lx0
+            (int(word_box(tokens[j])[2]) for j in range(i + 1, len(tokens)) if word_box(tokens[j])), lx0
         )
         if right - left < 3:
             continue
@@ -347,19 +358,20 @@ def digitless_dates(tokens: list[dict]) -> list[tuple[int, int]]:
 def letter_area(tokens: list[dict], i: int, line_bbox: list[int]) -> tuple[list[int], str, bool] | None:
     """Letter token `i`'s own area: `(bbox, Qari's reading of the area without the letter, is its
     box)`. Its word box; else the gap between its boxed neighbours when nothing but punctuation shares
-    it (a gap holding words or numbers too says nothing of where the letter is: None)."""
+    it (a gap holding words or numbers too says nothing of where the letter is: None). Weak boxes
+    count as none (`word_box`)."""
     token = tokens[i]
     rest = LETTER_TOKEN.sub(r"\1\3", str(token.get("t") or ""))
-    if token.get("bbox"):
-        return [int(v) for v in token["bbox"]], rest, True
+    if word_box(token):
+        return [int(v) for v in word_box(token)], rest, True
     lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
-    right = next((j for j in range(i - 1, -1, -1) if tokens[j].get("bbox")), None)
-    left = next((j for j in range(i + 1, len(tokens)) if tokens[j].get("bbox")), None)
+    right = next((j for j in range(i - 1, -1, -1) if word_box(tokens[j])), None)
+    left = next((j for j in range(i + 1, len(tokens)) if word_box(tokens[j])), None)
     inside = range(right + 1 if right is not None else 0, left if left is not None else len(tokens))
     if any(_WORDISH.search(str(tokens[j].get("t") or "")) for j in inside if j != i):
         return None
-    x1 = int(tokens[right]["bbox"][0]) if right is not None else lx1
-    x0 = int(tokens[left]["bbox"][2]) if left is not None else lx0
+    x1 = int(word_box(tokens[right])[0]) if right is not None else lx1
+    x0 = int(word_box(tokens[left])[2]) if left is not None else lx0
     if x1 - x0 < 3:
         return None
     text = "".join(rest if j == i else str(tokens[j].get("t") or "") for j in inside)
@@ -429,9 +441,9 @@ def date_area(tokens: list[dict], first: int, last: int, line_bbox: list[int]) -
     """Where the date `tokens[first:last + 1]` is: its tokens' boxes, else the gap between its nearest
     boxed neighbours (the word before it is on its right), at the line's height, when no number and no
     bracket shares that gap (one could be another date, read in the date's place: None). Words may:
-    Kraken reads no bracketed date out of them."""
+    Kraken reads no bracketed date out of them. Weak boxes count as none (`word_box`)."""
     lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
-    boxes = [t["bbox"] for t in tokens[first : last + 1] if t.get("bbox")]
+    boxes = [word_box(t) for t in tokens[first : last + 1] if word_box(t)]
     if len(boxes) == last - first + 1:
         return [
             min(b[0] for b in boxes),
@@ -439,7 +451,7 @@ def date_area(tokens: list[dict], first: int, last: int, line_bbox: list[int]) -
             max(b[2] for b in boxes),
             max(b[3] for b in boxes),
         ]
-    boxed = [bool(t.get("bbox")) for t in tokens]
+    boxed = [bool(word_box(t)) for t in tokens]
     right = first if boxed[first] else next((j for j in range(first - 1, -1, -1) if boxed[j]), None)
     left = last if boxed[last] else next((j for j in range(last + 1, len(tokens)) if boxed[j]), None)
     start = 0 if right is None else (right if right == first else right + 1)
@@ -447,8 +459,8 @@ def date_area(tokens: list[dict], first: int, last: int, line_bbox: list[int]) -
     others = (tokens[j] for j in range(start, end) if not first <= j <= last)
     if any(is_number(t) or _BRACKET.search(str(t.get("t") or "")) for t in others):
         return None
-    x1 = lx1 if right is None else int(tokens[right]["bbox"][2 if right == first else 0])
-    x0 = lx0 if left is None else int(tokens[left]["bbox"][0 if left == last else 2])
+    x1 = lx1 if right is None else int(word_box(tokens[right])[2 if right == first else 0])
+    x0 = lx0 if left is None else int(word_box(tokens[left])[0 if left == last else 2])
     return [x0, ly0, x1, ly1] if x1 - x0 >= 3 else None
 
 
@@ -491,7 +503,8 @@ def date_reading(
 def replace_date(tokens: list[dict], first: int, last: int, reading: str) -> dict:
     """The date's tokens become one token holding Kraken's `reading` (with what Qari read before its
     «(» and after its «)»); Qari's reading of the date is kept under `qari` and stays offered as the
-    second reading, as a letter's does; low (D17). Returns it."""
+    second reading, as a letter's does; low (D17); its box is the union of its tokens' boxes when they
+    all have one (weak when one of them was). Returns it."""
     group = tokens[first : last + 1]
     text = " ".join(str(t.get("t") or "") for t in group)
     head, tail = text[: text.index("(")], text[text.rindex(")") + 1 :]
@@ -515,6 +528,8 @@ def replace_date(tokens: list[dict], first: int, last: int, reading: str) -> dic
         "src": "kraken",
         "qari": {"t": text, "alt": None, "tess": None},
     }
+    if bbox and any(t.get("bq") == WEAK for t in group):
+        token["bq"] = WEAK
     tokens[first : last + 1] = [token]
     return token
 
@@ -722,7 +737,7 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
             continue
         tokens = line.tokens
         numbers = assign([tokens[i] for i in area.tokens], row.get("chars") or [])
-        own_box = len(area.tokens) == 1 and bool(tokens[area.tokens[0]].get("bbox"))
+        own_box = len(area.tokens) == 1 and bool(word_box(tokens[area.tokens[0]]))
         if numbers is None and own_box:
             whole = box_text(row.get("chars") or [])
             gave(line, bool(whole) and apply_reading(tokens[area.tokens[0]], whole=whole))

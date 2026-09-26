@@ -48,8 +48,9 @@ MAX_TYPED_WORDS = 6
 MAX_TYPED_CHARS = 120
 MAX_LINE_CHARS = 2000
 # `src`: "kraken" for a number the numbers pass read (D50): its one reading, confirmed or typed; where
-# Qari wrote a letter for it (D51) Qari's letter is its `alt`
-TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "res", "src")
+# Qari wrote a letter for it (D51) Qari's letter is its `alt`. `bq`: "weak" on a box the alignment is
+# unsure of (`ocr.alignment.weak_boxes`; drawn dashed). `normalize_token` keeps every stored key.
+TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "bq", "res", "src")
 
 
 class ReviewError(Exception):
