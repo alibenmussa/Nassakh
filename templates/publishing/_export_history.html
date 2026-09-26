@@ -1,18 +1,25 @@
 {% comment %}«السجل» (PHASE6_SPEC §8.3): every file of every format, newest first (at most 30, the retention keeps fewer),
-in the ed-snap look. Line 1: a dot, then «Word · كتابي.docx · 318 KB» (running «… · قيد الإخراج · {step}», failed
-«… · تعذّر الإخراج», cancelled «… · أُلغي»); line 2 (meta): the relative time (the absolute one in its title), the
-author, the options, «تغيّر النص بعد هذا الإخراج». «تنزيل» while the file is there. Before Alpine mounts: two skeleton
-rows. Inside exportPage.{% endcomment %}
-<section class="ex-block ex-history" aria-labelledby="ex-history-title" data-history>
-  <div class="ex-head">
-    <h2 class="ex-title" id="ex-history-title">السجل</h2>
-    <span class="meta" x-show="items.length" x-cloak><bdi class="num" x-text="items.length"></bdi></span>
+as the last card, across the page. The head: a clock, the title, «4 ملفات». A row: the format's icon with the
+status dot at its corner; line 1 «Word · كتابي.docx · 318 KB» (running «… · قيد الإخراج · {step}», failed «… · تعذّر
+الإخراج», cancelled «… · أُلغي»); line 2 (meta): the relative time (the absolute one in its title), the author, the
+options, «تغيّر النص بعد هذا الإخراج»; «تنزيل» on the end side while the file is there. Before Alpine mounts: two
+skeleton rows. Inside exportPage.{% endcomment %}
+<section class="ex-card ex-history" aria-labelledby="ex-history-title" data-history>
+  <div class="ex-card-head">
+    <span class="ex-card-icon" aria-hidden="true"><svg class="icon"><use href="#i-clock"/></svg></span>
+    <div class="ex-card-heading">
+      <h2 class="ex-title" id="ex-history-title">السجل</h2>
+    </div>
+    <span class="meta ex-head-meta" x-show="items.length" x-cloak x-text="itemsText"></span>
   </div>
   <div class="ed-snap-skeleton" x-show="false" aria-hidden="true"><span></span><span></span></div>
   <ul class="ex-rows" x-cloak>
     <template x-for="row in items" :key="row.id">
       <li class="ed-snap ex-row" :class="'is-' + row.status">
-        <span class="dot" :class="historyDot(row)" aria-hidden="true"></span>
+        <span class="ex-row-icon" aria-hidden="true">
+          <svg class="icon"><use :href="'#' + formatIcon(row.format)"/></svg>
+          <span class="dot" :class="historyDot(row)"></span>
+        </span>
         <span class="ed-snap-body">
           <span class="ed-snap-label" :title="row.filename"><template x-for="(p, i) in historyParts(row)" :key="i"><span><span x-show="i" aria-hidden="true"> · </span><bdi x-text="p"></bdi></span></template></span>
           <span class="meta"><span :title="absTime(row)" x-text="historyWhen(row)"></span><span x-text="historyRest(row)"></span></span>

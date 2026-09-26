@@ -1,4 +1,4 @@
-// The export page «الإخراج» (PHASE6_SPEC §8, D59): readiness, one block per format, the history.
+// The export page «الإخراج» (PHASE6_SPEC §8, D59): the readiness card, one card per format, the history card.
 //   exportPage(config) – config is the §3.2 payload (`publishing.exports.page_payload`, the same object as
 //                        GET `api:exports`):
 //     - every format the payload lists is drawn from its `form`: a field with `choices` is a segmented control
@@ -34,6 +34,13 @@
   // A field whose payload carries no label of its own (the Word kashida of §3.2).
   const FIELD_LABELS = { kashida: 'الكشيدة' };
   const LEVEL_DOT = { warn: 'dot-warning', info: 'dot-neutral', success: 'dot-success' };
+  const LEVEL_ICON = { warn: 'i-alert', info: 'i-info', success: 'i-check-circle' };
+  // What the page draws for a format key (the payload carries its label and extension, not its look): a generic
+  // stroke icon of base.html's sprite and the one-line purpose under its name.
+  const FORMAT_ICON = { docx: 'i-doc', print_pdf: 'i-printer', screen_pdf: 'i-monitor', epub: 'i-book-open' };
+  const FORMAT_PURPOSE = { docx: 'للتحرير والمراجعة', print_pdf: 'للمطبعة', screen_pdf: 'للقراءة على الشاشة', epub: 'للقارئات الإلكترونية' };
+  const NOTES = ['ملاحظة واحدة', 'ملاحظتان', 'ملاحظات', 'ملاحظة'];
+  const FILES = ['ملف واحد', 'ملفان', 'ملفات', 'ملفًا'];
 
   // ---------------------------------------------------------------- pure helpers (exported for the tests)
   const M = () => root.NassakhManuscript || {};
@@ -46,6 +53,9 @@
   // «2026-09-26 10:02» (the `title` of a relative time)
   const absTime = (iso) => String(iso || '').slice(0, 16).replace('T', ' ');
   const levelDot = (level) => LEVEL_DOT[level] || 'dot-neutral';
+  const levelIcon = (level) => LEVEL_ICON[level] || 'i-info';
+  const formatIcon = (key) => FORMAT_ICON[key] || 'i-doc';
+  const formatPurpose = (key) => FORMAT_PURPOSE[key] || '';
 
   // «17×24 سم · 85 صفحة · 6 فصول · Simplified Arabic 13 نقطة»; it ends «لم تُرتَّب الصفحات بعد» with no layout
   // and «يُحسب…» while one renders.
@@ -257,9 +267,30 @@
       get metaText() { return metaLine(this.book.layout); },
       get warnCount() { return this.readiness.filter((r) => r.level === 'warn').length; },
       get availableCount() { return this.formats.filter((f) => f.available).length; },
-      // «إخراج Word» is the primary while it is the only format; with more, none of them is *the* next step
+      // true while this is the only available format (the 6a payload); every card's «إخراج …» is drawn primary
+      // now, so the template no longer reads it
       isPrimary(f) { return Boolean(f.available) && this.availableCount === 1; },
       levelDot,
+      levelIcon,
+      formatIcon,
+      formatPurpose,
+      // the readiness head: the rows that are notes (every level but the all-clear one) as «3 ملاحظات», and its
+      // tone: warn while a warning is left, info with notes only, success when the book is clear
+      get noteCount() { return this.readiness.filter((r) => r.level !== 'success').length; },
+      get noteText() { return this.noteCount ? count(this.noteCount, NOTES) : ''; },
+      get readyLevel() { return this.warnCount ? 'warn' : this.noteCount ? 'info' : 'success'; },
+      // a clear book: the all-clear row's message («لا ملاحظات؛ الكتاب جاهز للإخراج.») is the head's line, no rows
+      get clearText() {
+        if (this.noteCount) return '';
+        const clear = this.readiness.find((r) => r.level === 'success');
+        return clear ? clear.message : '';
+      },
+      get itemsText() { return this.items.length ? count(this.items.length, FILES) : ''; },
+      // the card's foot: the running strip stands in for «إخراج …» while an export runs; the actions row shows
+      // when there is a button to press or a file to download
+      isRunning(f) { return isActive(f && f.active); },
+      hasFile(s) { return Boolean(s && (s.kind === 'done' || s.kind === 'stale') && s.row && s.row.download_url); },
+      hasActions(f) { return (this.canEdit && !this.isRunning(f)) || this.hasFile(this.stateOf(f)); },
       // the head's meta after the extension (which sits in its own LTR <bdi>): « · غير متاحة بعد», « · لم يُخرَج بعد»
       headNote(f) {
         if (!f.available) return ' · غير متاحة بعد';
@@ -508,7 +539,7 @@
 
   root.NassakhExport = Object.assign(root.NassakhExport || {}, {
     metaLine, fieldsOf, initialValues, stateOf, notesOf, fileWarnings, historyParts, historyTitle, historyRest, historyDot,
-    upsert, backoff, fill, absTime, moveIn, exportPage,
+    upsert, backoff, fill, absTime, moveIn, levelIcon, formatIcon, formatPurpose, exportPage,
   });
 
   document.addEventListener('alpine:init', () => {

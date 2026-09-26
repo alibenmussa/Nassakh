@@ -1,17 +1,24 @@
 {% comment %}«قبل الإخراج» (PHASE6_SPEC §7, §8.3): the book's readiness rows as the payload sends them (`readiness`,
-ready-made {code, level, message, action?}): a dot (warn, neutral for info, success), the message and, on the end
-side, the link to the fix with a mirrored chevron. The count counts the `warn` rows. Nothing here blocks an export.
-Inside exportPage.{% endcomment %}
-<section class="ex-block ex-ready" aria-labelledby="ex-ready-title" x-show="readiness.length" x-cloak data-readiness>
-  <div class="ex-head">
-    <h2 class="ex-title" id="ex-ready-title">قبل الإخراج</h2>
-    <span class="badge badge-warning" x-show="warnCount"><bdi class="num" x-text="warnCount"></bdi></span>
+ready-made {code, level, message, action?}), as the first card. The head: the tone's icon (the alert while a warning
+is left, info with notes only, a check when the book is clear), the title and what the count counts («3 ملاحظات»:
+every row but the all-clear one, amber while any of them warns). Then one row per item: its level's icon (warn amber,
+info grey, success green), the message and, on the end side, the link to the fix with a mirrored chevron. Nothing
+here blocks an export. Inside exportPage.{% endcomment %}
+<section class="ex-card ex-ready" :class="'is-' + readyLevel" aria-labelledby="ex-ready-title" x-show="readiness.length" x-cloak data-readiness>
+  <div class="ex-card-head">
+    <span class="ex-card-icon" aria-hidden="true"><svg class="icon"><use :href="'#' + levelIcon(readyLevel)"/></svg></span>
+    <div class="ex-card-heading">
+      <h2 class="ex-title" id="ex-ready-title">قبل الإخراج</h2>
+      {# the all-clear row's message sits in the head, so a clear book is one calm line #}
+      <p class="ex-card-purpose" x-show="clearText" x-text="clearText"></p>
+    </div>
+    <span class="badge ex-ready-count" :class="{ 'badge-warning': warnCount }" x-show="noteCount" x-text="noteText"></span>
   </div>
-  <ul class="bp-checks ex-checks">
+  <ul class="ex-checks" x-show="!clearText">
     <template x-for="(r, i) in readiness" :key="r.code + ':' + i">
-      <li class="bp-check ex-check" :class="'is-' + r.level">
-        <span class="dot" :class="levelDot(r.level)" aria-hidden="true"></span>
-        <span class="bp-check-label" x-text="r.message"></span>
+      <li class="ex-check" :class="'is-' + r.level">
+        <svg class="icon ex-check-icon" aria-hidden="true"><use :href="'#' + levelIcon(r.level)"/></svg>
+        <span class="ex-check-label" x-text="r.message"></span>
         <template x-if="r.action && r.action.url">
           <a class="link ex-fix" :href="r.action.url"><span x-text="r.action.label"></span><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg></a>
         </template>

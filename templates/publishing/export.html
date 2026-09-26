@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% load static %}
 {% comment %}
-The export page «الإخراج» (PHASE6_SPEC §8, D59): one reading column of blocks — «قبل الإخراج» (the readiness rows,
-linking to the fixes), one block per format the payload lists (drawn from its `form`: options, notes, one state row)
-and «السجل» (every file, newest first). Everything inside the root is `exportPage` (static/src/js/export.js) drawn
-from `config`, the §3.2 object (publishing.exports.page_payload, the same as GET api:exports), embedded as
+The export page «الإخراج» (PHASE6_SPEC §8, D59; relaid as cards): a centred grid of cards — «قبل الإخراج» (the readiness
+rows, linking to the fixes) across the top, one card per format the payload lists (drawn from its `form`: options and
+notes in the body, the state and the wide actions at the foot; two columns on wide screens, one on phones) and «السجل»
+(every file, newest first) across the bottom. Everything inside the root is `exportPage` (static/src/js/export.js)
+drawn from `config`, the §3.2 object (publishing.exports.page_payload, the same as GET api:exports), embedded as
 `export-config`; the top-bar controls live in header_actions (outside the root) and read the page through
 Alpine.store('exportPage').view. Styles: static/src/components/export.css (ex-) over the «التنسيق» classes.
 Context: book, config. Western digits everywhere.
@@ -61,22 +62,22 @@ Context: book, config. Western digits everywhere.
      @visibilitychange.document="onVisible()" @pageshow.window="onPageShow($event)">
   <p class="sr-only" role="status" aria-live="polite" x-text="live"></p>
 
-  {# before Alpine mounts: a quiet skeleton of the column (hidden by the first render) #}
+  {# before Alpine mounts: a quiet skeleton of the grid (hidden by the first render) #}
   <div class="ex-boot" x-show="false" aria-hidden="true">
     <span class="ex-boot-meta"></span>
-    <div class="ed-snap-skeleton"><span></span><span></span></div>
-    <div class="ed-snap-skeleton"><span></span><span></span></div>
+    <div class="ex-boot-grid"><div class="ex-boot-card"></div><div class="ex-boot-card"></div></div>
   </div>
 
   <p class="meta ex-meta" x-show="metaText" x-cloak x-text="metaText" data-meta></p>
+  {% if not config.can_edit %}<p class="lo-readonly meta ex-readonly" x-cloak>يبدأ الإخراج محرّر الكتاب؛ الملفات الجاهزة تُنزَّل من السجل.</p>{% endif %}
 
   {% include "publishing/_export_readiness.html" %}
 
-  {% if not config.can_edit %}<p class="lo-readonly meta ex-readonly" x-cloak>يبدأ الإخراج محرّر الكتاب؛ الملفات الجاهزة تُنزَّل من السجل.</p>{% endif %}
-
-  <template x-for="f in formats" :key="f.key">
-    {% include "publishing/_export_format.html" %}
-  </template>
+  <div class="ex-grid" data-formats>
+    <template x-for="f in formats" :key="f.key">
+      {% include "publishing/_export_format.html" %}
+    </template>
+  </div>
 
   {% include "publishing/_export_history.html" %}
 </div>

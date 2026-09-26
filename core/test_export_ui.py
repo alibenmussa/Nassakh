@@ -111,8 +111,11 @@ def test_export_page_shell_top_bar_and_config():
     # the meta line and the pre-Alpine skeleton
     assert 'class="meta ex-meta" x-show="metaText" x-cloak x-text="metaText"' in body
     assert 'class="ex-boot" x-show="false" aria-hidden="true"' in body
-    # the words: «إخراج», never «تصدير»; the page has one column of blocks, no cards
-    assert "تصدير" not in _sources() and "card" not in _sources()
+    # the words: «إخراج», never «تصدير»; the page is a grid of cards: the readiness across the top, one card per
+    # format (two columns on wide screens), the history across the bottom
+    assert "تصدير" not in _sources()
+    assert '<div class="ex-grid" data-formats>' in body
+    assert body.index("data-readiness") < body.index("data-formats") < body.index("data-history")
 
 
 def test_readiness_rows_with_their_links():
@@ -120,12 +123,20 @@ def test_readiness_rows_with_their_links():
     block = _between(body, "data-readiness", "</section>")
     assert '<h2 class="ex-title" id="ex-ready-title">قبل الإخراج</h2>' in block
     assert 'x-show="readiness.length"' in body  # no rows (no manuscript): no block
+    # the head: the tone's icon (the alert while a warning is left, a check when the book is clear) and what the
+    # count counts: «3 ملاحظات» (every row but the all-clear one), amber while any of them warns
     assert (
-        '<span class="badge badge-warning" x-show="warnCount"><bdi class="num" x-text="warnCount"></bdi>'
-        in block
+        '<section class="ex-card ex-ready" :class="\'is-\' + readyLevel" aria-labelledby="ex-ready-title" '
+        'x-show="readiness.length" x-cloak data-readiness>' in body
     )
-    assert 'x-for="(r, i) in readiness"' in block and ':class="levelDot(r.level)"' in block
-    assert 'x-text="r.message"' in block
+    assert ':href="\'#\' + levelIcon(readyLevel)"' in block
+    assert (
+        '<span class="badge ex-ready-count" :class="{ \'badge-warning\': warnCount }" x-show="noteCount" '
+        'x-text="noteText"></span>' in block
+    )
+    # a row: its level's icon (never a dot alone), the message
+    assert 'x-for="(r, i) in readiness"' in block and '<li class="ex-check" :class="\'is-\' + r.level">' in block
+    assert ':href="\'#\' + levelIcon(r.level)"' in block and 'x-text="r.message"' in block
     # the link to the fix on the end side, with a mirrored chevron
     assert '<template x-if="r.action && r.action.url">' in block
     assert '<a class="link ex-fix" :href="r.action.url"><span x-text="r.action.label"></span>' in block
@@ -135,13 +146,16 @@ def test_readiness_rows_with_their_links():
 def test_every_format_is_drawn_from_its_form_never_hardcoded():
     body = _render()
     assert 'x-for="f in formats" :key="f.key"' in body
-    block = _between(body, 'class="ex-block ex-format"', "</fieldset>")
+    block = _between(body, 'class="ex-card ex-format"', "</fieldset>")
     # a fieldset per format with an sr-only legend; a proofreader sees it disabled
     assert (
         ':data-ex-format="f.key" :disabled="!canEdit"' in block
         and 'class="sr-only" x-text="f.label"' in block
     )
-    # the head: the label, the extension in its own LTR <bdi>, «لم يُخرَج بعد» / «غير متاحة بعد»
+    # the head: the format's icon and purpose from its key (with the state's dot at the icon's corner), the label,
+    # the extension in its own LTR <bdi>, «لم يُخرَج بعد» / «غير متاحة بعد»
+    assert ':href="\'#\' + formatIcon(f.key)"' in block and 'x-text="formatPurpose(f.key)"' in block
+    assert '<span class="dot ex-head-dot" :class="stateOf(f).dot" x-show="stateOf(f).dot"></span>' in block
     assert '<bdi dir="ltr" x-text="f.extension"></bdi><span x-text="headNote(f)"></span>' in block
     assert '<template x-if="f.available">' in block
     # a field with choices: the segmented control (aria-pressed, one Tab stop, ←/→) and the chosen hint
@@ -178,12 +192,14 @@ def test_every_format_is_drawn_from_its_form_never_hardcoded():
 
 def test_the_state_row_has_every_state():
     body = _render()
-    state = _between(body, 'class="ex-state-wrap"', 'class="ex-block ex-history"')
-    # the format's button: primary while it is the only format, disabled while one runs; editors only
-    assert 'class="btn ex-go" :class="{ \'btn-primary\': isPrimary(f) }" x-show="canEdit"' in state
+    state = _between(body, 'class="ex-foot"', 'class="ex-card ex-history"')
+    # the format's wide primary button at the card's foot, disabled while the request is on the wire and given
+    # over to the running strip while an export runs; editors only
+    assert 'class="btn btn-primary ex-go" x-show="canEdit && !isRunning(f)"' in state
     assert ':disabled="!canStart(f)" @click="start(f.key)"' in state and 'x-text="goLabel(f)"' in state
-    # one state at a time, re-keyed so it cross-fades; the status line takes the focus after a start
-    assert state.count('x-for="s in [stateOf(f)]" :key="stateKey(s)"') == 3
+    # one state at a time, re-keyed so it cross-fades (the status line, «إلغاء» beside it, the details under it,
+    # «تنزيل» in the actions row); the status line takes the focus after a start
+    assert state.count('x-for="s in [stateOf(f)]" :key="stateKey(s)"') == 4
     assert 'class="ex-status" tabindex="-1" :data-ex-status="f.key"' in state  # stays: it keeps its focus
     assert state.index("data-ex-status") < state.index('x-for="s in [stateOf(f)]"')
     assert "isFresh(f, s) ? 'is-fresh' : ''" in state  # the success dot blooms in once
@@ -209,9 +225,11 @@ def test_the_state_row_has_every_state():
 
 def test_the_history_rows_and_their_empty_and_loading_states():
     body = _render()
-    history = _between(body, 'class="ex-block ex-history"', "</section>")
+    history = _between(body, 'class="ex-card ex-history"', "</section>")
     assert '<h2 class="ex-title" id="ex-history-title">السجل</h2>' in history
-    assert '<bdi class="num" x-text="items.length"></bdi>' in history
+    assert 'x-show="items.length" x-cloak x-text="itemsText"' in history  # «4 ملفات»
+    # a row: the format's icon with the status dot at its corner
+    assert ':href="\'#\' + formatIcon(row.format)"' in history
     assert 'class="ed-snap-skeleton" x-show="false" aria-hidden="true"><span></span><span></span>' in history
     assert (
         'x-for="row in items" :key="row.id"' in history
@@ -253,11 +271,15 @@ def test_the_download_symbol_and_the_compiled_css():
     app = (ROOT / "static" / "src" / "app.css").read_text(encoding="utf-8")
     assert '@import "./components/export.css";' in app
     css = CSS.read_text(encoding="utf-8")
-    assert re.search(r"\.ex-page\{[^}]*max-width:720px", css)
-    assert re.search(r"\.ex-block\{[^}]*border-top:1px solid var\(--color-border\)", css)
+    assert re.search(r"\.ex-page\{[^}]*max-width:1120px", css)
+    assert re.search(r"\.ex-grid\{[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\)", css)  # two columns
+    assert re.search(r"\.ex-card\{[^}]*border:1px solid var\(--color-border\)", css)
+    assert re.search(r"\.ex-go\{[^}]*flex:150px", css)  # the wide button (`flex: 1 1 150px`, minified)
     assert re.search(r"\.ex-dot\.is-fresh\{animation:\.3s [^}]*rv-stamp-in", css)  # the bloom, 300 ms
     assert re.search(r"\.ex-status-line\{[^}]*animation:\.2s [^}]*ex-fade-in", css)  # the cross-fade, 200 ms
-    assert re.search(r"@media \(max-width:560px\)\{[^@]*\.ex-go\{[^}]*width:100%", css)
+    assert re.search(
+        r"@media \(max-width:760px\)\{[^@]*\.ex-grid[^{]*\{[^}]*grid-template-columns:minmax\(0,1fr\)", css
+    )  # one column on phones
     assert re.search(r"prefers-reduced-motion:reduce\)\{[^@]*\.ex-dot\.is-fresh[^{]*\{animation:none", css)
 
 

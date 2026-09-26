@@ -903,6 +903,13 @@ modal would still need the readiness rows.
 
 ### 8.3 The page (desktop; the right edge is the start side)
 
+> **Amendment (2026-09-26, the owner's request after the build):** the page is a card grid. «قبل الإخراج» spans the
+> top (one calm line when clear, a count that says what it counts otherwise); the four format cards sit in two
+> columns from 760 px (one column below), each with a generic icon (document, printer, screen, open book), its name
+> and a one-line purpose, its options, and a tinted foot with the file's status and a wide primary «إخراج …» beside
+> «تنزيل»; «السجل» spans the bottom. Small text on the page is 12.5–13 px in `--color-text-2`. The mockup below shows
+> the original one-column layout.
+
 ```
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │ ⋯                                                  ‹ الكتاب    الإخراج · كتابي │  top bar
