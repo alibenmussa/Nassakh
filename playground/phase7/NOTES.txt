@@ -1,0 +1,8 @@
+Phase 7 trust probes (read-only), 2026-09-26. Scripts in this folder:
+ measure.py / features.py (+features_all.py) / evaluate.py / policy.py / policy_star.py : flags vs review outcome
+ s1_context.py / s1_support.py / s1_filtered.py : secondary-only runs (dropped words/lines)
+ dropped.py : S1-S4 signals ; rules.py : footnote rule thickness/fill ; blocks.py : one-line footnote block
+ fnzone.py / fn_assemble.py : footnote zone before the models + in-memory assembly
+ verse.py : staggered/centred verse + rhyme ; verse_spike*.py : WeasyPrint grid vs flex (RTL)
+ numwords.py : year digits vs number words ; rasm.py : dotless skeleton
+Key numbers: see the design message (D80-D91).

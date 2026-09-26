@@ -50,3 +50,4 @@ playground/word/out/
 playground/digits/results_lines_*.json
 playground/digits/*.err
 playground/ux/
+playground/phase7/*.jsonl
