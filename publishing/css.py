@@ -3,9 +3,10 @@
 `stylesheet_css(stylesheet, fonts)` writes every rule the book's pages need from the stylesheet
 (`editor.StyleSheet`, a dict of its fields or a `publishing.model.PageSetup`):
 
-- `@page` size (trim, plus bleed with crop marks when there is bleed) and **mirrored margins**: the
-  inner margin is the binding side. An Arabic book (RTL) opens with a left-hand recto, so odd pages are
-  `:left` pages with the inner margin on their right, even pages `:right` pages with it on their left.
+- `@page` size (the trim; never bleed or crop marks, which belong to the print export, D60/D61) and
+  **mirrored margins**: the inner margin is the binding side. An Arabic book (RTL) opens with a left-hand
+  recto, so odd pages are `:left` pages with the inner margin on their right, even pages `:right` pages
+  with it on their left.
 - running headers from `string-set` (`running`, set by each chapter heading and by `div.nk-run-mark`,
   shown `first-except`: never on a chapter's opening page), page numbers (bottom centre, bottom outer or
   top outer), nothing on the front matter or on blank pages.
@@ -22,12 +23,37 @@
 For a chapter (or a window, D47) rendered alone, `first_page` makes the page counter start at that
 chapter's first page in the current layout and puts that page on the right side (recto for an odd
 number); a window's first page shows the running header unless the window opens the book's text.
+
+**The PDF exports (D61, `output`: `publishing.engine.PdfOutput`)** add rules that never move a line, so
+their pages are the preview's: a clean outline (chapter titles at level 1 and section titles at level 2,
+labelled from `data-label` so a note call never leaks in; «المحتويات» at level 1; nothing for the title
+page), the note links' plain look (`.nk-note-link`, the screen PDF), and for print the bleed and crop
+marks asked for (`@page { bleed: <bleed + 6 mm slug>; marks: crop }`, so the marks sit outside the
+bleed) and pure black (every literal `#000`, and the scan marks' gray, as `device-cmyk`). The preview
+(`output=None`) is unchanged.
 """
 
 from __future__ import annotations
 
+import re
+
 from .fonts import ResolvedFonts, families, font_face_css, resolve
 from .model import PageSetup, page_setup
+
+# print colours as pure K (D61): the literal colours of the print CSS
+PURE_BLACK = "device-cmyk(0 0 0 1)"
+_CMYK: dict[str, str] = {"#000": PURE_BLACK, "#555": "device-cmyk(0 0 0 0.667)"}
+_RE_COLOUR = re.compile(r"#(?:000|555)(?![0-9A-Fa-f])")
+# the export outline (D61): chapters level 1, sections level 2, the contents level 1, no title page entry
+OUTLINE_CSS = (
+    ".nk-title-page h1, .nk-book-title { bookmark-level: none; }",
+    ".nk-contents-title { bookmark-level: 1; }",
+    ".nk-chapter-title { bookmark-level: 1; bookmark-label: attr(data-label); }",
+    ".nk-section-title { bookmark-level: 2; bookmark-label: attr(data-label); }",
+    'h1[data-label=""], h2[data-label=""] { bookmark-level: none; }',
+    # the screen PDF's call → note links look like the call (not a blue, underlined link)
+    ".nk-note-link { color: inherit; text-decoration: none; }",
+)
 
 
 def _mm(value: float) -> str:
@@ -86,10 +112,12 @@ def stylesheet_css(
     scope: str = "book",
     first_page: int = 1,
     continues: bool = False,
+    output=None,
 ) -> str:
     """The print CSS of a book for WeasyPrint (see the module docstring); `fonts` are resolved from the
     stylesheet's faces when not given. `continues`: a window that goes on from the pages before it (its
-    first page shows the running header like any page inside a chapter)."""
+    first page shows the running header like any page inside a chapter). `output` (a
+    `publishing.engine.PdfOutput`) adds the export's rules; None is the preview."""
     s = _setup(stylesheet)
     if fonts is None:
         fonts = resolve(s.body_font, s.latin_font, s.heading_font)
@@ -101,14 +129,13 @@ def stylesheet_css(
             f" font-size: {_pt(max(s.footnote_size_pt - 0.5, 6))}; color: #000; vertical-align: bottom;"
             " padding-bottom: 3mm; }"
         )
-    bleed = f" bleed: {_mm(s.bleed_mm)}; marks: crop;" if s.bleed_mm > 0 else ""
     opening = "recto" if s.chapter_opening == "recto" else "page"
     body_font = families()
     heading_font = families("heading")
     parts = [
         font_face_css(fonts),
         f"@page {{ size: {_mm(s.width_mm)} {_mm(s.height_mm)};"
-        f" margin: {_mm(s.top_mm)} {_mm(s.outer_mm)} {_mm(s.bottom_mm)} {_mm(s.inner_mm)};{bleed}"
+        f" margin: {_mm(s.top_mm)} {_mm(s.outer_mm)} {_mm(s.bottom_mm)} {_mm(s.inner_mm)};"
         f" {header} {page_box}"
         " @footnote { border-top: 0.4pt solid #000; padding-top: 1.6mm; margin-top: 4mm; } }",
         f"@page :left {{ margin-left: {_mm(s.outer_mm)}; margin-right: {_mm(s.inner_mm)}; {left_box} }}",
@@ -198,4 +225,25 @@ def stylesheet_css(
             " line-height: 1.2; color: #555; text-align: center; text-indent: 0; font-weight: normal;"
             " font-style: normal; }",
         ]
-    return "\n".join(part for part in parts if part)
+    if output is not None:
+        parts += export_rules(output)
+    css = "\n".join(part for part in parts[1:] if part)
+    if output is not None and output.is_print:
+        css = pure_black(css)
+    return "\n".join(part for part in (parts[0], css) if part)
+
+
+def export_rules(output) -> list[str]:
+    """The rules a PDF export adds (`output`: a `publishing.engine.PdfOutput`): the clean outline, and
+    for print the page's bleed and crop marks."""
+    rules = list(OUTLINE_CSS)
+    bleed = output.page_bleed_mm
+    if output.is_print and (bleed > 0 or output.crop_marks):
+        marks = " marks: crop;" if output.crop_marks else ""
+        rules.append(f"@page {{ bleed: {_mm(bleed)};{marks} }}")
+    return rules
+
+
+def pure_black(css: str) -> str:
+    """`css` with its literal colours as pure K (`#000` → `device-cmyk(0 0 0 1)`), for the print PDF."""
+    return _RE_COLOUR.sub(lambda match: _CMYK[match.group(0)], css)

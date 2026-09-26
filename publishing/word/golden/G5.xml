@@ -1,0 +1,532 @@
+### word/document.xml
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Title"/>
+        <w:spacing w:before="2064"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كتاب التجربة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkAuthor"/>
+        <w:sectPr>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مؤلف الكتاب</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOCHeading"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">المحتويات</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC1"/>
+      </w:pPr>
+      <w:r>
+        <w:fldChar w:fldCharType="begin"/>
+      </w:r>
+      <w:r>
+        <w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText>
+      </w:r>
+      <w:r>
+        <w:fldChar w:fldCharType="separate"/>
+      </w:r>
+      <w:hyperlink w:anchor="_Toc_h1" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">الفصل 1</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h1 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC1"/>
+      </w:pPr>
+      <w:hyperlink w:anchor="_Toc_h2" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">الفصل 2</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h2 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC1"/>
+        <w:sectPr>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:type w:val="oddPage"/>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:hyperlink w:anchor="_Toc_h3" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">الفصل 3</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h3 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+      <w:r>
+        <w:fldChar w:fldCharType="end"/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="0" w:name="_Toc_h1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل 1</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="0"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">(</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:footnoteReference w:id="1"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">)</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:sectPr>
+          <w:headerReference w:type="default" r:id="rId8"/>
+          <w:headerReference w:type="even" r:id="rId9"/>
+          <w:headerReference w:type="first" r:id="rId10"/>
+          <w:footerReference w:type="default" r:id="rId6"/>
+          <w:footerReference w:type="even" r:id="rId7"/>
+          <w:footerReference w:type="first" r:id="rId11"/>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:type w:val="oddPage"/>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:titlePg/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا  ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="1" w:name="_Toc_h2"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل 2</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="1"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">(</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:footnoteReference w:id="2"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">)</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:sectPr>
+          <w:headerReference w:type="default" r:id="rId12"/>
+          <w:headerReference w:type="even" r:id="rId13"/>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:type w:val="oddPage"/>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:titlePg/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا  ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="2" w:name="_Toc_h3"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل 3</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="2"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">(</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:footnoteReference w:id="3"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">)</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا  ثم يكمل النص بعد الحاشية.</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:headerReference w:type="default" r:id="rId14"/>
+      <w:headerReference w:type="even" r:id="rId15"/>
+      <w:footnotePr>
+        <w:numFmt w:val="decimal"/>
+        <w:numRestart w:val="eachPage"/>
+      </w:footnotePr>
+      <w:type w:val="oddPage"/>
+      <w:pgSz w:w="9638" w:h="13606"/>
+      <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+      <w:titlePg/>
+      <w:bidi/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+
+### word/header1.xml
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rtl/>
+      </w:rPr>
+      <w:t xml:space="preserve">الفصل 1</w:t>
+    </w:r>
+  </w:p>
+</w:hdr>
+
+### word/header2.xml
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rtl/>
+      </w:rPr>
+      <w:t xml:space="preserve">الفصل 1</w:t>
+    </w:r>
+  </w:p>
+</w:hdr>
+
+### word/header3.xml
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Header"/>
+    </w:pPr>
+  </w:p>
+</w:hdr>
+
+### word/footer1.xml
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="left"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="begin"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:instrText xml:space="preserve"> PAGE </w:instrText>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="separate"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:t xml:space="preserve">1</w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="end"/>
+    </w:r>
+  </w:p>
+</w:ftr>
+
+### word/footer2.xml
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="right"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="begin"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:instrText xml:space="preserve"> PAGE </w:instrText>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="separate"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:t xml:space="preserve">1</w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="end"/>
+    </w:r>
+  </w:p>
+</w:ftr>
+
+### word/footer3.xml
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:p>
+    <w:pPr>
+      <w:pStyle w:val="Footer"/>
+      <w:jc w:val="left"/>
+    </w:pPr>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="begin"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:instrText xml:space="preserve"> PAGE </w:instrText>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="separate"/>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:t xml:space="preserve">1</w:t>
+    </w:r>
+    <w:r>
+      <w:rPr>
+        <w:rStyle w:val="PageNumber"/>
+      </w:rPr>
+      <w:fldChar w:fldCharType="end"/>
+    </w:r>
+  </w:p>
+</w:ftr>

@@ -1,0 +1,449 @@
+"""Page setup, sections, headers and footers, the front matter and bookmarks (PHASE6_SPEC §5.7, §5.9).
+
+A `Para` is a paragraph waiting to be written: its style, content, the CSS margins the collapse rule
+needs, and the direct spacing that rule decides (`resolve_flow`). Section properties are built fresh for
+every section (spike lesson 3) by `sect_pr`; `HeaderFooterPlan` decides which header and footer parts a
+body section declares (the first declares all it uses, later ones only what differs, since Word
+inherits the rest).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+from lxml import etree
+
+from publishing.html import CONTENTS_TITLE, CREDIT_LABELS, EDITION_LABEL, ISBN_LABEL
+from publishing.model import Book, PageSetup
+
+from .ooxml import field_runs, fld_char, mm_to_pt, pt_to_mm, root, run, text, twips, twips_mm, w
+from .options import BIDI_LEFT_IS_START, MIRROR_PGMAR_LEFT
+from .runs import RunWriter, rpr
+from .styles import ParaStyle, collapse, split_gap, text_width_mm
+
+_BOOKMARK_SAFE = re.compile(r"[^A-Za-z0-9_]")
+BOOKMARK_MAX = 40
+TOC_INSTRUCTION = 'TOC \\o "1-2" \\h \\z \\u'
+NUMBERING_RESTART: dict[str, str] = {"page": "eachPage", "chapter": "eachSect", "book": "continuous"}
+
+
+# ====================================================================== paragraphs
+
+
+@dataclass
+class Para:
+    """A paragraph to write: `style` (a Word style id), its content elements, the CSS margins used by
+    the collapse rule (None: the style's), a padding that never collapses (`extra_before`, the title
+    page's 28 %), flags, and what the flow decided (`direct_before` / `direct_after`, mm)."""
+
+    style: str
+    content: list[etree._Element] = field(default_factory=list)
+    css_before: float | None = None
+    css_after: float | None = None
+    extra_before: float = 0.0
+    page_break: bool = False
+    keep_next: bool = False
+    ltr: bool = False
+    jc: str | None = None
+    tabs: etree._Element | None = None
+    direct_before: float | None = None
+    direct_after: float | None = None
+    sect_pr: etree._Element | None = None
+    extra: list[etree._Element] = field(default_factory=list)  # more pPr children (direct formatting)
+
+    def element(self) -> etree._Element:
+        spacing = None
+        if self.direct_before is not None or self.direct_after is not None:
+            spacing = w(
+                "spacing",
+                before=twips_mm(self.direct_before) if self.direct_before is not None else None,
+                after=twips_mm(self.direct_after) if self.direct_after is not None else None,
+            )
+        ppr = w(
+            "pPr",
+            w("pStyle", val=self.style) if self.style != "Normal" else None,  # Word's convention
+            w("keepNext") if self.keep_next else None,
+            w("pageBreakBefore") if self.page_break else None,
+            self.tabs,
+            w("bidi", val=0) if self.ltr else None,
+            spacing,
+            w("jc", val=self.jc) if self.jc else None,
+            *self.extra,
+            self.sect_pr,
+        )
+        return w("p", ppr, *self.content)
+
+
+def resolve_flow(paras: list[Para], table: dict[str, ParaStyle]) -> None:
+    """Decide the direct spacing of consecutive paragraphs of one flow (§5.5): where the CSS collapsed
+    gap differs from what Word adds up, one of the two gets a direct value. A page break starts a new
+    flow; a paragraph's own CSS override (an imprint's 30 mm) counts as its margin."""
+    flows: list[list[Para]] = []
+    for para in paras:
+        if not flows or para.page_break:
+            flows.append([para])
+        else:
+            flows[-1].append(para)
+    for flow in flows:
+        for previous, current in zip(flow, flow[1:], strict=False):
+            prev_style, cur_style = table[previous.style], table[current.style]
+            css_after = previous.css_after if previous.css_after is not None else prev_style.after
+            css_before = current.css_before if current.css_before is not None else cur_style.before
+            gap = collapse(css_after, css_before)
+            after, before = split_gap(prev_style.after, cur_style.written_before, gap)
+            if after is not None:
+                previous.direct_after = after
+            if before is not None:
+                current.direct_before = before
+        first, last = flow[0], flow[-1]
+        first_style, last_style = table[first.style], table[last.style]
+        if first.css_before is not None and first.direct_before is None:
+            if abs(max(first.css_before, 0) - first_style.written_before) > 0.005:
+                first.direct_before = max(first.css_before, 0)
+        if last.css_after is not None and last.direct_after is None:
+            if abs(last.css_after - last_style.after) > 0.005:
+                last.direct_after = last.css_after
+        for para in flow:
+            if para.extra_before:
+                base = (
+                    para.direct_before if para.direct_before is not None else table[para.style].written_before
+                )
+                para.direct_before = base + para.extra_before
+
+
+# ====================================================================== bookmarks
+
+
+class Bookmarks:
+    """Unique bookmark names (`_Toc_<id>`, `_nk_ch_<id>`, at most 40 characters) and their integer ids."""
+
+    def __init__(self) -> None:
+        self.names: dict[tuple[str, str], str] = {}
+        self.taken: set[str] = set()
+        self.next_id = 0
+
+    def name(self, prefix: str, value: str) -> str:
+        key = (prefix, value)
+        if key in self.names:
+            return self.names[key]
+        base = _BOOKMARK_SAFE.sub("_", value or "") or "x"
+        candidate = (prefix + base)[:BOOKMARK_MAX]
+        k = 2
+        while candidate in self.taken:
+            suffix = f"_{k}"
+            candidate = (prefix + base)[: BOOKMARK_MAX - len(suffix)] + suffix
+            k += 1
+        self.taken.add(candidate)
+        self.names[key] = candidate
+        return candidate
+
+    def wrap(self, name: str, content: list[etree._Element]) -> list[etree._Element]:
+        """`content` between a `bookmarkStart` and its `bookmarkEnd`."""
+        mark_id = self.next_id
+        self.next_id += 1
+        return [w("bookmarkStart", id=mark_id, name=name), *content, w("bookmarkEnd", id=mark_id)]
+
+
+# ====================================================================== page setup and sections
+
+
+def page_size(setup: PageSetup) -> etree._Element:
+    return w("pgSz", w=twips_mm(setup.width_mm), h=twips_mm(setup.height_mm))
+
+
+def header_footer_distances(setup: PageSetup, table: dict[str, ParaStyle]) -> tuple[float, float]:
+    """(header, footer) distances in mm: the preview's 3 mm and 4 mm paddings, never pushing the text."""
+    header_line = pt_to_mm(table["Header"].line_pt)
+    footer_line = pt_to_mm(table["Footer"].line_pt)
+    return max(4.0, setup.top_mm - 3 - header_line), max(4.0, setup.bottom_mm - 4 - footer_line)
+
+
+def page_margins(
+    setup: PageSetup, table: dict[str, ParaStyle], pgmar_left: str | None = None
+) -> etree._Element:
+    """`w:pgMar`: `pgmar_left` (`inner` | `outer`, the calibration file's C1) overrides the convention."""
+    inner, outer = setup.inner_mm, setup.outer_mm
+    side = pgmar_left or MIRROR_PGMAR_LEFT
+    left, right = (inner, outer) if side == "inner" else (outer, inner)
+    header, footer = header_footer_distances(setup, table)
+    return w(
+        "pgMar",
+        top=twips_mm(setup.top_mm),
+        right=twips_mm(right),
+        bottom=twips_mm(setup.bottom_mm),
+        left=twips_mm(left),
+        header=twips_mm(header),
+        footer=twips_mm(footer),
+        gutter=0,
+    )
+
+
+def sect_pr(
+    setup: PageSetup,
+    table: dict[str, ParaStyle],
+    *,
+    break_type: str | None,
+    references: list[tuple[str, str, str]] = (),
+    title_pg: bool = False,
+    number_format: str = "decimal",
+    pgmar_left: str | None = None,
+) -> etree._Element:
+    """A section's properties, built fresh: its header and footer references `(hdr|ftr, type, rId)`,
+    its own footnote numbering, the break type that opens it (None for the first section), the trim,
+    the mirrored margins (`pgmar_left` overrides the C1 convention), `titlePg` and `bidi`."""
+    restart = NUMBERING_RESTART.get(setup.footnote_numbering, "eachPage")
+    refs = [
+        w("headerReference" if kind == "hdr" else "footerReference", type=type_, r_id=rel_id)
+        for kind, type_, rel_id in references
+    ]
+    return w(
+        "sectPr",
+        *refs,
+        w("footnotePr", w("numFmt", val=number_format), w("numRestart", val=restart)),
+        w("type", val=break_type) if break_type else None,
+        page_size(setup),
+        page_margins(setup, table, pgmar_left),
+        w("titlePg") if title_pg else None,
+        w("bidi"),
+    )
+
+
+# ====================================================================== headers and footers
+
+
+@dataclass
+class HdrFtrPart:
+    """A header or footer part: its root element and, once registered, its zip name and rId."""
+
+    kind: str  # hdr | ftr
+    type: str  # default | even | first
+    element: etree._Element
+    name: str = ""
+    rel_id: str = ""
+
+
+def page_field(rpr_factory=None) -> list[etree._Element]:
+    """The PAGE field with the cached result `1`."""
+    return field_runs("PAGE", [run(text("1"), rpr=rpr_factory() if rpr_factory else None)], rpr_factory)
+
+
+def _number_rpr() -> etree._Element:
+    return rpr(rstyle="PageNumber")
+
+
+class HeaderFooterPlan:
+    """The header and footer parts of the body sections (§5.7's table)."""
+
+    def __init__(self, setup: PageSetup, writer: RunWriter):
+        self.setup = setup
+        self.writer = writer
+        self.effective: dict[tuple[str, str], tuple] = {}
+        self.parts: list[HdrFtrPart] = []
+        self.next_rel = 1  # the document relationship id of the next part declared
+
+    @property
+    def even_and_odd(self) -> bool:
+        return self.setup.page_number in ("bottom_outer", "top_outer")
+
+    @property
+    def numbers(self) -> str:
+        return (
+            self.setup.page_number
+            if self.setup.page_number in ("bottom_center", "bottom_outer", "top_outer")
+            else "none"
+        )
+
+    def needed(self, running_text: str) -> tuple[dict[tuple[str, str], tuple], bool]:
+        """`(kind, type) → signature` of the parts a section wants, and whether it sets `titlePg`."""
+        numbers = self.numbers
+        has_header = bool(running_text) or numbers == "top_outer"
+        wanted: dict[tuple[str, str], tuple] = {}
+        if numbers == "bottom_center":
+            wanted[("ftr", "default")] = ("ftr", "center", "")
+        elif numbers == "bottom_outer":
+            wanted[("ftr", "default")] = ("ftr", "left", "")
+            wanted[("ftr", "even")] = ("ftr", "right", "")
+        if numbers == "top_outer":
+            wanted[("hdr", "default")] = ("hdr", "left", running_text)
+            wanted[("hdr", "even")] = ("hdr", "right", running_text)
+            if running_text:
+                wanted[("hdr", "first")] = ("hdr", "left", "")
+        elif running_text:
+            wanted[("hdr", "default")] = ("hdr", "center", running_text)
+            if self.even_and_odd:
+                wanted[("hdr", "even")] = ("hdr", "center", running_text)
+            wanted[("hdr", "first")] = ("hdr", "empty", "")
+        title_pg = has_header and bool(running_text)
+        if title_pg and ("ftr", "default") in wanted:  # the opener keeps its page number (the preview does)
+            wanted[("ftr", "first")] = wanted[("ftr", "default")]
+        return wanted, title_pg
+
+    def references(self, running_text: str) -> tuple[list[HdrFtrPart], bool]:
+        """The parts a section declares (new parts, to register) and its `titlePg`."""
+        wanted, title_pg = self.needed(running_text)
+        declared: list[HdrFtrPart] = []
+        for key, signature in wanted.items():
+            if self.effective.get(key) == signature:
+                continue
+            part = HdrFtrPart(key[0], key[1], self.build(signature), rel_id=f"rId{self.next_rel}")
+            self.next_rel += 1
+            self.parts.append(part)
+            declared.append(part)
+            self.effective[key] = signature
+        return declared, title_pg
+
+    def build(self, signature: tuple) -> etree._Element:
+        kind, side, running_text = signature
+        if kind == "ftr":
+            jc = None if side == "center" else side
+            paragraph = w(
+                "p",
+                w("pPr", w("pStyle", val="Footer"), w("jc", val=jc) if jc else None),
+                *page_field(_number_rpr),
+            )
+            return root("ftr", paragraph)
+        if side == "empty":
+            return root("hdr", w("p", w("pPr", w("pStyle", val="Header"))))
+        if side == "center":
+            return root(
+                "hdr", w("p", w("pPr", w("pStyle", val="Header")), *self.writer.text_runs(running_text))
+            )
+        # top_outer: the number at the outer edge; the running text at a centre tab (an LTR paragraph)
+        width = mm_to_pt(text_width_mm(self.setup))
+        tabs = w(
+            "tabs", w("tab", val="center", pos=twips(width / 2)), w("tab", val="right", pos=twips(width))
+        )
+        ppr = w("pPr", w("pStyle", val="Header"), tabs, w("bidi", val=0), w("jc", val="left"))
+        text_runs = self.writer.text_runs(running_text) if running_text else []
+        if side == "left":
+            content = [*page_field(_number_rpr)]
+            if text_runs:
+                content += [run(w("tab")), *text_runs]
+        else:
+            content = []
+            if text_runs:
+                content += [run(w("tab")), *text_runs]
+            content += [run(w("tab")), *page_field(_number_rpr)]
+        return root("hdr", w("p", ppr, *content))
+
+
+# ====================================================================== front matter (§5.9)
+
+
+def running_text(book: Book, heading: str) -> str:
+    """The running header's text for a chapter (`html._Writer.running_text`)."""
+    mode = book.setup.running_header
+    if mode == "book":
+        return book.front.title
+    if mode == "chapter":
+        return heading or book.front.title
+    return ""
+
+
+def _credit(name: str, value: str) -> str:
+    label = CREDIT_LABELS[name]
+    return value if value.startswith(label) else f"{label}: {value}"
+
+
+def imprint_line(book: Book) -> str:
+    front = book.front
+    return "، ".join(value for value in (front.publisher, front.city, front.year) if value)
+
+
+def title_page(book: Book, writer: RunWriter) -> list[Para]:
+    """The title page's paragraphs: the title padded 28 % of the text width from the top, the subtitle,
+    the author, the credits and the imprint 30 mm lower."""
+    front = book.front
+    width = text_width_mm(book.setup)
+    paras = [Para("Title", writer.text_runs(front.title, role="heading"), extra_before=0.28 * width)]
+    if front.subtitle:
+        paras.append(Para("Subtitle", writer.text_runs(front.subtitle)))
+    if front.author:
+        paras.append(Para("NkAuthor", writer.text_runs(front.author)))
+    for name in ("editor", "translator"):
+        value = getattr(front, name)
+        if value:
+            paras.append(Para("NkCredit", writer.text_runs(_credit(name, value))))
+    place = imprint_line(book)
+    if place:
+        paras.append(Para("NkImprint", writer.text_runs(place), css_before=30))
+    return paras
+
+
+def copyright_lines(book: Book) -> list[str]:
+    """The copyright page's lines as `html.copyright_page` writes them."""
+    front = book.front
+    lines = [front.title]
+    if front.subtitle:
+        lines.append(front.subtitle)
+    if front.author:
+        lines.append(front.author)
+    for name in ("editor", "translator"):
+        value = getattr(front, name)
+        if value:
+            lines.append(_credit(name, value))
+    if front.edition:
+        edition = front.edition
+        lines.append(edition if edition.startswith(EDITION_LABEL) else f"{EDITION_LABEL} {edition}")
+    place = imprint_line(book)
+    if place:
+        lines.append(place)
+    if front.isbn:
+        lines.append(f"{ISBN_LABEL}: {front.isbn}")
+    if front.rights:
+        lines.append(" ".join(front.rights.split()))
+    return lines
+
+
+def copyright_page(book: Book, writer: RunWriter) -> list[Para]:
+    """The copyright page: a page break, 70 % of the width from the top, then the lines."""
+    width = text_width_mm(book.setup)
+    paras: list[Para] = []
+    for index, line in enumerate(copyright_lines(book)):
+        paras.append(
+            Para(
+                "NkCopyright",
+                writer.text_runs(line),
+                page_break=index == 0,
+                extra_before=0.70 * width if index == 0 else 0.0,
+            )
+        )
+    return paras
+
+
+def contents_page(
+    book: Book, writer: RunWriter, bookmarks: Bookmarks, pages: dict[str, int] | None
+) -> list[Para]:
+    """«المحتويات» and the TOC field with its result written in advance: one `TOC1` / `TOC2` paragraph
+    per entry, each a hyperlink to the heading's bookmark, the end tab and a PAGEREF with the page the
+    preview printed (no number when the plan has none)."""
+    entries = book.contents()
+    if not entries:
+        return []
+    paras = [Para("TOCHeading", writer.text_runs(CONTENTS_TITLE, role="heading"))]
+    for index, entry in enumerate(entries):
+        name = bookmarks.name("_Toc_", entry.target)
+        page = (pages or {}).get(entry.target)
+        result = [run(text(str(page)))] if page is not None else []
+        link = w(
+            "hyperlink",
+            *writer.text_runs(entry.text),
+            run(w("tab")),
+            *field_runs(f"PAGEREF {name} \\h", result),
+            anchor=name,
+            history=1,
+        )
+        content: list[etree._Element] = []
+        if index == 0:
+            content += field_runs(TOC_INSTRUCTION, [])[:3]  # begin, the instruction, separate
+        content.append(link)
+        if index == len(entries) - 1:
+            content.append(fld_char("end"))
+        paras.append(Para("TOC2" if min(entry.level, 2) == 2 else "TOC1", content))
+    return paras
+
+
+def start_tab_side() -> str:
+    """The `w:jc` / tab side that means the start of a bidi paragraph (§5.4)."""
+    return "left" if BIDI_LEFT_IS_START else "right"

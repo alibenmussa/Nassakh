@@ -1,0 +1,94 @@
+{
+  "book": {
+    "id": 21,
+    "title": "كتاب بلا مخطوطة",
+    "has_manuscript": false,
+    "layout": null
+  },
+  "can_edit": true,
+  "readiness": [],
+  "formats": [
+    {
+      "key": "docx",
+      "label": "Word",
+      "extension": ".docx",
+      "available": true,
+      "form": {
+        "kashida": {
+          "value": "low",
+          "choices": [
+            {
+              "value": "none",
+              "label": "بلا",
+              "title": "بلا كشيدة",
+              "hint": "تُضبط الأسطر بالمسافات وحدها، كما في المعاينة."
+            },
+            {
+              "value": "low",
+              "label": "خفيفة",
+              "title": "كشيدة خفيفة",
+              "hint": "الأسطر كما في المعاينة تقريبًا."
+            },
+            {
+              "value": "medium",
+              "label": "متوسطة",
+              "title": "كشيدة متوسطة",
+              "hint": "يغيّر Word فواصل الأسطر فيطول الكتاب عن المعاينة."
+            },
+            {
+              "value": "high",
+              "label": "قوية",
+              "title": "كشيدة قوية",
+              "hint": "يغيّر Word فواصل الأسطر فيطول الكتاب كثيرًا عن المعاينة."
+            }
+          ]
+        },
+        "comments": {
+          "value": false,
+          "available": 0,
+          "label": "تعليقات على الكلمات غير المؤكَّدة",
+          "hint": "لا كلمات غير مؤكَّدة في الكتاب."
+        }
+      },
+      "notes": [],
+      "active": null,
+      "latest": null
+    },
+    {
+      "key": "print_pdf",
+      "label": "PDF للطباعة",
+      "extension": ".pdf",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    },
+    {
+      "key": "screen_pdf",
+      "label": "PDF للشاشة",
+      "extension": ".pdf",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    },
+    {
+      "key": "epub",
+      "label": "EPUB",
+      "extension": ".epub",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    }
+  ],
+  "items": [],
+  "urls": {
+    "create": "/api/books/21/exports/",
+    "row": "/api/books/21/exports/__eid__/",
+    "cancel": "/api/books/21/exports/__eid__/cancel/"
+  }
+}

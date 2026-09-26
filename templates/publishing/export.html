@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+The export page «الإخراج» (PHASE6_SPEC §8, D59): one reading column of blocks — «قبل الإخراج» (the readiness rows,
+linking to the fixes), one block per format the payload lists (drawn from its `form`: options, notes, one state row)
+and «السجل» (every file, newest first). Everything inside the root is `exportPage` (static/src/js/export.js) drawn
+from `config`, the §3.2 object (publishing.exports.page_payload, the same as GET api:exports), embedded as
+`export-config`; the top-bar controls live in header_actions (outside the root) and read the page through
+Alpine.store('exportPage').view. Styles: static/src/components/export.css (ex-) over the «التنسيق» classes.
+Context: book, config. Western digits everywhere.
+{% endcomment %}
+{% block head_title %}الإخراج · {{ book.title }} · نسّاخ{% endblock %}
+{% block title %}<span class="title-page">الإخراج</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+
+{% block header_actions %}
+<div class="lo-bar" x-data="exportBar" data-export-bar>
+  <div class="lo-bar-inner">
+    <button type="button" class="bk-poll" x-show="v && v.pollState === 'error'" x-cloak @click="v.pollNow()" title="إعادة محاولة التحديث الآن">
+      <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
+    </button>
+    <a class="bk-poll" x-show="v && v.pollState === 'auth'" x-cloak href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
+      <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
+    </a>
+    <a class="btn btn-ghost btn-sm" href="{% url 'editor:layout' book.pk %}" title="صفحة الكتاب" data-back-link>
+      <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+      <span>الكتاب</span>
+    </a>
+    {# «⋯»: the book page, the manuscript, the dashboard #}
+    <div class="menu-anchor" @keydown.escape.window="open = false">
+      <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
+        <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
+      </button>
+      <div class="menu menu-popover lo-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms
+           @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)" data-export-menu>
+        <a class="menu-item" role="menuitem" href="{% url 'editor:layout' book.pk %}">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
+          <span>الكتاب</span>
+        </a>
+        <a class="menu-item" role="menuitem" href="{% url 'assembly:manuscript' book.pk %}">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
+          <span>المخطوطة</span>
+        </a>
+        <div class="menu-sep" role="separator"></div>
+        <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
+          <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+          <span>لوحة الكتاب</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block content %}
+{{ config|json_script:"export-config" }}
+{% if not config.book.has_manuscript %}
+{% url 'assembly:manuscript' book.pk as manuscript_url %}
+{% include "partials/_empty_state.html" with title="لا كتاب للإخراج بعد" text="حوّل الكتاب إلى مخطوطة وافتحه في صفحة الكتاب أولًا؛ من هنا يُخرَج بعد ذلك ملف Word." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-download" %}
+{% else %}
+<div class="ex-page" data-export-page x-data="exportPage(JSON.parse(document.getElementById('export-config').textContent))"
+     @visibilitychange.document="onVisible()" @pageshow.window="onPageShow($event)">
+  <p class="sr-only" role="status" aria-live="polite" x-text="live"></p>
+
+  {# before Alpine mounts: a quiet skeleton of the column (hidden by the first render) #}
+  <div class="ex-boot" x-show="false" aria-hidden="true">
+    <span class="ex-boot-meta"></span>
+    <div class="ed-snap-skeleton"><span></span><span></span></div>
+    <div class="ed-snap-skeleton"><span></span><span></span></div>
+  </div>
+
+  <p class="meta ex-meta" x-show="metaText" x-cloak x-text="metaText" data-meta></p>
+
+  {% include "publishing/_export_readiness.html" %}
+
+  {% if not config.can_edit %}<p class="lo-readonly meta ex-readonly" x-cloak>يبدأ الإخراج محرّر الكتاب؛ الملفات الجاهزة تُنزَّل من السجل.</p>{% endif %}
+
+  <template x-for="f in formats" :key="f.key">
+    {% include "publishing/_export_format.html" %}
+  </template>
+
+  {% include "publishing/_export_history.html" %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}<script src="{% static 'src/js/export.js' %}"></script>{% endblock %}

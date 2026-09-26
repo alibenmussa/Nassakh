@@ -356,7 +356,10 @@ split off a number («2 ه» for «٥٢», «4 ه ق» for «٥٥٤ ق») gets i
   bleed and crop marks, `ENGINE_VERSION = "nk-print-5"`.
 - **D61** PDF for print (TrimBox, optional bleed and crop marks) and for screen (clean outline, RTL reading) are fresh
   final renders through the book page's engine, so they have its pages. No PDF/X or PDF/A claim.
-- D62 (the Word calibration results) is recorded after the owner's calibration pass.
+- D62 (the Word calibration results) is recorded after the owner's calibration pass. Measured already (C12, by
+  `word_check --c12` on this Mac, 2026-09-26): Word collapses the space between paragraphs like CSS (60 pairs took the
+  pages of the larger space, not the sum), so `SPACING_ADDS = False` in `publishing/word/options.py`; direct spacing
+  is written only where the preview's CSS differs. Compatibility mode 15 kept (mode 14 gave 7 more lines).
 
 ## D63 — Word boxes: clip, fill, clamp, keep marks in their gaps, flag weak boxes (2026-09-26)
 An audit of book 22 (6 pages, 1,462 tokens, every box checked against the ink) found 250 bad word boxes: Tesseract's own

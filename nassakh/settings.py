@@ -126,6 +126,8 @@ CELERY_TASK_ROUTES = {
     # D47: the fast re-layout of a chapter has its own queue (the default worker consumes default,layout)
     "publishing.tasks.relayout_chapter": {"queue": "layout"},
     "publishing.tasks.render_layout_images": {"queue": "default", "priority": 9},
+    # Phase 6 (D58): exports have their own queue (the CPU worker consumes default,layout,export)
+    "publishing.tasks.run_export": {"queue": "export"},
 }
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
@@ -170,6 +172,12 @@ NASSAKH = {
     "KRAKEN_PYTHON": Path(BASE_DIR, env("KRAKEN_PYTHON", default=".venv-kraken/bin/python")),
     "KRAKEN_MODEL": Path(BASE_DIR, env("KRAKEN_MODEL", default="models/kraken/all_arabic_scripts.mlmodel")),
     "KRAKEN_TIMEOUT_S": env.int("KRAKEN_TIMEOUT_S", default=120),
+    # Exports (PHASE6_SPEC §6.4, D58): the export task's soft time limit (the hard one is 120 s more), the
+    # finished files kept per book and format, and whether the check step validates a Word file against
+    # the ECMA-376 schemas (the integrity checks always run).
+    "EXPORT_SOFT_LIMIT_S": env.int("EXPORT_SOFT_LIMIT_S", default=1800),
+    "EXPORTS_KEPT": env.int("EXPORTS_KEPT", default=5),
+    "EXPORT_VALIDATE": env.bool("EXPORT_VALIDATE", default=True),
 }
 
 # ---------------------------------------------------------------- rest framework

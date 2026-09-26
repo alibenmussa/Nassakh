@@ -1149,6 +1149,8 @@ def editor_urls(book: Book) -> dict:
 AUTOSAVE_MS = 1500
 RELAYOUT_MS = 500  # the pause after typing on a live page before the chapter is saved and re-laid-out
 MODES: tuple[str, ...] = ("preview", "edit")
+# the side panel's tabs (`static/src/js/book/panel.js` TABS): `?tab=` opens the book page on one of them
+PANEL_TABS: tuple[str, ...] = ("chapters", "pages", "find", "format", "block", "source", "uncertain")
 
 
 def _faces(sheet: StyleSheet) -> dict:
@@ -1170,7 +1172,12 @@ def _faces(sheet: StyleSheet) -> dict:
 
 
 def page_config(
-    book: Book, user, chapter_id: str | None = None, page: str = "editor", mode: str | None = None
+    book: Book,
+    user,
+    chapter_id: str | None = None,
+    page: str = "editor",
+    mode: str | None = None,
+    tab: str | None = None,
 ) -> dict:
     """What the book page (`bookLayout`, D47) and the old editor page start from: the book, the chapter to
     open (the requested one when it exists, else the first), the chapters' order, whether the user may
@@ -1178,7 +1185,9 @@ def page_config(
 
     For the book page (`page="layout"`) also: `mode` (`preview` | `edit`), the chapter summaries (versions,
     words, pages, drift: `chapter_summaries`), the review drift, the uncertain words' count, the browser
-    `@font-face` rules of the live pages (`fontCss`) and the pause before a re-layout (`relayoutMs`)."""
+    `@font-face` rules of the live pages (`fontCss`), the pause before a re-layout (`relayoutMs`) and
+    `tab`, the panel tab asked for with `?tab=` (one of `PANEL_TABS`, else None: the panel opens the tab
+    remembered for the mode; the export page's readiness links use it, PHASE6_SPEC §6.5)."""
     from books.services import page_url_templates
     from core.decorators import ROLE_EDITOR, has_role
 
@@ -1212,6 +1221,7 @@ def page_config(
             "uncertainCount": uncertain_count(document) if manuscript is not None else 0,
             "fontCss": browser_font_css(resolve(sheet.body_font, sheet.latin_font, sheet.heading_font)),
             "relayoutMs": RELAYOUT_MS,
+            "tab": tab if tab in PANEL_TABS else None,
         }
     return {
         **extra,

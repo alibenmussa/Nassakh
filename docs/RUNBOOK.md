@@ -76,7 +76,7 @@ Three terminals (or one `honcho start` with the `Procfile`; honcho is not a proj
 
 ```sh
 make web          # http://127.0.0.1:8000/  → /accounts/login/ → /books/
-make worker       # queue "default": ingest, preprocess, layout, Tesseract (4 processes)
+make worker       # queues "default", "layout", "export": ingest, preprocess, layout, Tesseract, page renders, exports (4 processes)
 make gpu-worker   # queue "gpu": Qari v0.3 + v0.2, one solo process, models stay loaded (~9 GB)
 ```
 
@@ -434,7 +434,62 @@ Kraken reads is left as they made it.
 upright. A single footnote longer than a page spills over. Word export (Phase 6) paginates slightly differently, so its page
 count can differ from the preview's.
 
-## 13. Troubleshooting
+## 13. Phase 6 — «الإخراج»: Word, PDF, EPUB
+
+Upgrading: `make migrate` (new `publishing.0003_export`), then **restart `make worker`**: it now consumes
+`-Q default,layout,export`, and a worker started before the change never takes an export (the row stays «في الانتظار»
+and after a minute the page says «لم يبدأ الإخراج بعد؛ تأكّد من تشغيل عامل المهام بعد آخر تحديث (make worker).»). The
+engine is `nk-print-5` (D60: Latin words in a book whose Latin face is the body face are set in that face, not in a system
+"Serif Narrow"; the preview never prints bleed or crop marks), so every book lays out once more the first time it opens.
+Book 19's new reference counts are in `playground/word/REFERENCE.md` (85 pages).
+
+**The page.** The book page's «الإخراج» (top bar, and «⋯») opens `/books/<id>/export/`:
+- «قبل الإخراج»: what is left (uncertain words and numbers, review drift, a running assembly, book details, no headings),
+  each with a link to the tab that fixes it (`/books/<id>/layout/?tab=uncertain|format|chapters`). It never blocks.
+- one block per format. Word: «الكشيدة» (بلا · خفيفة · متوسطة · قوية; default خفيفة — medium and high make the book longer
+  than the preview) and «تعليقات على الكلمات غير المؤكَّدة» (a Word comment by «نسّاخ» on every uncertain word, with its
+  readings and scan page; the file name ends «- مع التعليقات»). The notes under the options are the known differences
+  of the file (faces not embedded, the contents numbers to update in Word…).
+- «السجل»: every export with its time, options and state; «تنزيل» saves the file under its Arabic name.
+
+Every click builds a new file from the text as it is when the export starts (an edit made meanwhile stays out, and the row
+then reads «تغيّر النص بعد هذا الإخراج»). One export per book and format runs at a time (a second one is refused and
+offers «إلغاء»). Files live in `media/books/<id>/exports/<export id>.<ext>`; the newest 5 finished files and 3 failed or
+cancelled rows are kept per book and format, older ones are deleted with their files. There is no delete in v1.
+
+**Settings** (`.env`): `EXPORT_SOFT_LIMIT_S` (1800: an export stopped after that reads «استغرق الإخراج أطول من
+المسموح.»; the hard limit is 120 s more), `EXPORTS_KEPT` (5), `EXPORT_VALIDATE` (true: Word files are validated against
+the ECMA-376 schemas in `publishing/word/xsd/` before they are delivered; the integrity checks always run).
+
+**Endpoints** (under `/api/`, names in the `api` namespace): `exports` (GET the page's payload; POST `{format, options}`
+→ 202 · 409 while one runs · 400 · 404 without a manuscript), `export` (GET a row; `?wait=≤5&since=<updated_at>` long-polls),
+`export_cancel` (POST). The download is `publishing:export_download` (`/books/<id>/exports/<eid>/download/[?inline=1]`),
+a plain page that sends a signed-out visitor to the login page. Reading and downloading need a login; starting and
+cancelling need an editor or an admin.
+
+**Dev commands.**
+
+```sh
+# the book into a file now: no row, no queue, no worker (agents and the Word harness use it)
+.venv/bin/python manage.py export_book 19 --format docx --out /tmp/out/          # «كتابي.docx»
+.venv/bin/python manage.py export_book 19 --format docx --kashida medium --comments --out /tmp/out/book.docx
+.venv/bin/python manage.py export_book 19 --format print_pdf --bleed-mm 3 --crop-marks --out /tmp/out/
+.venv/bin/python manage.py export_book 19 --format docx --options '{"kashida": "none"}' --out /tmp/out/
+
+# the Word harness (macOS with Microsoft Word, never in pytest): Word opens on the screen, so say so first
+.venv/bin/python manage.py word_check 19                  # build, open in Word, pages and lines against the preview
+.venv/bin/python manage.py word_check 19 --kashida medium
+.venv/bin/python manage.py word_check 19 --chapters       # each chapter alone
+.venv/bin/python manage.py word_check --calibration       # calibration.docx and its checklist (the owner, ~15 min)
+```
+
+`word_check` validates every file before Word sees it, copies it into Word's own container folder (no file-access
+prompt), refuses with «أغلق مستندات Word المفتوحة أولًا» when Word has other documents open, and opens exactly one file.
+The calibration pass (PHASE6_SPEC §11.6: margins, footnote numbers, kashida in each face, comments, the embedded Amiri
+with Amiri disabled in Font Book, the contents field…) and a 5-minute reference file made in Word
+(`playground/word/reference/r1.docx`) settle the Word conventions (D62) in `publishing/word/options.py`.
+
+## 14. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -444,6 +499,8 @@ count can differ from the preview's.
 | `tesseract language(s) missing: ['ara']` | `brew install tesseract-lang`; `tesseract --list-langs` must show `ara` and `eng` |
 | page error «تعذّر تحميل محرّك التعرّف …» / `… is not prepared` | weights missing under `OCR_MODELS_DIR`: run `playground/poc/prepare_models.py` (`--mlx` for the MLX backend) or fix `OCR_MODELS_DIR` |
 | gpu worker very slow or swapping | both models need about 9 GB; close other GPU-heavy apps, or set `OCR_BACKEND=mlx` (about 1.8× faster in the PoC) |
+| an export stays «في الانتظار» | the worker was started before Phase 6 and does not consume the `export` queue: stop it and `make worker` again (`-Q default,layout,export`) |
+| the export page fails with `relation "publishing_export" does not exist` | `make migrate` (`publishing.0003_export`) |
 | dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
 | `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `book_text`, `book_sheets`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`, and the review names in §10) |
 | review screen read-only | the user has no `proofreader` / `editor` / `admin` group (Django admin → Users), or the page has no final text yet |

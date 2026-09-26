@@ -1,8 +1,12 @@
 """Page previews (PHASE5_SPEC §2, D44): one row per render of the book or of one chapter, cached by hash;
-the book's live layout (D47): the pages the book page draws now."""
+the book's live layout (D47): the pages the book page draws now; exports (PHASE6_SPEC §6.1, D58): one row
+per exported file, the history of the export page."""
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
+from django.conf import settings
 from django.db import models
 
 from books.models import Book
@@ -116,3 +120,95 @@ class LiveLayout(models.Model):
 
     def __str__(self) -> str:
         return f"live layout of book {self.book_id} r{self.revision} ({self.page_count} pages)"
+
+
+def export_path(instance: Export, filename: str) -> str:
+    """Media path of an export's file: `books/<id>/exports/<pk>.<ext>` (the row exists before its file;
+    the Arabic file name is `filename`, used only for the download)."""
+    extension = PurePosixPath(filename).suffix.lower() or ".bin"
+    return f"books/{instance.book_id}/exports/{instance.pk}{extension}"
+
+
+class Export(models.Model):
+    """One export of the book into a file (D58): Word, PDF for print or for screen, EPUB.
+
+    `options` are the normalised options (every default filled in); `inputs` what the task read when it
+    started (`{stylesheet, title, author, digit_style, chapters: {id: version}}`), with the manuscript
+    version it read (`manuscript_version`), the hash of the page setup and faces (`stylesheet_hash`,
+    without the engine version) and the renderer's version (`renderer`) — what tells a file made from an
+    older text, stylesheet or renderer (`publishing.exports.stale_reasons`). `progress` is `{step, done,
+    total}`; `warnings` `[{code, level, message}]`; `error` the Arabic headline, then the technical
+    `Type: message` line; `log` the exporter's technical lines. `page_count` is null for Word (Word lays
+    out its own pages). `updated_at` is set explicitly on every queryset `update()`.
+
+    At most one export per book and format is queued or running (a partial unique constraint).
+    """
+
+    class Format(models.TextChoices):
+        DOCX = "docx", "Word"
+        PRINT_PDF = "print_pdf", "PDF للطباعة"
+        SCREEN_PDF = "screen_pdf", "PDF للشاشة"
+        EPUB = "epub", "EPUB"
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "في الانتظار"
+        RUNNING = "running", "قيد الإخراج"
+        DONE = "done", "اكتمل"
+        ERROR = "error", "خطأ"
+        CANCELLED = "cancelled", "أُلغي"
+
+    ACTIVE = (Status.QUEUED, Status.RUNNING)
+    FINAL = (Status.DONE, Status.ERROR, Status.CANCELLED)
+
+    book = models.ForeignKey(Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="exports")
+    format = models.CharField("الصيغة", max_length=12, choices=Format.choices)
+    status = models.CharField("الحالة", max_length=10, choices=Status.choices, default=Status.QUEUED)
+    options = models.JSONField("الخيارات", default=dict, blank=True)
+    inputs = models.JSONField("المدخلات", default=dict, blank=True)
+    manuscript_version = models.PositiveIntegerField("إصدار المخطوطة", null=True, blank=True)
+    stylesheet_hash = models.CharField("بصمة التنسيق", max_length=24, blank=True)
+    renderer = models.CharField("المُخرِج", max_length=64, blank=True)
+    file = models.FileField("الملف", upload_to=export_path, max_length=255, blank=True)
+    filename = models.CharField("اسم الملف", max_length=255, blank=True)
+    size_bytes = models.BigIntegerField("الحجم (بايت)", default=0)
+    page_count = models.PositiveIntegerField("عدد الصفحات", null=True, blank=True)
+    stats = models.JSONField("الإحصاءات", default=dict, blank=True)
+    progress = models.JSONField("التقدّم", default=dict, blank=True)
+    warnings = models.JSONField("الملاحظات", default=list, blank=True)
+    log = models.TextField("السجل", blank=True)
+    error = models.TextField("الخطأ", blank=True)
+    duration_ms = models.IntegerField("المدة (مللي ثانية)", default=0)
+    task_id = models.CharField("معرّف المهمة", max_length=64, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="أخرجه",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    created_at = models.DateTimeField("أُنشئ في", auto_now_add=True)
+    started_at = models.DateTimeField("بدأ في", null=True, blank=True)
+    finished_at = models.DateTimeField("انتهى في", null=True, blank=True)
+    updated_at = models.DateTimeField("حُدّث في", auto_now=True)
+
+    class Meta:
+        verbose_name = "إخراج"
+        verbose_name_plural = "الإخراجات"
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["book", "format", "-created_at"], name="export_book_format_latest")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["book", "format"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="export_one_active_per_format",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"export {self.pk} of book {self.book_id} as {self.format} ({self.status})"
+
+    @property
+    def is_active(self) -> bool:
+        """True while the export waits in the queue or runs."""
+        return self.status in self.ACTIVE

@@ -1,0 +1,438 @@
+### word/document.xml
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Title"/>
+        <w:spacing w:before="2064" w:after="227"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كتاب التجربة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Subtitle"/>
+        <w:spacing w:before="0"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">دراسة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkAuthor"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مؤلف الكتاب</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCredit"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">تحقيق: المحقق</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCredit"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">ترجمة: المترجم</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkImprint"/>
+        <w:spacing w:before="1701"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">دار النشر، طرابلس، 2026</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+        <w:pageBreakBefore/>
+        <w:spacing w:before="5159"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كتاب التجربة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">دراسة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مؤلف الكتاب</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">تحقيق: المحقق</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">ترجمة: المترجم</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الطبعة الأولى</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">دار النشر، طرابلس، 2026</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">ردمك: 978-9959-0-0001-1</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkCopyright"/>
+        <w:sectPr>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">جميع الحقوق محفوظة للناشر</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOCHeading"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">المحتويات</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC1"/>
+      </w:pPr>
+      <w:r>
+        <w:fldChar w:fldCharType="begin"/>
+      </w:r>
+      <w:r>
+        <w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText>
+      </w:r>
+      <w:r>
+        <w:fldChar w:fldCharType="separate"/>
+      </w:r>
+      <w:hyperlink w:anchor="_Toc_h1" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">الفصل الأول</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h1 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:t xml:space="preserve">5</w:t>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC2"/>
+      </w:pPr>
+      <w:hyperlink w:anchor="_Toc_h2" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">مبحث</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h2 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:t xml:space="preserve">6</w:t>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="TOC1"/>
+        <w:sectPr>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:type w:val="nextPage"/>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:hyperlink w:anchor="_Toc_h3" w:history="1">
+        <w:r>
+          <w:rPr>
+            <w:rtl/>
+          </w:rPr>
+          <w:t xml:space="preserve">الفصل الثاني</w:t>
+        </w:r>
+        <w:r>
+          <w:tab/>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="begin"/>
+        </w:r>
+        <w:r>
+          <w:instrText xml:space="preserve"> PAGEREF _Toc_h3 \h </w:instrText>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="separate"/>
+        </w:r>
+        <w:r>
+          <w:t xml:space="preserve">9</w:t>
+        </w:r>
+        <w:r>
+          <w:fldChar w:fldCharType="end"/>
+        </w:r>
+      </w:hyperlink>
+      <w:r>
+        <w:fldChar w:fldCharType="end"/>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="0" w:name="_Toc_h1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل الأول</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="0"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading2"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="1" w:name="_Toc_h2"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مبحث</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="1"/>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:sectPr>
+          <w:footerReference w:type="default" r:id="rId6"/>
+          <w:footnotePr>
+            <w:numFmt w:val="decimal"/>
+            <w:numRestart w:val="eachPage"/>
+          </w:footnotePr>
+          <w:type w:val="nextPage"/>
+          <w:pgSz w:w="9638" w:h="13606"/>
+          <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+          <w:bidi/>
+        </w:sectPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="2" w:name="_Toc_h3"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل الثاني</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="2"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:footnotePr>
+        <w:numFmt w:val="decimal"/>
+        <w:numRestart w:val="eachPage"/>
+      </w:footnotePr>
+      <w:type w:val="nextPage"/>
+      <w:pgSz w:w="9638" w:h="13606"/>
+      <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+      <w:bidi/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+
+### docProps/core.xml
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>كتاب التجربة</dc:title>
+  <dc:subject>دراسة</dc:subject>
+  <dc:creator>مؤلف الكتاب</dc:creator>
+  <dc:description>جميع الحقوق محفوظة للناشر</dc:description>
+  <cp:lastModifiedBy>نسّاخ</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-01-01T00:00:00Z</dcterms:modified>
+  <dc:language>ar</dc:language>
+</cp:coreProperties>
+
+### docProps/custom.xml
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="ISBN">
+    <vt:lpwstr>978-9959-0-0001-1</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="Edition">
+    <vt:lpwstr>الأولى</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="Publisher">
+    <vt:lpwstr>دار النشر</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="5" name="City">
+    <vt:lpwstr>طرابلس</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="6" name="Year">
+    <vt:lpwstr>2026</vt:lpwstr>
+  </property>
+  <property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="7" name="NassakhRenderer">
+    <vt:lpwstr>nk-word-1</vt:lpwstr>
+  </property>
+</Properties>
+
+### docProps/app.xml
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>Nassakh</Application>
+  <Company>دار النشر</Company>
+</Properties>

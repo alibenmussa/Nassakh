@@ -1,0 +1,116 @@
+/* The export page «الإخراج» (PHASE6_SPEC §8.3, D59): one reading column (720 px, centered) of blocks —
+   «قبل الإخراج», one per format, «السجل» — each a head row (13 px/600 title on the start side, meta on the end
+   side) over a hairline; no cards, boxes or shadows; 32 px between blocks. The fields reuse the «التنسيق» classes
+   (lo-field, lo-stepper-label, segmented lo-seg, lo-check, help, lo-note), the readiness rows bp-check, the
+   history rows ed-snap, the poll pills bk-poll; ex- is what is left. Motion (muted, DESIGN.md §8): blocks fade in
+   and states cross-fade (200 ms), the running dot pulses, a file finished on this page blooms in once
+   (rv-stamp-in, 300 ms), the boot skeleton shimmers; prefers-reduced-motion drops all of it. */
+@layer components {
+  .ex-page { width: 100%; max-width: 720px; margin-inline: auto; display: flex; flex-direction: column; gap: 32px; min-width: 0; }
+  .ex-meta { margin: -12px 0 -8px; line-height: 1.6; }
+  .ex-readonly { margin: -16px 0 -16px; }
+
+  /* ------------------------------------------------------------ a block: a head row over a hairline */
+  .ex-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    min-inline-size: 0; /* a fieldset shrinks with the column */
+    margin: 0;
+    padding: 10px 0 0;
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    animation: ex-fade-in 200ms ease-out both;
+  }
+  .ex-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+  .ex-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.45; color: var(--color-text); }
+  .ex-head-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ex-body { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .ex-format.is-unavailable { gap: 0; }
+  .ex-format.is-unavailable .ex-title { font-weight: 500; color: var(--color-text-3); }
+
+  /* «قبل الإخراج»: the bp-check rows, not buttons here: the link to the fix sits on the end side */
+  .ex-checks .bp-check { cursor: default; line-height: 1.55; }
+  .ex-checks .bp-check:hover .bp-check-label { color: inherit; }
+  .ex-checks .bp-check:last-child { border-bottom: 0; }
+  .ex-fix { flex: none; display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .ex-fix .icon { width: 12px; height: 12px; }
+  .ex-fix:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 3px; }
+
+  /* ------------------------------------------------------------ the options (= التنسيق's fields, in a wider column) */
+  .ex-fields { display: flex; flex-direction: column; gap: 14px; }
+  .ex-field .help { margin: 0; line-height: 1.5; }
+  .ex-field .field-error { margin: 0; }
+  .ex-seg { max-width: 400px; }
+  .ex-seg > button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+  .ex-field .lo-check.is-disabled { color: var(--color-text-3); cursor: default; }
+  /* a proofreader's view: the fields are there, quieter (= .lo-section:disabled) */
+  .ex-format:disabled .lo-seg, .ex-format:disabled .lo-check { opacity: 0.6; cursor: default; }
+  .ex-format:disabled .lo-seg > button { cursor: default; }
+  .ex-check-help { max-width: 60ch; }
+
+  /* the notes of a format and the warnings of its file: a dot and a line (warn in the warning text colour) */
+  .ex-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .ex-note { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 1.6; color: var(--color-text-2); }
+  .ex-note.is-warn { color: var(--color-warning-text); }
+  .ex-note .dot { width: 6px; height: 6px; transform: translateY(-1px); }
+  .ex-note-text { flex: 1; min-width: 0; }
+
+  /* ------------------------------------------------------------ the state row: the button, the status, «تنزيل» / «إلغاء» */
+  .ex-state-wrap { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .ex-state { display: flex; align-items: center; gap: 12px; min-height: 36px; min-width: 0; }
+  .ex-go { flex: none; }
+  .ex-state-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+  .ex-status { flex: 1; min-width: 0; display: flex; font-size: 12.5px; color: var(--color-text-2); font-variant-numeric: tabular-nums; }
+  /* what changes with the state: re-keyed, so it fades in (the elements around it stay) */
+  .ex-status-line { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; animation: ex-fade-in 200ms ease-out both; }
+  .ex-extra { flex: none; display: inline-flex; align-items: center; gap: 6px; animation: ex-fade-in 200ms ease-out both; }
+  .ex-status:focus { outline: none; }
+  .ex-status:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; border-radius: 4px; }
+  /* the file name gives way first (an ellipsis), then the rest of the line */
+  .ex-state-name { min-width: 5em; flex: 0 100 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--color-text); }
+  .ex-state-text { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ex-state-main.is-stale .ex-state-text { color: var(--color-warning-text); }
+  .ex-state-main.is-error .ex-state-text { flex: 1; min-width: 0; white-space: normal; line-height: 1.5; color: var(--color-danger-text); }
+  .ex-state-main.is-error .ex-dot { align-self: flex-start; margin-top: 6px; }
+  .ex-dot { width: 7px; height: 7px; }
+  .ex-dot.is-live { animation: lo-pulse 900ms ease-in-out infinite; }
+  .ex-dot.is-fresh { animation: rv-stamp-in 300ms ease-out both; }
+  .ex-download, .ex-cancel { flex: none; }
+  .ex-more { display: flex; flex-direction: column; gap: 6px; min-width: 0; animation: ex-fade-in 200ms ease-out both; }
+  .ex-bar { max-width: 400px; }
+  .ex-error-details { font-size: 12px; }
+  .ex-error-details pre { max-width: 100%; overflow-x: auto; }
+  .ex-state-wrap > .field-error { margin: 0; }
+
+  /* ------------------------------------------------------------ «السجل» (= ed-snap, on the page: no scroll box) */
+  .ex-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .ex-row { align-items: flex-start; }
+  .ex-row > .dot { margin-top: 6px; }
+  .ex-row > .dot.is-live { animation: lo-pulse 900ms ease-in-out infinite; }
+  .ex-row-download { flex: none; align-self: center; }
+  .ex-row.is-error .ed-snap-label, .ex-row.is-cancelled .ed-snap-label { font-weight: 400; color: var(--color-text-2); }
+
+  /* ------------------------------------------------------------ before Alpine mounts */
+  .ex-boot { display: flex; flex-direction: column; gap: 24px; }
+  .ex-boot-meta { display: block; width: 46%; height: 12px; border-radius: 4px; background: linear-gradient(90deg, var(--color-bg-muted) 25%, var(--color-bg-subtle) 50%, var(--color-bg-muted) 75%); background-size: 200% 100%; animation: lo-shimmer 1.4s linear infinite; }
+
+  @keyframes ex-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ------------------------------------------------------------ narrow screens: the state first, then a full-width button */
+  @media (max-width: 560px) {
+    .ex-page { gap: 28px; }
+    .ex-state { flex-wrap: wrap; row-gap: 10px; }
+    .ex-state-main { flex-basis: 100%; }
+    .ex-state-main.is-never { display: none; }
+    .ex-state-text { white-space: normal; }
+    .ex-go { order: 2; width: 100%; }
+    .ex-seg { max-width: none; }
+    .ex-checks .bp-check { flex-wrap: wrap; }
+    .ex-checks .ex-fix { margin-inline-start: 15px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ex-block, .ex-status-line, .ex-extra, .ex-more, .ex-dot.is-live, .ex-dot.is-fresh, .ex-row > .dot.is-live, .ex-boot-meta { animation: none; }
+  }
+}

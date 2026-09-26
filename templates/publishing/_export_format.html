@@ -1,0 +1,60 @@
+{% comment %}One format's block (PHASE6_SPEC §8.3), inside `x-for="f in formats"`: drawn from the payload, so Word, the
+two PDFs and EPUB share it. The head: the label on the start side, the extension (its own LTR <bdi>) and «لم يُخرَج
+بعد» / «غير متاحة بعد» on the end side. Then, for an available format, its options from `f.form` — a field with
+`choices` is a segmented control (aria-pressed, ←/→ Home End, the chosen choice's hint under it), a boolean one a
+checkbox (its count, disabled at 0, its help) —, its notes (info and warn dots) and the state row
+(_export_state.html). A fieldset with an sr-only legend; a proofreader sees it disabled.
+This one partial replaces the spec's per-format partials (_export_word.html, 6b's _export_pdf_*.html).{% endcomment %}
+<fieldset class="ex-block ex-format" :class="{ 'is-unavailable': !f.available }" :data-ex-format="f.key" :disabled="!canEdit">
+  <legend class="sr-only" x-text="f.label"></legend>
+  <div class="ex-head">
+    <h2 class="ex-title" x-text="f.label"></h2>
+    <span class="meta ex-head-meta"><bdi dir="ltr" x-text="f.extension"></bdi><span x-text="headNote(f)"></span></span>
+  </div>
+  <template x-if="f.available">
+    <div class="ex-body">
+      <div class="ex-fields" x-show="fieldsOf(f).some((fd) => fd.kind !== 'value')">
+        <template x-for="fd in fieldsOf(f)" :key="fd.key">
+          <div class="ex-field" :class="'is-' + fd.kind" x-show="fd.kind !== 'value'">
+            <template x-if="fd.kind === 'choice'">
+              <div class="lo-field">
+                <span class="lo-stepper-label" :id="'ex-' + f.key + '-' + fd.key" x-text="fd.label"></span>
+                <div class="segmented lo-seg ex-seg" role="group" :aria-labelledby="'ex-' + f.key + '-' + fd.key" :data-ex-choice="fd.key">
+                  <template x-for="(c, i) in fd.choices" :key="String(c.value)">
+                    <button type="button" :aria-pressed="picked(f, fd, c) ? 'true' : 'false'" :tabindex="segTab(f, fd, i)" :title="c.title || c.label"
+                            @click="pick(f, fd, c)" @keydown="onSegKey($event, f, fd, i)" x-text="c.label"></button>
+                  </template>
+                </div>
+                <p class="help" x-show="choiceHint(f, fd)" x-text="choiceHint(f, fd)" aria-live="polite"></p>
+              </div>
+            </template>
+            <template x-if="fd.kind === 'bool'">
+              <div class="lo-field">
+                <label class="lo-check" :class="{ 'is-disabled': fd.disabled }">
+                  <input type="checkbox" :checked="Boolean(fieldValue(f, fd))" :disabled="fd.disabled" @change="setValue(f, fd, $el.checked)" :aria-describedby="fd.hint ? 'ex-' + f.key + '-' + fd.key + '-help' : null" :data-ex-check="fd.key">
+                  <span><span x-text="fd.label"></span><template x-if="fd.available > 0"><span> (<bdi class="num" x-text="fd.available"></bdi>)</span></template></span>
+                </label>
+                <p class="help ex-check-help" :id="'ex-' + f.key + '-' + fd.key + '-help'" x-show="fd.hint" x-text="fd.hint"></p>
+              </div>
+            </template>
+            <p class="field-error" x-show="fieldError(f, fd)" x-text="fieldError(f, fd)"></p>
+          </div>
+        </template>
+      </div>
+
+      <ul class="ex-notes" x-show="notesOf(f).length" data-ex-notes>
+        <template x-for="(n, i) in notesOf(f)" :key="n.code + ':' + i">
+          <li class="ex-note" :class="'is-' + n.level">
+            <span class="dot" :class="levelDot(n.level)" aria-hidden="true"></span>
+            <span class="ex-note-text" x-text="n.message"></span>
+            <template x-if="n.action && n.action.url">
+              <a class="link ex-fix" :href="n.action.url"><span x-text="n.action.label"></span><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg></a>
+            </template>
+          </li>
+        </template>
+      </ul>
+
+      {% include "publishing/_export_state.html" %}
+    </div>
+  </template>
+</fieldset>

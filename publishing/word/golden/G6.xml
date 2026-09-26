@@ -1,0 +1,378 @@
+### word/document.xml
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="0" w:name="_Toc_h1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="0"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كلمة </w:t>
+      </w:r>
+      <w:commentRangeStart w:id="0"/>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:bCs/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مش</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كوكة</w:t>
+      </w:r>
+      <w:commentRangeEnd w:id="0"/>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:commentReference w:id="0"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> ثم </w:t>
+      </w:r>
+      <w:commentRangeStart w:id="1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">ثانية</w:t>
+      </w:r>
+      <w:commentRangeEnd w:id="1"/>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:commentReference w:id="1"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">(</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:footnoteReference w:id="1"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="FootnoteReference"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">)</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> بعدها.</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:footerReference w:type="default" r:id="rId6"/>
+      <w:footnotePr>
+        <w:numFmt w:val="decimal"/>
+        <w:numRestart w:val="eachPage"/>
+      </w:footnotePr>
+      <w:pgSz w:w="9638" w:h="13606"/>
+      <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+      <w:bidi/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+
+### word/footnotes.xml
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:footnote w:type="separator" w:id="-1">
+    <w:p>
+      <w:pPr>
+        <w:pBdr>
+          <w:top w:val="single" w:sz="3" w:space="0" w:color="auto"/>
+        </w:pBdr>
+        <w:spacing w:before="227" w:after="0" w:line="91" w:lineRule="exact"/>
+        <w:rPr>
+          <w:sz w:val="2"/>
+          <w:szCs w:val="2"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:sz w:val="2"/>
+          <w:szCs w:val="2"/>
+        </w:rPr>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0">
+    <w:p>
+      <w:pPr>
+        <w:pBdr>
+          <w:top w:val="single" w:sz="3" w:space="0" w:color="auto"/>
+        </w:pBdr>
+        <w:spacing w:before="227" w:after="0" w:line="91" w:lineRule="exact"/>
+        <w:rPr>
+          <w:sz w:val="2"/>
+          <w:szCs w:val="2"/>
+        </w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:sz w:val="2"/>
+          <w:szCs w:val="2"/>
+        </w:rPr>
+        <w:t xml:space="preserve"> </w:t>
+      </w:r>
+    </w:p>
+  </w:footnote>
+  <w:footnote w:id="1">
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="FootnoteText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="NkNoteNumber"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">(</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="NkNoteNumber"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:footnoteRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="NkNoteNumber"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">) </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">حاشية فيها </w:t>
+      </w:r>
+      <w:commentRangeStart w:id="2"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">شك</w:t>
+      </w:r>
+      <w:commentRangeEnd w:id="2"/>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:commentReference w:id="2"/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> أيضًا</w:t>
+      </w:r>
+    </w:p>
+  </w:footnote>
+</w:footnotes>
+
+### word/comments.xml
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:comment w:id="0" w:author="نسّاخ" w:date="2026-01-01T00:00:00Z" w:initials="ن">
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كلمة غير مؤكَّدة: مشكوكة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">القراءات:</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">Qari v</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">0.3: مشكوكة (في النص)</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">Tesseract</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">: مشكوكةة</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الصفحة الأصلية: 5</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="1" w:author="نسّاخ" w:date="2026-01-01T00:00:00Z" w:initials="ن">
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كلمة غير مؤكَّدة: ثانية</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الصفحة الأصلية: 5</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">لا قراءات أخرى لهذه الكلمة؛ راجعها على الأصل.</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+  <w:comment w:id="2" w:author="نسّاخ" w:date="2026-01-01T00:00:00Z" w:initials="ن">
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="CommentReference"/>
+        </w:rPr>
+        <w:annotationRef/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">كلمة غير مؤكَّدة: شك</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">القراءات:</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">Qari v</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">0.3: شك (في النص)</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="CommentText"/>
+      </w:pPr>
+      <w:r>
+        <w:t xml:space="preserve">Tesseract</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">: شكة</w:t>
+      </w:r>
+    </w:p>
+  </w:comment>
+</w:comments>

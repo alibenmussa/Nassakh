@@ -37,8 +37,8 @@ seed-groups:        ## make sure the admin / editor / proofreader groups exist
 web:                ## Django dev server on :8000
 	$(PY) manage.py runserver 8000
 
-worker:             ## CPU worker: ingest, preprocess, layout, fast OCR, page renders; also the re-layout queue
-	$(CELERY) -A nassakh worker -Q default,layout -c 4 -l info
+worker:             ## CPU worker: ingest, preprocess, layout, fast OCR, page renders; the re-layout and export queues
+	$(CELERY) -A nassakh worker -Q default,layout,export -c 4 -l info
 
 gpu-worker:         ## GPU worker: the OCR models, one process, models resident
 	$(CELERY) -A nassakh worker -Q gpu -c 1 -P solo -l info

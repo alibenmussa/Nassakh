@@ -66,6 +66,10 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
             <span>اختصارات لوحة المفاتيح</span>
           </button>
           <div class="menu-sep" role="separator"></div>
+          <a class="menu-item" role="menuitem" href="{% url 'publishing:export' book.pk %}" x-show="v.hasDocument" data-export-menu-item>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
+            <span>الإخراج</span>
+          </a>
           <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
             <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
             <span>لوحة الكتاب</span>

@@ -7,15 +7,23 @@
 - `relayout_chapter` (queue `layout`, `CELERY_TASK_ROUTES`: the fast re-layout must not wait behind page
   renders; the default worker consumes `default,layout`) runs `publishing.relayout.run_relayout`.
 - `render_layout_images` (queue `default`, low priority) writes a finished re-layout's page images.
+- `run_export` (queue `export`, PHASE6_SPEC §6.4; the CPU worker consumes `default,layout,export`) runs
+  `publishing.exports.run_export`, which records every failure on the export's row. Its soft time limit is
+  `NASSAKH["EXPORT_SOFT_LIMIT_S"]` (a timeout reads «استغرق الإخراج أطول من المسموح.»), the hard limit
+  120 s above it.
 """
 
 from __future__ import annotations
 
 from celery import shared_task
+from django.conf import settings
 
 from books.models import Book
 
 from . import preview
+
+EXPORT_SOFT_LIMIT_S = int(settings.NASSAKH.get("EXPORT_SOFT_LIMIT_S", 1800))
+EXPORT_HARD_MARGIN_S = 120
 
 
 def _task_id(task) -> str:
@@ -58,4 +66,16 @@ def render_layout_images(render_id: int) -> int | None:
     from . import relayout
 
     row = relayout.render_layout_images(render_id)
+    return row.pk if row is not None else None
+
+
+@shared_task(
+    bind=True, soft_time_limit=EXPORT_SOFT_LIMIT_S, time_limit=EXPORT_SOFT_LIMIT_S + EXPORT_HARD_MARGIN_S
+)
+def run_export(self, export_id: int) -> int | None:
+    """Export a book into its file (D58, `publishing.exports.run_export`); returns the row id (None: no
+    such row). A redelivered task (`acks_late`) with the same id starts the export again."""
+    from . import exports
+
+    row = exports.run_export(export_id, task_id=_task_id(self))
     return row.pk if row is not None else None

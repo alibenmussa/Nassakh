@@ -16,10 +16,24 @@
   the answer waits until it is done (a long poll).
 
 404 without a manuscript or for an unknown chapter, 400 for an unknown scope or a bad page range.
+
+Exports (PHASE6_SPEC §6.5, D58; payloads §3.2, `publishing.exports`):
+
+- GET  /api/books/<id>/exports/  (login) → `exports.page_payload`: the book, the readiness, one block per
+  format (its form, notes, active and latest export), the history (newest first, at most 30), the URLs.
+- POST /api/books/<id>/exports/  `{format, options}`  (editor) → 202 the new row · 409 `{detail, active}`
+  (an export of this format is queued or running) · 400 `{detail, errors}` · 404 `{detail}` (no manuscript).
+- GET  /api/books/<id>/exports/<eid>/?wait=<seconds ≤ 5>&since=<iso>  (login) → the row; with `wait` the
+  answer waits until the row's `updated_at` is later than `since`, or it is final (a long poll).
+- POST /api/books/<id>/exports/<eid>/cancel/  (editor) → the row, cancelled · 409 `{detail, row}` when it
+  had finished.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound
@@ -29,8 +43,8 @@ from rest_framework.response import Response
 from books.models import Book
 from editor.api import EditorOrReadOnly
 
-from . import engine, relayout
-from .models import PreviewRender
+from . import engine, exports, relayout
+from .models import Export, PreviewRender
 from .preview import PreviewNotFound
 
 SCOPES = ("book", "chapter")
@@ -130,3 +144,75 @@ def relayout_status(request: Request, book_id: int, render_id: int) -> Response:
     if wait > 0:
         row = relayout.wait_for(row, wait)
     return Response(relayout.relayout_payload(row))
+
+
+# ====================================================================== exports
+
+
+def _export_error(exc: exports.ExportError, request: Request) -> Response:
+    body: dict = {"detail": exc.detail}
+    if exc.errors:
+        body["errors"] = exc.errors
+    if isinstance(exc, exports.ExportConflict) and exc.row is not None:
+        body["active"] = exports.export_payload(exc.row, request.user)
+    elif isinstance(exc, exports.ExportFinished) and exc.row is not None:
+        body["row"] = exports.export_payload(exc.row, request.user)
+    return Response(body, status=exc.status)
+
+
+def _export_row(book_id: int, export_id: int) -> Export:
+    row = Export.objects.filter(pk=export_id, book_id=book_id).select_related("book", "created_by").first()
+    if row is None:
+        raise NotFound("الإخراج غير موجود.")
+    return row
+
+
+def _since(value) -> datetime | None:
+    """`since` of the long poll (an ISO time; a `+` sent unescaped arrives as a space)."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace(" ", "+"))
+    except ValueError:
+        return None
+    return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([EditorOrReadOnly])
+def book_exports(request: Request, book_id: int) -> Response:
+    """The export page's payload; POST starts an export of one format."""
+    book = _book(book_id)
+    if request.method == "GET":
+        return Response(exports.page_payload(book, request.user))
+    data = request.data if isinstance(request.data, dict) else {}
+    try:
+        row = exports.request_export(book, str(data.get("format") or ""), data.get("options"), request.user)
+    except exports.ExportError as exc:
+        return _export_error(exc, request)
+    return Response(exports.export_payload(row, request.user), status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["GET"])
+def book_export(request: Request, book_id: int, export_id: int) -> Response:
+    """One export's row; `?wait=` long-polls until it changes after `since` or is final."""
+    row = _export_row(book_id, export_id)
+    try:
+        wait = float(request.query_params.get("wait") or 0)
+    except ValueError:
+        wait = 0.0
+    if wait > 0:
+        row = exports.wait_for(row, wait, _since(request.query_params.get("since")))
+    return Response(exports.export_payload(row, request.user))
+
+
+@api_view(["POST"])
+@permission_classes([EditorOrReadOnly])
+def book_export_cancel(request: Request, book_id: int, export_id: int) -> Response:
+    """Cancel a queued or running export."""
+    row = _export_row(book_id, export_id)
+    try:
+        row = exports.cancel_export(row)
+    except exports.ExportError as exc:
+        return _export_error(exc, request)
+    return Response(exports.export_payload(row, request.user))

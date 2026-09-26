@@ -28,6 +28,11 @@ Markup contract (used by `publishing.css`, `publishing.pdf` and `publishing.layo
 - front matter: `section.nk-title-page` (title, subtitle, author, editor, translator, publisher, city and
   year), `section.nk-copyright-page` (the book details), `nav.nk-contents` > `ol.nk-toc` >
   `li.nk-toc-<level>` > `a[href="#b-<heading id>"]`
+- with `labels` (the PDF exports, D61), every chapter and section title also carries `data-label`: its
+  text without note calls or scan page marks, which the export CSS uses as the outline entry
+  (`bookmark-label: attr(data-label)`); with `note_links` (the screen PDF) every footnote element sits in
+  `a.nk-note-link[href="#fn-…"]`, so its call links to its note (the link's only box in the line is the
+  call; the lines do not move). The preview's markup has neither.
 """
 
 from __future__ import annotations
@@ -118,11 +123,20 @@ class Markup:
     notes: dict[str, str] = field(default_factory=dict)  # note id → its element id (`fn-…`)
 
 
+def heading_label(block: Block) -> str:
+    """A heading's outline label: its text without note calls or scan page marks, spaces collapsed."""
+    return " ".join(block.text().split())
+
+
 class _Writer:
-    def __init__(self, book: Book, numbers: dict[str, str] | None):
+    def __init__(
+        self, book: Book, numbers: dict[str, str] | None, labels: bool = False, note_links: bool = False
+    ):
         self.book = book
         self.setup = book.setup
         self.numbers = numbers or {}
+        self.labels = labels
+        self.note_links = note_links
         self.texts: dict[str, str] = {}
         # HTML ids for every block and note, allocated once in document order (the contents page links
         # to headings before they are written).
@@ -163,7 +177,10 @@ class _Writer:
                 element_id = self.note_ids.get((id(block), run.note))
                 if note is None or element_id is None:
                     continue
-                parts.append(_note_html(note, element_id, self.first_number(note)))
+                html = _note_html(note, element_id, self.first_number(note))
+                if self.note_links:
+                    html = f'<a class="nk-note-link" href="#{_attr(element_id)}">{html}</a>'
+                parts.append(html)
             elif isinstance(run, SourceMark) and self.setup.print_source_pages:
                 parts.append(
                     f'<span class="nk-src" data-src="{run.page}" aria-hidden="true">ص {run.page}</span>'
@@ -176,6 +193,8 @@ class _Writer:
         extra = ""
         if block.style == "chapter-title":
             extra = f' data-running="{_attr(chapter_running)}"'
+        if self.labels and tag in ("h1", "h2"):
+            extra += f' data-label="{_attr(heading_label(block))}"'
         classes = f"nk-{block.style}"
         if block.break_before and not opens_page:  # (a block that opens a page anyway: no empty page first)
             classes += " nk-break"
@@ -271,16 +290,20 @@ def render_markup(
     *,
     numbers: dict[str, str] | None = None,
     start_block: str | None = None,
+    labels: bool = False,
+    note_links: bool = False,
 ) -> Markup:
     """The print HTML of `book` and the plain text of its tagged elements (`scope` `book`: front matter
     and every chapter; `chapter`: the chapters in the model only, no front matter; `window`: the same,
     the first chapter from the block `start_block` on). `stylesheet`, when given, replaces the model's page
-    setup; `numbers` (note id or element id → shown number) fixes the footnote numbers (D46 pass 2)."""
+    setup; `numbers` (note id or element id → shown number) fixes the footnote numbers (D46 pass 2);
+    `labels` adds the headings' outline labels (`data-label`, the PDF exports), `note_links` the links from
+    the footnote calls to their notes (the screen PDF)."""
     if scope not in SCOPES:
         raise ValueError(f"unknown scope {scope!r}")
     if stylesheet is not None:
         book = replace(book, setup=page_setup(stylesheet))  # the caller's model is left as it is
-    writer = _Writer(book, numbers)
+    writer = _Writer(book, numbers, labels, note_links)
     front = book.front
     parts: list[str] = [
         "<!DOCTYPE html>",

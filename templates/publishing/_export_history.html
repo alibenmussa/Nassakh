@@ -1,0 +1,29 @@
+{% comment %}«السجل» (PHASE6_SPEC §8.3): every file of every format, newest first (at most 30, the retention keeps fewer),
+in the ed-snap look. Line 1: a dot, then «Word · كتابي.docx · 318 KB» (running «… · قيد الإخراج · {step}», failed
+«… · تعذّر الإخراج», cancelled «… · أُلغي»); line 2 (meta): the relative time (the absolute one in its title), the
+author, the options, «تغيّر النص بعد هذا الإخراج». «تنزيل» while the file is there. Before Alpine mounts: two skeleton
+rows. Inside exportPage.{% endcomment %}
+<section class="ex-block ex-history" aria-labelledby="ex-history-title" data-history>
+  <div class="ex-head">
+    <h2 class="ex-title" id="ex-history-title">السجل</h2>
+    <span class="meta" x-show="items.length" x-cloak><bdi class="num" x-text="items.length"></bdi></span>
+  </div>
+  <div class="ed-snap-skeleton" x-show="false" aria-hidden="true"><span></span><span></span></div>
+  <ul class="ex-rows" x-cloak>
+    <template x-for="row in items" :key="row.id">
+      <li class="ed-snap ex-row" :class="'is-' + row.status">
+        <span class="dot" :class="historyDot(row)" aria-hidden="true"></span>
+        <span class="ed-snap-body">
+          <span class="ed-snap-label" :title="row.filename"><template x-for="(p, i) in historyParts(row)" :key="i"><span><span x-show="i" aria-hidden="true"> · </span><bdi x-text="p"></bdi></span></template></span>
+          <span class="meta"><span :title="absTime(row)" x-text="historyWhen(row)"></span><span x-text="historyRest(row)"></span></span>
+        </span>
+        <template x-if="row.download_url">
+          <a class="btn-icon ex-row-download" :href="row.download_url" download :aria-label="'تنزيل ' + row.filename" title="تنزيل">
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
+          </a>
+        </template>
+      </li>
+    </template>
+    <li class="meta ed-snap-empty" x-show="!items.length">لا ملفات بعد. يظهر هنا كل ملف أُخرج، بوقته وخياراته.</li>
+  </ul>
+</section>

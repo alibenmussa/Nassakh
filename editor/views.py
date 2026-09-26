@@ -28,7 +28,9 @@ INITIAL_LAYOUT_PAGES = 4
 def _context(request: HttpRequest, book_id: int, page: str) -> dict:
     book = get_object_or_404(Book, pk=book_id)
     chapter_id = request.GET.get("chapter") or None
-    config = services.page_config(book, request.user, chapter_id, page, request.GET.get("mode"))
+    config = services.page_config(
+        book, request.user, chapter_id, page, request.GET.get("mode"), tab=request.GET.get("tab")
+    )
     return {"book": book, "config": config, "exists": config["exists"], "can_edit": config["canEdit"]}
 
 

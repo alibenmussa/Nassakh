@@ -1,0 +1,56 @@
+{% comment %}The state row of one format (PHASE6_SPEC §8.3), shared by the formats, inside the format's `x-for` (`f`).
+One state at a time (`stateOf(f)`: never exported, done, stale, queued, running, error; a cancelled export brings
+the previous file back), re-keyed on every change so it cross-fades inside elements that stay (the status line
+keeps the focus it was given after a start). The format's button «إخراج …» on the start side (editors), the status
+line (a dot and its text) and, on the end side, «تنزيل» for a file or «إلغاء» while it runs. Under it: the 4 px bar
+when the progress is counted, the waiting hint, the file's warnings, the technical line of a failure (editors) and
+the request's own error (409, 400…).{% endcomment %}
+<div class="ex-state-wrap" :data-ex-state="f.key">
+  <div class="ex-state">
+    <button type="button" class="btn ex-go" :class="{ 'btn-primary': isPrimary(f) }" x-show="canEdit" :disabled="!canStart(f)" @click="start(f.key)" :data-ex-go="f.key" x-text="goLabel(f)"></button>
+    <div class="ex-state-main" :class="'is-' + stateOf(f).kind">
+      <span class="ex-status" tabindex="-1" :data-ex-status="f.key">
+        <template x-for="s in [stateOf(f)]" :key="stateKey(s)">
+          <span class="ex-status-line">
+            <span class="dot ex-dot" :class="[s.dot, isFresh(f, s) ? 'is-fresh' : '']" x-show="s.dot" aria-hidden="true"></span>
+            <span class="ex-state-name" x-show="s.name" :title="s.name"><bdi x-text="s.name"></bdi></span>
+            <span class="ex-state-text" :title="s.title"><template x-for="(p, i) in s.parts" :key="i"><span><span x-show="i || s.name" aria-hidden="true"> · </span><bdi x-text="p"></bdi></span></template></span>
+          </span>
+        </template>
+      </span>
+      <template x-for="s in [stateOf(f)]" :key="stateKey(s)">
+        <span class="ex-extra">
+          <template x-if="s.kind === 'done' || s.kind === 'stale'">
+            <a class="btn btn-sm ex-download" :href="s.row.download_url" download :data-ex-download="f.key" :title="'تنزيل ' + s.row.filename">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
+              <span>تنزيل</span>
+            </a>
+          </template>
+          <template x-if="(s.kind === 'queued' || s.kind === 'running') && canEdit">
+            <button type="button" class="btn btn-sm btn-ghost ex-cancel" :disabled="busy[f.key] === 'cancel'" @click="cancel(f.key)" :data-ex-cancel="f.key">إلغاء</button>
+          </template>
+        </span>
+      </template>
+    </div>
+  </div>
+  <template x-for="s in [stateOf(f)]" :key="stateKey(s)">
+    <div class="ex-more" x-show="s.percent !== null || s.hint || fileWarnings(s).length || (s.kind === 'error' && s.row.error_detail)">
+      <div class="progress ex-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="s.percent" :aria-label="s.text" x-show="s.percent !== null">
+        <div class="progress-fill" :style="'width:' + (s.percent || 0) + '%'"></div>
+      </div>
+      <p class="lo-note" x-show="s.hint" x-text="s.hint"></p>
+      <ul class="ex-notes ex-file-notes" x-show="fileWarnings(s).length">
+        <template x-for="(w, i) in fileWarnings(s)" :key="w.code + ':' + i">
+          <li class="ex-note is-warn"><span class="dot dot-warning" aria-hidden="true"></span><span class="ex-note-text" x-text="w.message"></span></li>
+        </template>
+      </ul>
+      <template x-if="s.kind === 'error' && s.row.error_detail">
+        <details class="error-details ex-error-details">
+          <summary class="meta">التفاصيل التقنية</summary>
+          <pre dir="ltr" x-text="s.row.error_detail"></pre>
+        </details>
+      </template>
+    </div>
+  </template>
+  <p class="field-error" role="alert" x-show="errorOf(f)" x-text="errorOf(f)" :data-ex-error="f.key"></p>
+</div>

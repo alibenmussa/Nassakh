@@ -7,10 +7,11 @@ Phase 5 styles, see `editor.document`) into plain dataclasses that know nothing 
          LineBreak | SourceMark], footnotes[Footnote])])], setup)
 
 - **Blocks carry style names only**, never direct formatting (`STYLES`: `chapter-title`, `body`, `quote`,
-  …). The HTML renderer maps a style to a class and the stylesheet's CSS, the Word renderer (Phase 6) to a
-  real Word style (`Style.word`: `Heading 1`, `Normal`, `Footnote Text`, …), so the Word navigation pane,
-  its table of contents and its footnote pane work.
-- **Runs** are text with typographic marks (`bold`, `italic`); editorial marks (`uncertain`) are dropped.
+  …). The HTML renderer maps a style to a class and the stylesheet's CSS, the Word renderer
+  (`publishing.word`, Phase 6) to a real Word style id (`Style.word`: `Heading1`, `Normal`,
+  `FootnoteText`, …), so the Word navigation pane, its table of contents and its footnote pane work.
+- **Runs** are text with typographic marks (`bold`, `italic`); editorial marks (`uncertain`) are dropped
+  unless `book_model(…, editorial=True)` asks for them (the Word export's comments on uncertain words).
   A footnote call is a `NoteRef` in the runs (Word: `w:footnoteReference`); a hard line break a
   `LineBreak`; a scan page mark a `SourceMark` (printed in the margin only when the stylesheet asks).
 - **Footnotes are objects** attached to the block that calls them, in call order, with their own runs and
@@ -42,7 +43,8 @@ from editor import document as doc
 
 @dataclass(frozen=True)
 class Style:
-    """A block style: its Arabic name (the editor's style picker) and the Word style it maps to."""
+    """A block style: its Arabic name (the editor's style picker) and the Word style id it maps to
+    (PHASE6_SPEC §4.3; `publishing.word.styles` defines every id)."""
 
     key: str
     label: str
@@ -53,18 +55,18 @@ STYLES: dict[str, Style] = {
     style.key: style
     for style in (
         Style("book-title", "عنوان الكتاب", "Title"),
-        Style("book-author", "المؤلف", "Subtitle"),
-        Style("contents-title", "عنوان المحتويات", "TOC Heading"),
-        Style("contents-1", "مدخل فصل في المحتويات", "TOC 1"),
-        Style("contents-2", "مدخل عنوان فرعي في المحتويات", "TOC 2"),
-        Style("chapter-title", "عنوان فصل", "Heading 1"),
-        Style("section-title", "عنوان فرعي", "Heading 2"),
+        Style("book-author", "المؤلف", "NkAuthor"),
+        Style("contents-title", "عنوان المحتويات", "TOCHeading"),
+        Style("contents-1", "مدخل فصل في المحتويات", "TOC1"),
+        Style("contents-2", "مدخل عنوان فرعي في المحتويات", "TOC2"),
+        Style("chapter-title", "عنوان فصل", "Heading1"),
+        Style("section-title", "عنوان فرعي", "Heading2"),
         Style("body", "فقرة", "Normal"),
         Style("quote", "اقتباس", "Quote"),
-        Style("verse", "شعر", "Verse"),
-        Style("center", "ملاحظة وسط", "Centered"),
-        Style("separator", "فاصل", "Separator"),
-        Style("footnote-text", "حاشية", "Footnote Text"),
+        Style("verse", "شعر", "NkVerse"),
+        Style("center", "ملاحظة وسط", "NkCenter"),
+        Style("separator", "فاصل", "NkSeparator"),
+        Style("footnote-text", "حاشية", "FootnoteText"),
     )
 }
 PARAGRAPH_STYLE_OF: dict[str | None, str] = {
@@ -75,6 +77,7 @@ PARAGRAPH_STYLE_OF: dict[str | None, str] = {
     "center": "center",
 }
 TYPOGRAPHIC_MARKS: dict[str, str] = {"bold": "bold", "strong": "bold", "italic": "italic", "em": "italic"}
+EDITORIAL_MARKS: dict[str, str] = {"uncertain": "uncertain"}  # kept only with `editorial=True`
 SEPARATOR_TEXT = "* * *"
 # The book details of `StyleSheet.front_matter["fields"]` (D47), in the order the title and copyright pages
 # print them; the title and the author default from the Book.
@@ -372,13 +375,13 @@ class _Counters:
     book: int = 0
     chapter: int = 0
     last_page: int | None = None
+    editorial: bool = False  # keep the editorial marks (`uncertain`) on the runs
 
 
-def _marks(node: dict) -> tuple[str, ...]:
+def _marks(node: dict, editorial: bool = False) -> tuple[str, ...]:
+    known = {**TYPOGRAPHIC_MARKS, **EDITORIAL_MARKS} if editorial else TYPOGRAPHIC_MARKS
     out = {
-        TYPOGRAPHIC_MARKS[m["type"]]
-        for m in node.get("marks") or []
-        if isinstance(m, dict) and m.get("type") in TYPOGRAPHIC_MARKS
+        known[m["type"]] for m in node.get("marks") or [] if isinstance(m, dict) and m.get("type") in known
     }
     return tuple(sorted(out))
 
@@ -393,13 +396,13 @@ def _append_run(runs: list, text: str, marks: tuple[str, ...]) -> None:
         runs.append(Run(text, marks))
 
 
-def _note_runs(content: list) -> list[Run | LineBreak]:
+def _note_runs(content: list, editorial: bool = False) -> list[Run | LineBreak]:
     runs: list = []
     for item in content or []:
         if not isinstance(item, dict):
             continue
         if item.get("type") == "text":
-            _append_run(runs, str(item.get("text") or ""), _marks(item))
+            _append_run(runs, str(item.get("text") or ""), _marks(item, editorial))
         elif item.get("type") == "hardBreak":
             runs.append(LineBreak())
     return _trim(_tidy_breaks(runs))
@@ -429,7 +432,7 @@ def _inline(content: list, counters: _Counters, notes: list[Footnote]) -> list[I
             continue
         kind = item.get("type")
         if kind == "text":
-            _append_run(runs, str(item.get("text") or ""), _marks(item))
+            _append_run(runs, str(item.get("text") or ""), _marks(item, counters.editorial))
         elif kind == "hardBreak":
             runs.append(LineBreak())
         elif kind == "pageBreak":
@@ -447,7 +450,7 @@ def _inline(content: list, counters: _Counters, notes: list[Footnote]) -> list[I
             notes.append(
                 Footnote(
                     id=note_id,
-                    runs=_note_runs(item.get("content") or []),
+                    runs=_note_runs(item.get("content") or [], counters.editorial),
                     number=counters.chapter,
                     book_number=counters.book,
                     source_page=page if isinstance(page, int) and not isinstance(page, bool) else None,
@@ -545,12 +548,22 @@ def _title_of(content: list, fallback: str) -> tuple[str, str]:
     return fallback, ""
 
 
-def book_model(document, stylesheet=None, *, title: str = "", author: str = "", chapter_ids=None) -> Book:
+def book_model(
+    document,
+    stylesheet=None,
+    *,
+    title: str = "",
+    author: str = "",
+    chapter_ids=None,
+    editorial: bool = False,
+) -> Book:
     """The book model of a manuscript document with a stylesheet (`editor.StyleSheet`, a dict or None).
 
     The title and the author are the stylesheet's book details when given, else the document's title
     node's, else `title` / `author` (the book's own fields). `chapter_ids`, when given, keeps only those
     chapters (the chapter preview, the re-layout); footnote numbers still count from the start of the book.
+    `editorial=True` keeps the `uncertain` mark on the runs (the Word export's comments); the default
+    model is the same as before, byte for byte.
     """
     setup = page_setup(stylesheet)
     content = doc.content_of(document)
@@ -564,7 +577,7 @@ def book_model(document, stylesheet=None, *, title: str = "", author: str = "", 
         **{name: setup.detail(name) for name in BOOK_FIELDS if name not in ("title", "author")},
     )
     wanted = set(chapter_ids) if chapter_ids is not None else None
-    counters = _Counters()
+    counters = _Counters(editorial=editorial)
     chapters: list[Chapter] = []
     for chapter in doc.chapters_of(document):
         counters.chapter = 0

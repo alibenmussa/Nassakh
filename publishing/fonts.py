@@ -12,6 +12,9 @@ Lotus has no usable Latin letters or digits: Latin text uses the stylesheet's La
 by default). In the CSS every Arabic face is declared with a `unicode-range` that leaves Latin letters to
 the Latin face — and digits too when the face has none — so a paragraph is set in one family list
 (`"nk-body", "nk-latin"`) and each character takes the right face, as Word's `rFonts` ascii / cs pair does.
+A role set in the Latin face's own file (Simplified Arabic for both, D60) is declared without a range: the
+face sets its own Latin letters (WeasyPrint does not take the same file again for `nk-latin`, and would
+fall back to a system face such as "Serif Narrow").
 """
 
 from __future__ import annotations
@@ -383,12 +386,22 @@ def _rules(family: str, face: Face, ranges: str | None) -> list[str]:
     return rules
 
 
+def role_ranges(face: Face, latin: Face) -> str | None:
+    """The `unicode-range` of an Arabic role (`nk-body`, `nk-heading`): Latin letters left out (and the
+    digits for a face without them), or None — the whole face — when the role's regular file is the
+    Latin face's own file (D60: the face sets its own Latin letters)."""
+    if face.files.regular == latin.files.regular:
+        return None
+    return _ARABIC_RANGES if face.latin else _ARABIC_RANGES_NO_DIGITS
+
+
 def font_face_css(fonts: ResolvedFonts) -> str:
     """`@font-face` rules for `nk-body`, `nk-heading` (Arabic faces: Latin letters left out, and every
-    character the face's file lacks) and `nk-latin`; file URLs are absolute `file://` paths."""
+    character the face's file lacks; `role_ranges`) and `nk-latin`; file URLs are absolute `file://`
+    paths."""
     rules: list[str] = []
     for family, face in (("nk-body", fonts.body), ("nk-heading", fonts.heading)):
-        rules += _rules(family, face, _ARABIC_RANGES if face.latin else _ARABIC_RANGES_NO_DIGITS)
+        rules += _rules(family, face, role_ranges(face, fonts.latin))
     rules += _rules("nk-latin", fonts.latin, None)
     return "\n".join(rules)
 
@@ -431,15 +444,15 @@ def local_names(path: Path) -> tuple[str, ...]:
 
 def browser_faces(fonts: ResolvedFonts) -> list[dict]:
     """The render's faces for the live pages (D47): `[{family, weight, style, src: [...], unicode_range}]`
-    — the same families (`nk-body`, `nk-heading`, `nk-latin`), files and unicode ranges as the PDF. The
-    vendored Amiri is served from /static/; an installed face is used through `local()` (its files stay in
-    the Mac's font folders, never served)."""
+    — the same families (`nk-body`, `nk-heading`, `nk-latin`), files and unicode ranges (`role_ranges`) as
+    the PDF. The vendored Amiri is served from /static/; an installed face is used through `local()` (its
+    files stay in the Mac's font folders, never served)."""
     from django.templatetags.static import static
 
     out: list[dict] = []
     for family, face, ranges in (
-        ("nk-body", fonts.body, _ARABIC_RANGES if fonts.body.latin else _ARABIC_RANGES_NO_DIGITS),
-        ("nk-heading", fonts.heading, _ARABIC_RANGES if fonts.heading.latin else _ARABIC_RANGES_NO_DIGITS),
+        ("nk-body", fonts.body, role_ranges(fonts.body, fonts.latin)),
+        ("nk-heading", fonts.heading, role_ranges(fonts.heading, fonts.latin)),
         ("nk-latin", fonts.latin, None),
     ):
         for weight, style, path in face.files.styles():

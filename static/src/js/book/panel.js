@@ -65,7 +65,8 @@
     const tabFor = (mode) => { const t = U.readLocal(TAB_KEY + mode, DEFAULT_TAB[mode]); return TABS.includes(t) ? t : DEFAULT_TAB[mode]; };
 
     return {
-      tab: tabFor(cfg.mode === 'edit' && cfg.canEdit ? 'edit' : 'preview'),
+      // `?tab=` (page_config's `tab`, the export page's readiness links) wins over the tab remembered for the mode
+      tab: TABS.includes(cfg.tab) ? cfg.tab : tabFor(cfg.mode === 'edit' && cfg.canEdit ? 'edit' : 'preview'),
       pointed: null, // the block last clicked in preview (the source tab follows it)
       pointedNode: null, // {key, id, node}: that block from its chapter's nodes when no chapter is being edited («الفقرة»)
       flash: null, // {n, block, i}: a line pointed at from a list, lit for a moment

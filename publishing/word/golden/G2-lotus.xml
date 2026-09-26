@@ -1,0 +1,106 @@
+### word/document.xml
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="0" w:name="_Toc_h1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="0"/>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:b/>
+          <w:bCs/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">غامق</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> ومائل </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:i/>
+          <w:iCs/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">مائل</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> و </w:t>
+      </w:r>
+      <w:r>
+        <w:t xml:space="preserve">Ibn Khaldun</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> في </w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rStyle w:val="NkLatin"/>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">1377</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve"> – «اقتباس»… شطر</w:t>
+      </w:r>
+      <w:r>
+        <w:br/>
+      </w:r>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">عجز</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:footerReference w:type="default" r:id="rId6"/>
+      <w:footnotePr>
+        <w:numFmt w:val="decimal"/>
+        <w:numRestart w:val="eachPage"/>
+      </w:footnotePr>
+      <w:pgSz w:w="9638" w:h="13606"/>
+      <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+      <w:bidi/>
+    </w:sectPr>
+  </w:body>
+</w:document>
+
+### word/fontTable.xml
+<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:font w:name="Lotus Linotype Exnd">
+    <w:panose1 w:val="00000500000000000000"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="auto"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+  <w:font w:name="Times New Roman">
+    <w:panose1 w:val="00000500000000000000"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="auto"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+</w:fonts>

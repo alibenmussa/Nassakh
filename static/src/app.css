@@ -8,6 +8,7 @@
 @import "./components/review.css";
 @import "./components/manuscript.css";
 @import "./components/layout.css";
+@import "./components/export.css";
 
 @source "../../templates";
 @source "./js";

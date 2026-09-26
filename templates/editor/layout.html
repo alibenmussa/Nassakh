@@ -37,7 +37,13 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
         <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
       </a>
 
-      {# «⋯»: snapshots, digits, the chapter's re-assembly on drift, the PDF of the last render, the manuscript, the dashboard #}
+      {# «الإخراج» (PHASE6_SPEC §8.2): the book's files; in preview only (in edit mode «تم» is the one primary) #}
+      <a class="btn btn-primary btn-sm" href="{% url 'publishing:export' book.pk %}" x-show="v.mode !== 'edit'" title="ملفات الكتاب" data-export-link>
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
+        <span>الإخراج</span>
+      </a>
+
+      {# «⋯»: snapshots, digits, the chapter's re-assembly on drift, the preview's PDF, the export page, the manuscript, the dashboard #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
         <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
@@ -60,7 +66,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
           {% endif %}
           <a class="menu-item" role="menuitem" :href="v.pdfUrl || '#'" :aria-disabled="v.pdfUrl ? 'false' : 'true'" target="_blank" rel="noopener" @click="if (!v.pdfUrl) $event.preventDefault(); else open = false" data-pdf-link>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"/></svg>
-            <span>إخراج PDF</span>
+            <span>PDF المعاينة</span>
             <span class="meta ms-auto" x-show="!v.pdfUrl">بعد أول إخراج</span>
           </a>
           <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
@@ -68,6 +74,10 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
             <span>اختصارات لوحة المفاتيح</span>
           </button>
           <div class="menu-sep" role="separator"></div>
+          <a class="menu-item" role="menuitem" href="{% url 'publishing:export' book.pk %}" data-export-menu-item>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
+            <span>الإخراج</span>
+          </a>
           <a class="menu-item" role="menuitem" href="{% url 'assembly:manuscript' book.pk %}">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
             <span>المخطوطة</span>

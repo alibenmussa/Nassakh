@@ -15,6 +15,11 @@ Two layers:
   one), `preview_payload` (the API's answer), `schedule_after_edit` (after an editor save: the chapter's
   fast re-layout at once, the book render debounced, D44/D47), `request_relayout` (the fast re-layout of
   a chapter), `layout_state` (the dashboard's «الكتاب» block) and `render_book_pdf` (the export).
+
+**PDF exports (D61, PHASE6_SPEC §9).** `RenderJob.output` (`PdfOutput`) turns the same render into the
+print or the screen PDF: the same markup, CSS and passes — so the same pages as the preview — plus the
+export's rules (a clean outline; for print, bleed and crop marks and pure black), post-processed boxes,
+viewer preferences and metadata (`publishing.pdf.finisher_for`). `output=None` is the preview, unchanged.
 """
 
 from __future__ import annotations
@@ -22,9 +27,60 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
-ENGINE_VERSION = "nk-print-4"
+ENGINE_VERSION = "nk-print-5"  # D60: the Latin-face fix, no bleed or crop marks in the preview
+
+
+PDF_KINDS: tuple[str, ...] = ("print", "screen")
+# with crop marks the page grows by this much beyond the bleed, so the marks sit outside it
+CROP_SLUG_MM = 6.0
+
+
+@dataclass(frozen=True)
+class PdfMetadata:
+    """The document properties of an exported PDF besides the title and the author, which the markup
+    already carries (`<title>`, `<meta name="author">`): the subject (the subtitle), the creation time
+    (the export's, so the same export gives the same bytes), the creator and the language."""
+
+    subject: str = ""
+    created: datetime | None = None
+    creator: str = "نسّاخ"
+    lang: str = "ar"
+
+
+@dataclass(frozen=True)
+class PdfOutput:
+    """How an exported PDF differs from the preview's (D61): `kind` `print` (bleed and crop marks as
+    asked, pure black, the BleedBox exact, `Trapped /False`) or `screen` (RGB, no bleed, the outline pane
+    open, each footnote call a link to its note); both get the clean outline (chapters level 1, sections
+    level 2, no title-page entry, no note calls in the labels), right-to-left reading and the metadata."""
+
+    kind: str
+    bleed_mm: float = 0.0
+    crop_marks: bool = False
+    metadata: PdfMetadata = field(default_factory=PdfMetadata)
+
+    def __post_init__(self):
+        if self.kind not in PDF_KINDS:
+            raise ValueError(f"unknown PDF kind {self.kind!r}")
+
+    @property
+    def is_print(self) -> bool:
+        return self.kind == "print"
+
+    @property
+    def note_links(self) -> bool:
+        """The footnote calls link to their notes (the screen PDF)."""
+        return self.kind == "screen"
+
+    @property
+    def page_bleed_mm(self) -> float:
+        """The CSS `bleed` of the page: the bleed, plus the slug the crop marks are drawn in."""
+        if not self.is_print:
+            return 0.0
+        return float(self.bleed_mm) + (CROP_SLUG_MM if self.crop_marks else 0.0)
 
 
 @dataclass(frozen=True)
@@ -36,7 +92,8 @@ class RenderJob:
 
     `pdf=False` lays out without writing the PDF (the fast re-layout, D47); `seed` (note id → number)
     starts the footnote passes from the numbers of the last layout; `reuse` keeps the loaded CSS and fonts
-    for the next job (the layout worker)."""
+    for the next job (the layout worker). `output` makes the render a PDF export (`PdfOutput`, D61; None:
+    the preview); it never changes the pages, so it is not part of the preview hash."""
 
     document: dict
     stylesheet: object
@@ -51,6 +108,7 @@ class RenderJob:
     seed: dict | None = None
     reuse: bool = False
     continues: bool = False  # a window that goes on from the pages before it (not the book's first text page)
+    output: PdfOutput | None = None
 
     def wanted(self) -> list[str] | None:
         """The chapters the job renders (None: all of them)."""
@@ -85,7 +143,12 @@ class Engine(Protocol):
     name: str
     version: str
 
-    def render(self, job: RenderJob, cancelled: Callable[[], bool] | None = None) -> Rendered: ...
+    def render(
+        self,
+        job: RenderJob,
+        cancelled: Callable[[], bool] | None = None,
+        on_pass: Callable[[str], None] | None = None,
+    ) -> Rendered: ...
 
 
 def chapter_ranges(chapters, anchors: dict[str, int], page_count: int, first_page: int = 1) -> list[dict]:
@@ -130,7 +193,16 @@ class WeasyPrintEngine:
 
         return f"{ENGINE_VERSION}/weasyprint-{weasyprint.__version__}"
 
-    def render(self, job: RenderJob, cancelled: Callable[[], bool] | None = None) -> Rendered:
+    def render(
+        self,
+        job: RenderJob,
+        cancelled: Callable[[], bool] | None = None,
+        on_pass: Callable[[str], None] | None = None,
+    ) -> Rendered:
+        """Lay the job out and write its PDF. `cancelled()` is asked between passes; `on_pass(step)` is
+        told each pass as it starts (`layout`, `footnotes`, `relax`, then `write`: an export's progress).
+        With `job.output` the PDF is an export (the clean outline, the print rules, the finisher) and no
+        page layout is exported (`Rendered.layout` stays empty)."""
         from editor import document as doc
 
         from .css import stylesheet_css
@@ -138,17 +210,24 @@ class WeasyPrintEngine:
         from .html import render_markup
         from .layout import assign_chapters, page_checks, set_note_numbers
         from .model import book_model
-        from .pdf import render_pdf
+        from .pdf import finisher_for, render_pdf
 
         started = time.monotonic()
+        output = job.output
         book = book_model(
             job.document, job.stylesheet, title=job.title, author=job.author, chapter_ids=job.wanted()
         )
         setup = book.setup
         fonts = resolve(setup.body_font, setup.latin_font, setup.heading_font)
-        markup = render_markup(book, scope=job.scope, start_block=job.start_block)
+        markup = render_markup(
+            book,
+            scope=job.scope,
+            start_block=job.start_block,
+            labels=output is not None,
+            note_links=output is not None and output.note_links,
+        )
         css = stylesheet_css(
-            setup, fonts, scope=job.scope, first_page=job.first_page, continues=job.continues
+            setup, fonts, scope=job.scope, first_page=job.first_page, continues=job.continues, output=output
         )
         seed = None
         if job.seed:
@@ -158,12 +237,14 @@ class WeasyPrintEngine:
             css,
             numbering=setup.footnote_numbering,
             cancelled=cancelled,
-            texts=markup.texts,
+            texts=markup.texts if output is None else None,
             first_page=job.first_page,
             pdf=job.pdf,
             seed=seed,
-            reuse=job.reuse,
+            reuse=job.reuse and output is None,
             patch=not job.pdf and tabular_digits(number_face(fonts).files.regular),
+            finisher=finisher_for(output) if output is not None and job.pdf else None,
+            on_pass=on_pass,
         )
         if result.patched and result.layout:
             by_note = {

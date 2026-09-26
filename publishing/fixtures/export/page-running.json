@@ -1,0 +1,394 @@
+{
+  "book": {
+    "id": 19,
+    "title": "كتابي",
+    "has_manuscript": true,
+    "layout": {
+      "state": "current",
+      "trim_label": "17×24 سم",
+      "page_count": 85,
+      "chapters": 6,
+      "body_font": "Simplified Arabic",
+      "body_size_pt": 13
+    }
+  },
+  "can_edit": true,
+  "readiness": [
+    {
+      "code": "uncertain_words",
+      "level": "warn",
+      "message": "بقيت 12 كلمة غير مؤكَّدة في النص، منها 3 أرقام.",
+      "action": {
+        "label": "غير المؤكَّدة",
+        "url": "/books/19/layout/?tab=uncertain"
+      }
+    },
+    {
+      "code": "review_drift",
+      "level": "warn",
+      "message": "تغيّر نص 4 صفحات في المراجعة بعد التحرير.",
+      "action": {
+        "label": "الكتاب",
+        "url": "/books/19/layout/"
+      }
+    },
+    {
+      "code": "book_details",
+      "level": "info",
+      "message": "بيانات الكتاب بلا مؤلف؛ يُكتب في صفحة العنوان وخصائص الملف.",
+      "action": {
+        "label": "بيانات الكتاب",
+        "url": "/books/19/layout/?tab=format"
+      }
+    }
+  ],
+  "formats": [
+    {
+      "key": "docx",
+      "label": "Word",
+      "extension": ".docx",
+      "available": true,
+      "form": {
+        "kashida": {
+          "value": "low",
+          "choices": [
+            {
+              "value": "none",
+              "label": "بلا",
+              "title": "بلا كشيدة",
+              "hint": "تُضبط الأسطر بالمسافات وحدها، كما في المعاينة."
+            },
+            {
+              "value": "low",
+              "label": "خفيفة",
+              "title": "كشيدة خفيفة",
+              "hint": "الأسطر كما في المعاينة تقريبًا."
+            },
+            {
+              "value": "medium",
+              "label": "متوسطة",
+              "title": "كشيدة متوسطة",
+              "hint": "يغيّر Word فواصل الأسطر فيطول الكتاب عن المعاينة."
+            },
+            {
+              "value": "high",
+              "label": "قوية",
+              "title": "كشيدة قوية",
+              "hint": "يغيّر Word فواصل الأسطر فيطول الكتاب كثيرًا عن المعاينة."
+            }
+          ]
+        },
+        "comments": {
+          "value": false,
+          "available": 12,
+          "label": "تعليقات على الكلمات غير المؤكَّدة",
+          "hint": "تعليق Word لكل كلمة بقراءاتها وصفحتها الأصلية، للمدقّق. نسخة للمراجعة لا للمطبعة: يطبع Word التعليقات في الهامش ما لم تُخفِها."
+        }
+      },
+      "notes": [
+        {
+          "code": "font_not_embedded",
+          "level": "info",
+          "message": "خط «Simplified Arabic» غير مضمَّن في الملف (ترخيصه لا يسمح)؛ يلزم أن يكون مثبّتًا على الجهاز الذي يُفتح عليه."
+        },
+        {
+          "code": "toc_update",
+          "level": "warn",
+          "message": "يرتّب Word صفحاته بنفسه، وقد تختلف أرقام المحتويات بصفحة؛ حدّثها في Word قبل الطباعة: زر الفأرة الأيمن على المحتويات ← تحديث الحقل."
+        }
+      ],
+      "active": {
+        "id": 14,
+        "format": "docx",
+        "format_label": "Word",
+        "status": "running",
+        "status_label": "قيد الإخراج",
+        "options": {
+          "kashida": "low",
+          "comments": true
+        },
+        "options_text": "كشيدة خفيفة · تعليقات",
+        "manuscript_version": 36,
+        "stale": false,
+        "stale_text": "",
+        "progress": {
+          "step": "write",
+          "label": "كتابة الملف",
+          "done": null,
+          "total": null,
+          "percent": null
+        },
+        "waiting_hint": "",
+        "page_count": null,
+        "pages_hint": 85,
+        "size_bytes": 0,
+        "size_text": "",
+        "duration_ms": 0,
+        "warnings": [],
+        "error": "",
+        "error_detail": "",
+        "filename": "كتابي - مع التعليقات.docx",
+        "download_url": null,
+        "created_by": "علي",
+        "created_at": "2026-09-26T10:05:00.120931+02:00",
+        "updated_at": "2026-09-26T10:05:01.931774+02:00",
+        "finished_at": null
+      },
+      "latest": {
+        "id": 12,
+        "format": "docx",
+        "format_label": "Word",
+        "status": "done",
+        "status_label": "اكتمل",
+        "options": {
+          "kashida": "low",
+          "comments": false
+        },
+        "options_text": "كشيدة خفيفة",
+        "manuscript_version": 36,
+        "stale": false,
+        "stale_text": "",
+        "progress": {
+          "step": "done",
+          "label": "اكتمل",
+          "done": null,
+          "total": null,
+          "percent": null
+        },
+        "waiting_hint": "",
+        "page_count": null,
+        "pages_hint": 85,
+        "size_bytes": 325632,
+        "size_text": "318 KB",
+        "duration_ms": 2140,
+        "warnings": [
+          {
+            "code": "toc_update",
+            "level": "warn",
+            "message": "يرتّب Word صفحاته بنفسه، وقد تختلف أرقام المحتويات بصفحة؛ حدّثها في Word قبل الطباعة: زر الفأرة الأيمن على المحتويات ← تحديث الحقل."
+          },
+          {
+            "code": "font_not_embedded",
+            "level": "info",
+            "message": "خط «Simplified Arabic» غير مضمَّن في الملف (ترخيصه لا يسمح)؛ يلزم أن يكون مثبّتًا على الجهاز الذي يُفتح عليه."
+          }
+        ],
+        "error": "",
+        "error_detail": "",
+        "filename": "كتابي.docx",
+        "download_url": "/books/19/exports/12/download/",
+        "created_by": "علي",
+        "created_at": "2026-09-26T10:02:11.482113+02:00",
+        "updated_at": "2026-09-26T10:02:13.690552+02:00",
+        "finished_at": "2026-09-26T10:02:13.690552+02:00"
+      }
+    },
+    {
+      "key": "print_pdf",
+      "label": "PDF للطباعة",
+      "extension": ".pdf",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    },
+    {
+      "key": "screen_pdf",
+      "label": "PDF للشاشة",
+      "extension": ".pdf",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    },
+    {
+      "key": "epub",
+      "label": "EPUB",
+      "extension": ".epub",
+      "available": false,
+      "form": {},
+      "notes": [],
+      "active": null,
+      "latest": null
+    }
+  ],
+  "items": [
+    {
+      "id": 14,
+      "format": "docx",
+      "format_label": "Word",
+      "status": "running",
+      "status_label": "قيد الإخراج",
+      "options": {
+        "kashida": "low",
+        "comments": true
+      },
+      "options_text": "كشيدة خفيفة · تعليقات",
+      "manuscript_version": 36,
+      "stale": false,
+      "stale_text": "",
+      "progress": {
+        "step": "write",
+        "label": "كتابة الملف",
+        "done": null,
+        "total": null,
+        "percent": null
+      },
+      "waiting_hint": "",
+      "page_count": null,
+      "pages_hint": 85,
+      "size_bytes": 0,
+      "size_text": "",
+      "duration_ms": 0,
+      "warnings": [],
+      "error": "",
+      "error_detail": "",
+      "filename": "كتابي - مع التعليقات.docx",
+      "download_url": null,
+      "created_by": "علي",
+      "created_at": "2026-09-26T10:05:00.120931+02:00",
+      "updated_at": "2026-09-26T10:05:01.931774+02:00",
+      "finished_at": null
+    },
+    {
+      "id": 12,
+      "format": "docx",
+      "format_label": "Word",
+      "status": "done",
+      "status_label": "اكتمل",
+      "options": {
+        "kashida": "low",
+        "comments": false
+      },
+      "options_text": "كشيدة خفيفة",
+      "manuscript_version": 36,
+      "stale": false,
+      "stale_text": "",
+      "progress": {
+        "step": "done",
+        "label": "اكتمل",
+        "done": null,
+        "total": null,
+        "percent": null
+      },
+      "waiting_hint": "",
+      "page_count": null,
+      "pages_hint": 85,
+      "size_bytes": 325632,
+      "size_text": "318 KB",
+      "duration_ms": 2140,
+      "warnings": [
+        {
+          "code": "toc_update",
+          "level": "warn",
+          "message": "يرتّب Word صفحاته بنفسه، وقد تختلف أرقام المحتويات بصفحة؛ حدّثها في Word قبل الطباعة: زر الفأرة الأيمن على المحتويات ← تحديث الحقل."
+        },
+        {
+          "code": "font_not_embedded",
+          "level": "info",
+          "message": "خط «Simplified Arabic» غير مضمَّن في الملف (ترخيصه لا يسمح)؛ يلزم أن يكون مثبّتًا على الجهاز الذي يُفتح عليه."
+        }
+      ],
+      "error": "",
+      "error_detail": "",
+      "filename": "كتابي.docx",
+      "download_url": "/books/19/exports/12/download/",
+      "created_by": "علي",
+      "created_at": "2026-09-26T10:02:11.482113+02:00",
+      "updated_at": "2026-09-26T10:02:13.690552+02:00",
+      "finished_at": "2026-09-26T10:02:13.690552+02:00"
+    },
+    {
+      "id": 11,
+      "format": "docx",
+      "format_label": "Word",
+      "status": "done",
+      "status_label": "اكتمل",
+      "options": {
+        "kashida": "low",
+        "comments": false
+      },
+      "options_text": "كشيدة خفيفة",
+      "manuscript_version": 35,
+      "stale": true,
+      "stale_text": "تغيّر النص بعد هذا الإخراج",
+      "progress": {
+        "step": "done",
+        "label": "اكتمل",
+        "done": null,
+        "total": null,
+        "percent": null
+      },
+      "waiting_hint": "",
+      "page_count": null,
+      "pages_hint": 85,
+      "size_bytes": 325632,
+      "size_text": "318 KB",
+      "duration_ms": 2140,
+      "warnings": [
+        {
+          "code": "toc_update",
+          "level": "warn",
+          "message": "يرتّب Word صفحاته بنفسه، وقد تختلف أرقام المحتويات بصفحة؛ حدّثها في Word قبل الطباعة: زر الفأرة الأيمن على المحتويات ← تحديث الحقل."
+        },
+        {
+          "code": "font_not_embedded",
+          "level": "info",
+          "message": "خط «Simplified Arabic» غير مضمَّن في الملف (ترخيصه لا يسمح)؛ يلزم أن يكون مثبّتًا على الجهاز الذي يُفتح عليه."
+        }
+      ],
+      "error": "",
+      "error_detail": "",
+      "filename": "كتابي.docx",
+      "download_url": "/books/19/exports/11/download/",
+      "created_by": "علي",
+      "created_at": "2026-09-25T18:40:02.004410+02:00",
+      "updated_at": "2026-09-25T18:40:04.310002+02:00",
+      "finished_at": "2026-09-25T18:40:04.310002+02:00"
+    },
+    {
+      "id": 10,
+      "format": "docx",
+      "format_label": "Word",
+      "status": "error",
+      "status_label": "خطأ",
+      "options": {
+        "kashida": "medium",
+        "comments": false
+      },
+      "options_text": "كشيدة متوسطة",
+      "manuscript_version": 36,
+      "stale": false,
+      "stale_text": "",
+      "progress": {
+        "step": "check",
+        "label": "فحص الملف",
+        "done": null,
+        "total": null,
+        "percent": null
+      },
+      "waiting_hint": "",
+      "page_count": null,
+      "pages_hint": 85,
+      "size_bytes": 0,
+      "size_text": "",
+      "duration_ms": 1210,
+      "warnings": [],
+      "error": "الملف الناتج غير سليم فلم يُسلَّم؛ التفاصيل في سجل الخادم.",
+      "error_detail": "InvalidExport: word/document.xml: Element 'w:jc': 'kashida' is not a valid value",
+      "filename": "كتابي.docx",
+      "download_url": null,
+      "created_by": "علي",
+      "created_at": "2026-09-23T09:12:44.551020+02:00",
+      "updated_at": "2026-09-23T09:12:45.770114+02:00",
+      "finished_at": "2026-09-23T09:12:45.770114+02:00"
+    }
+  ],
+  "urls": {
+    "create": "/api/books/19/exports/",
+    "row": "/api/books/19/exports/__eid__/",
+    "cancel": "/api/books/19/exports/__eid__/cancel/"
+  }
+}

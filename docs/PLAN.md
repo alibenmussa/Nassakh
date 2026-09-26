@@ -111,7 +111,7 @@ Book 1──n Page 1──1 Preprocess
 | `Manuscript` / `ManuscriptSnapshot` (editor) | document JSON (ProseMirror), version, label, updated_by/at |
 | `StyleSheet` (editor) | book 1:1, template FK, trim size, margins (top/bottom/inner/outer), bleed, fonts, styles JSON, running_header_mode, page_number_style (**western digits default**), chapter_opening ∈ {any, recto} |
 | `BookTemplate` (publishing) | name (Arabic), trim size, default margins/fonts, base CSS fragment, ornaments; seeded by data migration |
-| `Export` (publishing) | book, snapshot, format ∈ {print_pdf, screen_pdf, epub}, settings JSON, file, status, duration_ms, log, created_by/at |
+| `Export` (publishing) | book, format ∈ {docx, print_pdf, screen_pdf, epub}, status, options JSON (normalised), inputs JSON (stylesheet, title, author, digit style, chapter versions), manuscript_version, stylesheet_hash, renderer, file / filename / size_bytes, page_count (null for docx), stats / progress / warnings JSON, log, error, duration_ms, task_id, created_by, created/started/finished/updated_at; no snapshot (the recorded version is enough, D58); at most one queued or running per book and format |
 
 Source mapping: every block node in the manuscript JSON carries `attrs.sourcePages` and `attrs.sourceLineIds`; "show original" opens the scan with those lines highlighted.
 

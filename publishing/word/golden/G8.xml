@@ -1,0 +1,106 @@
+### word/document.xml
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="0" w:name="_Toc_h1"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">الفصل</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="0"/>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading2"/>
+      </w:pPr>
+      <w:bookmarkStart w:id="1" w:name="_Toc_h2"/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">عنوان فرعي</w:t>
+      </w:r>
+      <w:bookmarkEnd w:id="1"/>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Quote"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">اقتباس أول</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Quote"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">اقتباس ثان</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkVerse"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">بيت</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="NkSeparator"/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">* * *</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr>
+        <w:keepNext/>
+        <w:pageBreakBefore/>
+      </w:pPr>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا</w:t>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:pPr/>
+      <w:r>
+        <w:rPr>
+          <w:rtl/>
+        </w:rPr>
+        <w:t xml:space="preserve">هذا نص تجريبي بالعربية يُكتب ليملأ الصفحة بأسطر كثيرة حتى تنتقل الفقرات إلى الصفحة التالية وتظهر الحواشي في أسفل كل صفحة كما في الكتب المطبوعة، ويستمر الكلام على هذا النحو زمنًا</w:t>
+      </w:r>
+    </w:p>
+    <w:sectPr>
+      <w:footerReference w:type="default" r:id="rId6"/>
+      <w:footnotePr>
+        <w:numFmt w:val="decimal"/>
+        <w:numRestart w:val="eachPage"/>
+      </w:footnotePr>
+      <w:pgSz w:w="9638" w:h="13606"/>
+      <w:pgMar w:top="1134" w:right="1020" w:bottom="1247" w:left="1247" w:header="679" w:footer="720" w:gutter="0"/>
+      <w:bidi/>
+    </w:sectPr>
+  </w:body>
+</w:document>

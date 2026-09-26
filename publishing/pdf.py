@@ -21,6 +21,13 @@ and the book is laid out again (at most twice).
 **Layout (D47).** Given the markup's `texts`, the last pass's box tree is exported as the page layout
 (`publishing.layout`); `pdf=False` stops there (the fast re-layout writes no PDF). `seed` (element id →
 number) starts pass 1 with the numbers of the last layout: when no note changed page, one pass is enough.
+
+**Exports (D61).** `on_pass(step)` is told each pass as it starts (`layout`, `footnotes`, `relax`) and
+`write` before the PDF is written — the export's progress, asked where `cancelled()` is asked, so no
+WeasyPrint internals are needed. `finisher` and `write_options` go to `Document.write_pdf`;
+`finisher_for(output)` is the export's: the BleedBox exactly the trim plus the bleed (WeasyPrint caps it
+at 10 pt from the trim), right-to-left reading and the document title in the viewer, the outline pane open
+for the screen PDF, `Trapped /False` for print, and the subject, creator and dates.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .html import note_order, with_numbers
 
@@ -181,6 +189,9 @@ def render_pdf(
     seed: dict[str, str] | None = None,
     reuse: bool = False,
     patch: bool = False,
+    write_options: dict | None = None,
+    finisher: Callable | None = None,
+    on_pass: Callable[[str], None] | None = None,
 ) -> PdfResult:
     """Lay out `html` with `css` and write the PDF (`fonts`: a WeasyPrint `FontConfiguration`, one is
     made when None). `numbering` `page` runs the D46 passes; `cancelled()` is asked between passes and
@@ -188,8 +199,10 @@ def render_pdf(
     from `first_page`); `pdf=False` writes no PDF (`PdfResult.pdf` is empty); `seed` and `reuse`: see the
     module docstring. `patch` (a layout without a PDF, digits all as wide): when the footnote numbers of
     pass 1 are wrong but as long as the right ones, no second pass is laid out — the caller sets the
-    numbers in the layout (`PdfResult.patched`; the lines cannot move)."""
-    options = (numbering, base_url, cancelled, texts, first_page, pdf, seed, patch)
+    numbers in the layout (`PdfResult.patched`; the lines cannot move). `write_options`, `finisher` and
+    `on_pass`: see the module docstring (exports)."""
+    writing = (write_options, finisher, on_pass)
+    options = (numbering, base_url, cancelled, texts, first_page, pdf, seed, patch, writing)
     if reuse and fonts is None:
         with _SHEETS_LOCK:
             return _render(html, css, None, *options, reuse=True)
@@ -197,16 +210,19 @@ def render_pdf(
 
 
 def _render(
-    html, css, fonts, numbering, base_url, cancelled, texts, first_page, pdf, seed, patch, *, reuse
+    html, css, fonts, numbering, base_url, cancelled, texts, first_page, pdf, seed, patch, writing, *, reuse
 ) -> PdfResult:
     from weasyprint import HTML
 
+    write_options, finisher, on_pass = writing
     started = time.monotonic()
     sheet, font_config = _sheet(css, fonts, reuse)
 
     extra: list = []  # the relaxed widows / orphans around a displaced note, when needed
 
-    def layout(markup: str):
+    def layout(markup: str, step: str):
+        if on_pass is not None:
+            on_pass(step)
         if cancelled is not None and cancelled():
             raise RenderCancelled
         document = HTML(string=markup, base_url=base_url)
@@ -220,7 +236,7 @@ def _render(
         html_first = with_numbers(html, numbers)
     else:
         html_first = html
-    document = layout(html_first)
+    document = layout(html_first, "layout")
     anchors = first_pages(document)
     passes = 1
     note_pages = {element_id: anchors[element_id] for element_id in order if element_id in anchors}
@@ -234,7 +250,7 @@ def _render(
             numbers = wanted  # as long as the numbers shown, digits all as wide: set in the layout instead
             patched = True
         while passes < MAX_PASSES and wanted != numbers:
-            document = layout(with_numbers(html, wanted))
+            document = layout(with_numbers(html, wanted), "footnotes")
             passes += 1
             numbers = wanted
             anchors = first_pages(document)
@@ -258,14 +274,14 @@ def _render(
             relaxed |= blocks
             extra[:] = [CSS(string=relax_css(relaxed), font_config=font_config)]
             markup = with_numbers(html, numbers) if numbering == "page" and numbers else html
-            document = layout(markup)
+            document = layout(markup, "relax")
             passes += 1
             anchors = first_pages(document)
             note_pages = {element_id: anchors[element_id] for element_id in order if element_id in anchors}
             if numbering == "page":
                 wanted = per_page_numbers(order, note_pages)
                 if wanted != numbers:
-                    document = layout(with_numbers(html, wanted))
+                    document = layout(with_numbers(html, wanted), "footnotes")
                     passes += 1
                     numbers = wanted
                     anchors = first_pages(document)
@@ -278,7 +294,11 @@ def _render(
         from .layout import extract_layout
 
         pages, misses = extract_layout(document, texts, first_page=first_page)
-    data = document.write_pdf() if pdf else b""
+    data = b""
+    if pdf:
+        if on_pass is not None:
+            on_pass("write")
+        data = document.write_pdf(finisher=finisher, **(write_options or {}))
     return PdfResult(
         pdf=data,
         page_count=len(document.pages),
@@ -291,3 +311,57 @@ def _render(
         misses=misses or 0,
         patched=patched,
     )
+
+
+# ====================================================================== the exports' finisher (D61)
+
+MM_PT = 72 / 25.4
+
+
+def pdf_date(value: datetime) -> str:
+    """A PDF date (`D:20260926100211+02'00'`; `Z` for UTC, a naive time is taken as UTC)."""
+    stamp = value.strftime("D:%Y%m%d%H%M%S")
+    offset = value.utcoffset()
+    if offset is None or not offset:
+        return stamp + "Z"
+    minutes = int(offset.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    minutes = abs(minutes)
+    return f"{stamp}{sign}{minutes // 60:02d}'{minutes % 60:02d}'"
+
+
+def page_objects(pdf) -> list:
+    """The page dictionaries of a `pydyf.PDF`, in order."""
+    return [pdf.objects[number] for number in pdf.pages["Kids"][::3]]
+
+
+def finisher_for(output) -> Callable:
+    """The `write_pdf` finisher of a PDF export (`output`: `publishing.engine.PdfOutput`): see the module
+    docstring."""
+    import pydyf
+
+    metadata = output.metadata
+    bleed = float(output.bleed_mm) * MM_PT if output.is_print else 0.0
+
+    def finish(document, pdf) -> None:
+        for page in page_objects(pdf):
+            left, top, right, bottom = (float(value) for value in page["TrimBox"])
+            page["BleedBox"] = pydyf.Array([left - bleed, top - bleed, right + bleed, bottom + bleed])
+        preferences = {"Direction": "/R2L", "DisplayDocTitle": "true"}
+        pdf.catalog["ViewerPreferences"] = pydyf.Dictionary(preferences)
+        if metadata.lang:
+            pdf.catalog["Lang"] = pydyf.String(metadata.lang)
+        if output.is_print:
+            pdf.info["Trapped"] = "/False"
+        else:
+            pdf.catalog["PageMode"] = "/UseOutlines"
+        if metadata.subject:
+            pdf.info["Subject"] = pydyf.String(metadata.subject)
+        if metadata.creator:
+            pdf.info["Creator"] = pydyf.String(metadata.creator)
+        if metadata.created is not None:
+            stamp = pydyf.String(pdf_date(metadata.created))
+            pdf.info["CreationDate"] = stamp
+            pdf.info["ModDate"] = stamp
+
+    return finish

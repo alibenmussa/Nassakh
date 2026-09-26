@@ -102,6 +102,10 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-book"/></svg>
             <span>الكتاب</span>
           </a>
+          <a class="menu-item" role="menuitem" href="{% url 'publishing:export' book.pk %}" x-show="d.hasManuscript" data-export-menu-item>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
+            <span>الإخراج</span>
+          </a>
           {% if role == 'admin' or role == 'editor' %}
           <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openConvert()">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>

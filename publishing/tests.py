@@ -234,14 +234,14 @@ def test_the_model_maps_the_phase5_styles_and_marks_to_style_names():
     assert last.footnotes[0].runs == [Run("حاشية", ("bold",)), LineBreak(), Run("ثانية")]
     assert book.setup.footnote_numbering == "book" and book.setup.body_font == "lotus"
     assert {STYLES[b.style].word for b in blocks} >= {
-        "Heading 1",
+        "Heading1",
         "Normal",
         "Quote",
-        "Verse",
-        "Centered",
-        "Separator",
+        "NkVerse",
+        "NkCenter",
+        "NkSeparator",
     }
-    assert STYLES["footnote-text"].word == "Footnote Text"
+    assert STYLES["footnote-text"].word == "FootnoteText"
 
 
 def test_numbers_count_per_chapter_and_through_the_book_and_scope_keeps_them():
@@ -319,7 +319,8 @@ def test_font_faces_leave_latin_letters_and_lotus_digits_to_the_latin_face(tmp_p
     assert body and f'url("{lotus.as_uri()}")' in body[0]
     # Lotus: no digits, no Latin (and only the characters its file has: no control characters)
     assert "U+0020-002F, U+003A-0040" in body[0] and "U+0041" not in body[0]
-    assert "U+0020-0040," in heading[0] and "font-weight: 700" in heading[1]  # Amiri keeps its digits
+    # D60: the heading's Amiri is the Latin face's own file, so it sets everything itself (no range)
+    assert "unicode-range" not in heading[0] and "font-weight: 700" in heading[1]
     assert latin and "unicode-range" not in latin[0]
     assert fonts.families("heading") == '"nk-heading", "nk-latin", serif'
 
@@ -352,7 +353,7 @@ def test_page_rules_size_mirrored_margins_and_page_numbers():
         "@page :left { margin-left: 18mm; margin-right: 22mm; @bottom-left { content: counter(page);" in outer
     )
     assert "@bottom-right { content: counter(page);" in outer and "string(running" not in outer
-    assert "break-before: recto;" in outer and "bleed: 3mm; marks: crop;" in outer
+    assert "break-before: recto;" in outer and "bleed" not in outer  # D60: the preview never bleeds
     top = css_of(page_number="top_outer")
     assert "@top-left { content: counter(page);" in top and "@top-right { content: counter(page);" in top
 

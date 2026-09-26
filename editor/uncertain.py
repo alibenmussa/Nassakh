@@ -69,6 +69,7 @@ class Word:
     lines: list[int] = field(default_factory=list)  # the container's source line ids
     source_page: int | None = None
     readings: list[dict] = field(default_factory=list)
+    number: bool = False  # a number Kraken read (D50; set by `attach_readings`): the readiness counts them
 
 
 def _spans(content: list) -> list[tuple[int, int, str]]:
@@ -237,6 +238,7 @@ def attach_readings(words: list[Word], normalize=None) -> None:
             if word.word in texts or folded in {_fold(t) for t in texts}:
                 word.readings = _readings(token, word.word, labels, normalize)
                 word.source_page = page
+                word.number = token.get("src") == "kraken"
                 cursors[key] = index + 1
                 break
 
@@ -313,6 +315,16 @@ def uncertain_words(book: Book) -> dict:
 def count(document) -> int:
     """How many uncertain words the document has left (the tab's badge)."""
     return len(words_of(document or {}))
+
+
+def counts(book: Book, document) -> dict[str, int]:
+    """The uncertain words left, by kind (the export readiness, PHASE6_SPEC §7): `{words, numbers}` —
+    every uncertain word, and those that are numbers Kraken read (`Word.number`). One query (the
+    readings' OCR lines), none without uncertain words."""
+    words = words_of(document or {})
+    if words:
+        attach_readings(words, normalizer(book))
+    return {"words": len(words), "numbers": sum(1 for word in words if word.number)}
 
 
 # ====================================================================== resolving
