@@ -46,5 +46,6 @@ playground/digits/lines*.json
 playground/digits/areas_*.json
 playground/digits/letters*_request.json
 playground/digits/letters*_result.json
+playground/word/out/
 playground/digits/results_lines_*.json
 playground/digits/*.err
