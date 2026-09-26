@@ -18,7 +18,10 @@ The pass, for one finalised page (`read_page_numbers`):
    digit runs to the area's numbers in order when the counts agree (closing up stray spaces inside a
    number if that makes them agree). A token read in its own word box whose counts do not agree takes
    Kraken's reading of the whole box (`box_text`: Qari then held a fragment of the box, e.g. «١،» for
-   «(ص٢٣-٢٤).»); a gap, which may hold other words, keeps Qari's reading then.
+   «(ص٢٣-٢٤).»); a gap, which may hold other words, keeps Qari's reading then. A number whose weak box
+   was left out is read in that box too (`page_weak_boxes`) and takes its one number when its gap gave
+   it none (a weak box is mostly wide: «٢٢» for «٢٠١٢»; no whole-box reading, it may be a
+   neighbour's).
 4. `apply_reading`: the token's digits become Kraken's (in Arabic-Indic digits; what surrounds them,
    brackets, «هـ», «م», stays Qari's), Qari's readings are kept under `qari` for the record and dropped
    from the offered readings (`alt`, `tess` → None), `src` = "kraken"; the token stays low-confidence
@@ -616,6 +619,29 @@ def page_areas(page, lines: list | None = None) -> tuple[list[dict], list[tuple]
     return requests, index
 
 
+def page_weak_boxes(page, lines: list | None = None) -> tuple[list[dict], list[tuple]]:
+    """The number tokens of a page's unreviewed lines with a weak box (step 3): runner requests for
+    those boxes and `(line, token index)` pairs."""
+    requests: list[dict] = []
+    index: list[tuple] = []
+    for line in _unreviewed_lines(page) if lines is None else lines:
+        for i, token in enumerate(line.tokens or []):
+            if not (token.get("bbox") and token.get("bq") == WEAK and is_number(token)):
+                continue
+            if token.get("res") or token.get("src") == "kraken":
+                continue
+            requests.append({"id": f"{line.pk}:weak{i}", "bbox": [int(v) for v in token["bbox"]]})
+            index.append((line, i))
+    return requests, index
+
+
+def read_weak_box(token: dict, chars: list) -> bool:
+    """Kraken's reading of a number's own weak box into it, when its gap gave it nothing and the box
+    holds as many numbers as the token (`assign`); False otherwise."""
+    numbers = assign([token], chars)
+    return bool(numbers) and apply_reading(token, numbers[0])
+
+
 @dataclass
 class LineLetters:
     """A line's letters Qari may have written for digits and its digit-less dates (D51), with the
@@ -710,8 +736,9 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         return result
     lines = _unreviewed_lines(page)
     requests, index = page_areas(page, lines)
+    weak, weak_index = page_weak_boxes(page, lines)
     plans = page_letters(page, lines)
-    requests_all = requests + [request for plan in plans for request in plan.requests()]
+    requests_all = requests + weak + [request for plan in plans for request in plan.requests()]
     result.areas = len(requests_all)
     if not requests_all:
         return result
@@ -747,6 +774,10 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         gave(
             line, sum(apply_reading(tokens[i], found) for i, found in zip(area.tokens, numbers, strict=True))
         )
+    for request, (line, i) in zip(weak, weak_index, strict=True):
+        row = by_id.get(request["id"])
+        if row:
+            gave(line, read_weak_box(line.tokens[i], row.get("chars") or []))
     for plan in plans:
         letters, dates = read_letters(plan, by_id)
         gave(plan.line, letters=letters, dates=dates)

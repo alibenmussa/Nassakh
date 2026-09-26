@@ -11,9 +11,10 @@ Word boxes (audit of book 22, 2026-09: 250 of 1,462 boxes were wrong). Before th
 Tesseract's boxes are fitted to the page (`fit_lines`): each is kept inside the rows of its printed
 line (the preprocess stage's line bands) and ends where the word on its right starts
 (`clip_overruns`). Punctuation and numbers are never paired with a word, and with a Tesseract mark
-or number only inside the gap between the words matched around them (`pair_marks`). The words
-between two anchors of one line take the unused Tesseract words there, by position, or pieces of
-their ink (`split_at_ink`). Boxes that still look wrong are marked `bq: "weak"` (`weak_boxes`).
+or number only inside the gap between the words matched around them, where the gap's other tokens
+still fit (`pair_marks`, `build_lines`: a date that ends a line keeps it). The words between two
+anchors of one line take the unused Tesseract words there, by position, or pieces of their ink
+(`split_at_ink`). Boxes that still look wrong are marked `bq: "weak"` (`weak_boxes`).
 """
 
 from __future__ import annotations
@@ -67,6 +68,9 @@ _CLOSERS = frozenset(")]")  # a closing bracket after a line's last word ends th
 _BRACKETED = re.compile(r"^[(\[][^\s()\[\]]{1,4}[)\]][.,،؛:]*$")
 _BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")  # Tesseract adds RLMs
 _LATIN = re.compile(r"[A-Za-z]")
+# «ج» (volume), «ص» (page), «ط» (edition) before their number, and any digit
+_ABBREVIATION = re.compile(r"^[(\[«]?[جصط]$")
+_DIGITS = re.compile(r"[0-9٠-٩۰-۹]")
 # A lone letter (or two) that looks like a digit, bare or with brackets / punctuation: «آ», «(ه)», «اا».
 _LETTER_DIGIT = re.compile(r"^[(\[«]?[اأإآهع]{1,2}ـ?[)\]»]?[.،:؛]?$")
 _ARABIC = re.compile(r"[\u0621-\u064A\u066E-\u06D3\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFC]")
@@ -114,6 +118,9 @@ WEAK_TALL = 1.35
 WEAK_WIDE = 1.6
 WEAK_WIDE_SLACK = 1
 WEAK_MIN_SAMPLES = 4
+# A region's first / last Tesseract line of one word of at most this many characters, on a printed line
+# of its own, is where the region's leading / trailing number may go (a page number, «١٨» read "\A").
+LONE_MAX_CHARS = 5
 
 
 def _bracketed(token: str) -> bool:
@@ -212,6 +219,11 @@ def _chars(texts: list[str]) -> int:
     return sum(1 for text in texts for ch in str(text or "") if ch.isalnum())
 
 
+def _count(tokens: list[str]) -> int:
+    """How many of `tokens` hold a letter or a digit (a tatweel alone, «1 ـ كتاب», is a dash)."""
+    return sum(1 for token in tokens if any(ch.isalnum() and ch != "ـ" for ch in str(token or "")))
+
+
 def _height(bbox: list | None) -> int:
     return int(bbox[3]) - int(bbox[1]) if bbox else 0
 
@@ -285,17 +297,23 @@ def _by_position(words: list[tuple[int, dict]], idx: list[int]) -> list[int]:
     return sorted(idx, key=lambda j: -_centre(words[j][1]["bbox"]))
 
 
-def _units(tokens: list[str]) -> list[list[int]]:
+def _units(tokens: list[str], abbreviations: bool = True) -> list[list[int]]:
     """Group a run's tokens into words: a punctuation-only token rides with a neighbouring word.
 
     Openers («, ( ...) join the next word, anything else the previous one (the next one at the start
-    of the run). Returns the token indices of each unit, `[]` when the run is only punctuation.
+    of the run). With `abbreviations`, the abbreviation of a volume, page or edition and the number
+    after it are one word as printed («(ج ١، ص ١٧٩).» for «(ج١، ص١٧٩).», which Tesseract reads as two
+    words). Returns the token indices of each unit, `[]` when the run is only punctuation.
     """
     units: list[list[int]] = []
     pending: list[int] = []
     for x, tok in enumerate(tokens):
         if _chars([tok]):
-            units.append([*pending, x])
+            joined = abbreviations and units and not pending and _ABBREVIATION.match(tokens[units[-1][-1]])
+            if joined and _DIGITS.search(tok):
+                units[-1].append(x)
+            else:
+                units.append([*pending, x])
             pending = []
         elif units and not pending and tok[:1] not in _OPENERS:
             units[-1].append(x)
@@ -388,6 +406,19 @@ def line_pitch(bands: list[dict]) -> float:
     return _median([b - a for a, b in zip(centres, centres[1:], strict=False) if b > a])
 
 
+def _valid_bands(bands: list[dict] | None) -> list[dict]:
+    """The detected bands that have their four sides as numbers and some height (others are ignored)."""
+    out = []
+    for b in bands or []:
+        try:
+            sides = [float(b[k]) for k in ("x0", "y0", "x1", "y1")]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if all(v == v for v in sides) and sides[3] > sides[1]:  # v == v: no NaN
+            out.append(b)
+    return out
+
+
 def page_bands(bands: list[dict] | None) -> list[Band]:
     """The printed lines of a page from its detected bands (`Preprocess.line_boxes`), top to bottom.
 
@@ -395,10 +426,7 @@ def page_bands(bands: list[dict] | None) -> list[Band]:
     its own band (a band the detector missed is no neighbour). Empty without a pitch (fewer than two
     bands): nothing then says how far a line reaches.
     """
-    ordered = sorted(
-        (b for b in bands or [] if all(k in b for k in ("x0", "y0", "x1", "y1")) and b["y1"] > b["y0"]),
-        key=lambda b: b["y0"],
-    )
+    ordered = sorted(_valid_bands(bands), key=lambda b: b["y0"])
     pitch = line_pitch(ordered)
     if not pitch:
         return []
@@ -414,9 +442,14 @@ def page_bands(bands: list[dict] | None) -> list[Band]:
     return out
 
 
+def _core_rows(box: list, band: Band) -> int:
+    """How many of the band's core rows `box` covers."""
+    return max(0, min(box[3], band.y1) - max(box[1], band.y0))
+
+
 def _core_share(box: list, band: Band) -> float:
     """Share of the band's core rows that `box` covers."""
-    return max(0, min(box[3], band.y1) - max(box[1], band.y0)) / max(1, band.y1 - band.y0)
+    return _core_rows(box, band) / max(1, band.y1 - band.y0)
 
 
 def covered_bands(box: list | None, bands: list[Band]) -> list[Band]:
@@ -478,9 +511,10 @@ def fit_lines(lines: list[dict], bands: list[Band]) -> list[dict]:
 
     Each word box is kept inside the rows of its printed line: the band its line covers
     (`covered_bands`). A line that covers two bands (flagged `two_bands`) is one printed line with
-    its box grown over the next: its main band is the one no other line covers alone, else the one
-    its words sit on most; a word goes to the other band only when it covers that one clearly more
-    (`BAND_TIE`). The line box keeps to the main band, whose core rows the line keeps as `core`.
+    its box grown over the next: its main band is the one its words cover most (rows of the band's
+    core: a thin band is no line's main one), else the one no other line covers alone; a word goes
+    to the other band only when it covers that one clearly more (`BAND_TIE`). The line box keeps to
+    the main band, whose core rows the line keeps as `core`.
     Then boxes that run into their right-hand neighbour are clipped (`clip_overruns`). A line that
     covers no band keeps its rows (`core` None).
     """
@@ -493,10 +527,7 @@ def fit_lines(lines: list[dict], bands: list[Band]) -> list[dict]:
         box = _box(line)
         rows = None
         if covered:
-            main = max(
-                covered,
-                key=lambda b: (-owned[b], sum(_core_share(_box(w) or box, b) for w in words)),
-            )
+            main = max(covered, key=lambda b: (sum(_core_rows(_box(w) or box, b) for w in words), -owned[b]))
             for word in words:
                 wbox = _box(word)
                 if not wbox:
@@ -590,18 +621,25 @@ def _mark_kind(token: str, tesseract: bool = False) -> str:
     return "letter" if _LETTER_DIGIT.match(strip_tashkeel(_BIDI_CONTROLS.sub("", str(token or "")))) else ""
 
 
-def pair_marks(a: list[str], b: list[str]) -> list[tuple[int, int]]:
+def pair_marks(
+    a: list[str],
+    b: list[str],
+    allowed: Callable[[int, int], bool] | None = None,
+) -> list[tuple[int, int]]:
     """Monotone one-to-one pairs `(x, y)` of Qari's marks and numbers `a` with Tesseract's `b`.
 
     The most pairs win, those whose readings agree (`_special_key`) counting most, then those of one
     kind (`_mark_kind`) and those sharing a mark («(٢)» and "(')"): Tesseract reads «(٢)» as "(')",
-    «•» as "©", «١» as "e". Of two equal choices the earlier Tesseract word wins. A small DP: a gap
-    between two matched words holds a few marks at most.
+    «•» as "©", «١» as "e". Only pairs `allowed(x, y)` are made (all when None). Of two equal
+    choices the earlier Tesseract word wins. A small DP: a gap between two matched words holds a few
+    marks at most.
     """
     if not a or not b:
         return []
 
-    def score(x: int, y: int) -> int:
+    def score(x: int, y: int) -> int | None:
+        if allowed is not None and not allowed(x, y):
+            return None
         if _special_key(a[x]) == _special_key(b[y]):
             return 5
         shared = bool(_marks(a[x]) & _marks(b[y]))
@@ -611,7 +649,8 @@ def pair_marks(a: list[str], b: list[str]) -> list[tuple[int, int]]:
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for x in range(1, n + 1):
         for y in range(1, m + 1):
-            dp[x][y] = max(dp[x - 1][y], dp[x][y - 1], dp[x - 1][y - 1] + score(x - 1, y - 1))
+            s = score(x - 1, y - 1)
+            dp[x][y] = max(dp[x - 1][y], dp[x][y - 1], 0 if s is None else dp[x - 1][y - 1] + s)
     out: list[tuple[int, int]] = []
     x, y = n, m
     while x and y:
@@ -631,7 +670,14 @@ def _marks(token: str) -> set[str]:
 
 
 def _structure_key(token: str) -> str:
-    """`norm_token`, and for a mark (which that turns to nothing) its folded marks, apart from words."""
+    """`norm_token`, and one key for every mark (which that turns to nothing), apart from words:
+    Tesseract reads a mark as another («.» as "-»), which must not throw the two readings out of step."""
+    return norm_token(token) or "\x00"
+
+
+def _mark_class_key(token: str) -> str:
+    """`norm_token`, and for a mark its folded marks («،» equals "," but not ":»): a run of marks then
+    cannot take the words' matches (`build_lines` aligns a gap again with it)."""
     return norm_token(token) or "\x00" + _punct_key(token)
 
 
@@ -713,30 +759,36 @@ def build_lines(
     `Preprocess.line_boxes`, `gray` its gray image, both optional). Each primary word is anchored to
     the Tesseract word it aligns with (Tesseract's words taken in `reading_order`) and inherits that
     word's line and box. Punctuation and numbers (`_special_word`) take part in that alignment only to
-    keep the two sequences in step (a mark equals only a mark of its kind, `_structure_key`) and keep
-    their pair only in the gap between the words matched around them (`between`: on those words'
-    lines, between their boxes); the ones left are paired with the Tesseract marks and numbers of that
-    gap (`pair_marks`), and any still without a box take the unused Tesseract words between their
-    neighbours' boxes when there are as many. A run of unmatched tokens inside one line stays there
-    and takes the unused Tesseract words between its anchors: one to one by position when there are
-    as many as its words, else pieces of their ink (`split_at_ink`). A run between the last anchor of
-    a line and the first anchor of a later line (or before the first / after the last anchor) is
-    placed on the Tesseract words left unmatched
-    between them by `_place_run` (Latin-looking ones taken by position when the run is Arabic: they
-    are Arabic words Tesseract misread and laid out left to right): the garbage words that start the
-    next line, a rescued line or any line with no anchored word take their share, and without such
-    words the run stays on the previous anchored line (leading ones take the first anchored line).
-    Without Tesseract lines the primary text's own line breaks are used. `alt` is the secondary
-    engine's token when its normalised form differs; `conf` is `low` when an alt differs, when the
-    secondary has no counterpart for the token, or when the token is a number (D17). A box that still
-    looks wrong (`weak_boxes`) is marked `bq: "weak"`.
+    keep the two sequences in step (every mark equals every other, `_structure_key`; the words left
+    between two matched ones that read the same as a Tesseract word there are matched again, a mark
+    then equal only to its kind, `_mark_class_key`) and keep their pair only in the gap between the
+    words matched around them (`between`: on those words' lines, between their boxes; the region's
+    trailing number on a page-number line of its own, `lone`) where the gap's other tokens still fit
+    (`room`); the ones left are paired with the Tesseract marks and numbers of that gap (`pair_marks`,
+    under the same rules), and those still without a box take the unused Tesseract words between
+    their neighbours' boxes when there are as many. A run of unmatched tokens inside one line stays
+    there and takes the unused Tesseract words between its anchors: one to one by position when there
+    are as many as its words, else pieces of their ink (`split_at_ink`). A run between the last anchor
+    of a line and the first anchor of a later line (or before the first / after the last anchor) is
+    placed on the Tesseract words left unmatched between them by `_place_run` (Latin-looking ones
+    taken by position when the run is Arabic: they are Arabic words Tesseract misread and laid out
+    left to right): the garbage words that start the next line, a rescued line or any line with no
+    anchored word take their share, and without such words the run stays on the previous anchored
+    line (leading ones take the first anchored line). An abbreviation and its number («(ج ١،») share a
+    Tesseract word, whose box is the number's (`holders`). Without Tesseract lines the primary
+    text's own line breaks are used. `alt` is the secondary engine's token when its normalised form
+    differs; `conf` is `low` when an alt differs, when the secondary has no counterpart for the
+    token, or when the token is a number (D17). A box that still looks wrong (`weak_boxes`) is marked
+    `bq: "weak"`.
 
     Returns `[{order, bbox, text, tokens, n_low, n_anchored, n_unseen, tess_words, tess_matched,
     rescued, two_bands, confidence}]` with tokens `{"t", "alt", "conf", "digit", "bbox", "tess"}` and
-    `"bq": "weak"` on a weak box (`tess` = Tesseract's word when it differs). `n_unseen` counts the
-    words (`is_word`) no Tesseract word accounts for; `tess_words` / `tess_matched` are the words of
-    the Tesseract line and how many of them a primary word matched; `rescued` marks a line that only
-    the line rescue found, `two_bands` one whose Tesseract line covers two printed lines.
+    `"bq": "weak"` on a weak box (`tess` = Tesseract's word when it differs). `n_anchored` counts the
+    tokens anchored to a Tesseract word by the alignment or a run's evidence (not those boxed by their
+    place in a line, as before D63: the page's `alignment_poor` flag); `n_unseen` the words
+    (`is_word`) no Tesseract word accounts for; `tess_words` / `tess_matched` are the words of the
+    Tesseract line and how many of them a primary word matched; `rescued` marks a line that only the
+    line rescue found, `two_bands` one whose Tesseract line covers two printed lines.
     """
     p_tokens = primary_text.split()
     if not p_tokens:
@@ -764,6 +816,7 @@ def build_lines(
     unseen: list[bool] = [False] * n
     word_of: list[int | None] = [None] * n
     taken: set[int] = set()
+    anchored_by: set[int] = set()  # tokens anchored to a Tesseract word (`take`)
     read: dict[int | None, tuple[int, int]] = {k: (0, 0) for k in range(len(lines_in))}
 
     # Runs stored before `reading_order` existed may hold lines laid out left to right: repair them here
@@ -780,23 +833,45 @@ def build_lines(
     def text_of(j: int) -> str:
         return str(words[j][1].get("text") or "")
 
-    def take(i: int, j: int) -> None:
+    def take(i: int, j: int, anchor: bool = True) -> None:
+        """Token `i` takes Tesseract word `j` (its line and box); `anchor`: by the alignment or as a
+        run's evidence (`n_anchored`), not by its place among a line's unused words."""
         line_of[i] = words[j][0]
         bbox_of[i] = words[j][1].get("bbox")
         taken.add(j)
+        if anchor:
+            anchored_by.add(i)
         word = text_of(j)
         if word and norm_token(word) != norm_token(p_tokens[i]):
             tess_of[i] = word
 
+    # A region's first / last Tesseract line that holds one short word and is a printed line of its own
+    # (no other line covers its band): a page number («١٨» read "\A"), which the region's leading /
+    # trailing number or letter may take (`between`) when the word is about as long (Tesseract drops a
+    # digit at most).
+    cores = Counter(tuple(line["core"]) for line in lines_in if line.get("core"))
+
+    def lone(k: int, i: int | None) -> bool:
+        idx = by_line.get(k) or []
+        if len(idx) != 1 or len(_BIDI_CONTROLS.sub("", text_of(idx[0])).strip()) > LONE_MAX_CHARS:
+            return False
+        core = lines_in[k].get("core")
+        if core and cores[tuple(core)] > 1:
+            return False
+        return i is None or _chars([text_of(idx[0])]) >= _chars([p_tokens[i]]) - 1
+
     def between(j: int, ja: int | None, jb: int | None, i: int | None = None) -> bool:
         """Is word `j` in the gap between the anchors `ja` and `jb`: on one of their lines (or on a line
         between them when there are both), and after `ja` / before `jb` on the page where it shares
-        their line? (A number at the end of a region is no page number further down.) Token `i`, when
-        given, must stay on `ja`'s line when it closes what comes before it («الهجري ⟨)⟩ ⏎ وبرنيق»,
-        `ends_line`)."""
+        their line? Before the first / after the last anchor only the region's first / last line may
+        be another one, when it is a page number on a line of its own (`lone`): a number at the end of
+        a region is no number further down. Token `i`, when given, must stay on `ja`'s line when it
+        closes what comes before it («الهجري ⟨)⟩ ⏎ وبرنيق», `ends_line`)."""
         k = words[j][0]
         if k not in {words[a][0] for a in (ja, jb) if a is not None} and (ja is None or jb is None):
-            return False
+            edges = ({max(by_line)} if jb is None else set()) | ({min(by_line)} if ja is None else set())
+            if k not in edges or not lone(k, i):
+                return False
         if i is not None and ja is not None and k != words[ja][0] and ends_line(i):
             return False
         box = words[j][1].get("bbox")
@@ -809,6 +884,64 @@ def build_lines(
             if (_centre(box) >= _centre(abox)) if after else (_centre(box) <= _centre(abox)):
                 return False
         return True
+
+    def inside(k: int, right: int | None, left: int | None) -> list[int]:
+        """The words of line `k` between the words `right` and `left` of that line (either None: the
+        line's edge), by their boxes (Tesseract may list a Latin-looking word out of place), by its
+        order without them."""
+        ends = [words[y][1].get("bbox") for y in (right, left) if y is not None]
+        if not all(ends) or any(not words[y][1].get("bbox") for y in by_line[k]):
+            return [y for y in by_line[k] if (right is None or y > right) and (left is None or y < left)]
+        hi = _centre(words[right][1]["bbox"]) if right is not None else float("inf")
+        lo = _centre(words[left][1]["bbox"]) if left is not None else float("-inf")
+        return [y for y in by_line[k] if lo < _centre(words[y][1]["bbox"]) < hi]
+
+    def span(ja: int | None, jb: int | None) -> list[str]:
+        """The unused Tesseract words between `ja` and `jb` on the page (None: the region's edge)."""
+        la = words[ja][0] if ja is not None else min(by_line)
+        lb = words[jb][0] if jb is not None else max(by_line)
+        if la == lb:
+            found = inside(la, ja, jb)
+        else:
+            found = inside(la, ja, None) + inside(lb, None, jb)
+            found += [y for k in by_line if la < k < lb for y in by_line[k]]
+        return [text_of(y) for y in found if y not in taken]
+
+    def room(i: int, gap: tuple[int, int], j: int, ja: int | None, jb: int | None) -> bool:
+        """May token `i` of the gap `gap` (its first token and its end) between the anchors `ja` and
+        `jb` take word `j`? The gap's other tokens must fit on the page around `j` (a gap within one
+        line always does). On `ja`'s line the words and numbers before `i` go between `ja` and `j`: one
+        more than the Tesseract words there at most (Tesseract joins «ص ٢٢١١).» as one; «عظيمًا» (ج٢٢،
+        ص ١٥٢١).» gives «(ج”,» to «(ج٢٢،», not to the number after it). On any later line those after
+        `i` (past the one closing its bracket) go between `j` and `jb`: no more than the Tesseract
+        words there («٢٠٢١م. ⏎ ° يقول»: «°» is the footnote mark «٢», no home for the date that ends
+        the line before); on a line between the two anchors' lines, those before `i` between `ja` and
+        `j` too (a mark there does not split a run of words away from that line). A number of two
+        digits or more that reads the same needs no room (Qari may have set it apart from its words)."""
+        k = words[j][0]
+        la = words[ja][0] if ja is not None else None
+        lb = words[jb][0] if jb is not None else None
+        same = _special_key(p_tokens[i]) == _special_key(text_of(j))
+        if la == lb or (same and sum(ch.isdigit() for ch in _special_key(p_tokens[i])) >= 2):
+            return True
+        if k == la:
+            return _count(p_tokens[gap[0] : i]) <= _count(span(ja, j)) + 1
+        if _count(p_tokens[closing(i, gap[1]) + 1 : gap[1]]) > _count(span(j, jb)):
+            return False
+        if la is None or lb is None or k == lb:
+            return True
+        return _count(p_tokens[gap[0] : i]) <= _count(span(ja, j))
+
+    def closing(i: int, end: int) -> int:
+        """The token closing the bracket token `i` opens («(2 ⟨1)⟩»: Qari splits what Tesseract reads as
+        one), `i` itself when it opens none or none closes it before `end`."""
+        text = p_tokens[i]
+        if text.count("(") + text.count("[") <= text.count(")") + text.count("]"):
+            return i
+        for r in range(i + 1, end):
+            if ")" in p_tokens[r] or "]" in p_tokens[r]:
+                return r
+        return i
 
     def ends_line(i: int) -> bool:
         """Is token `i` a closing bracket (with its punctuation) after only such marks since the anchored
@@ -843,9 +976,8 @@ def build_lines(
             return
         if len(idx) == len(units):
             for unit, j in zip(units, idx, strict=True):
-                for r in (s + x for x in unit):
-                    if _chars([p_tokens[r]]):
-                        take(r, j)
+                for r in holders(s, unit):
+                    take(r, j, anchor=False)
             return
         boxes = [words[j][1]["bbox"] for j in idx if words[j][1].get("bbox")]
         if gray is None or not boxes:
@@ -857,11 +989,28 @@ def build_lines(
             + SPLIT_PUNCT_WEIGHT * sum(1 for x in unit if not _chars([p_tokens[s + x]]))
             for unit in units
         ]
-        pieces = split_at_ink(gray, core, min(b[0] for b in boxes), max(b[2] for b in boxes), weights)
-        for unit, (x0, x1) in zip(units, pieces or [], strict=False):
-            for r in (s + x for x in unit):
-                if _chars([p_tokens[r]]):
-                    bbox_of[r] = [x0, y0, x1, y1]
+        pieces = split_at_ink(gray, core, min(b[0] for b in boxes), max(b[2] for b in boxes), weights) or []
+        latin = [
+            bool(held) and all(_latin_looking(p_tokens[r]) for r in held)
+            for held in (holders(s, u) for u in units)
+        ]
+        x = 0
+        while x < len(pieces):  # the pieces run right to left; a run of Latin words reads left to right
+            y = x
+            while y < len(pieces) and latin[y]:
+                y += 1
+            pieces[x:y] = pieces[x:y][::-1]
+            x = y + 1 if y == x else y
+        for unit, (x0, x1) in zip(units, pieces, strict=False):
+            for r in holders(s, unit):
+                bbox_of[r] = [x0, y0, x1, y1]
+
+    def holders(s: int, unit: list[int]) -> list[int]:
+        """The tokens of unit `unit` (of a run starting at token `s`) that take its box: those with
+        letters or digits, but not an abbreviation before its number («(ج ١،»: the box is the number's,
+        which the numbers pass reads)."""
+        texty = [s + x for x in unit if _chars([p_tokens[s + x]])]
+        return [r for r in texty if r == texty[-1] or not _ABBREVIATION.match(p_tokens[r])]
 
     def place_marks() -> None:
         """Punctuation and numbers still without a box take the unused Tesseract words in the gap
@@ -901,42 +1050,63 @@ def build_lines(
                     for i, j in zip(
                         run, sorted(idx, key=lambda j: -_centre(words[j][1]["bbox"])), strict=True
                     ):
-                        take(i, j)
+                        take(i, j, anchor=False)
 
     kinds = [_special_word(t) for t in p_tokens]
     if words:
         w_kinds = [_special_word(text_of(j)) for j in range(len(words))]
-        # Every token is aligned with every Tesseract word, but a mark compares equal only to a mark of
-        # its kind (`_structure_key`) and a word never takes a mark or a number: they keep the two
-        # sequences in step. A mark or number keeps its pair only in the gap between the words matched
-        # around it (else «،» takes a «:» two lines away).
+        # Every token is aligned with every Tesseract word, every mark equal to every other
+        # (`_structure_key`), and a word never takes a mark or a number: marks keep the two sequences in
+        # step. The words left unmatched between two matched ones are aligned again there with a mark
+        # equal only to a mark of its kind (`_mark_class_key`), and those that read the same are matched:
+        # a run of marks matched to marks must not take their words' matches. A mark or number keeps its
+        # pair only in the gap between the words matched around it (else «،» takes a «:» two lines away).
+        texts = [text_of(j) for j in range(len(words))]
         pairs = [
             (a, b)
-            for a, b in align_tokens(p_tokens, [text_of(j) for j in range(len(words))], key=_structure_key)
+            for a, b in align_tokens(p_tokens, texts, key=_structure_key)
             if a is not None and b is not None
         ]
         for a, b in pairs:
             if not kinds[a] and not w_kinds[b]:
                 word_of[a] = b
                 take(a, b)
+        bounds = [(-1, -1), *((i, word_of[i]) for i in range(n) if word_of[i] is not None), (n, len(words))]
+        for (a0, b0), (a1, b1) in zip(bounds, bounds[1:], strict=False):
+            if a1 - a0 < 2 or b1 - b0 < 2:
+                continue
+            for x, y in align_tokens(p_tokens[a0 + 1 : a1], texts[b0 + 1 : b1], key=_mark_class_key):
+                if x is None or y is None:
+                    continue
+                a, b = a0 + 1 + x, b0 + 1 + y
+                if not kinds[a] and not w_kinds[b] and norm_token(p_tokens[a]) == norm_token(texts[b]):
+                    word_of[a] = b
+                    take(a, b)
         matched_words = [i for i in range(n) if word_of[i] is not None]
         for a, b in pairs:
             if kinds[a] or w_kinds[b]:
                 x = bisect.bisect_left(matched_words, a)
                 ja = word_of[matched_words[x - 1]] if x else None
                 jb = word_of[matched_words[x]] if x < len(matched_words) else None
-                if (ja is None or ja < b) and (jb is None or b < jb) and between(b, ja, jb, a):
+                end = matched_words[x] if x < len(matched_words) else n
+                if (
+                    (ja is None or ja < b)
+                    and (jb is None or b < jb)
+                    and between(b, ja, jb, a)
+                    and room(a, (matched_words[x - 1] + 1 if x else 0, end), b, ja, jb)
+                ):
                     word_of[a] = b
                     take(a, b)
         # punctuation and numbers (and lone letters that may be digits, «آ» for «١»): only among the marks,
-        # numbers and one-letter words in the gap between the words matched around them; a number that
-        # reads the same may be anywhere between those words (on a line of its own)
+        # numbers and one-letter words in the gap between the words matched around them, where the gap's
+        # other tokens leave room (`room`); a number that reads the same may be anywhere between those
+        # words (on a line of its own)
         anchors = [i for i in range(n) if word_of[i] is not None]
         for before, after in zip([None, *anchors], [*anchors, None], strict=True):
             ja = word_of[before] if before is not None else None
             jb = word_of[after] if after is not None else None
-            span = range(before + 1 if before is not None else 0, after if after is not None else n)
-            toks = [i for i in span if _mark_kind(p_tokens[i]) and word_of[i] is None]
+            gap = (before + 1 if before is not None else 0, after if after is not None else n)
+            toks = [i for i in range(*gap) if _mark_kind(p_tokens[i]) and word_of[i] is None]
             numbers = {_special_key(p_tokens[i]) for i in toks if kinds[i] == "number"}
             found = range(ja + 1 if ja is not None else 0, jb if jb is not None else len(words))
             cands = [
@@ -945,7 +1115,13 @@ def build_lines(
                 if _mark_kind(text_of(j), tesseract=True)
                 and (between(j, ja, jb) or (w_kinds[j] == "number" and _special_key(text_of(j)) in numbers))
             ]
-            for a, b in pair_marks([p_tokens[i] for i in toks], [text_of(j) for j in cands]):
+            for a, b in pair_marks(
+                [p_tokens[i] for i in toks],
+                [text_of(j) for j in cands],
+                allowed=lambda x, y, toks=toks, cands=cands, gap=gap, ja=ja, jb=jb: room(
+                    toks[x], gap, cands[y], ja, jb
+                ),
+            ):
                 i, j = toks[a], cands[b]
                 same = _special_key(p_tokens[i]) == _special_key(text_of(j))
                 if between(j, ja, jb, i) or (same and not ends_line(i)):
@@ -986,13 +1162,28 @@ def build_lines(
                 slots = _without_bracketed(words, slots)
             if not any(_LATIN.search(p_tokens[r]) for r in range(s, i)):
                 slots = [(k, _by_position(words, idx)) for k, idx in slots]
-            for unit, (k, j, seen) in zip(units, _place_run(len(units), slots, edges), strict=True):
+            placed = _place_run(len(units), slots, edges)
+            plain = _units(p_tokens[s:i], abbreviations=False)
+            if plain != units:  # an abbreviation and its number go together; no other word moves line
+                by_word = _place_run(len(plain), slots, edges)
+                paired = {
+                    x
+                    for unit in units
+                    if len([y for y in unit if _chars([p_tokens[s + y]])]) > 1
+                    for x in unit
+                }
+                was = {x: k for unit, (k, _, _) in zip(plain, by_word, strict=True) for x in unit}
+                now = {x: k for unit, (k, _, _) in zip(units, placed, strict=True) for x in unit}
+                if any(was[x] != now[x] for x in was if x not in paired):
+                    units, placed = plain, by_word
+            for unit, (k, j, seen) in zip(units, placed, strict=True):
                 for r in (s + x for x in unit):
                     line_of[r] = k
                     if _chars([p_tokens[r]]):
                         unseen[r] = not seen
-                        if j is not None:
-                            take(r, j)
+                if j is not None:
+                    for r in holders(s, unit):
+                        take(r, j)
         place_marks()
         line_bboxes = {k: line.get("bbox") for k, line in enumerate(lines_in)}
         rescued = {k for k, line in enumerate(lines_in) if line.get("rescued")}
@@ -1035,8 +1226,8 @@ def build_lines(
                 }
             )
         built.append((key, indices, tokens))
-    pitch = line_pitch(bands or []) or line_pitch(
-        [{"y0": b[1], "y1": b[3]} for line in source if (b := line.get("bbox"))]
+    pitch = line_pitch(_valid_bands(bands)) or line_pitch(
+        [{"y0": b[1], "y1": b[3]} for line in source if (b := _box(line))]
     )
 
     lines: list[dict] = []
@@ -1045,10 +1236,10 @@ def build_lines(
             if token["bbox"] and weak:
                 token["bq"] = WEAK
         n_low = sum(1 for t in tokens if t["conf"] == "low")
-        anchored = sum(1 for i in indices if bbox_of[i] is not None)
+        anchored = sum(1 for i in indices if i in anchored_by)
         bbox = line_bboxes.get(key)
-        if bbox is None and anchored:
-            boxes = [bbox_of[i] for i in indices if bbox_of[i] is not None]
+        boxes = [bbox_of[i] for i in indices if bbox_of[i] is not None]
+        if bbox is None and boxes:
             bbox = [
                 min(b[0] for b in boxes),
                 min(b[1] for b in boxes),

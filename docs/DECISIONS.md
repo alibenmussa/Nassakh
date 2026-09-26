@@ -373,3 +373,12 @@ dashed in review and is never a numbers-pass area. Book 22: right word boxes 1,0
 boxes 31 → 0, missing 103 → 61. Book 19 (in memory): boxes overlapping a neighbour 113 → 1. Existing pages change only
 with `manage.py rebuild_lines` (book 22 rebuilt). Next: a position-aware matcher, the dropped-line rescue, an upscaled
 Tesseract pass for low-resolution scans (measured worse alone).
+- **D63 amended (2026-09-26, after its code review).** The review found that D63 let printed page numbers stay in the
+  text (10 pages), pulled line-end numbers onto the next line, let a misread mark move words across lines, and kept
+  numbers in weak boxes away from Kraken. Fixed: a region's last/first number or letter takes a lone short Tesseract
+  line again (the page number is dropped as before D63); a mark or number may pair only where the gap's other tokens
+  still fit by page position; the main alignment treats all marks alike again (the per-kind key only inside each gap);
+  «ج/ص/ط» and its number form one unit; bands are chosen by the words' cover; Latin pieces split at the ink run left to
+  right; a number its gap left unread is read in its own weak box. On all 229 pages: no page-number leak, no checked
+  page worse than before D63, D63's geometry kept (book 22: 1,171 right word boxes of 1,298); of the 253 numbers whose
+  reading changed on books 19 and 20, 124 are now right against 42 before D63.

@@ -1,15 +1,20 @@
 """Tests of the word boxes (`ocr.alignment`, audit of book 22): Tesseract's boxes fitted to the printed
 lines and clipped where they run into the word on their right, the words of an in-line gap boxed from
 the Tesseract words there, punctuation and numbers matched only inside their gap, Latin-looking
-misreads taken by position, weak boxes marked and left alone by the numbers pass.
+misreads taken by position, weak boxes marked and read by the numbers pass only as a last resort; and
+the regressions of that change found in review (page numbers, line-end dates, misread marks, bands).
 
 Small synthetic lines: boxes are `[x0, y0, x1, y1]`, the page reads right to left.
 """
 
 from __future__ import annotations
 
-import numpy as np
+from types import SimpleNamespace
 
+import numpy as np
+import pytest
+
+from books.models import Book, Page
 from ocr import numbers as nb
 from ocr.alignment import (
     WEAK,
@@ -24,6 +29,8 @@ from ocr.alignment import (
     split_at_ink,
     weak_boxes,
 )
+from ocr.models import Line
+from review import services as review
 from review.services import normalize_token
 
 
@@ -48,6 +55,10 @@ def band(y0: int, y1: int, x0: int = 0, x1: int = 400) -> dict:
 
 def boxes_of(built: list[dict]) -> dict[str, list | None]:
     return {t["t"]: t["bbox"] for b in built for t in b["tokens"]}
+
+
+def texts(built: list[dict]) -> list[str]:
+    return [b["text"] for b in built]
 
 
 # ---------------------------------------------------------------- 1. boxes that run into their neighbour
@@ -101,6 +112,27 @@ def test_word_boxes_keep_to_their_printed_line_and_a_line_over_two_bands_is_flag
     assert boxes_of(built)["ثم"] == [300, 105, 380, 150]
 
 
+def test_a_line_keeps_to_the_band_its_words_cover_most_not_a_thin_one():
+    # a thin band (a rule, a speck row) under the first line: every word covers all of its one row
+    bands = [band(10, 20), band(26, 27), band(70, 80)]
+    fitted = fit_lines([line(w("قال", 300, 380, 15, 28), w("في", 200, 280, 15, 28))], page_bands(bands))
+    assert fitted[0]["core"] == [10, 20]
+    # book 21 page 5: a fragment Tesseract made a line of its own sits on the band the line's words
+    # are on; the line box stays there, not on the band its box grew over
+    lines = [
+        line(w("0", 390, 398, 12, 18)),
+        line(w("قال", 300, 380, 5, 25), w("الأمير", 200, 280, 5, 25), w("ثم", 100, 180, 5, 85)),
+    ]
+    fitted = fit_lines(lines, page_bands([band(10, 20), band(70, 80)]))
+    assert fitted[1]["core"] == [10, 20] and fitted[1]["bbox"][1::2] == [5, 45]
+
+
+def test_a_malformed_band_is_left_out():
+    tess = [line(w("قال", 300, 380), w("الأمير", 200, 280))]
+    broken = [band(0, 20), {"x0": 0, "y0": 60, "x1": 400}, {"x0": "?", "y0": 0, "x1": 1, "y1": 5}]
+    assert texts(build_lines("قال الأمير", None, tess, bands=broken)) == ["قال الأمير"]
+
+
 # ---------------------------------------------------------------- 2. and 5. the words of a gap in a line
 
 
@@ -113,6 +145,8 @@ def test_the_words_of_an_in_line_gap_take_the_unused_tesseract_words_there_by_po
     assert tokens["المدينة"]["bbox"] == [449, 0, 506, 20] and tokens["المدينة"]["tess"] == "Spl"
     assert tokens["نفسها"]["bbox"] == [381, 0, 436, 20]
     assert tokens["Tripolis"]["bbox"] == [270, 0, 355, 20]
+    # boxes found by their place in the line do not count as anchored (the page's alignment flags)
+    assert built[0]["n_anchored"] == 2
 
 
 def _inked(blocks: list[tuple[int, int]], width: int = 400, height: int = 100) -> np.ndarray:
@@ -135,6 +169,14 @@ def test_a_gap_with_fewer_tesseract_words_than_words_is_split_at_its_clean_ink_g
     assert boxes_of(built)["كتابه"] is None and boxes_of(built)["ب"] is None
     # without the gray image the gap keeps no box either
     assert boxes_of(build_lines("قال كتابه ب انتهى", None, tess, bands=bands))["كتابه"] is None
+
+
+def test_latin_words_split_at_the_ink_take_their_pieces_left_to_right():
+    # «Leptis Magna» between Arabic words, read by Tesseract as one word: «Leptis» is the left piece
+    tess = [line(w("قال", 310, 350, 5, 35), w("Lqqq", 20, 290, 5, 35), w("انتهى", 0, 15, 5, 35))]
+    gray = _inked([(310, 350), (200, 290), (20, 150), (0, 15)])
+    built = build_lines("قال Leptis Magna انتهى", None, tess, bands=[band(12, 28), band(72, 88)], gray=gray)
+    assert boxes_of(built)["Leptis"] == [20, 5, 150, 35] and boxes_of(built)["Magna"] == [200, 5, 290, 35]
 
 
 def test_split_at_ink_needs_clean_gaps_and_pieces_that_fit_their_words():
@@ -185,13 +227,93 @@ def test_a_number_takes_the_mark_tesseract_read_for_it_at_the_start_of_its_line(
     assert boxes_of(built)["(٢)"] == [385, 30, 398, 50]
 
 
-def test_a_number_at_the_end_of_a_region_is_not_a_page_number_further_down():
+def test_the_last_number_of_a_region_takes_the_page_number_line_below():
+    # books 10-18: the page number «١٨» read "\\A" on the region's last line, a line of its own; D63 kept
+    # it on the last text line, where it leaked into the text
+    tess = [line(w("قال", 300, 380), w("الأمير", 200, 280)), line(w("\\A", 190, 205, 60, 80))]
+    assert texts(build_lines("قال الأمير ١٨", None, tess)) == ["قال الأمير", "١٨"]
+    # a page number at the top of a region
+    tess = [line(w("Ye", 190, 205)), line(w("قال", 300, 380, 60, 80), w("الأمير", 200, 280, 60, 80))]
+    assert texts(build_lines("٢٤ قال الأمير", None, tess)) == ["٢٤", "قال الأمير"]
+
+
+def test_a_number_at_the_end_of_a_region_is_not_a_page_number_much_shorter_than_it():
     tess = [line(w("قال", 300, 380), w("الأمير", 200, 280)), line(w("٨", 190, 200, 60, 80))]
-    built = build_lines("قال الأمير ١٢٣", None, tess)
-    assert [b["text"] for b in built] == ["قال الأمير ١٢٣"]
+    assert texts(build_lines("قال الأمير ١٢٣", None, tess)) == ["قال الأمير ١٢٣"]
     # ... but a number that reads the same is found on a line of its own
-    built = build_lines("قال الأمير ٨", None, tess)
-    assert [b["text"] for b in built] == ["قال الأمير", "٨"]
+    assert texts(build_lines("قال الأمير ٨", None, tess)) == ["قال الأمير", "٨"]
+
+
+def test_a_number_tesseract_set_apart_on_the_same_printed_line_stays_on_it():
+    # book 21 page 11: the footnote mark «(١)» is a Tesseract line of its own on the first line's band
+    tess = [
+        line(w("0", 390, 398, 8, 22)),
+        line(w("قال", 300, 380, 5, 25), w("الأمير", 200, 280, 5, 25)),
+        line(w("ثم", 300, 380, 65, 85)),
+    ]
+    built = build_lines("(١) قال الأمير ثم", None, tess, bands=[band(10, 20), band(70, 80)])
+    assert texts(built) == ["(١) قال الأمير", "ثم"]
+
+
+def test_a_date_that_ends_a_line_is_not_pulled_onto_the_next_one():
+    # book 19 page 34: «… ٢٠٢١م.» ends a line and the footnote mark «٢» (read "°") starts the next;
+    # D63 gave that mark to the first token of the gap, which took the date along
+    tess = [
+        line(w("قال", 300, 380), w("الأمير", 200, 280), w("xq", 100, 180)),
+        line(w("°", 390, 398, 30, 40), w("يقول", 300, 380, 30, 50), w("السعودي", 200, 280, 30, 50)),
+    ]
+    built = build_lines("قال الأمير ه ٢٠٢١م. ٢ يقول السعودي", None, tess)
+    assert texts(built) == ["قال الأمير ه ٢٠٢١م.", "٢ يقول السعودي"]
+    assert boxes_of(built)["٢"] == [390, 30, 398, 40]
+
+
+def test_a_number_that_reads_the_same_needs_no_room_after_it():
+    tess = [
+        line(w("قال", 300, 380), w("الأمير", 200, 280)),
+        line(w("xyz", 300, 380, 30, 50), w("214", 200, 280, 30, 50)),
+    ]
+    assert texts(build_lines("قال الأمير ٢١٤ ص", None, tess)) == ["قال الأمير", "٢١٤ ص"]
+
+
+def test_a_mark_on_a_line_between_two_anchors_does_not_split_a_run_away_from_it():
+    # book 19 page 39: «(ج١، ص٢٤٠).» on a line of its own, read "Ge Ng) +¥8("; D63 gave «.22).» its
+    # last word and left «(ج» on the line before
+    tess = [
+        line(w("المقدس»", 300, 380)),
+        line(w("Ge", 300, 340, 30, 50), w("Ng)", 350, 400, 30, 50), w("+¥8(", 200, 260, 30, 50)),
+        line(w("ولما", 300, 380, 60, 80), w("كان", 200, 280, 60, 80)),
+    ]
+    built = build_lines("المقدس» (ج ا، ص .22). ولما كان", None, tess)
+    assert texts(built) == ["المقدس»", "(ج ا، ص .22).", "ولما كان"]
+
+
+def test_a_mark_misread_as_another_keeps_the_two_readings_in_step():
+    # book 22 page 6: «.» read "-", «وأيّاً» read "I,": D63 matched no mark, lost «وأيّاً» and moved it up
+    tess = [
+        line(w("الفتتح", 300, 380), w("gl", 200, 280), w("-", 180, 190)),
+        line(w("I,", 330, 380, 30, 50), w("كان", 250, 320, 30, 50), w("الأمر", 150, 240, 30, 50)),
+    ]
+    built = build_lines("الفتح العربي . وأيّاً كان الأمر", None, tess)
+    assert texts(built) == ["الفتح العربي .", "وأيّاً كان الأمر"]
+
+
+def test_marks_matched_to_marks_do_not_take_the_match_of_a_word():
+    # book 20 page 3: with every mark equal to every other the marks around «الأمير» match first; the
+    # gap is aligned again with marks of different kinds apart
+    tess = [
+        line(w("قال", 300, 380), w("الأمير", 200, 280), w(":", 190, 195), w("؛", 180, 185)),
+        line(w("ثم", 300, 380, 30, 50)),
+    ]
+    assert boxes_of(build_lines("قال . ، الأمير ثم", None, tess))["الأمير"] == [200, 0, 280, 20]
+
+
+def test_an_abbreviation_and_its_number_share_the_word_tesseract_read_for_both():
+    # book 19: «(ج١، ص١٠٦).» is two words to Tesseract, four tokens to Qari; the number takes the box
+    # (the numbers pass reads it), the abbreviation none; D63 gave «١،» the page's box
+    tess = [line(w("قال", 400, 480), w("Ne)", 300, 380), w("(Vga", 150, 290))]
+    boxes = boxes_of(build_lines("قال (ج ١، ص ١٠٦).", None, tess))
+    assert boxes["١،"] == [300, 0, 380, 20] and boxes["١٠٦)."] == [150, 0, 290, 20]
+    assert boxes["(ج"] is None and boxes["ص"] is None
 
 
 def test_a_closing_bracket_after_the_last_word_of_a_line_stays_on_that_line():
@@ -221,6 +343,8 @@ def test_marks_pair_in_order_preferring_readings_and_kinds_that_agree():
     assert pair_marks(["•"], ["١٩", "©"]) == [(0, 1)]  # a mark for a mark
     assert pair_marks(["،"], [",", ","]) == [(0, 0)]  # of two alike, the earlier
     assert pair_marks([], ["."]) == [] and pair_marks(["."], []) == []
+    assert pair_marks(["ه", "٢٠٢١م.", "٢"], ["°"]) == [(0, 0)]
+    assert pair_marks(["ه", "٢٠٢١م.", "٢"], ["°"], allowed=lambda x, y: x == 2) == [(2, 0)]
 
 
 # ---------------------------------------------------------------- 6. weak boxes
@@ -254,7 +378,10 @@ def test_build_lines_marks_a_box_that_holds_two_printed_words_weak():
     assert tokens["في"]["bq"] == WEAK and "bq" not in tokens["قال"]
 
 
-def test_the_numbers_pass_does_not_use_a_weak_box_as_an_area_or_a_gap_edge():
+def test_the_numbers_pass_reads_a_weak_box_only_when_the_numbers_gap_gave_it_nothing():
+    # a weak box is no area and no gap edge (D63): the gap is read; a number it gave nothing is then
+    # read in its own weak box, which is mostly wide (Qari read «٢٢» for «٢٠١٢»), when that box holds
+    # as many numbers as the token (no whole-box reading: the box may be a neighbour's)
     tokens = [
         tok("قال", [300, 0, 340, 20]),
         tok("١٢", [200, 0, 290, 20], digit=True, bq=WEAK),
@@ -264,7 +391,16 @@ def test_the_numbers_pass_does_not_use_a_weak_box_as_an_area_or_a_gap_edge():
     ]
     areas = nb.number_areas(tokens, [0, 0, 400, 20])
     assert [(a.bbox, a.tokens) for a in areas] == [([90, 0, 300, 20], [1, 3])]
-    assert nb.word_box(tokens[0]) == [300, 0, 340, 20] and nb.word_box(tokens[2]) is None
+    assert nb.word_box(tokens[0]) == [300, 0, 340, 20] and nb.word_box(tokens[1]) is None
+    held = SimpleNamespace(pk=7, tokens=tokens, bbox=[0, 0, 400, 20])
+    requests, index = nb.page_weak_boxes(None, [held])
+    assert requests == [{"id": "7:weak1", "bbox": [200, 0, 290, 20]}] and index == [(held, 1)]
+    one = [["٢", 280, 288, 0.9], ["٠", 260, 268, 0.9], ["١", 240, 248, 0.9], ["٢", 220, 228, 0.9]]
+    token = dict(tokens[1])
+    assert nb.read_weak_box(token, one) and token["t"] == "٢٠١٢" and token["src"] == "kraken"
+    assert not nb.read_weak_box(token, one)  # read already
+    two = [*one[:2], ["،", 250, 256, 0.9], *one[2:]]
+    assert not nb.read_weak_box(dict(tokens[1]), two)  # two numbers for one token: left as it is
     letters = [
         tok("قال", [300, 0, 340, 20]),
         tok("ا", [200, 0, 220, 20], bq=WEAK),
@@ -289,3 +425,26 @@ def test_the_numbers_pass_does_not_use_a_weak_box_as_an_area_or_a_gap_edge():
 
 def test_review_keeps_the_weak_mark_on_a_token():
     assert normalize_token({"t": "قال", "bbox": [0, 0, 10, 10], "bq": WEAK})["bq"] == WEAK
+
+
+def test_a_review_edit_that_keeps_a_box_keeps_its_weak_mark():
+    old = [tok("قال", [60, 0, 100, 20], bq=WEAK), tok("الأمير", [0, 0, 50, 20])]
+    edited = review.retokenize(old, "قالت الأمير")
+    assert edited[0]["t"] == "قالت" and edited[0]["bbox"] == [60, 0, 100, 20] and edited[0]["bq"] == WEAK
+    assert "bq" not in edited[1]
+    assert "bq" not in review.typed_token("قال", None, WEAK)  # no box, no mark
+
+
+@pytest.mark.django_db
+def test_merging_two_words_keeps_the_weak_mark_of_either_box():
+    book = Book.objects.create(title="كتاب", status=Book.Status.READY_FOR_REVIEW)
+    page = Page.objects.create(
+        book=book, number=1, source_index=0, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL
+    )
+    tokens = [tok("هير", [60, 0, 100, 20], bq=WEAK), tok("ودوت", [30, 0, 60, 20]), tok("قال", [0, 0, 30, 20])]
+    line_ = Line.objects.create(page=page, order=0, bbox=[0, 0, 100, 20], text="هير ودوت قال", tokens=tokens)
+    merged = review.merge_tokens(line_, 0)
+    assert merged.tokens[0]["t"] == "هيرودوت" and merged.tokens[0]["bbox"] == [30, 0, 100, 20]
+    assert merged.tokens[0]["bq"] == WEAK
+    clean = Line.objects.create(page=page, order=1, bbox=[0, 30, 100, 50], text="قال ثم", tokens=tokens[1:])
+    assert "bq" not in review.merge_tokens(clean, 0).tokens[0]

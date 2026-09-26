@@ -30,7 +30,7 @@ from django.utils import timezone
 from books.models import Book, Page
 from core.arabic import is_digit_token, to_western_digits
 from core.decorators import ROLE_EDITOR, ROLE_PROOFREADER, has_role
-from ocr.alignment import align_tokens
+from ocr.alignment import WEAK, align_tokens
 from ocr.models import Line
 from ocr.services import ENGINE_LABELS, count_unresolved, engine_names, join_region_texts
 from processing.models import Region
@@ -102,9 +102,10 @@ def normalize_token(raw: dict) -> dict:
     return token
 
 
-def typed_token(word: str, bbox: list | None = None) -> dict:
-    """A token written by the reviewer: high confidence, `res = "typed"`, no alternatives."""
-    return {
+def typed_token(word: str, bbox: list | None = None, bq: str | None = None) -> dict:
+    """A token written by the reviewer: high confidence, `res = "typed"`, no alternatives. A box it
+    keeps keeps its quality mark (`bq`: "weak" when the alignment was unsure of it)."""
+    token = {
         "t": word,
         "alt": None,
         "tess": None,
@@ -113,6 +114,9 @@ def typed_token(word: str, bbox: list | None = None) -> dict:
         "bbox": bbox,
         "res": "typed",
     }
+    if bbox and bq:
+        token["bq"] = bq
+    return token
 
 
 def _clean_words(text: str | None) -> list[str]:
@@ -571,8 +575,8 @@ def retokenize(old_tokens: list[dict], text: str) -> list[dict]:
     """Tokens for a line edited to `text`, aligned to its old tokens (`ocr.alignment.align_tokens`).
 
     A token whose text is unchanged keeps its whole dict (bbox, conf, res, alternatives); a changed
-    token paired one-to-one with an old token becomes a typed token with the old bbox; an added
-    token becomes a typed token without a box.
+    token paired one-to-one with an old token becomes a typed token with the old bbox (and its weak
+    mark, `bq`); an added token becomes a typed token without a box.
     """
     old = [normalize_token(token) for token in old_tokens or []]
     words = _clean_words(text)
@@ -583,7 +587,11 @@ def retokenize(old_tokens: list[dict], text: str) -> list[dict]:
         if i is not None and old[i]["t"] == words[j]:
             out[j] = old[i]
         else:
-            out[j] = typed_token(words[j], old[i]["bbox"] if i is not None else None)
+            out[j] = (
+                typed_token(words[j], old[i]["bbox"], old[i].get("bq"))
+                if i is not None
+                else typed_token(words[j])
+            )
     return [token if token is not None else typed_token(words[j]) for j, token in enumerate(out)]
 
 
@@ -705,10 +713,10 @@ def merge_tokens(
     """Join word `index` with the word after it (reading order) into one word, e.g. «هير» + «ودوت».
 
     For a name or place the models split in two (D31). The two readings are written together without
-    a space; the merged word's box is the union of both boxes and it counts as the reviewer's
-    decision (typed, high confidence, no alternatives). Undo restores both words. `expected` /
-    `expected_next` are the two words the client saw (`ReviewConflict` when they moved). Raises
-    `ReviewError` when there is no word after `index` on the line.
+    a space; the merged word's box is the union of both boxes (weak when one of them was) and it
+    counts as the reviewer's decision (typed, high confidence, no alternatives). Undo restores both
+    words. `expected` / `expected_next` are the two words the client saw (`ReviewConflict` when they
+    moved). Raises `ReviewError` when there is no word after `index` on the line.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -723,7 +731,10 @@ def merge_tokens(
         raise ReviewError("لا توجد كلمة بعدها في هذا السطر للدمج.")
     before = line_snapshot(line)
     first, second = tokens[i], tokens[i + 1]
-    merged = typed_token(first["t"] + second["t"], _union_box(first.get("bbox"), second.get("bbox")))
+    weak = any(t.get("bbox") and t.get("bq") == WEAK for t in (first, second))
+    merged = typed_token(
+        first["t"] + second["t"], _union_box(first.get("bbox"), second.get("bbox")), WEAK if weak else None
+    )
     tokens[i : i + 2] = [merged]
     _set_tokens(line, tokens)
     line.updated_by = _user_or_none(user)
