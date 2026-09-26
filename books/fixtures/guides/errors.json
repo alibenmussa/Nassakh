@@ -1,0 +1,60 @@
+{
+  "invalid": {
+    "book": "book_guides_layout.json",
+    "url": "/api/pages/813/guides/",
+    "request": {
+      "merge": true,
+      "set": {"footnote_line": 1.5},
+      "unset": [],
+      "reset": false,
+      "stage": "layout"
+    },
+    "status": 400,
+    "response": {
+      "errors": ["يجب أن تكون قيمة خط الحاشية نسبة بين 0.2 و 1.0 من ارتفاع الصفحة."]
+    }
+  },
+  "approved": {
+    "book": "book_guides_started.json",
+    "url": "/api/pages/812/guides/",
+    "request": {
+      "merge": true,
+      "set": {"footnote_line": 0.79},
+      "unset": [],
+      "reset": false,
+      "stage": "ocr"
+    },
+    "status": 422,
+    "response": {
+      "errors": ["الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة أولًا."]
+    }
+  },
+  "review": {
+    "book": "book_guides_started.json",
+    "url": "/api/pages/813/guides/",
+    "request": {
+      "merge": true,
+      "set": {"footnote_line": 0.79},
+      "unset": [],
+      "reset": false,
+      "stage": "ocr"
+    },
+    "status": 422,
+    "response": {
+      "errors": ["في هذه الصفحة تصحيحات مراجعة، فلا تتغيّر مناطقها."]
+    }
+  },
+  "started": {
+    "book": "book_guides_started.json",
+    "url": "/api/pages/814/guides/",
+    "request": {
+      "merge": true,
+      "set": {"footnote_line": 0.79},
+      "unset": [],
+      "reset": false,
+      "stage": "layout"
+    },
+    "status": 409,
+    "response": {"detail": "بدأت المعالجة في نافذة أخرى؛ حدّث الصفحة.", "started": true}
+  }
+}

@@ -13,9 +13,12 @@ inside the functions that enqueue them.
 from __future__ import annotations
 
 import logging
+import math
 import re
+import shutil
 import statistics
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from celery import chain
@@ -23,8 +26,10 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import UploadedFile
+from django.db import transaction
 from django.db.models import Count
 from django.urls import reverse
+from django.utils import timezone
 
 import numpy as np
 import pymupdf
@@ -61,8 +66,8 @@ BOOK_FIELDS: tuple[str, ...] = (
 # Pipeline stages a page can be re-run from, in pipeline order, with their Arabic labels.
 STAGES: tuple[str, ...] = ("preprocess", "layout", "ocr", "ocr_fast", "ocr_full")
 STAGE_LABELS: dict[str, str] = {
-    "preprocess": "المعالجة الأولية",
-    "layout": "التخطيط",
+    "preprocess": "تجهيز الصفحات",
+    "layout": "تحديد المناطق",
     "ocr": "التعرّف على النص (سريع ثم كامل)",
     "ocr_fast": "التعرّف السريع (Tesseract)",
     "ocr_full": "التعرّف الكامل (Qari)",
@@ -79,6 +84,24 @@ ACTIVE_PAGE_STATUSES: frozenset[str] = frozenset(
 APPROVED_PAGE_STATUSES: frozenset[str] = frozenset({Page.Status.REVIEWED, Page.Status.ASSEMBLED})
 APPROVED_PAGE_ERROR = "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة قبل إعادة تشغيلها."
 ALL_APPROVED_ERROR = "كل صفحات الكتاب معتمدة؛ أعد فتح الصفحات التي تريد إعادة تشغيلها من شاشة المراجعة أولًا."
+
+# «التخطيط» and «المعالجة» (D64, D65): the messages of the split.
+LAYOUT_STAGES: tuple[str, ...] = ("preprocess",)  # the only re-run while a book awaits «بدء المعالجة»
+NOT_STARTED_ERROR = "لم تبدأ المعالجة بعد؛ اضغط «بدء المعالجة» أولًا."
+LAYOUT_DONE_ERROR = "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو أعد تجهيز الصفحات من القائمة «⋯»."
+BROKER_ERROR = "تعذّر إرسال العمل إلى العامل الخلفي. تأكّد من تشغيل Redis والعامل ثم أعد المحاولة."
+ALREADY_STARTED_ERROR = "بدأت المعالجة بالفعل."
+STILL_PREPARING_ERROR = "لم يكتمل التخطيط بعد؛ انتظر حتى تُجهَّز كل الصفحات."
+NOTHING_READY_ERROR = "لا صفحات جاهزة للمعالجة؛ أعد صفحةً إلى الكتاب أو أعد تجهيز الصفحات."
+
+# The model time a book re-run costs (§3.6): stages whose chain ends with the models, and the
+# per-page Qari time used when the book has no Qari run yet.
+MODEL_STAGES: frozenset[str] = frozenset({"preprocess", "layout", "ocr", "ocr_full"})
+QARI_FALLBACK_SECONDS = 20.0
+
+# Arabic count forms (`assembly.render.ar_count`): «7 صفحات» and «من 555 صفحة».
+PAGE_FORMS: tuple[str, str, str, str] = ("صفحة واحدة", "صفحتان", "صفحات", "صفحة")
+PAGE_FORMS_OF: tuple[str, str, str, str] = ("صفحة واحدة", "صفحتين", "صفحات", "صفحة")
 
 # Text-layer detection (spec §6): average characters per sampled page and Arabic share of letters.
 TEXT_LAYER_MIN_CHARS = 200
@@ -121,10 +144,11 @@ def create_book(data: dict, pdf: UploadedFile, user) -> Book:
 
     Only keys in `BOOK_FIELDS` are taken from `data`. The PDF lands at `books/{id}/source.pdf`
     (`core.storage.book_source_path`). When the PDF cannot be read the book is kept with status
-    `error` and an actionable Arabic message instead of raising.
+    `error` and an actionable Arabic message instead of raising. The book awaits «بدء المعالجة»
+    (D64): its pages are extracted and prepared, then nothing is read before the owner starts.
     """
     fields = {key: value for key, value in data.items() if key in BOOK_FIELDS and value is not None}
-    book = Book(**fields)
+    book = Book(**fields, awaits_ocr_start=True)
     if getattr(user, "is_authenticated", False):
         book.created_by = user
     book.save()
@@ -446,34 +470,89 @@ def _create_page(
 
 
 def start_processing(book: Book) -> None:
-    """Mark the book `processing` and enqueue `ingest_book_task`, which fans out preprocessing.
+    """«استخراج الصفحات»: mark the book `processing` and enqueue `ingest_book_task` (ingest → preprocess).
 
-    Allowed from `uploaded` and `error` (a restart resumes the idempotent ingest). Raises
-    ValueError with an Arabic message otherwise.
+    Allowed from `uploaded` and `error` (a restart resumes the idempotent ingest; a book whose
+    «المعالجة» had started goes on through OCR, as its flag is False). Raises ValueError with an
+    Arabic message otherwise. When the task cannot be queued the status and the error message go
+    back and ValueError says so (`BROKER_ERROR`), so the book never waits for work nobody runs.
     """
     if book.status in ACTIVE_BOOK_STATUSES:
         raise ValueError("المعالجة جارية بالفعل.")
     if book.status == Book.Status.NEEDS_GUIDES:
-        raise ValueError("هذا الكتاب متوقف من إصدار سابق. استخدم «إعادة التشغيل» من مرحلة التخطيط لمتابعته.")
+        raise ValueError(LAYOUT_DONE_ERROR)
     if book.status not in (Book.Status.UPLOADED, Book.Status.ERROR):
         raise ValueError("انتهت معالجة هذا الكتاب. استخدم «إعادة التشغيل» لإعادة مرحلة معيّنة.")
     if not book.source_pdf:
         raise ValueError("لا يوجد ملف PDF مرفق بهذا الكتاب.")
 
+    previous = (book.status, book.error_message)
     book.status = Book.Status.PROCESSING
     book.error_message = ""
     book.save(update_fields=["status", "error_message", "updated_at"])
 
     from books.tasks import ingest_book_task
 
-    ingest_book_task.delay(book.pk)
+    try:
+        ingest_book_task.delay(book.pk)
+    except Exception as exc:  # noqa: BLE001 - the broker refused (Redis down): nothing will run
+        log.warning("start_processing: book %s not queued: %s", book.pk, exc)
+        book.status, book.error_message = previous
+        book.save(update_fields=["status", "error_message", "updated_at"])
+        raise ValueError(BROKER_ERROR) from exc
 
 
-def _stage_signatures(page_id: int, stage: str) -> list:
-    """Celery signatures for the pipeline from `stage` onwards; each task returns the page id."""
+def start_ocr(book: Book) -> None:
+    """«بدء المعالجة» (D64): send every prepared page into «المعالجة».
+
+    Only from «تم التخطيط» (`needs_guides` with `awaits_ocr_start`). Refused with an Arabic ValueError
+    when no page is ready. One conditional UPDATE claims the start (flag → False, status → `ocr`), so
+    a double submit or a second tab starts nothing twice; `start_ocr_task` then runs `_enqueue_layout`.
+    When the task cannot be queued the claim is undone.
+    """
+    ready = book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED).exists()
+    if not ready:
+        current = Book.objects.filter(pk=book.pk).values("awaits_ocr_start", "status").first() or {}
+        if current and not current["awaits_ocr_start"]:
+            raise ValueError(ALREADY_STARTED_ERROR)
+        if current.get("status") == Book.Status.PROCESSING:
+            raise ValueError(STILL_PREPARING_ERROR)
+        raise ValueError(NOTHING_READY_ERROR)
+    claimed = Book.objects.filter(pk=book.pk, awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES).update(
+        awaits_ocr_start=False, status=Book.Status.OCR, error_message="", updated_at=timezone.now()
+    )
+    if not claimed:
+        current = Book.objects.filter(pk=book.pk).values("awaits_ocr_start", "status").first() or {}
+        if current and not current["awaits_ocr_start"]:
+            raise ValueError(ALREADY_STARTED_ERROR)
+        if current.get("status") == Book.Status.PROCESSING:
+            raise ValueError(STILL_PREPARING_ERROR)
+        raise ValueError(NOTHING_READY_ERROR)
+    book.refresh_from_db(fields=["awaits_ocr_start", "status", "error_message", "updated_at"])
+
+    from books.tasks import start_ocr_task
+
+    try:
+        start_ocr_task.delay(book.pk)
+    except Exception as exc:  # noqa: BLE001 - the broker refused: give the start back
+        log.warning("start_ocr: book %s not queued: %s", book.pk, exc)
+        Book.objects.filter(pk=book.pk).update(
+            awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES, updated_at=timezone.now()
+        )
+        book.refresh_from_db(fields=["awaits_ocr_start", "status", "updated_at"])
+        raise ValueError(BROKER_ERROR) from exc
+
+
+def _stage_signatures(page_id: int, stage: str, layout_stage: bool = False) -> list:
+    """Celery signatures for the pipeline from `stage` onwards; each task returns the page id.
+
+    With `layout_stage` (the book awaits «بدء المعالجة») the only chain is `preprocess_page`.
+    """
     from ocr.tasks import ocr_page_fast, ocr_page_full
     from processing.tasks import layout_page, preprocess_page  # other apps: lazy imports
 
+    if layout_stage:
+        return [preprocess_page.s(page_id)]
     steps = {
         "preprocess": [preprocess_page, layout_page, ocr_page_fast, ocr_page_full],
         "layout": [layout_page, ocr_page_fast, ocr_page_full],
@@ -539,11 +618,15 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True):
     A page in `error` is cleared first (it falls back to its last completed status), then put back
     to the stage's input state (`_reset_to_stage_input`) and the book status is re-derived so the
     dashboard polls until the page is through. Excluded pages are refused, and so are approved
-    pages (`APPROVED_PAGE_ERROR`: reopen them first). Stores the chain's task id on the page and
-    returns the AsyncResult.
+    pages (`APPROVED_PAGE_ERROR`: reopen them first). While the book awaits «بدء المعالجة» only
+    `preprocess` runs, and alone (`NOT_STARTED_ERROR` for the other stages; the flag is read fresh).
+    Stores the chain's task id on the page and returns the AsyncResult.
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
+    layout_stage = awaits_start(page.book_id)
+    if layout_stage and stage not in LAYOUT_STAGES:
+        raise ValueError(NOT_STARTED_ERROR)
     if page.is_excluded:
         raise ValueError("الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا.")
     if page.status == Page.Status.ERROR:
@@ -554,10 +637,15 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True):
     if refresh_book:
         _refresh_started_book(page.book)
 
-    result = chain(*_stage_signatures(page.pk, stage)).apply_async()
+    result = chain(*_stage_signatures(page.pk, stage, layout_stage=layout_stage)).apply_async()
     page.task_id = str(getattr(result, "id", "") or "")[:64]
     page.save(update_fields=["task_id"])
     return result
+
+
+def awaits_start(book_id: int) -> bool:
+    """The book's `awaits_ocr_start`, read fresh from the database (D64)."""
+    return bool(Book.objects.filter(pk=book_id).values_list("awaits_ocr_start", flat=True).first())
 
 
 def _refresh_started_book(book: Book) -> None:
@@ -571,11 +659,14 @@ def validate_rerun(book: Book, stage: str) -> None:
     """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage`.
 
     Every stage can be re-run, including on a book that an earlier version parked in
-    `needs_guides` (regions are now derived per page, so nothing waits for the guides). Refused
-    when every non-excluded page is approved (`rerun_book` would have nothing to run).
+    `needs_guides` (regions are now derived per page, so nothing waits for the guides). While the
+    book awaits «بدء المعالجة» only `preprocess` can («إعادة تجهيز الصفحات»). Refused when every
+    non-excluded page is approved (`rerun_book` would have nothing to run).
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
+    if stage not in LAYOUT_STAGES and awaits_start(book.pk):
+        raise ValueError(NOT_STARTED_ERROR)
     pages = book.pages.filter(is_excluded=False)
     if pages.exists() and not pages.exclude(status__in=APPROVED_PAGE_STATUSES).exists():
         raise ValueError(ALL_APPROVED_ERROR)
@@ -618,8 +709,8 @@ def toggle_exclude(page: Page) -> Page:
 
     A page re-included into a book whose processing has started continues from its completed
     stage (preprocess, layout or OCR is enqueued), so the book never waits for work nobody runs.
-    In a book waiting for its guides, a preprocessed page simply joins the waiting pages and an
-    unprocessed one is only preprocessed.
+    In a book that awaits «بدء المعالجة» (D64) a prepared page simply joins the waiting pages and an
+    unprepared one is only prepared; nothing is queued for OCR.
     """
     page.is_excluded = not page.is_excluded
     if page.is_excluded:
@@ -634,7 +725,7 @@ def toggle_exclude(page: Page) -> Page:
     if book.status in (Book.Status.UPLOADED, Book.Status.ERROR):
         return page
     next_stage = None if page.is_excluded else _NEXT_STAGE.get(page.status)
-    if next_stage is not None and book.status == Book.Status.NEEDS_GUIDES:
+    if next_stage is not None and book.awaits_ocr_start:
         if next_stage == "preprocess":
             from processing.tasks import preprocess_page  # other app: lazy import
 
@@ -645,6 +736,142 @@ def toggle_exclude(page: Page) -> Page:
     else:
         book.refresh_status()
     return page
+
+
+def qari_seconds(book: Book) -> float:
+    """Typical model time of one page of the book, in seconds (one query over `OcrRun`).
+
+    A page's Qari time is the duration of the newest primary (Qari v0.3) run plus the newest
+    secondary (Qari v0.2) run of each of its regions (page-level runs count as one target); the
+    result is the median over the book's pages that have one, else `QARI_FALLBACK_SECONDS`.
+    """
+    from ocr.models import OcrRun  # other app: lazy imports
+    from ocr.services import engine_names
+
+    primary, secondary, _fast = engine_names()
+    rows = (
+        OcrRun.objects.filter(page__book=book, engine_name__in=(primary, secondary), status=OcrRun.Status.OK)
+        .order_by("-created_at", "-id")
+        .values_list("page_id", "region_id", "engine_name", "duration_ms")
+    )
+    newest: dict[tuple, int] = {}
+    for page_id, region_id, engine, duration in rows:
+        newest.setdefault((page_id, region_id, engine), int(duration or 0))
+    per_page: dict[int, int] = {}
+    for (page_id, _region, _engine), duration in newest.items():
+        per_page[page_id] = per_page.get(page_id, 0) + duration
+    times = [ms / 1000 for ms in per_page.values() if ms > 0]
+    return float(statistics.median(times)) if times else QARI_FALLBACK_SECONDS
+
+
+def _rerun_counts(book: Book) -> tuple[int, int]:
+    """`(pages, kept)`: the non-excluded unapproved pages a book re-run runs, and the approved ones."""
+    rows = list(book.pages.filter(is_excluded=False).values_list("status", flat=True))
+    kept = sum(1 for status in rows if status in APPROVED_PAGE_STATUSES)
+    return len(rows) - kept, kept
+
+
+def rerun_estimate(
+    book: Book, stage: str, seconds: float | None = None, counts: tuple[int, int] | None = None
+) -> dict:
+    """The numbers of the book re-run confirmation (§3.6): `{pages, kept, minutes}`.
+
+    `pages` are the non-excluded, unapproved pages (what `rerun_book` would run), `kept` the approved
+    ones; `minutes` = ⌈pages × s ÷ 60⌉ with s = `qari_seconds`, only in «المعالجة» and only for the
+    stages whose chain ends with the models (not `ocr_fast`, Tesseract alone), else null. `seconds`
+    and `counts` let a caller that estimates several stages pay each query once.
+    """
+    pages, kept = counts if counts is not None else _rerun_counts(book)
+    minutes = None
+    if stage in MODEL_STAGES and not book.awaits_ocr_start:
+        s = qari_seconds(book) if seconds is None else seconds
+        minutes = math.ceil(pages * s / 60) if pages else 0
+    return {"pages": pages, "kept": kept, "minutes": minutes}
+
+
+def offered_rerun_stages(book: Book, has_pages: bool | None = None) -> list[str]:
+    """The book-wide re-runs «⋯» offers: in «التخطيط» only «إعادة تجهيز الصفحات», and only once the book
+    is `needs_guides` or in `error` with pages; else today's five stages."""
+    if not book.awaits_ocr_start:
+        return list(STAGES)
+    if book.status == Book.Status.NEEDS_GUIDES:
+        return list(LAYOUT_STAGES)
+    if book.status == Book.Status.ERROR:
+        has = book.pages.exists() if has_pages is None else has_pages
+        return list(LAYOUT_STAGES) if has else []
+    return []
+
+
+def rerun_estimates(book: Book, stages: Sequence[str]) -> dict[str, dict]:
+    """`{stage: rerun_estimate}` for the offered stages (the `OcrRun` query runs at most once)."""
+    if not stages:
+        return {}
+    needs_time = not book.awaits_ocr_start and any(stage in MODEL_STAGES for stage in stages)
+    seconds = qari_seconds(book) if needs_time else QARI_FALLBACK_SECONDS
+    counts = _rerun_counts(book)
+    return {stage: rerun_estimate(book, stage, seconds, counts) for stage in stages}
+
+
+def kept_range(book: Book, source_pages: int | None = None) -> dict:
+    """The PDF pages the book keeps, 1-based and inclusive (D66): `{source_pages, first, last, sheets,
+    pages, text}`.
+
+    The count is `source_pages` (the form's reading) or `Book.source_page_count` (`inspect_pdf`).
+    `sheets` = last − first + 1 and `pages` = sheets × `pages_per_sheet`; `text` is the side panel's
+    line («الصفحات 187–193 من 555», two per sheet «…، وفي كل منها صفحتان»). Nothing kept (or an
+    unknown count): first / last null, 0 sheets and an empty text.
+    """
+    total = int(source_pages if source_pages is not None else book.source_page_count or 0)
+    first = int(book.skip_first) + 1
+    last = total - int(book.skip_last)
+    if total <= 0 or first > last:
+        return {"source_pages": total, "first": None, "last": None, "sheets": 0, "pages": 0, "text": ""}
+    sheets = last - first + 1
+    two_up = int(book.pages_per_sheet) == 2
+    span = f"الصفحات {first}–{last}" if sheets > 1 else f"الصفحة {first}"
+    text = f"{span} من {total}"
+    if two_up:
+        text += "، وفي كل منها صفحتان" if sheets > 1 else "، وفيها صفحتان"
+    return {
+        "source_pages": total,
+        "first": first,
+        "last": last,
+        "sheets": sheets,
+        "pages": sheets * (2 if two_up else 1),
+        "text": text,
+    }
+
+
+def extraction_message(book: Book) -> str:
+    """The success message of «استخراج الصفحات» on the new-book form, with the exact kept range."""
+    from assembly.render import ar_count  # other app: lazy import
+
+    kept = kept_range(book)
+    two_up = int(book.pages_per_sheet) == 2
+    count = ar_count(kept["pages"], PAGE_FORMS) + (" في الكتاب" if two_up else "")
+    head = f"أُنشئ الكتاب «{book.title}»، وتُستخرج الآن"
+    if not book.skip_first and not book.skip_last:
+        return f"{head} صفحات الملف كلها ({count})."
+    span = f"الصفحات {kept['first']}–{kept['last']}" if kept["sheets"] > 1 else f"الصفحة {kept['first']}"
+    of = ar_count(kept["source_pages"], PAGE_FORMS_OF)
+    return f"{head} {span} من {of} في الملف ({count})."
+
+
+def delete_book(book: Book) -> str:
+    """«حذف الكتاب»: delete the book and every row that hangs on it, then its files; returns the title.
+
+    Every related table cascades (pages, guides, runs, lines, revisions, manuscript, snapshots,
+    stylesheet, renders, exports). After the commit `MEDIA_ROOT/books/<id>/` is removed: every file
+    of a book lives under it. Tasks still running for the book end quietly when their row is gone; a
+    task that was mid-write can leave a stray file, which is harmless.
+    """
+    title, book_id = book.title, book.pk
+    folder = Path(settings.MEDIA_ROOT) / "books" / str(book_id)
+    with transaction.atomic():
+        book.delete()
+        transaction.on_commit(lambda: shutil.rmtree(folder, ignore_errors=True))
+    log.info("book %s («%s») deleted", book_id, title)
+    return title
 
 
 # ====================================================================== read models for screens
@@ -661,10 +888,16 @@ def _bar_state(status: str) -> str:
     return ""
 
 
-def _pipeline_percent(by_status: dict[str, int], total: int) -> int:
-    """Share (0-100) of the Phase 2 pipeline the non-excluded pages have gone through."""
+def _pipeline_percent(by_status: dict[str, int], total: int, layout_stage: bool = False) -> int:
+    """Share (0-100) of the Phase 2 pipeline the non-excluded pages have gone through.
+
+    In «التخطيط» (`layout_stage`) it is the prepared share: pages past `uploaded` that did not fail.
+    """
     if total <= 0:
         return 0
+    if layout_stage:
+        prepared = total - by_status.get(Page.Status.UPLOADED, 0) - by_status.get(Page.Status.ERROR, 0)
+        return int(round(100 * prepared / total))
     weight = sum(_STATUS_WEIGHT.get(status, 0) * count for status, count in by_status.items())
     return int(round(100 * weight / (3 * total)))
 
@@ -709,18 +942,25 @@ def book_progress(book: Book) -> dict:
 
 
 def _progress_payload(book: Book, by_status: dict[str, int], flags: int) -> dict:
-    """The `book_progress` dict from already counted pages (shared with `books_overview`)."""
+    """The `book_progress` dict from already counted pages (shared with `books_overview`).
+
+    `layout_stage` is true while the book awaits «بدء المعالجة» (D64), and `waiting` once its pages
+    are prepared (`needs_guides`): the books list then reads «بانتظار «بدء المعالجة»» instead of a bar.
+    """
     total = sum(by_status.values())
+    layout_stage = bool(book.awaits_ocr_start)
     return {
         "total": total,
         "by_status": by_status,
-        "percent": _pipeline_percent(by_status, total),
+        "percent": _pipeline_percent(by_status, total, layout_stage),
         "active": book.status in ACTIVE_BOOK_STATUSES,
         "flags": flags,
         "status": book.status,
         "status_label": book.get_status_display(),
         "dot": status_dot(book.status),
         "bar_state": _bar_state(book.status),
+        "layout_stage": layout_stage,
+        "waiting": layout_stage and book.status == Book.Status.NEEDS_GUIDES,
     }
 
 
@@ -938,8 +1178,8 @@ def attention_pages(book: Book) -> list[dict]:
 
 
 def guides_url(book: Book) -> str:
-    """URL of the guides screen of the processing app."""
-    return reverse("processing:guides", args=[book.pk])
+    """URL of the «التخطيط» mode of the dashboard (the «⋯» item «التخطيط», D67)."""
+    return reverse("books:detail", args=[book.pk]) + "?view=guides"
 
 
 def has_guides(book: Book) -> bool:
@@ -970,7 +1210,39 @@ def page_url_templates(book: Book) -> dict[str, str]:
     }
 
 
-def book_dashboard(book: Book) -> dict:
+GUIDES_VIEW = "guides"  # `?view=guides`: the «التخطيط» mode on a book whose «المعالجة» started
+
+
+def start_action(book: Book, guides_mode: bool) -> str:
+    """The primary of the «التخطيط» mode (§3.11 `startAction`), '' outside the mode."""
+    if not guides_mode:
+        return ""
+    if not book.awaits_ocr_start:
+        return "back"
+    return {
+        Book.Status.UPLOADED: "extract",
+        Book.Status.ERROR: "reextract",
+        Book.Status.NEEDS_GUIDES: "startOcr",
+        Book.Status.PROCESSING: "startOcrDisabled",
+    }.get(book.status, "startOcrDisabled")
+
+
+def guides_urls(book: Book) -> dict[str, str]:
+    """The URLs the «التخطيط» mode posts to (`__id__` stands for a page id)."""
+    page_url = reverse("api:page_guides_override", args=[0]).replace("/0/", "/__id__/")
+    return {
+        "state": reverse("api:book_guides", args=[book.pk]),
+        "apply": reverse("api:book_guides", args=[book.pk]),
+        "preview": reverse("api:book_guides_preview", args=[book.pk]),
+        "page": page_url,
+        "startOcr": reverse("books:start_ocr", args=[book.pk]),
+        "extract": reverse("books:start", args=[book.pk]),
+        "delete": reverse("books:delete", args=[book.pk]),
+        "back": reverse("books:detail", args=[book.pk]),
+    }
+
+
+def book_dashboard(book: Book, view: str | None = None) -> dict:
     """Everything the dashboard template needs, including the Alpine component's initial state.
 
     `config.manuscript` is the compact manuscript state (as in the progress poll) and
@@ -978,29 +1250,49 @@ def book_dashboard(book: Book) -> dict:
     `config.editor` / `config.layout` the editor and layout states of the progress poll and
     `config.editorUrls` the editor, layout, chapters, stylesheet and preview URLs
     (`editor.services.editor_urls`).
+
+    The «التخطيط» mode (D67) is on while the book awaits «بدء المعالجة», or with `view == "guides"`;
+    it adds `guidesMode`, `layoutStage`, `startAction`, the book guides, the detection line, the kept
+    range, `textLayer` and `guidesUrls` to the config (§3.11). Every book carries `rerun`: the
+    estimate of each offered book re-run, so the confirmation opens without a request.
     """
     from assembly.services import manuscript_urls  # other app: lazy import
     from editor.services import editor_urls
+    from processing import services as processing
 
     progress = book_progress(book)
     by_status = progress["by_status"]
+    labels = dict(Page.Status.choices)
     stages = [
-        {"key": "uploaded", "statuses": [Page.Status.UPLOADED], "label": "مرفوعة", "state": "neutral"},
-        {"key": "preprocessed", "statuses": [Page.Status.PREPROCESSED], "label": "مُعالَجة", "state": ""},
-        {"key": "layout_done", "statuses": [Page.Status.LAYOUT_DONE], "label": "تم التخطيط", "state": ""},
+        {"key": "uploaded", "statuses": [Page.Status.UPLOADED], "label": labels[Page.Status.UPLOADED]},
+        {
+            "key": "preprocessed",
+            "statuses": [Page.Status.PREPROCESSED],
+            "label": labels[Page.Status.PREPROCESSED],
+        },
+        {
+            "key": "layout_done",
+            "statuses": [Page.Status.LAYOUT_DONE],
+            "label": labels[Page.Status.LAYOUT_DONE],
+        },
         {
             "key": "ocr_done",
             "statuses": [Page.Status.OCR_DONE, Page.Status.REVIEWED, Page.Status.ASSEMBLED],
-            "label": "تم التعرّف",
-            "state": "success",
+            "label": labels[Page.Status.OCR_DONE],
         },
-        {"key": "error", "statuses": [Page.Status.ERROR], "label": "خطأ", "state": "danger"},
+        {"key": "error", "statuses": [Page.Status.ERROR], "label": labels[Page.Status.ERROR]},
     ]
-    for stage in stages:
+    for stage, state in zip(stages, ("neutral", "", "", "success", "danger"), strict=True):
+        stage["label"] = str(stage["label"])
+        stage["state"] = state
         stage["count"] = sum(by_status.get(status, 0) for status in stage["statuses"])
         stage["percent"] = int(round(100 * stage["count"] / progress["total"])) if progress["total"] else 0
         stage["dot"] = status_dot(stage["statuses"][0])
     tiles = page_tiles(book)
+    layout_stage = bool(book.awaits_ocr_start)
+    guides_mode = layout_stage or view == GUIDES_VIEW
+    offered = offered_rerun_stages(book, has_pages=bool(tiles))
+    rerun = rerun_estimates(book, offered)
     config = {
         "progressUrl": reverse("api:book_progress", args=[book.pk]),
         "active": progress["active"],
@@ -1027,7 +1319,29 @@ def book_dashboard(book: Book) -> dict:
         "statusLabels": {status: str(label) for status, label in Page.Status.choices},
         "statusDots": {status: status_dot(status) for status in Page.Status.values},
         "urls": page_url_templates(book),
+        "guidesMode": guides_mode,
+        "layoutStage": layout_stage,
+        "rerun": rerun,
     }
+    context: dict = {"guides_mode": guides_mode, "layout_stage": layout_stage, "start_action": ""}
+    if guides_mode:
+        from processing.models import LayoutGuides
+
+        guides = LayoutGuides.objects.filter(book=book).first()
+        stats = processing.guides_summary(book)
+        kept = kept_range(book)
+        action = start_action(book, guides_mode)
+        config.update(
+            {
+                "startAction": action,
+                "guides": processing.book_guides_view(guides),
+                "guidesStats": stats,
+                "keptRange": kept,
+                "textLayer": bool(book.has_text_layer) and bool(book.use_text_layer),
+                "guidesUrls": guides_urls(book),
+            }
+        )
+        context.update({"start_action": action, "kept_range": kept, "guides_stats": stats})
     return {
         "book": book,
         "progress": progress,
@@ -1037,7 +1351,11 @@ def book_dashboard(book: Book) -> dict:
         "has_guides": has_guides(book),
         "guides_url": guides_url(book),
         "can_start": book.status in (Book.Status.UPLOADED, Book.Status.ERROR),
-        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in STAGES],
+        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in offered],
+        "rerun": rerun,
+        "start_ocr_url": reverse("books:start_ocr", args=[book.pk]),
+        "delete_url": reverse("books:delete", args=[book.pk]),
+        "extract_url": reverse("books:start", args=[book.pk]),
         "error_headline": _headline(book.error_message),
         "error_detail": _detail(book.error_message),
         "review": progress["review"],
@@ -1047,6 +1365,7 @@ def book_dashboard(book: Book) -> dict:
         "layout": progress["layout"],
         "editor_urls": config["editorUrls"],
         "config": config,
+        **context,
     }
 
 
@@ -1070,8 +1389,37 @@ def page_images(page: Page) -> dict:
 
 
 def page_regions(page: Page) -> list[dict]:
-    """Regions of the page as plain dicts (bbox in gray-image pixel space) for the overlay."""
-    return region_items(page.regions.all())
+    """Regions of the page as plain dicts (bbox in gray-image pixel space) for the overlay.
+
+    Before its regions exist (in «التخطيط») the page shows the bands `layout_page` will write:
+    the same dicts with `id` null and `computed: true`.
+    """
+    rows = list(page.regions.all())
+    if rows:
+        return region_items(rows)
+    pre = _preprocess_of(page)
+    if pre is None or not pre.output_height or not pre.output_width:
+        return []
+    from processing import services as processing  # other app: lazy imports
+    from processing.models import LayoutGuides, Region
+
+    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    specs = processing.page_bands(
+        pre, processing.guides_values(guides), processing.is_manual(guides), page.guides_override
+    )
+    labels = dict(Region.Kind.choices)
+    return [
+        {
+            "id": None,
+            "kind": kind,
+            "label": str(labels.get(kind, kind)),
+            "bbox": box,
+            "order": order,
+            "source": Region.Source.GUIDES,
+            "computed": True,
+        }
+        for order, (kind, box) in enumerate(specs)
+    ]
 
 
 def page_status(page: Page) -> dict:
@@ -1110,6 +1458,8 @@ def page_detail_context(page: Page) -> dict:
         else None
     )
     book = page.book
+    stages = LAYOUT_STAGES if book.awaits_ocr_start else STAGES
+    regions = page_regions(page)
     prev_url = reverse("books:page_detail", args=[book.pk, previous.number]) if previous else None
     next_url = reverse("books:page_detail", args=[book.pk, following.number]) if following else None
     return {
@@ -1120,7 +1470,7 @@ def page_detail_context(page: Page) -> dict:
         "prev_url": prev_url,
         "next_url": next_url,
         "page_images": images,
-        "page_regions": page_regions(page),
+        "page_regions": regions,
         "page_flags": flag_items(page.attention_flags),
         "page_state": page_status(page),
         "error_headline": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
@@ -1128,7 +1478,8 @@ def page_detail_context(page: Page) -> dict:
         "retry_stage": page.error_from
         if page.status == Page.Status.ERROR and page.error_from in STAGES
         else None,
-        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in STAGES],
+        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in stages],
+        "layout_stage": bool(book.awaits_ocr_start),
         "total_pages": Page.objects.filter(book_id=page.book_id).count(),
         "dpi": int(round(page.dpi)) if page.dpi else 0,
         "source_page": page.source_index + 1,
@@ -1136,7 +1487,7 @@ def page_detail_context(page: Page) -> dict:
             "pageId": page.pk,
             "images": images,
             "size": size,
-            "regions": page_regions(page),
+            "regions": regions,
             "prevUrl": prev_url,
             "nextUrl": next_url,
             "initialTab": "gray" if images["gray"] else "original",
@@ -1265,7 +1616,7 @@ def provisional_lines(
     return [entry for i, entry in enumerate(out) if i not in drop]
 
 
-def book_sheets(book: Book, first: int, last: int) -> dict:
+def book_sheets(book: Book, first: int, last: int, guides: bool = False) -> dict:
     """Pages `first..last` of the book for the stacked-sheets view (five queries in all).
 
     Per page: status, provisional text and its Tesseract lines (`provisional_lines`), final lines
@@ -1275,6 +1626,10 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
     page, review state and URLs. The response also carries `book_line_h_px`: the book's typical
     printed line height (median of the pages' detected line heights in gray-image pixels, excluded and
     unprocessed pages left out; 0 when unknown), so every sheet sets its text at the same size (D30).
+
+    With `guides` (the «التخطيط» mode, §3.11) each item carries the `guides` block
+    (`processing.services.page_guides_payload`) and the lines and fast runs are not loaded
+    (`lines` and `provisional_lines` stay empty); still at most five queries.
     """
     from ocr.models import Line  # other apps: lazy imports
     from processing.models import Region
@@ -1282,24 +1637,29 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
     pages = list(
         book.pages.filter(number__gte=first, number__lte=last)
         .select_related("preprocess")
-        .defer("text_layer_text", "final_text", "guides_override", "preprocess__auto_params")
+        .defer("text_layer_text", "final_text", "preprocess__auto_params")
         .order_by("number")
     )
     page_ids = [page.pk for page in pages]
     lines_of: dict[int, list] = {pk: [] for pk in page_ids}
-    rows = (
-        Line.objects.filter(page_id__in=page_ids)
-        .select_related("region")
-        .only("page_id", "order", "bbox", "tokens", "region__kind")
-        .order_by("page_id", "order", "id")
-    )
-    for line in rows:
-        lines_of[line.page_id].append(line)
+    if not guides:
+        rows = (
+            Line.objects.filter(page_id__in=page_ids)
+            .select_related("region")
+            .only("page_id", "order", "bbox", "tokens", "region__kind")
+            .order_by("page_id", "order", "id")
+        )
+        for line in rows:
+            lines_of[line.page_id].append(line)
     regions_of: dict[int, list] = {pk: [] for pk in page_ids}
     for region in Region.objects.filter(page_id__in=page_ids).order_by("page_id", "order", "id"):
         regions_of[region.page_id].append(region)
-    runs = _fast_runs_by_target(page_ids) if page_ids else {}
-    out = [_sheet(book, page, lines_of[page.pk], regions_of[page.pk], runs) for page in pages]
+    runs = _fast_runs_by_target(page_ids) if page_ids and not guides else {}
+    out = [
+        _sheet(book, page, lines_of[page.pk], regions_of[page.pk], runs, text=not guides) for page in pages
+    ]
+    if guides and pages:
+        _add_guides_blocks(book, pages, regions_of, out)
     # one query for both the page total and the book's typical line height (was a plain count)
     heights = list(book.pages.values_list("is_excluded", "preprocess__median_line_height"))
     typical = [float(h) for excluded, h in heights if not excluded and h]
@@ -1313,8 +1673,28 @@ def book_sheets(book: Book, first: int, last: int) -> dict:
     }
 
 
-def _sheet(book: Book, page: Page, lines: list[Line], regions: list[Region], runs: RunsByTarget) -> dict:
-    """One page of `book_sheets` from its already loaded lines, regions and fast runs."""
+def _add_guides_blocks(book: Book, pages: list[Page], regions_of: dict[int, list], items: list[dict]) -> None:
+    """Put the `guides` block on each sheet item (two queries: the book guides, the review work)."""
+    from processing import services as processing  # other app: lazy imports
+    from processing.models import LayoutGuides
+
+    guides = LayoutGuides.objects.filter(book=book).first()
+    values, manual = processing.guides_values(guides), processing.is_manual(guides)
+    awaits = bool(book.awaits_ocr_start)
+    review = set() if awaits else processing.review_work_pages(book.pk, [page.pk for page in pages])
+    for page, item in zip(pages, items, strict=True):
+        locked = processing.page_lock(page, awaits, review)
+        pre = _preprocess_of(page)
+        item["guides"] = processing.page_guides_payload(
+            page, pre, values, manual, regions_of[page.pk], locked
+        )
+
+
+def _sheet(
+    book: Book, page: Page, lines: list[Line], regions: list[Region], runs: RunsByTarget, text: bool = True
+) -> dict:
+    """One page of `book_sheets` from its already loaded lines, regions and fast runs (`text=False`:
+    no provisional lines, which need the fast runs)."""
     from ocr.services import SKIPPED_KINDS
 
     pre = _preprocess_of(page)
@@ -1338,7 +1718,7 @@ def _sheet(book: Book, page: Page, lines: list[Line], regions: list[Region], run
         "dot": status_dot(page.status),
         "text_state": page.text_state,
         "provisional_text": page.provisional_text,
-        "provisional_lines": provisional_lines(page, regions, runs, width, height),
+        "provisional_lines": provisional_lines(page, regions, runs, width, height) if text else [],
         "lines": [
             {
                 "id": line.pk,

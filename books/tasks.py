@@ -1,7 +1,11 @@
-"""Books tasks: ingest the PDF, continue after preprocessing, re-run a stage for a whole book.
+"""Books tasks: ingest the PDF, continue (or pause) after preprocessing, start «المعالجة», re-run a book.
 
 Tasks call `books.services` and return the `book_id` they received. Tasks of the other apps
 (processing, ocr) are imported lazily inside the function bodies.
+
+«التخطيط» (D64): a book made by `create_book` awaits «بدء المعالجة»; its chord callback pauses at
+«تم التخطيط», and `start_ocr_task` sends the prepared pages on once the owner starts. Books with the
+flag False (every older book and fixture) take today's path.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from books.models import Book, Page
 log = logging.getLogger(__name__)
 
 INGEST_ERROR = (
-    "تعذّر استخراج الصفحات من الملف. تأكد أن الملف PDF سليم وغير محمي، ثم اضغط «بدء المعالجة» مجددًا."
+    "تعذّر استخراج الصفحات من الملف. تأكد أن الملف PDF سليم وغير محمي، ثم أعد المحاولة من الزر أعلى الصفحة."
 )
 NO_PAGES_ERROR = "لم تُستخرج أي صفحة. راجع قيم تجاوز الصفحات الأولى والأخيرة ثم أعد المحاولة."
 
@@ -27,7 +31,9 @@ def ingest_book_task(self, book_id: int) -> int:
     """Ingest the book's pages, then fan out `processing.tasks.preprocess_page` into `after_preprocess`.
 
     Disk errors are retried (twice); any other failure puts the book in `error` with an actionable
-    Arabic message and ends the run without raising.
+    Arabic message and ends the run without raising. Whether the callback goes on to OCR is fixed
+    here (`continue_ocr`), so a click on «بدء المعالجة» that lands before the callback runs cannot
+    enqueue the pages twice.
     """
     book = Book.objects.get(pk=book_id)
     try:
@@ -55,22 +61,33 @@ def ingest_book_task(self, book_id: int) -> int:
     from processing.tasks import preprocess_page
 
     header = group(preprocess_page.s(page.pk) for page in pages)
-    chord(header)(after_preprocess.s(book_id))
+    chord(header)(after_preprocess.s(book_id, continue_ocr=not book.awaits_ocr_start))
     return book_id
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,))
-def after_preprocess(self, results, book_id: int) -> int:
+def after_preprocess(self, results, book_id: int, continue_ocr: bool | None = None) -> int:
     """Chord callback once every page is preprocessed.
 
-    Proposes layout guides when the book has none (`processing.services.propose_guides`; the
-    proposal is only shown on the guides screen), then moves the book to `ocr` and gives every
-    preprocessed page the chain layout → ocr_fast → ocr_full. Footnotes and page numbers are
-    detected per page, so the book never waits for guides (`needs_guides` is not set here).
+    Proposes layout guides when the book has none (`processing.services.propose_guides`, for
+    display only; automatic guides never apply to a page). Then:
+
+    - `continue_ocr` true (today's path): moves the book to `ocr` and gives every preprocessed page
+      the chain layout → ocr_fast → ocr_full (`_enqueue_layout`);
+    - false (the book awaits «بدء المعالجة»): the book pauses at «تم التخطيط» (`refresh_status`),
+      unless the owner already started meanwhile, in which case it is left alone;
+    - None (a chord queued before this change): decided by the book's live flag.
     """
-    book = Book.objects.get(pk=book_id)
+    try:
+        book = Book.objects.get(pk=book_id)
+    except ObjectDoesNotExist:
+        log.warning("after_preprocess: book %s no longer exists", book_id)
+        return book_id
+    if continue_ocr is None:
+        continue_ocr = not book.awaits_ocr_start
     if not book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED).exists():
-        book.refresh_status()  # every page failed preprocessing: nothing to lay out
+        if continue_ocr or book.awaits_ocr_start:
+            book.refresh_status()  # every page failed preprocessing: nothing to lay out
         return book_id
 
     if not services.has_guides(book):
@@ -79,7 +96,31 @@ def after_preprocess(self, results, book_id: int) -> int:
         _guides, confidence = propose_guides(book)
         log.info("book %s: guides proposed with confidence %.2f (display only)", book_id, confidence)
 
-    _enqueue_layout(book)
+    if continue_ocr:
+        _enqueue_layout(book)
+        return book_id
+    book.refresh_from_db(fields=["awaits_ocr_start", "status", "error_message"])
+    if not book.awaits_ocr_start:  # «بدء المعالجة» landed meanwhile: `start_ocr_task` owns the book
+        return book_id
+    book.refresh_status()
+    log.info("book %s: prepared, waits for «بدء المعالجة» (%s)", book_id, book.status)
+    return book_id
+
+
+@shared_task(bind=True, max_retries=2, autoretry_for=(OSError,))
+def start_ocr_task(self, book_id: int) -> int:
+    """«بدء المعالجة» (D64): layout → ocr_fast → ocr_full for every prepared page (`_enqueue_layout`).
+
+    A task because an 800-page book means 800 chains; `services.start_ocr` has already claimed the
+    start (flag False, status `ocr`).
+    """
+    try:
+        book = Book.objects.get(pk=book_id)
+    except ObjectDoesNotExist:
+        log.warning("start_ocr_task: book %s no longer exists", book_id)
+        return book_id
+    count = _enqueue_layout(book)
+    log.info("book %s: «المعالجة» started for %s pages", book_id, count)
     return book_id
 
 

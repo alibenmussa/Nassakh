@@ -1,0 +1,133 @@
+{
+  "book_id": 25,
+  "from": 1,
+  "to": 2,
+  "total": 7,
+  "book_line_h_px": 40.0,
+  "pages": [
+    {
+      "id": 812,
+      "number": 1,
+      "status": "preprocessed",
+      "status_label": "مُجهَّزة",
+      "dot": "dot-accent",
+      "text_state": "none",
+      "provisional_text": "",
+      "provisional_lines": [],
+      "lines": [],
+      "regions": [],
+      "footnote_y": 0.781,
+      "median_line_h": 0.0133,
+      "display_url": "/media/books/25/pages/0001/display.webp",
+      "scan_url": null,
+      "thumb_url": null,
+      "scan_thumb_url": null,
+      "width": 1000,
+      "height": 3000,
+      "line_boxes": [
+        [0.4, 0.04, 0.6, 0.0533],
+        [0.1, 0.0833, 0.9, 0.0967],
+        [0.1, 0.11, 0.9, 0.1233],
+        [0.1, 0.75, 0.9, 0.7633],
+        [0.1, 0.8, 0.9, 0.81],
+        [0.1, 0.82, 0.9, 0.83],
+        [0.466, 0.974, 0.524, 0.988]
+      ],
+      "n_lines": 7,
+      "n_unresolved": 0,
+      "is_reviewed": false,
+      "is_excluded": false,
+      "printed_number": "",
+      "error": "",
+      "url": "/books/25/pages/1/",
+      "review_url": "/books/25/review/1/",
+      "guides": {
+        "bands": [
+          {
+            "kind": "body",
+            "bbox": [0.0, 0.0, 1.0, 0.781],
+            "source": "auto"
+          },
+          {
+            "kind": "footnote",
+            "bbox": [0.0, 0.781, 1.0, 0.972],
+            "source": "rule"
+          },
+          {
+            "kind": "page_number",
+            "bbox": [0.46, 0.972, 0.53, 0.99],
+            "source": "detected"
+          }
+        ],
+        "lines": {
+          "header": null,
+          "footnote": {"y": 0.781, "source": "rule"}
+        },
+        "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+        "override": {},
+        "doubts": [],
+        "image_url": "/media/books/25/pages/0001/display.webp?v=1727337600",
+        "derived": false,
+        "locked": ""
+      }
+    },
+    {
+      "id": 813,
+      "number": 2,
+      "status": "preprocessed",
+      "status_label": "مُجهَّزة",
+      "dot": "dot-accent",
+      "text_state": "none",
+      "provisional_text": "",
+      "provisional_lines": [],
+      "lines": [],
+      "regions": [],
+      "footnote_y": null,
+      "median_line_h": 0.0133,
+      "display_url": "/media/books/25/pages/0002/display.webp",
+      "scan_url": null,
+      "thumb_url": null,
+      "scan_thumb_url": null,
+      "width": 1000,
+      "height": 3000,
+      "line_boxes": [
+        [0.4, 0.04, 0.6, 0.0533],
+        [0.1, 0.0833, 0.9, 0.0967],
+        [0.1, 0.11, 0.9, 0.1233],
+        [0.1, 0.75, 0.9, 0.7633],
+        [0.1, 0.8, 0.9, 0.81],
+        [0.1, 0.82, 0.9, 0.83],
+        [0.466, 0.974, 0.524, 0.988]
+      ],
+      "n_lines": 7,
+      "n_unresolved": 0,
+      "is_reviewed": false,
+      "is_excluded": false,
+      "printed_number": "",
+      "error": "",
+      "url": "/books/25/pages/2/",
+      "review_url": "/books/25/review/2/",
+      "guides": {
+        "bands": [
+          {
+            "kind": "body",
+            "bbox": [0.0, 0.0, 1.0, 0.972],
+            "source": "auto"
+          },
+          {
+            "kind": "page_number",
+            "bbox": [0.46, 0.972, 0.53, 0.99],
+            "source": "detected"
+          }
+        ],
+        "lines": {"header": null, "footnote": null},
+        "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+        "override": {},
+        "doubts": [],
+        "image_url": "/media/books/25/pages/0002/display.webp?v=1727337600",
+        "derived": false,
+        "locked": ""
+      }
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 
 {% block content %}
 <form method="post" enctype="multipart/form-data" class="form-column stack-lg" novalidate
-      x-data="bookForm({ pagesPerSheet: '{{ form.pages_per_sheet.value|default:1|escapejs }}', splitRatio: '{{ form.split_ratio.value|default:'0.5'|escapejs }}' })"
+      x-data="bookForm({ pagesPerSheet: '{{ form.pages_per_sheet.value|default:1|escapejs }}', splitRatio: '{{ form.split_ratio.value|default:'0.5'|escapejs }}', skipFirst: '{{ form.skip_first.value|default:0|escapejs }}', skipLast: '{{ form.skip_last.value|default:0|escapejs }}' })"
       @submit="submitting = true">
   {% csrf_token %}
 
@@ -33,19 +33,35 @@
       <h2 class="section-title">الملف</h2>
       <span class="meta">يُحفظ الملف الأصلي كما هو ولا يُعدَّل</span>
     </div>
-    {% include "books/_field.html" with field=form.source_pdf %}
+    {# «اختيار ملف PDF» with the file's name (§3.13); the real input is visually hidden and keeps the focus ring on its label #}
+    <div class="field">
+      <span class="label" id="source-pdf-label">{{ form.source_pdf.label }}<span class="req" aria-hidden="true">*</span></span>
+      <div class="file-pick">
+        <input type="file" name="{{ form.source_pdf.html_name }}" id="{{ form.source_pdf.id_for_label }}" class="file-pick-input" accept="application/pdf,.pdf" required
+               aria-labelledby="source-pdf-label" aria-describedby="{{ form.source_pdf.id_for_label }}_help" @change="onFile($event)">
+        <label class="btn file-pick-btn" for="{{ form.source_pdf.id_for_label }}">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-upload"/></svg>
+          <span>اختيار ملف PDF</span>
+        </label>
+        <span class="file-pick-name" :class="{ 'is-empty': !fileName }" x-text="fileName || 'لم يُختر ملف'" dir="auto">لم يُختر ملف</span>
+      </div>
+      <p class="help" id="{{ form.source_pdf.id_for_label }}_help">{{ form.source_pdf.help_text }}</p>
+      {% for error in form.source_pdf.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+    </div>
   </section>
 
   <section class="card stack">
     <div class="card-header">
       <h2 class="section-title">خيارات الاستخراج</h2>
-      <span class="meta">يمكن استثناء صفحات بعينها لاحقًا من لوحة الكتاب</span>
+      <span class="meta">يمكن استثناء صفحات بعينها لاحقًا</span>
     </div>
 
-    <div class="field-row">
+    <div class="field-row" @input="readSkips($el)" @change="readSkips($el)">
       {% include "books/_field.html" with field=form.skip_first %}
       {% include "books/_field.html" with field=form.skip_last %}
     </div>
+    {# D66: which PDF pages will be extracted, before anything is queued (the server check stays authoritative) #}
+    <p class="range-line" :class="{ 'is-error': range.error }" role="status" aria-live="polite" x-text="range.text" data-range-line></p>
 
     <div class="field">
       <span class="label" id="pages-per-sheet-label">{{ form.pages_per_sheet.label }}</span>
@@ -86,11 +102,11 @@
 
   <div class="form-actions">
     <button type="submit" class="btn btn-primary" :disabled="submitting">
-      <span x-show="!submitting">إنشاء الكتاب</span>
+      <span x-show="!submitting">استخراج الصفحات</span>
       <span x-show="submitting" x-cloak class="inline-flex items-center gap-2"><span class="spinner spinner-sm"></span> يُرفع الملف…</span>
     </button>
     <a class="btn btn-ghost" href="{% url 'books:list' %}">إلغاء</a>
-    <span class="meta">بعد الإنشاء تُفتح لوحة الكتاب، ومنها تبدأ المعالجة.</span>
+    <span class="meta">تُستخرج الصفحات فور الرفع وتُكتشف مناطقها، ثم تنتظر «بدء المعالجة».</span>
   </div>
 </form>
 {% endblock %}

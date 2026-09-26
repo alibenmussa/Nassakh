@@ -20,7 +20,7 @@ from django.utils import timezone
 
 import pytest
 
-from assembly import pipeline, services
+from assembly import pipeline, render, services
 from assembly.models import AssemblyRun
 from assembly.pipeline import (
     Block,
@@ -1457,6 +1457,7 @@ def test_manuscript_state_before_any_run_costs_one_query(db, django_assert_num_q
         "active": False,
         "stale": False,
         "stale_pages": [],
+        "drift_pages": [],
         "warnings_count": 0,
         "stats": {},
         "options": {
@@ -1477,6 +1478,101 @@ def test_manuscript_state_of_an_assembled_book_has_a_fixed_cost(editor, django_a
     rows = services.page_rows(f.book)
     with django_assert_num_queries(3):
         services.manuscript_state(f.book, rows)
+
+
+# ---------------------------------------------------------------- D70: approval is not drift; live marks
+
+
+def test_drift_pages_leave_out_approval_only_pages_that_stale_pages_keep(editor):
+    """Book 26's shape: a page approved after assembly, its lines untouched, is stale (a re-assembly brings
+    the approval in, D36) but not drift; a text change, a new page and an excluded page are both."""
+    f, (one, two) = two_page_book()
+    three = f.page(3, Page.Status.LAYOUT_DONE)
+    services.start_assembly(f.book, editor)
+    run = Manuscript.objects.select_related("run").get(book=f.book).run
+    options = pipeline.normalize_settings(f.book.assembly_settings)
+
+    def changes():
+        rows = services.page_rows(f.book)
+        both = services.page_changes(run.included, rows, options)
+        assert both == (
+            services.stale_pages(run.included, rows, options),
+            services.drift_pages(run.included, rows, options),
+        )
+        return both
+
+    assert changes() == ([], [])
+    review_services.approve_page(two, editor, force=True)
+    assert changes() == ([2], [])
+    state = services.manuscript_state(f.book)
+    assert state["stale_pages"] == [2] and state["drift_pages"] == []
+    review_services.edit_line(two.lines.get(text="فقرة ثانية"), "فقرة ثانية مصححة", editor)
+    assert changes() == ([2], [2])
+    Page.objects.filter(pk=three.pk).update(status=Page.Status.OCR_DONE)  # newly eligible
+    Page.objects.filter(pk=one.pk).update(is_excluded=True, status=Page.Status.EXCLUDED)  # left out
+    assert changes() == ([1, 2, 3], [1, 2, 3])
+
+
+def test_reopening_an_assembled_page_is_stale_but_not_drift(editor):
+    f, (one, _) = two_page_book()
+    services.start_assembly(f.book, editor)
+    one.refresh_from_db()
+    review_services.reopen_page(one, editor)
+    state = services.manuscript_state(f.book)
+    assert state["stale_pages"] == [1] and state["drift_pages"] == []
+
+
+def test_the_amber_mark_follows_the_live_page_status():
+    """D35's mark (`data-reviewed`) comes from the live status of the block's source pages; without the
+    status (or for a block with no source page, or a page since left out) from the stored attribute."""
+
+    def para(block_id, pages, reviewed):
+        attrs = {"id": block_id, "sourcePages": pages, "reviewed": reviewed}
+        return {"type": "paragraph", "attrs": attrs, "content": [{"type": "text", "text": block_id}]}
+
+    doc = {
+        "type": "doc",
+        "content": [
+            para("p1", [2], False),
+            para("p2", [2, 3], False),
+            para("p3", [], False),
+            para("p4", [9], True),  # page 9 is not in the book (left out since): the attribute
+            para("p5", [1], True),
+        ],
+    }
+
+    def marks(html):
+        return dict(re.findall(r'data-block="(p\d)"[^>]*data-reviewed="(true|false)"', html))
+
+    assert marks(render.render_document(doc)) == {
+        "p1": "false",
+        "p2": "false",
+        "p3": "false",
+        "p4": "true",
+        "p5": "true",
+    }
+    live = {1: False, 2: True, 3: False}
+    html = render.render_document(doc, reviewed=live)
+    assert marks(html) == {"p1": "true", "p2": "false", "p3": "false", "p4": "true", "p5": "false"}
+    assert html.count(render.UNREVIEWED_TITLE) == 3
+
+
+def test_a_page_approved_after_assembly_loses_its_amber_mark_at_once(editor):
+    f, (_, two) = two_page_book()
+    services.start_assembly(f.book, editor)
+    client = logged(editor)
+    url = reverse("assembly:document", args=[f.book.pk])
+
+    def page_two_marks():
+        html = client.get(url).content.decode()
+        return set(re.findall(r'data-pages="2"[^>]*data-reviewed="(true|false)"', html))
+
+    assert page_two_marks() == {"false"}
+    review_services.approve_page(two, editor, force=True)
+    assert page_two_marks() == {"true"}  # no re-assembly needed
+    two.refresh_from_db()
+    review_services.reopen_page(two, editor)
+    assert page_two_marks() == {"false"}
 
 
 # ---------------------------------------------------------------- overrides
@@ -1612,7 +1708,8 @@ def test_api_assemble_state_and_manuscript(editor):
         and state["options"]["footnote_numbering"] == "page"
     )
     data = client.get(reverse("api:manuscript", args=[f.book.pk])).json()
-    assert set(data) == {"document", "warnings", "stats", "seams", "version"}
+    assert set(data) == {"document", "warnings", "stats", "seams", "version", "reviewed"}
+    assert data["reviewed"] == {"1": True, "2": False}  # page number → reviewed now (D70's amber mark)
     assert data["version"] == 1 and data["seams"] == data["document"]["attrs"]["seams"]
     assert data["warnings"] == run.warnings and data["stats"] == run.stats
 

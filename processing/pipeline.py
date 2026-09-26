@@ -53,6 +53,10 @@ ARTIFACT_MIN_HEIGHT_FRAC = 0.25
 # Footnote rule: horizontal closing kernel and minimum width (of the text block).
 RULE_CLOSE_FRAC = 0.03
 RULE_MIN_WIDTH_FRAC = 0.12
+# Thick rules (D68), taken only when no strict rule exists: mean thickness up to this share of the line
+# height, and a component that fills at least this share of its box (a closed text row fills less).
+NEAR_RULE_THICKNESS = 0.5
+RULE_MIN_FILL = 0.6
 # Footnote block without a rule: smaller type at the bottom of the page.
 BLOCK_MAX_SIZE_RATIO = 0.8
 BLOCK_MIN_LINES = 2
@@ -345,11 +349,18 @@ def detect_footnote_rule(
     Connected components of the raw Otsu ink mask (not the speck-cleaned one) after a horizontal
     closing of about 3% of the width, which bridges the gaps of dotted and dashed rules. A rule is
     a component in the lower 60% of the page that is at least 12% of the text-block width wide
-    (short rules at the start of the line count) and thin: its mean stroke thickness
-    (area / width) is a few pixels, while a closed text line is ~0.7 × the line height thick.
-    Text lines must exist both above and below; `extra_rows` (short rows that `detect_lines`
-    dropped, such as a single short footnote, without the page number) count for that check but
-    not for the text-block width. The widest candidate wins.
+    (short rules at the start of the line count), at most max(12, 6% of the height) tall, with
+    text lines both above and below; `extra_rows` (short rows that `detect_lines` dropped, such as
+    a single short footnote, without the page number) count for that check but not for the
+    text-block width. The candidates are then split by mean stroke thickness t = area / width
+    (a closed text line is ~0.7 × the line height thick):
+
+    - strict: t ≤ max(3, 0.3 × `med_h`), as before D68;
+    - thick (D68): max(3, 0.3 × `med_h`) < t ≤ `NEAR_RULE_THICKNESS` × `med_h`, with a fill
+      (area / box) of at least `RULE_MIN_FILL`, so a closed text row (fill ≤ 0.56) stays refused.
+
+    The widest strict candidate wins; only when there is none does the widest thick one win (a
+    single "widest wins" over both kinds would move a table page's thin rule to a thicker bar).
     """
     h, w = gray.shape
     if h == 0 or w == 0:
@@ -359,22 +370,34 @@ def detect_footnote_rule(
     closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (kx, 1)))
     n, _, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
     max_thickness = max(3.0, 0.3 * med_h) if med_h else 3.0
+    max_thick = NEAR_RULE_THICKNESS * med_h if med_h else 0.0
     min_width = max(20, int(RULE_MIN_WIDTH_FRAC * _text_block_width(lines, w)))
     text = list(lines) + list(extra_rows or [])
-    best = None
+    strict = None
+    thick = None
     for i in range(1, n):
         x, y, cw, ch, area = (int(v) for v in stats[i])
         if cw < min_width or y < 0.4 * h or ch > max(12, 0.06 * h):
             continue
-        if area / cw > max_thickness:
+        thickness = area / cw
+        if thickness <= max_thickness:
+            kind = "strict"
+        elif thickness <= max_thick and area / (cw * ch) >= RULE_MIN_FILL:
+            kind = "thick"
+        else:
             continue
         y0, y1 = y, y + ch
         below = [ln for ln in text if ln["y0"] >= y1 - 2]
         above = [ln for ln in text if ln["y1"] <= y0 + 2]
         if not (below and above) or y1 >= 0.97 * h:
             continue
-        if best is None or cw > best[1]:
-            best = ((y0 + y1) // 2, cw)
+        candidate = ((y0 + y1) // 2, cw)
+        if kind == "strict":
+            if strict is None or cw > strict[1]:
+                strict = candidate
+        elif thick is None or cw > thick[1]:
+            thick = candidate
+    best = strict if strict is not None else thick
     return None if best is None else int(best[0])
 
 

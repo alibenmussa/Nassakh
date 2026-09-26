@@ -696,12 +696,18 @@ def page_rows(book: Book) -> list[tuple[int, int, str]]:
     return list(book.pages.filter(is_excluded=False).values_list("id", "number", "status"))
 
 
-def stale_pages(included: dict, rows, options: Settings) -> list[int]:
-    """Numbers of the pages whose text or status changed since the run that built the manuscript.
+def page_changes(included: dict, rows, options: Settings) -> tuple[list[int], list[int]]:
+    """`(stale, drift)`: the numbers of the pages changed since the run that built the manuscript, two ways.
 
-    A page is stale when it became eligible or stopped being eligible, when its reviewed flag
-    changed, or when its content signature differs (a line edited, inserted, deleted or re-roled
-    after the run read it). One query for the signatures.
+    - **stale**: the text or the status changed. A page is stale when it became eligible or stopped being
+      eligible, when its reviewed flag changed, or when its content signature differs (a line edited,
+      inserted, deleted or re-roled after the run read it). For an unedited manuscript a re-assembly is
+      lossless and is what brings an approval into the text (D36), so an approval counts here.
+    - **drift** (D70): the same minus the pages whose *only* change is the reviewed flag (eligible before and
+      now, same signature). Approving a page whose lines did not change is not "text changed in review
+      after the edit"; the manuscript's amber mark follows the page's live status instead (`render`).
+
+    One query for the signatures (of every page the run read that is still eligible).
     """
     allowed = eligible_statuses(options)
     eligible = {pk: (number, status) for pk, number, status in rows if status in allowed}
@@ -710,20 +716,38 @@ def stale_pages(included: dict, rows, options: Settings) -> list[int]:
         if str(key).isdigit() and isinstance(info, dict):
             known[int(key)] = info
     stale: set[int] = set()
+    drift: set[int] = set()
     common: list[int] = []
     for pk, (number, status) in eligible.items():
         info = known.get(pk)
-        if info is None or bool(info.get("reviewed")) != (status in pipeline.REVIEWED_STATUSES):
+        if info is None:
             stale.add(number)
-        else:
-            common.append(pk)
+            drift.add(number)
+            continue
+        if bool(info.get("reviewed")) != (status in pipeline.REVIEWED_STATUSES):
+            stale.add(number)
+        common.append(pk)
     for pk, info in known.items():
         if pk not in eligible and isinstance(info.get("number"), int):
             stale.add(info["number"])
+            drift.add(info["number"])
     for pk, signature in page_signatures(common).items():
         if signature != known[pk].get("sig"):
             stale.add(eligible[pk][0])
-    return sorted(stale)
+            drift.add(eligible[pk][0])
+    return sorted(stale), sorted(drift)
+
+
+def stale_pages(included: dict, rows, options: Settings) -> list[int]:
+    """Numbers of the pages whose text or status changed since the run that built the manuscript
+    (`page_changes`' first list): what re-assembly would bring in. One query for the signatures."""
+    return page_changes(included, rows, options)[0]
+
+
+def drift_pages(included: dict, rows, options: Settings) -> list[int]:
+    """`stale_pages` minus the approval-only pages (D70, `page_changes`' second list): the review drift of
+    an edited manuscript. One query for the signatures."""
+    return page_changes(included, rows, options)[1]
 
 
 def _run_info(run: AssemblyRun | None) -> dict | None:
@@ -752,7 +776,8 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
     """The compact manuscript state of the dashboard and the manuscript view (§3).
 
     `{exists, version, assembled_at, run: {id, status, stage, error} | None, stale, stale_pages,
-    warnings_count, stats}` plus `active` (a run is queued or running), `options` (the stored
+    drift_pages, warnings_count, stats}` (`drift_pages`: the stale pages minus the approval-only ones, D70,
+    `page_changes`) plus `active` (a run is queued or running), `options` (the stored
     assembly options), `unreviewed_pages` (pages OCR'd and not reviewed yet) and `edited` (the text
     was saved from the book page since the last whole-book run: D41, D49). `rows` are the
     book's `(id, number, status)` page rows when the caller already has them. A book never assembled
@@ -774,6 +799,7 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
         "active": latest is not None and latest.is_active,
         "stale": False,
         "stale_pages": [],
+        "drift_pages": [],
         "warnings_count": 0,
         "stats": {},
         "options": assembly_options(options),
@@ -818,8 +844,8 @@ def manuscript_state(book: Book, rows: list[tuple[int, int, str]] | None = None)
         edited=manuscript.origin == Manuscript.Origin.EDITOR,
     )
     if run is not None:
-        pages = stale_pages(run.included, rows, options)
-        state.update(stale=bool(pages), stale_pages=pages)
+        pages, drift = page_changes(run.included, rows, options)
+        state.update(stale=bool(pages), stale_pages=pages, drift_pages=drift)
     return state
 
 
@@ -849,8 +875,16 @@ def run_payload(run: AssemblyRun) -> dict:
     }
 
 
+def live_reviewed(book: Book) -> dict[int, bool]:
+    """Page number → whether the page is reviewed now, for the book's non-excluded pages (one query): the
+    manuscript's amber mark follows it (D70), so a page approved after assembly loses the mark at once."""
+    rows = book.pages.filter(is_excluded=False).values_list("number", "status")
+    return {number: status in pipeline.REVIEWED_STATUSES for number, status in rows}
+
+
 def manuscript_payload(book: Book) -> dict | None:
-    """`{document, warnings, stats, seams, version}` of the book's manuscript (None before the first run)."""
+    """`{document, warnings, stats, seams, version, reviewed}` of the book's manuscript (None before the first
+    run). `reviewed` is `live_reviewed` (page number → reviewed now) for the amber mark. Two queries."""
     manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
     if manuscript is None:
         return None
@@ -862,4 +896,5 @@ def manuscript_payload(book: Book) -> dict | None:
         "stats": dict(run.stats or {}) if run is not None else {},
         "seams": list((document.get("attrs") or {}).get("seams") or []),
         "version": manuscript.version,
+        "reviewed": live_reviewed(book),
     }

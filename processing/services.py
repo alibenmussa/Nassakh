@@ -8,14 +8,21 @@ Coordinates: `Preprocess.crop_box` and `edge_strips_removed` are in the rotated,
 `gray_image` pixel space. Guide values (`header_cut`, `footnote_line`, `page_number_height`) are
 ratios of the gray-image height.
 
-Regions are derived per page (`page_layout`): footnotes and the page number come from what was
-detected on that page; the book's guide lines are a manual fallback (D4) used only when the owner
-set them by hand and nothing was detected, and a page override always wins.
+Regions are derived per page (`page_layout` → `resolve_layout`): footnotes and the page number come
+from what was detected on that page; the book's guide lines are a manual fallback (D4) used only
+when the owner set them by hand and nothing was detected, and a page override always wins.
+
+«التخطيط» (D64, D67): while a book awaits «بدء المعالجة» no `Region` row exists; the dashboard,
+the page detail and the APIs draw the bands `page_bands` computes, which are exactly what
+`layout_page` writes at the start. Guide edits then only save values; once «المعالجة» started they
+re-derive and re-read the changed pages, leaving approved pages and pages with review work alone.
 """
 
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -50,6 +57,14 @@ DEFAULT_GUIDES: dict[str, Any] = {
     "page_number_zone": LayoutGuides.PageNumberZone.BOTTOM,
     "page_number_height": 0.06,
 }
+# The first manual change to a book whose guides are automatic starts from these (D67 §3.10): the
+# stored proposal (`footnote_line`, a bottom zone) must not become live with it.
+INERT_GUIDES: dict[str, Any] = {
+    "header_cut": None,
+    "footnote_line": None,
+    "page_number_zone": LayoutGuides.PageNumberZone.NONE,
+    "page_number_height": 0.06,
+}
 # A footnote line is proposed only when at least this fraction of the pages shows a rule.
 MIN_RULE_FRACTION = 0.4
 # Pixels added around a detected page number to form its region.
@@ -60,6 +75,17 @@ Spec = tuple[str, list[int]]
 
 class ProcessingError(Exception):
     """A processing failure with an Arabic, actionable message (stored in `Page.error_message`)."""
+
+
+class GuidesConflict(Exception):
+    """A guides write that names a stage the book is no longer in (another tab started «المعالجة»)."""
+
+
+# Guide edits on a locked page (only once «المعالجة» started) and the stage conflict (§3.11).
+APPROVED_GUIDES_ERROR = "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة أولًا."
+REVIEW_WORK_ERROR = "في هذه الصفحة تصحيحات مراجعة، فلا تتغيّر مناطقها."
+STARTED_CONFLICT = "بدأت المعالجة في نافذة أخرى؛ حدّث الصفحة."
+GUIDES_STAGES: tuple[str, ...] = ("layout", "ocr")
 
 
 # ---------------------------------------------------------------- preprocessing
@@ -383,10 +409,9 @@ def propose_guides(book: Book) -> tuple[LayoutGuides, float]:
     return guides, stats.confidence
 
 
-def book_guides_dict(book: Book) -> dict:
-    """The book-level guide values as a plain dict (defaults when the book has no guides yet)."""
+def guides_values(guides: LayoutGuides | None) -> dict:
+    """The stored guide values of a `LayoutGuides` row as a plain dict (`DEFAULT_GUIDES` without one)."""
     values = dict(DEFAULT_GUIDES)
-    guides = LayoutGuides.objects.filter(book=book).first()
     if guides is not None:
         values.update(
             {
@@ -397,6 +422,16 @@ def book_guides_dict(book: Book) -> dict:
             }
         )
     return values
+
+
+def is_manual(guides: LayoutGuides | None) -> bool:
+    """True when the owner set the book guides by hand (only then do they apply as a fallback)."""
+    return guides is not None and guides.source == LayoutGuides.Source.MANUAL
+
+
+def book_guides_dict(book: Book) -> dict:
+    """The book-level guide values as a plain dict (defaults when the book has no guides yet)."""
+    return guides_values(LayoutGuides.objects.filter(book=book).first())
 
 
 def effective_guides(page: Page) -> dict:
@@ -545,31 +580,36 @@ def guide_regions(
 
 @dataclass(slots=True)
 class PageLayout:
-    """Where a page's footnotes and page number come from, resolved per page (see `page_layout`)."""
+    """Where a page's footnotes and page number come from, resolved per page (see `resolve_layout`)."""
 
     guides: dict
     footnote_y: int | None
     footnote_source: str
     page_number_box: list[int] | None
     page_number_source: str
+    header_source: str = "book"
 
 
-def page_layout(page: Page, pre: Preprocess) -> PageLayout:
-    """Resolve the footnote top and the page-number region of one page.
+def resolve_layout(
+    book_values: Mapping, manual_book: bool, override: Mapping | None, pre: Preprocess
+) -> PageLayout:
+    """Resolve the footnote top and the page-number region of one page (pure: no query).
 
-    Footnote top, first match wins: the page override's `footnote_line` (an explicit null means
-    "no footnotes on this page"), the detected rule, the detected smaller-type block, the book's
-    `footnote_line` only when the book guides are manual, else none (the body runs to the bottom).
-    An automatically proposed book line is never applied to a page.
+    `book_values` are the stored book guides (`guides_values`), `manual_book` whether the owner set
+    them, `override` the page's `guides_override`. Footnote top, first match wins: the override's
+    `footnote_line` (an explicit null means "no footnotes on this page"), the detected rule, the
+    detected smaller-type block, the book's `footnote_line` only when the book guides are manual,
+    else none (the body runs to the bottom). An automatically proposed book line is never applied.
 
-    Page number: the page override's zone (`none` switches it off), else the detected box, else
-    the book's zone only when the book guides are manual, else none. The running-header cut comes
-    from the book guides and the page override as before.
+    Page number: the override's zone (`none` switches it off), else the detected box, else the
+    book's zone only when the book guides are manual, else none. The running-header cut comes from
+    the override when it has the key, else from the book guides.
     """
-    book_guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
-    manual_book = book_guides is not None and book_guides.source == LayoutGuides.Source.MANUAL
-    values = effective_guides(page)
-    override = page.guides_override or {}
+    override = override or {}
+    values = dict(book_values)
+    for key in GUIDE_KEYS:
+        if key in override:
+            values[key] = override[key]
     h = int(pre.output_height or 0)
 
     footnote_y: int | None = None
@@ -581,8 +621,8 @@ def page_layout(page: Page, pre: Preprocess) -> PageLayout:
         footnote_y, footnote_source = int(pre.footnote_rule_y), "rule"
     elif pre.footnote_block_y is not None:
         footnote_y, footnote_source = int(pre.footnote_block_y), "block"
-    elif manual_book and book_guides.footnote_line is not None:
-        footnote_y, footnote_source = int(round(book_guides.footnote_line * h)), "book"
+    elif manual_book and book_values.get("footnote_line") is not None:
+        footnote_y, footnote_source = int(round(book_values["footnote_line"] * h)), "book"
     else:
         footnote_source = "none"
 
@@ -601,12 +641,18 @@ def page_layout(page: Page, pre: Preprocess) -> PageLayout:
     resolved = dict(values)
     resolved["footnote_line"] = None
     resolved["page_number_zone"] = zone
-    return PageLayout(resolved, footnote_y, footnote_source, box, page_number_source)
+    header_source = "override" if "header_cut" in override else "book"
+    return PageLayout(resolved, footnote_y, footnote_source, box, page_number_source, header_source)
 
 
-def page_region_specs(page: Page, pre: Preprocess) -> list[Spec]:
-    """Region specs of a page from `page_layout` (gray-image coordinates)."""
-    layout = page_layout(page, pre)
+def page_layout(page: Page, pre: Preprocess) -> PageLayout:
+    """`resolve_layout` for a stored page: loads the book guides (one query) and the page override."""
+    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    return resolve_layout(guides_values(guides), is_manual(guides), page.guides_override, pre)
+
+
+def layout_specs(layout: PageLayout, pre: Preprocess) -> list[Spec]:
+    """Region specs of a resolved layout on the page's prepared image (gray-image pixels)."""
     return guide_regions(
         layout.guides,
         pre.output_width,
@@ -614,6 +660,403 @@ def page_region_specs(page: Page, pre: Preprocess) -> list[Spec]:
         footnote_y=layout.footnote_y,
         page_number_box=layout.page_number_box,
     )
+
+
+def page_bands(
+    pre: Preprocess, book_values: Mapping, manual_book: bool, override: Mapping | None
+) -> list[Spec]:
+    """The bands of a page: `guide_regions(resolve_layout(…))`, the specs `layout_page` writes (pure)."""
+    return layout_specs(resolve_layout(book_values, manual_book, override, pre), pre)
+
+
+def page_region_specs(page: Page, pre: Preprocess) -> list[Spec]:
+    """Region specs of a stored page: `page_bands` with its book guides and override."""
+    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    return page_bands(pre, guides_values(guides), is_manual(guides), page.guides_override)
+
+
+# ---------------------------------------------------------------- pages worth a look (D67)
+
+LAYOUT_DOUBT_LABELS: dict[str, str] = {
+    "footnote_from_type": "حاشية من حجم الخط",
+    "line_cut": "خط يقطع سطرًا",
+    "text_hidden": "سطر من المتن خارج المتن",
+    "no_lines": "لا أسطر في الصفحة",
+}
+LINE_CUT_MARGIN = 2  # px: a guide line this close to a line box's edge does not cut it
+HIDDEN_MIN_WIDTH = 0.5  # share of the text-block width a hidden line must have
+HIDDEN_MIN_SHARE = 0.6  # share of its height (and half its width) inside the band
+_CUT_EDGE = {Region.Kind.RUNNING_HEADER: 3, Region.Kind.FOOTNOTE: 1}  # the bbox edge that is a guide line
+_HIDING_KINDS = (Region.Kind.RUNNING_HEADER, Region.Kind.PAGE_NUMBER)
+
+
+def _line_boxes(pre: Preprocess) -> list[dict]:
+    """The page's detected text-line boxes (malformed entries skipped).
+
+    A box thinner than a thick rule (`pipeline.NEAR_RULE_THICKNESS` × the median line height) is a
+    rule or a stroke that `detect_lines` kept, not a line of text: a footnote rule lies inside its own
+    box, which must not read as «خط يقطع سطرًا» (book 25 after D68).
+    """
+    min_h = pipeline.NEAR_RULE_THICKNESS * float(pre.median_line_height or 0)
+    out = []
+    for box in pre.line_boxes or []:
+        try:
+            line = {k: float(box[k]) for k in ("x0", "y0", "x1", "y1")}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if line["y1"] - line["y0"] >= min_h:
+            out.append(line)
+    return out
+
+
+def layout_doubts(
+    pre: Preprocess, layout: PageLayout, override: Mapping | None, specs: list[Spec]
+) -> list[str]:
+    """The reasons a page is worth a look (live, nothing stored), in a fixed order (pure).
+
+    - `footnote_from_type`: the footnote start comes from the smaller-type block (an explicit footnote
+      choice in the override makes it go away);
+    - `line_cut`: the running-head cut or the footnote start lies inside a detected line box, more
+      than `LINE_CUT_MARGIN` px from its edges;
+    - `text_hidden`: a line box at least half the text-block width lies, by 60 % of its height and half
+      its width, inside a running-head or page-number band;
+    - `no_lines`: preprocessing found no line on the page.
+    """
+    codes: list[str] = []
+    if layout.footnote_source == "block" and "footnote_line" not in (override or {}):
+        codes.append("footnote_from_type")
+    lines = _line_boxes(pre)
+    cuts = [box[_CUT_EDGE[kind]] for kind, box in specs if kind in _CUT_EDGE]
+    m = LINE_CUT_MARGIN
+    if any(ln["y0"] + m < y < ln["y1"] - m for y in cuts for ln in lines):
+        codes.append("line_cut")
+    if lines:
+        block_w = max(ln["x1"] for ln in lines) - min(ln["x0"] for ln in lines)
+        bands = [box for kind, box in specs if kind in _HIDING_KINDS]
+        for ln in lines:
+            lw, lh = ln["x1"] - ln["x0"], ln["y1"] - ln["y0"]
+            if lw < HIDDEN_MIN_WIDTH * block_w or lh <= 0:
+                continue
+            if any(
+                min(ln["y1"], b[3]) - max(ln["y0"], b[1]) >= HIDDEN_MIN_SHARE * lh
+                and min(ln["x1"], b[2]) - max(ln["x0"], b[0]) >= 0.5 * lw
+                for b in bands
+            ):
+                codes.append("text_hidden")
+                break
+    if not pre.n_lines:
+        codes.append("no_lines")
+    return codes
+
+
+def doubt_items(codes: list[str]) -> list[dict]:
+    """Doubt codes as `[{"code", "label"}]` with their Arabic labels."""
+    return [{"code": code, "label": LAYOUT_DOUBT_LABELS.get(code, code)} for code in codes]
+
+
+# ---------------------------------------------------------------- the «التخطيط» payloads (§3.11)
+
+BAND_KINDS: tuple[str, ...] = (
+    Region.Kind.RUNNING_HEADER,
+    Region.Kind.BODY,
+    Region.Kind.FOOTNOTE,
+    Region.Kind.PAGE_NUMBER,
+)
+BAND_COMPACT: dict[str, str] = {"running_header": "h", "body": "b", "footnote": "f", "page_number": "p"}
+LOCK_APPROVED = "approved"
+LOCK_REVIEW = "review"
+
+
+def _r4(value: float) -> float:
+    return round(float(value), 4)
+
+
+def band_sources(layout: PageLayout) -> dict[str, str]:
+    """`{kind: source}` of a resolved layout's bands (body `auto`; the others as resolved)."""
+    return {
+        Region.Kind.RUNNING_HEADER: layout.header_source,
+        Region.Kind.BODY: "auto",
+        Region.Kind.FOOTNOTE: layout.footnote_source,
+        Region.Kind.PAGE_NUMBER: layout.page_number_source,
+    }
+
+
+def _rows_specs(rows: list[Region]) -> list[Spec]:
+    """Stored guide regions as specs, in their order."""
+    ordered = sorted(rows, key=lambda r: (r.order, r.pk or 0))
+    return [(str(r.kind), [int(round(float(v))) for v in r.bbox]) for r in ordered]
+
+
+def page_lock(page: Page, awaits_start: bool, review_pages: set[int] | frozenset[int]) -> str:
+    """'' | 'approved' | 'review' for a page; always '' while the book awaits «بدء المعالجة».
+
+    `review_pages` holds the ids of the book's pages with a reviewed line (one query for many pages).
+    """
+    from books.services import APPROVED_PAGE_STATUSES  # the books app owns the page statuses
+
+    if awaits_start:
+        return ""
+    if page.status in APPROVED_PAGE_STATUSES:
+        return LOCK_APPROVED
+    if page.reviewed_at is not None or page.pk in review_pages:
+        return LOCK_REVIEW
+    return ""
+
+
+def review_work_pages(book_id: int, page_ids: list[int] | None = None) -> set[int]:
+    """Ids of the book's pages with at least one reviewed line (one query)."""
+    from ocr.models import Line  # other app: lazy import
+
+    rows = Line.objects.filter(page__book_id=book_id, is_reviewed=True)
+    if page_ids is not None:
+        rows = rows.filter(page_id__in=page_ids)
+    return set(rows.values_list("page_id", flat=True).distinct())
+
+
+def _image_url(pre: Preprocess) -> str | None:
+    """Versioned URL of the prepared display image (the gray image as fallback), None without one."""
+    return _versioned_url(pre.display_image) or _versioned_url(pre.gray_image) or None
+
+
+def _page_view(pre: Preprocess, book_values, manual_book, override, rows: list[Region] | None):
+    """`(specs, sources, layout, derived)`: the stored guide rows once derived, else the computed bands."""
+    layout = resolve_layout(book_values, manual_book, override, pre)
+    guide_rows = [r for r in rows or [] if r.source == Region.Source.GUIDES]
+    if guide_rows:
+        return _rows_specs(guide_rows), band_sources(layout), layout, True
+    return layout_specs(layout, pre), band_sources(layout), layout, False
+
+
+def _has_pre(pre: Preprocess | None) -> bool:
+    return pre is not None and bool(pre.output_height) and bool(pre.output_width)
+
+
+def page_guides_payload(
+    page: Page,
+    pre: Preprocess | None,
+    book_values: Mapping,
+    manual_book: bool,
+    rows: list[Region] | None = None,
+    locked: str | None = None,
+) -> dict:
+    """The `guides` block of a sheet item (§3.11): bands, guide lines, rows, override, doubts, image.
+
+    The bands are the page's stored guide regions once derived (`derived: true`), else the bands
+    `layout_page` would write. Every value is a ratio of the prepared image (4 decimals). `rows`
+    are the page's `Region` rows when the caller loaded them (None: queried here); `locked` is the
+    page's `page_lock` when known (None: computed here, one query). Excluded pages carry no doubt.
+    """
+    override = dict(page.guides_override or {})
+    if locked is None:
+        awaits = Book.objects.filter(pk=page.book_id).values_list("awaits_ocr_start", flat=True).first()
+        locked = page_lock(page, bool(awaits), review_work_pages(page.book_id, [page.pk]))
+    if not _has_pre(pre):
+        return {
+            "bands": [],
+            "lines": {"header": None, "footnote": None},
+            "rows": [],
+            "override": override,
+            "doubts": [],
+            "image_url": None,
+            "derived": False,
+            "locked": locked,
+        }
+    if rows is None:
+        rows = list(page.regions.all())
+    w, h = int(pre.output_width), int(pre.output_height)
+    specs, sources, layout, derived = _page_view(pre, book_values, manual_book, override, rows)
+    bands = [
+        {
+            "kind": kind,
+            "bbox": [_r4(box[0] / w), _r4(box[1] / h), _r4(box[2] / w), _r4(box[3] / h)],
+            "source": sources.get(kind, "auto"),
+        }
+        for kind, box in specs
+    ]
+    header = next((b for b in bands if b["kind"] == Region.Kind.RUNNING_HEADER), None)
+    footnote = next((b for b in bands if b["kind"] == Region.Kind.FOOTNOTE), None)
+    doubts = [] if page.is_excluded else layout_doubts(pre, layout, override, specs)
+    return {
+        "bands": bands,
+        "lines": {
+            "header": {"y": header["bbox"][3], "source": header["source"]} if header else None,
+            "footnote": {"y": footnote["bbox"][1], "source": footnote["source"]} if footnote else None,
+        },
+        "rows": [[_r4(ln["y0"] / h), _r4(ln["y1"] / h)] for ln in _line_boxes(pre)],
+        "override": override,
+        "doubts": doubt_items(doubts),
+        "image_url": _image_url(pre),
+        "derived": derived,
+        "locked": locked,
+    }
+
+
+def _compact_bands(specs: list[Spec], w: int, h: int) -> list[list]:
+    """Bands as `[kind, y0, y1]` (the page number also `x0, x1`), ratios to 4 decimals."""
+    out: list[list] = []
+    for kind, (x0, y0, x1, y1) in specs:
+        entry: list = [BAND_COMPACT.get(kind, kind), _r4(y0 / h), _r4(y1 / h)]
+        if kind == Region.Kind.PAGE_NUMBER:
+            entry += [_r4(x0 / w), _r4(x1 / w)]
+        out.append(entry)
+    return out
+
+
+def compact_entry(
+    page: Page, pre: Preprocess | None, book_values, manual_book, rows: list[Region] | None, locked: str
+) -> dict:
+    """One page of `api:book_guides` (about 60 B): id, number, bands, doubt count, override, lock, status."""
+    override = page.guides_override or {}
+    bands: list[list] = []
+    n_doubts = 0
+    if _has_pre(pre):
+        specs, _sources, layout, _derived = _page_view(pre, book_values, manual_book, override, rows)
+        bands = _compact_bands(specs, int(pre.output_width), int(pre.output_height))
+        if not page.is_excluded:
+            n_doubts = len(layout_doubts(pre, layout, override, specs))
+    return {
+        "id": page.pk,
+        "n": page.number,
+        "b": bands,
+        "d": n_doubts,
+        "o": bool(override),
+        "l": locked,
+        "s": page.status,
+        "x": page.is_excluded,
+    }
+
+
+def book_guides_view(guides: LayoutGuides | None) -> dict:
+    """The book guides as the side panel shows them: automatic guides read as the inert values."""
+    if not is_manual(guides):
+        header = guides.header_cut if guides is not None else None
+        return {"source": LayoutGuides.Source.AUTO, **INERT_GUIDES, "header_cut": header}
+    return {"source": LayoutGuides.Source.MANUAL, **guides_values(guides)}
+
+
+def _book_brief(guides: LayoutGuides | None, awaits_start: bool) -> dict:
+    """The `book` part of the guides payloads."""
+    view = book_guides_view(guides)
+    return {
+        "source": view["source"],
+        "header_cut": view["header_cut"],
+        "footnote_line": view["footnote_line"],
+        "awaits_ocr_start": bool(awaits_start),
+    }
+
+
+_ONE_PAGE_OF = ("صفحة واحدة", "صفحتين", "صفحات", "صفحة")
+
+
+def _summary_of(rows: list[tuple[int, int | None, int | None, Any]]) -> dict:
+    """`guides_summary` from `(output_height, rule_y, block_y, page_number_box)` of the prepared pages."""
+    from assembly.render import ar_count  # other app: lazy import
+
+    n = len(rows)
+    ratios = [rule / height for height, rule, _block, _pn in rows if rule is not None]
+    rule = len(ratios)
+    block = sum(1 for _h, r, b, _pn in rows if r is None and b is not None)
+    number = sum(1 for *_rest, pn in rows if pn)
+    median = _r4(statistics.median(ratios)) if ratios and rule / n >= MIN_RULE_FRACTION else None
+    parts = []
+    if rule:
+        parts.append(f"خط حاشية في {rule}")
+    if block:
+        parts.append(f"حاشية بخط أصغر في {block}")
+    if number:
+        parts.append(f"رقم صفحة في {number}")
+    if not n:
+        text = ""
+    elif parts:
+        parts[0] += f" من {ar_count(n, _ONE_PAGE_OF)}"
+        text = "اكتُشف " + "، و".join(parts) + "."
+    else:
+        text = "لم يُكتشف خط حاشية ولا رقم صفحة."
+    return {"pages": n, "rule": rule, "block": block, "number": number, "median_rule": median, "text": text}
+
+
+def guides_summary(book: Book) -> dict:
+    """The detection line of the side panel: `{pages, rule, block, number, median_rule, text}` (one query).
+
+    Over the book's prepared, non-excluded pages: how many show a footnote rule, a smaller-type
+    block (without a rule) and a page number; `median_rule` is the median rule ratio when at least
+    `MIN_RULE_FRACTION` of the pages show one (the proposal), else null. Parts at 0 are left out.
+    """
+    rows = list(
+        Preprocess.objects.filter(page__book=book, page__is_excluded=False, output_height__gt=0).values_list(
+            "output_height", "footnote_rule_y", "footnote_block_y", "page_number_box"
+        )
+    )
+    return _summary_of(rows)
+
+
+def _load_book_pages(book: Book, awaits: bool):
+    """`(pages, regions_of, review_pages, guides)` for every page of the book in ≤ 4 queries."""
+    guides = LayoutGuides.objects.filter(book=book).first()
+    pages = list(
+        book.pages.select_related("preprocess")
+        .defer(
+            "text_layer_text",
+            "provisional_text",
+            "final_text",
+            "preprocess__auto_params",
+            "preprocess__edge_strips_removed",
+        )
+        .order_by("number")
+    )
+    regions_of: dict[int, list[Region]] = {page.pk: [] for page in pages}
+    for region in Region.objects.filter(page__book=book).order_by("page_id", "order", "id"):
+        regions_of.setdefault(region.page_id, []).append(region)
+    review_pages = set() if awaits else review_work_pages(book.pk)
+    return pages, regions_of, review_pages, guides
+
+
+def _pre_of(page: Page) -> Preprocess | None:
+    try:
+        return page.preprocess
+    except Preprocess.DoesNotExist:
+        return None
+
+
+def book_guides_state(book: Book, first: int | None = None, last: int | None = None) -> dict:
+    """`GET api:book_guides`: the book guides, the detection line, the chip counts and one compact entry
+    per page (`first..last` when given; the counts always cover the whole book). ≤ 4 queries whatever
+    the page count."""
+    awaits = bool(book.awaits_ocr_start)
+    pages, regions_of, review_pages, guides = _load_book_pages(book, awaits)
+    values, manual = guides_values(guides), is_manual(guides)
+    entries = [
+        compact_entry(
+            page,
+            _pre_of(page),
+            values,
+            manual,
+            regions_of.get(page.pk),
+            page_lock(page, awaits, review_pages),
+        )
+        for page in pages
+    ]
+    included = [e for e in entries if not e["x"]]
+    counts = {
+        "all": len(included),
+        "doubt": sum(1 for e in included if e["d"] or e["s"] == Page.Status.ERROR),
+        "override": sum(1 for e in included if e["o"]),
+        "error": sum(1 for e in included if e["s"] == Page.Status.ERROR),
+    }
+    prepared = [
+        (pre.output_height, pre.footnote_rule_y, pre.footnote_block_y, pre.page_number_box)
+        for page in pages
+        if not page.is_excluded and (pre := _pre_of(page)) is not None and pre.output_height
+    ]
+    if first is not None or last is not None:
+        lo, hi = first or 1, last or 10**9
+        entries = [e for e in entries if lo <= e["n"] <= hi]
+    return {
+        "book": _book_brief(guides, awaits),
+        "stats": _summary_of(prepared),
+        "counts": counts,
+        "pages": entries,
+    }
 
 
 def _derive_regions(page: Page) -> tuple[list[Region], bool]:
@@ -625,7 +1068,7 @@ def _derive_regions(page: Page) -> tuple[list[Region], bool]:
     """
     pre = Preprocess.objects.filter(page=page).first()
     if pre is None or not pre.output_height:
-        raise ProcessingError("لم تُعالَج الصفحة بعد؛ شغّل المعالجة الأولية قبل تخطيط الصفحة.")
+        raise ProcessingError("لم تُجهَّز الصفحة بعد؛ شغّل «تجهيز الصفحات» قبل تحديد مناطقها.")
     specs = page_region_specs(page, pre)
     existing = list(page.regions.filter(source=Region.Source.GUIDES).order_by("order", "pk"))
     changed = [(r.kind, [int(v) for v in r.bbox]) for r in existing] != specs
@@ -690,154 +1133,464 @@ def _run_stage(page: Page, stage: str) -> None:
     book_services.run_stage(page, stage)
 
 
-def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
-    """Save manual guides for the book, re-derive every non-excluded page and re-OCR what changed.
+# ---------------------------------------------------------------- guide edits and the stage rule (§3.10)
 
-    Pages that have not been preprocessed yet are skipped (their layout task will pick the new
-    guides up), and so are approved pages (they keep their regions and reviewed lines until they
-    are reopened). Pages whose regions changed are handed to `books.services.run_stage(page, "ocr")`.
+
+def book_awaits_start(book_id: int) -> bool:
+    """The book's `awaits_ocr_start`, read fresh (a click on «بدء المعالجة» may have landed meanwhile)."""
+    return bool(Book.objects.filter(pk=book_id).values_list("awaits_ocr_start", flat=True).first())
+
+
+def refresh_waiting_book(book_id: int) -> None:
+    """Re-derive the status of a book in «التخطيط» after one of its pages was prepared (or failed).
+
+    Runs under the book's row lock so two tasks finishing together cannot write a stale status: the
+    second one counts after the first has committed. A book that has not started (`uploaded`) or
+    whose «المعالجة» started meanwhile is left alone.
     """
-    from books.services import APPROVED_PAGE_STATUSES  # the books app owns the page statuses
+    with transaction.atomic():
+        book = Book.objects.select_for_update().filter(pk=book_id).first()
+        if book is None or not book.awaits_ocr_start or book.status == Book.Status.UPLOADED:
+            return
+        book.refresh_status()
 
-    clean = clean_guides(data)
-    guides, _ = LayoutGuides.objects.get_or_create(book=book)
-    guides.header_cut = clean["header_cut"]
-    guides.footnote_line = clean["footnote_line"]
-    guides.page_number_zone = clean["page_number_zone"]
-    guides.page_number_height = clean["page_number_height"]
-    guides.source = LayoutGuides.Source.MANUAL
-    if clean.get("reference_page"):
-        guides.reference_page = book.pages.filter(pk=clean["reference_page"]).first() or guides.reference_page
-    guides.save()
 
-    changed_pages: list[Page] = []
-    pages = (
-        book.pages.filter(is_excluded=False, preprocess__isnull=False)
-        .exclude(status__in=APPROVED_PAGE_STATUSES)
-        .select_related("book")
-        .order_by("number")
-    )
+def check_stage(book_id: int, stage: str | None) -> bool:
+    """The book's fresh `awaits_ocr_start`; GuidesConflict when the client's `stage` is no longer the book's.
+
+    `stage` is `layout` («التخطيط») or `ocr` («المعالجة»); any other value (or none) is not checked.
+    """
+    awaits = book_awaits_start(book_id)
+    if stage in GUIDES_STAGES and (stage == "layout") != awaits:
+        raise GuidesConflict(STARTED_CONFLICT)
+    return awaits
+
+
+def _stored_guides(guides: LayoutGuides | None) -> dict | None:
+    """A `LayoutGuides` row as an undo value (`source` + the four values), None without a row."""
+    if guides is None:
+        return None
+    return {"source": guides.source, **guides_values(guides)}
+
+
+@dataclass(slots=True)
+class _GuidesPlan:
+    """A book-guides change: the stored values after it (None: no row), their source, the page
+    overrides it rewrites (`{page id: override | None}`) and the keys it sets."""
+
+    values: dict | None
+    source: str
+    overrides: dict[int, dict | None]
+    set_keys: frozenset[str]
+    reference_page: int | None = None
+
+    @property
+    def manual(self) -> bool:
+        return self.values is not None and self.source == LayoutGuides.Source.MANUAL
+
+
+def _clean_keys(keys) -> list[str]:
+    """The override keys a request names (unknown keys refused, Arabic ValidationError)."""
+    keys = list(keys or [])
+    unknown = [k for k in keys if k not in GUIDE_KEYS]
+    if unknown:
+        raise ValidationError(["مفتاح تخطيط غير معروف: " + "، ".join(str(k) for k in unknown)])
+    return keys
+
+
+def _override_changes(pages: list[Page], drop_all: list[str], from_page: int | None, set_keys) -> dict:
+    """`{page id: new override | None}` for the pages whose override loses `drop_all` (every page) or
+    the set keys (`from_page`, whose value now is the book value)."""
+    out: dict[int, dict | None] = {}
     for page in pages:
-        _regions, changed = _derive_regions(page)
-        if changed:
-            changed_pages.append(page)
-    for page in changed_pages:
-        _run_stage(page, "ocr")
-    book.refresh_status()
+        drop = set(drop_all)
+        if from_page is not None and page.pk == from_page:
+            drop |= set(set_keys)
+        current = page.guides_override or {}
+        if drop & set(current):
+            kept = {k: v for k, v in current.items() if k not in drop}
+            out[page.pk] = kept or None
+    return out
+
+
+def _plan_change(book: Book, guides, pages, changes, reset_overrides, from_page) -> _GuidesPlan:
+    """The plan of a partial change: the inert start for automatic guides, then only the given keys."""
+    clean = clean_guides(changes if isinstance(changes, Mapping) else {}, partial=True)
+    clean.pop("reference_page", None)
+    values = guides_values(guides) if is_manual(guides) else dict(INERT_GUIDES)
+    values.update(clean)
+    if values["header_cut"] is not None and values["footnote_line"] is not None:
+        if values["header_cut"] >= values["footnote_line"]:
+            raise ValidationError(["يجب أن يكون حدّ الترويسة أعلى من خط الحاشية."])
+    source_page = None
+    if from_page not in (None, ""):
+        try:
+            source_page = int(from_page)
+        except (TypeError, ValueError):
+            raise ValidationError(["الصفحة غير صالحة."]) from None
+    keys = frozenset(clean)
+    overrides = _override_changes(pages, _clean_keys(reset_overrides), source_page, keys)
+    return _GuidesPlan(values, LayoutGuides.Source.MANUAL, overrides, keys)
+
+
+def _plan_undo(pages, undo) -> _GuidesPlan:
+    """The plan that restores an `undo` payload exactly (the book row, then each page's override)."""
+    if not isinstance(undo, Mapping):
+        raise ValidationError(["بيانات التراجع غير صالحة."])
+    stored = undo.get("book")
+    values: dict | None = None
+    source = LayoutGuides.Source.AUTO
+    if stored is not None:
+        if not isinstance(stored, Mapping) or stored.get("source") not in LayoutGuides.Source.values:
+            raise ValidationError(["بيانات التراجع غير صالحة."])
+        source = stored["source"]
+        values = clean_guides(stored)
+        values.pop("reference_page", None)
+    known = {page.pk for page in pages}
+    overrides: dict[int, dict | None] = {}
+    raw = undo.get("overrides") or {}
+    if not isinstance(raw, Mapping):
+        raise ValidationError(["بيانات التراجع غير صالحة."])
+    for key, value in raw.items():
+        try:
+            page_id = int(key)
+        except (TypeError, ValueError):
+            raise ValidationError(["بيانات التراجع غير صالحة."]) from None
+        if page_id not in known:
+            continue
+        clean = clean_guides(value, partial=True) if isinstance(value, Mapping) else {}
+        clean.pop("reference_page", None)
+        overrides[page_id] = clean or None
+    return _GuidesPlan(values, source, overrides, frozenset())
+
+
+def _plan_reset(book: Book) -> _GuidesPlan:
+    """«إزالة الضبط العام»: back to the automatic guides (a fresh proposal, inert as ever)."""
+    stats = _rule_stats(book)
+    values = {
+        "header_cut": None,
+        "footnote_line": stats.footnote_line,
+        "page_number_zone": LayoutGuides.PageNumberZone.BOTTOM,
+        "page_number_height": DEFAULT_GUIDES["page_number_height"],
+    }
+    return _GuidesPlan(values, LayoutGuides.Source.AUTO, {}, frozenset())
+
+
+def _new_override(page: Page, plan: _GuidesPlan) -> dict:
+    if page.pk in plan.overrides:
+        return dict(plan.overrides[page.pk] or {})
+    return dict(page.guides_override or {})
+
+
+def _evaluate(plan: _GuidesPlan, awaits: bool, pages, regions_of, review_pages, guides) -> list[dict]:
+    """Per prepared, non-excluded page: would its bands change, is it locked, would a line cut a line
+    or a band hide text afterwards, does its own override keep a set key."""
+    old_values, old_manual = guides_values(guides), is_manual(guides)
+    new_values = plan.values if plan.values is not None else guides_values(None)
+    out = []
+    for page in pages:
+        pre = _pre_of(page)
+        if page.is_excluded or not _has_pre(pre):
+            continue
+        override = _new_override(page, plan)
+        layout = resolve_layout(new_values, plan.manual, override, pre)
+        after = layout_specs(layout, pre)
+        if awaits:
+            before = page_bands(pre, old_values, old_manual, page.guides_override)
+        else:
+            before = _rows_specs([r for r in regions_of.get(page.pk, []) if r.source == Region.Source.GUIDES])
+        doubts = set(layout_doubts(pre, layout, override, after))
+        out.append(
+            {
+                "page": page,
+                "changed": after != before,
+                "locked": page_lock(page, awaits, review_pages),
+                "cut": bool(doubts & {"line_cut", "text_hidden"}),
+                "kept": bool(plan.set_keys & set(override)),
+            }
+        )
+    return out
+
+
+def _minutes(book: Book, pages: int) -> int:
+    """Model time of re-reading `pages` pages (the books app's per-page Qari estimate)."""
+    from books.services import qari_seconds  # the books app owns the estimate
+
+    return math.ceil(pages * qari_seconds(book) / 60) if pages else 0
+
+
+def preview_book_guides(
+    book: Book, changes: Mapping, reset_overrides=(), *, from_page=None, stage: str | None = None
+) -> dict:
+    """What a book-guides change would do, without writing anything (§3.12 «معاينة»).
+
+    `{changed, pages, cut, kept_overrides, locked, reocr, minutes}`: the pages whose bands change
+    (in «المعالجة» against their stored regions, locked pages apart), those that would then show
+    `line_cut` or `text_hidden`, those whose own override keeps a set key, the approved / review-work
+    pages that stay (only in «المعالجة»), how many pages are re-read and the model time (null in
+    «التخطيط»). A constant number of queries whatever the page count.
+    """
+    awaits = check_stage(book.pk, stage)
+    pages, regions_of, review_pages, guides = _load_book_pages(book, awaits)
+    plan = _plan_change(book, guides, pages, changes, reset_overrides, from_page)
+    rows = _evaluate(plan, awaits, pages, regions_of, review_pages, guides)
+    changed = [r for r in rows if r["changed"] and not r["locked"]]
+    reocr = 0 if awaits else len(changed)
+    return {
+        "changed": len(changed),
+        "pages": [r["page"].number for r in changed],
+        "cut": [r["page"].number for r in changed if r["cut"]],
+        "kept_overrides": [r["page"].number for r in rows if r["kept"]],
+        "locked": [r["page"].number for r in rows if r["changed"] and r["locked"]],
+        "reocr": reocr,
+        "minutes": None if awaits else _minutes(book, reocr),
+    }
+
+
+def _commit(book: Book, plan: _GuidesPlan, awaits: bool, loaded, user=None) -> dict:
+    """Write a guides plan and answer as `api:book_guides` does (§3.11).
+
+    In «التخطيط» only values are saved: `changed` lists the pages whose computed bands move, and
+    `undo` restores the book row and every rewritten override exactly. In «المعالجة» the plan skips
+    locked pages; every other prepared page is re-derived and those whose regions changed are
+    re-read (`books.services.run_stage(page, "ocr")`); there is no undo.
+    """
+    pages, regions_of, review_pages, guides = loaded
+    by_id = {page.pk: page for page in pages}
+    if not awaits:  # locked pages keep their override (their regions stay as reviewed)
+        plan.overrides = {
+            pk: value
+            for pk, value in plan.overrides.items()
+            if pk in by_id and not page_lock(by_id[pk], False, review_pages)
+        }
+    evaluated = _evaluate(plan, awaits, pages, regions_of, review_pages, guides) if awaits else []
+    undo = {
+        "book": _stored_guides(guides),
+        "overrides": {str(pk): by_id[pk].guides_override for pk in plan.overrides if pk in by_id},
+    }
+
+    with transaction.atomic():
+        if plan.values is None:
+            LayoutGuides.objects.filter(book=book).delete()
+            guides = None
+        else:
+            guides, _ = LayoutGuides.objects.get_or_create(book=book)
+            for key in GUIDE_KEYS:
+                setattr(guides, key, plan.values[key])
+            guides.source = plan.source
+            if plan.reference_page:
+                guides.reference_page = (
+                    book.pages.filter(pk=plan.reference_page).first() or guides.reference_page
+                )
+            guides.save()
+        for pk, value in plan.overrides.items():
+            if pk in by_id:
+                Page.objects.filter(pk=pk).update(guides_override=value)
+                by_id[pk].guides_override = value
+    values, manual = guides_values(guides), is_manual(guides)
+
+    if awaits:
+        changed_ids = [r["page"].pk for r in evaluated if r["changed"]]
+        reocr = 0
+    else:
+        changed_pages: list[Page] = []
+        for page in pages:
+            if page.is_excluded or not _has_pre(_pre_of(page)) or page_lock(page, False, review_pages):
+                continue
+            _regions, changed = _derive_regions(page)
+            if changed:
+                changed_pages.append(page)
+        for page in changed_pages:
+            _run_stage(page, "ocr")
+        book.refresh_status()
+        changed_ids = [page.pk for page in changed_pages]
+        reocr = len(changed_pages)
+    touched = set(changed_ids) | set(plan.overrides)
+    if touched and not awaits:
+        fresh: dict[int, list[Region]] = {pk: [] for pk in touched}
+        for region in Region.objects.filter(page_id__in=touched).order_by("page_id", "order", "id"):
+            fresh[region.page_id].append(region)
+        regions_of = {**regions_of, **fresh}
+        for page in Page.objects.filter(pk__in=touched).only("id", "status"):
+            by_id[page.pk].status = page.status
+    entries = [
+        compact_entry(
+            page,
+            _pre_of(page),
+            values,
+            manual,
+            regions_of.get(page.pk),
+            page_lock(page, awaits, review_pages),
+        )
+        for page in pages
+        if page.pk in touched
+    ]
     logger.info(
-        "guides applied to book %s by %s: %s pages re-derived, %s changed",
+        "book guides of book %s saved by %s (%s): %s pages changed, %s re-read",
         book.pk,
         getattr(user, "pk", None),
-        len(pages),
-        len(changed_pages),
+        "layout" if awaits else "ocr",
+        len(changed_ids),
+        reocr,
     )
-    return guides
+    return {
+        "changed": sorted(by_id[pk].number for pk in changed_ids),
+        "reocr": reocr,
+        "undo": undo if awaits else None,
+        "book": _book_brief(guides, awaits),
+        "pages": entries,
+    }
 
 
-def set_page_guides_override(page: Page, data: Mapping | None) -> tuple[list[Region], bool]:
-    """Store a per-page guide override (or clear it when `data` is empty/`reset`) and re-derive.
+def apply_book_guides(
+    book: Book, changes: Mapping, reset_overrides=(), user=None, *, from_page=None, stage: str | None = None
+) -> dict:
+    """Save a partial change of the book guides (the side panel's «تطبيق على كل الصفحات»).
 
-    Returns `(regions, ocr_enqueued)`; OCR is re-run through the books chain when the regions
-    changed. Raises ProcessingError for an excluded or approved page.
+    The first manual change of automatic guides starts from `INERT_GUIDES`, then only the given keys
+    change. `reset_overrides` removes those keys from every page's override; `from_page` drops the
+    set keys from that page's override (its value is now the book value). In «التخطيط» nothing is
+    derived or queued and the answer carries its `undo`; in «المعالجة» today's loop re-derives the
+    unlocked pages and re-reads those whose regions changed. Raises ValidationError (Arabic) and
+    GuidesConflict (a stale `stage`).
     """
+    awaits = check_stage(book.pk, stage)
+    loaded = _load_book_pages(book, awaits)
+    plan = _plan_change(book, loaded[3], loaded[0], changes, reset_overrides, from_page)
+    return _commit(book, plan, awaits, loaded, user)
+
+
+def restore_book_guides(book: Book, undo: Mapping, user=None, *, stage: str | None = None) -> dict:
+    """Post back an `undo` payload of `apply_book_guides` (or of this function): restores the book row
+    and the listed overrides exactly; the answer carries the inverse again."""
+    awaits = check_stage(book.pk, stage)
+    loaded = _load_book_pages(book, awaits)
+    return _commit(book, _plan_undo(loaded[0], undo), awaits, loaded, user)
+
+
+def reset_book_guides(book: Book, user=None, *, stage: str | None = None) -> dict:
+    """«إزالة الضبط العام»: the book goes back to its automatic guides (which never apply to a page)."""
+    awaits = check_stage(book.pk, stage)
+    loaded = _load_book_pages(book, awaits)
+    return _commit(book, _plan_reset(book), awaits, loaded, user)
+
+
+def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
+    """Save the full set of manual guides (the retired guides form's four keys).
+
+    In «التخطيط» the values are only saved. Once «المعالجة» started, every prepared, non-excluded
+    page is re-derived and those whose regions changed are re-read; approved pages and pages with
+    review work keep their regions (`ocr.services._has_review_work`: their footnote lines would lose
+    their region). Returns the saved `LayoutGuides`.
+    """
+    clean = clean_guides(data)
+    awaits = book_awaits_start(book.pk)
+    loaded = _load_book_pages(book, awaits)
+    values = {key: clean[key] for key in GUIDE_KEYS}
+    plan = _GuidesPlan(values, LayoutGuides.Source.MANUAL, {}, frozenset(values), clean.get("reference_page"))
+    _commit(book, plan, awaits, loaded, user)
+    return LayoutGuides.objects.get(book=book)
+
+
+def _refuse_locked(page: Page, awaits: bool) -> None:
+    """ProcessingError (Arabic) for a page whose regions must not change: excluded, or — once
+    «المعالجة» started — approved or carrying review work."""
     if page.is_excluded:
         raise ProcessingError(EXCLUDED_PAGE_ERROR)
-    _refuse_approved(page)
-    data = dict(data or {})
-    reset = data.pop("reset", False)
-    clean = {} if reset else clean_guides(data, partial=True)
-    clean.pop("reference_page", None)
-    page.guides_override = clean or None
+    lock = page_lock(page, awaits, review_work_pages(page.book_id, [page.pk]) if not awaits else set())
+    if lock == LOCK_APPROVED:
+        raise ProcessingError(APPROVED_GUIDES_ERROR)
+    if lock == LOCK_REVIEW:
+        raise ProcessingError(REVIEW_WORK_ERROR)
+
+
+def _save_override(page: Page, override: dict | None, awaits: bool) -> tuple[list[Region], bool]:
+    """Store a page override; in «المعالجة» re-derive the page and re-read it when its regions changed."""
+    page.guides_override = override or None
     page.save(update_fields=["guides_override"])
+    if awaits:
+        return [], False
     regions, changed = _derive_regions(page)
     if changed:
         _run_stage(page, "ocr")
     return regions, changed
 
 
-# ---------------------------------------------------------------- guides screen
+def set_page_guides(
+    page: Page, set_: Mapping, unset=(), reset: bool = False, *, stage: str | None = None
+) -> dict:
+    """Merge a change into the page's override (a drag, «+ ترويسة», «إزالة من هذه الصفحة», «التلقائي»).
+
+    `set_` keys are validated by `clean_guides(partial=True)` (a null keeps its meaning: "none on this
+    page"), `unset` keys are removed, `reset` clears the override. In «التخطيط» only the value is
+    saved; in «المعالجة» approved pages and pages with review work are refused (422) and the page is
+    re-derived and re-read when its regions changed. Returns `{regions, ocr_enqueued, undo}`, the undo
+    (`{"replace": <override before>}`) only in «التخطيط».
+    """
+    awaits = check_stage(page.book_id, stage)
+    _refuse_locked(page, awaits)
+    before = page.guides_override
+    if reset:
+        override: dict = {}
+    else:
+        clean = clean_guides(set_ if isinstance(set_, Mapping) else {}, partial=True)
+        clean.pop("reference_page", None)
+        drop = set(_clean_keys(unset))
+        override = {k: v for k, v in (before or {}).items() if k not in drop}
+        override.update(clean)
+        header, footnote = override.get("header_cut"), override.get("footnote_line")
+        if header is not None and footnote is not None and header >= footnote:
+            raise ValidationError(["يجب أن يكون حدّ الترويسة أعلى من خط الحاشية."])
+    regions, changed = _save_override(page, override, awaits)
+    return {"regions": regions, "ocr_enqueued": changed, "undo": {"replace": before} if awaits else None}
 
 
-def ratio_percent(ratio: float | None) -> str:
-    """Ratio → percentage string with one decimal and Western digits ('' for None)."""
-    return "" if ratio is None else f"{ratio * 100:.1f}"
+def set_page_guides_override(
+    page: Page, data: Mapping | None, *, stage: str | None = None
+) -> tuple[list[Region], bool]:
+    """Replace the page's override (or clear it when `data` is empty / `reset`); the undo body as well.
+
+    Returns `(regions, ocr_enqueued)`. In «التخطيط» only the value is saved (no regions yet); in
+    «المعالجة» the page is re-derived and re-read when its regions changed. Raises ProcessingError
+    for an excluded page, and once «المعالجة» started for an approved page or one with review work.
+    """
+    awaits = check_stage(page.book_id, stage)
+    _refuse_locked(page, awaits)
+    data = dict(data or {})
+    reset = data.pop("reset", False)
+    clean = {} if reset else clean_guides(data, partial=True)
+    clean.pop("reference_page", None)
+    return _save_override(page, clean, awaits)
 
 
-def _parse_page_number(requested: str | None) -> int | None:
+def page_guides_answer(page: Page, regions: list[Region], enqueued: bool, undo: dict | None) -> dict:
+    """The answer of `api:page_guides_override`: today's fields plus the `guides` block and the undo."""
+    page.refresh_from_db(fields=["status", "guides_override", "reviewed_at", "is_excluded"])
+    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    pre = Preprocess.objects.filter(page=page).first()
+    rows = list(page.regions.all())
+    awaits = book_awaits_start(page.book_id)
+    locked = page_lock(page, awaits, review_work_pages(page.book_id, [page.pk]) if not awaits else set())
+    effective = guides_values(guides)
+    for key in GUIDE_KEYS:
+        if key in (page.guides_override or {}):
+            effective[key] = page.guides_override[key]
+    return {
+        "page_id": page.pk,
+        "status": page.status,
+        "status_label": page.get_status_display(),
+        "effective": effective,
+        "override": page.guides_override,
+        "regions": region_items(rows),
+        "ocr_enqueued": enqueued,
+        "guides": page_guides_payload(page, pre, guides_values(guides), is_manual(guides), rows, locked),
+        "undo": undo,
+    }
+
+
+def parse_page_number(requested: str | None) -> int | None:
     """`?page=` value as a page number, None when it is not a plain decimal number."""
     try:
         return int(requested) if requested and requested.strip().isdecimal() else None
     except ValueError:
         return None
-
-
-def guides_reference_page(book: Book, guides: LayoutGuides | None, requested: str | None) -> Page | None:
-    """The page shown on the guides screen: `?page=<number>`, else the stored reference, else the first."""
-    candidates = book.pages.filter(is_excluded=False, preprocess__isnull=False).select_related("preprocess")
-    number = _parse_page_number(requested)
-    if number is not None:
-        page = candidates.filter(number=number).first()
-        if page is not None:
-            return page
-    if guides is not None and guides.reference_page_id:
-        page = candidates.filter(pk=guides.reference_page_id).first()
-        if page is not None:
-            return page
-    return candidates.order_by("number").first()
-
-
-def guides_context(book: Book, requested_page: str | None) -> dict:
-    """Everything the guides screen renders: guide values, detection stats and the reference page.
-
-    `config` feeds the Alpine component (guide ratios, the proposal, the reference page's detected
-    footnote top (rule, else block), line boxes and output size); `pages` lists every preprocessed
-    page with whether a footnote rule, a footnote block and a page number were detected on it.
-    """
-    guides = LayoutGuides.objects.filter(book=book).first()
-    stats = guides_stats(book)
-    reference = guides_reference_page(book, guides, requested_page)
-    values = book_guides_dict(book)
-
-    pre: Preprocess | None = reference.preprocess if reference is not None else None
-    detected_rule = None
-    if pre is not None and pre.output_height:
-        detected_y = pre.footnote_rule_y if pre.footnote_rule_y is not None else pre.footnote_block_y
-        if detected_y is not None:
-            detected_rule = round(detected_y / pre.output_height, 4)
-
-    pages = [
-        {
-            "number": n,
-            "has_rule": rule is not None,
-            "has_block": block is not None,
-            "has_number": bool(number),
-        }
-        for n, rule, block, number in Preprocess.objects.filter(
-            page__book=book, page__is_excluded=False, output_height__gt=0
-        )
-        .order_by("page__number")
-        .values_list("page__number", "footnote_rule_y", "footnote_block_y", "page_number_box")
-    ]
-    config = {
-        "header_cut": values["header_cut"],
-        "footnote_line": values["footnote_line"],
-        "page_number_zone": values["page_number_zone"],
-        "page_number_height": values["page_number_height"],
-        "proposal": stats.footnote_line,
-        "detected_rule": detected_rule,
-        "line_boxes": pre.line_boxes if pre is not None else [],
-        "output": {"width": pre.output_width, "height": pre.output_height} if pre is not None else None,
-    }
-    return {
-        "book": book,
-        "guides": guides,
-        "config": config,
-        "stats": stats,
-        "proposal_percent": ratio_percent(stats.footnote_line),
-        "reference": reference,
-        "reference_image": pre.display_image.url if pre is not None and pre.display_image else "",
-        "pages": pages,
-        "n_with_block": sum(1 for p in pages if p["has_block"] and not p["has_rule"]),
-        "n_with_number": sum(1 for p in pages if p["has_number"]),
-        "zones": LayoutGuides.PageNumberZone.choices,
-    }

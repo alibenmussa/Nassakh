@@ -8,6 +8,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 from django.contrib.auth.models import Group, User
@@ -197,8 +198,10 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     book, pages = _book([(Page.Status.OCR_DONE, "final"), (Page.Status.REVIEWED, "final")])
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     # every primary candidate is rendered role-gated and toggled from the poll (one visible per state)
-    for state in ("start", "guides", "review", "copy", "book"):
+    for state in ("start", "review", "copy", "book"):
         assert f"x-show=\"d.primary === '{state}'\"" in body, state
+    # PHASE7 §3.12: «ضبط الأدلة» is gone as a primary (and as a word); the «التخطيط» mode is not rendered
+    assert "d.primary === 'guides'" not in body and "ضبط الأدلة" not in body and "is-guides" not in body
     assert "data-review-next" in body and "الصفحة التالية للمراجعة" in body
     # Phase 5 (D47): «فتح الكتاب» is the primary once the manuscript is fresh: the book page, the only place
     # to
@@ -217,7 +220,8 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "data-editor-open" not in body
     )
     assert "x-text=\"d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'\"" in body
-    # status chip, progress bar, poll pill, «⋯» menu with copy / guides / rerun forms / all books
+    # status chip, progress bar, poll pill, «⋯» menu with copy / «التخطيط» / re-run items (each asks first,
+    # §3.6) / «حذف الكتاب…» / all books
     assert 'class="bk-status"' in body and 'aria-label="نسبة إتمام المعالجة"' in body
     assert "تعذّر التحديث · إعادة المحاولة" in body and "انتهت الجلسة · تسجيل الدخول" in body
     menu = body[
@@ -226,11 +230,25 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         )
     ]
     assert (
-        menu.count('name="stage"') == 5
+        menu.count("data-rerun-stage=") == 5
+        and 'name="stage"' not in menu
         and "إعادة التشغيل من مرحلة" in menu
-        and "ضبط الأدلة" in menu
+        and "<span>التخطيط</span>" in menu
+        and "data-guides-menu-item" in menu
+        and "حذف الكتاب…" in menu
         and "كل الكتب" in menu
     )
+    assert "d.openRerun('ocr'," in menu and "d.openDelete()" in menu
+    # the re-run dialog posts the stage it names; the delete dialog names what is lost (§3.13)
+    rerun = body[body.index("data-rerun-dialog") : body.index("data-delete-dialog")]
+    assert (
+        'name="stage" :value="dialog.stage"' in rerun
+        and 'x-ref="rerunSafe"' in rerun
+        and "إعادة التشغيل</button>" in rerun
+    )
+    delete = body[body.index("data-delete-dialog") :]
+    assert f"حذف الكتاب «{book.title}»؟" in delete and "ولا يمكن التراجع عن ذلك." in delete
+    assert 'class="btn btn-danger">حذف الكتاب</button>' in delete and 'x-ref="deleteSafe"' in delete
     assert "نسخ نص الكتاب" in menu and "x-show=\"d.primary !== 'copy'\"" in menu
     # «⋯»: «الكتاب» → the book page, hidden while it is the primary
     item = menu[menu.index("data-book-menu-item") - 200 : menu.index("data-book-menu-item") + 160]
@@ -267,7 +285,7 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     # banners follow the poll, the review summary lives in the strip
     assert (
         "x-show=\"status === 'error'\"" in body
-        and "x-show=\"status === 'needs_guides'\"" in body
+        and "x-show=\"status === 'needs_guides'\"" not in body
         and 'x-text="errorHeadline' in body
     )
     assert (
@@ -281,6 +299,7 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     client.force_login(_user("reader", "proofreader"))
     body = client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "d.primary === 'start'" not in body and 'name="stage"' not in body and "fac-restore" not in body
+    assert "data-rerun-dialog" not in body and "حذف الكتاب" not in body
     assert "d.primary === 'book'" not in body  # the manuscript stays a proofreader's primary
     assert (
         "data-book-menu-item" in body and "data-book-link" in body
@@ -743,7 +762,7 @@ const states = [];
 dash.status = 'uploaded'; states.push(dash.primary);
 dash.status = 'error'; states.push(dash.primary);
 dash.status = 'needs_guides'; states.push(dash.primary);
-const dg = mk({ guidesUrl: '/processing/1/guides/', status: 'needs_guides', active: false }); states.push(dg.primary);
+const dg = mk({ status: 'needs_guides', active: false }); states.push(dg.primary); // no «ضبط الأدلة» any more (D65)
 dash.status = 'ocr'; dash.review = { reviewed: 1, total: 2, unresolved_total: 0, next_review_url: '/books/1/review/next/' }; states.push(dash.primary);
 dash.review = { reviewed: 2, total: 2, unresolved_total: 0, next_review_url: null }; states.push(dash.primary);
 dash.canEdit = false; dash.status = 'uploaded'; states.push(dash.primary);
@@ -775,7 +794,8 @@ out.follow = dEnd.followTarget([
   { before: { status: 'uploaded', text_state: 'none' }, after: { number: 9, status: 'preprocessed', text_state: 'none' } },
   { before: { status: 'layout_done', text_state: 'none' }, after: { number: 11, status: 'ocr_done', text_state: 'final', is_excluded: true } },
 ]);
-out.keys = [dash.keyAction({ key: 'g', code: 'KeyG' }, false), dash.keyAction({ key: 'g', code: 'KeyG' }, true), dash.keyAction({ key: 'ArrowLeft' }, false), dash.keyAction({ key: 'Escape' }, true), dash.keyAction({ key: 'n', code: 'KeyN', metaKey: true }, false), dash.keyAction({ key: '2' }, false)];
+out.keys = [dash.keyAction({ key: 'g', code: 'KeyG' }, false), dash.keyAction({ key: 'g', code: 'KeyG' }, true), dash.keyAction({ key: 'ArrowLeft' }, false), dash.keyAction({ key: 'Escape' }, true), dash.keyAction({ key: 'n', code: 'KeyN', metaKey: true }, false), dash.keyAction({ key: '2' }, false),
+  dash.keyAction({ key: 'ر', code: 'KeyV' }, false), dash.keyAction({ key: 'ل', code: 'KeyG' }, false), dash.keyAction({ key: 'v', code: 'KeyV', isComposing: true }, false)];
 // auth loss stops polling quietly
 const dAuth = mk();
 globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async () => ({}) });
@@ -994,7 +1014,7 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
 def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_path):
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
-    files = [str(JS / name) for name in ("ui.js", "decode.js", "books.js", "ocr.js")]
+    files = [str(JS / name) for name in ("ui.js", "keys.js", "decode.js", "books.js", "ocr.js")]
     run = subprocess.run(["node", str(harness), *files], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout.strip().splitlines()[-1])
@@ -1317,7 +1337,7 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "start",
         "start",
         "",
-        "guides",
+        "review",
         "review",
         "convert",
         "copy",
@@ -1359,7 +1379,9 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "label": "جاهز للمراجعة",
     }
     assert out["follow"] == 7  # highest page that entered provisional / ocr_done (excluded pages skipped)
-    assert out["keys"] == ["jump", None, "nextSheet", "blur", None, "grid"]
+    # D69: the view moved from 1 / 2 to V, matched by the physical key (the Arabic layout types «ر» there); a
+    # composing key is never a shortcut
+    assert out["keys"] == ["jump", None, "nextSheet", "blur", None, None, "toggleView", "jump", None]
     assert out["auth"] == ["auth", True]
 
     # --- ocr.js text panel
@@ -1367,3 +1389,862 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert out["tpResolving"] == [True, "provisional", True]
     assert out["tpDone"] == [False, "final", "نص نهائي"]
     assert out["tpStatic"] == ["static", True, "نص مبدئي"]
+
+
+# ------------------------------------------------------------ «التخطيط» mode (PHASE7_SPEC §3.12–§3.14, D67)
+
+FIXTURES = ROOT / "books" / "fixtures" / "guides"
+
+
+def _awaiting(status: str, states=(), **book_kwargs) -> tuple[Book, list[Page]]:
+    """A book awaiting «بدء المعالجة» (D64) with one page per page status."""
+    book = Book.objects.create(
+        title="الحوليات الليبية",
+        status=status,
+        awaits_ocr_start=True,
+        source_page_count=555,
+        skip_first=186,
+        skip_last=362,
+        **book_kwargs,
+    )
+    pages = [
+        Page.objects.create(
+            book=book, number=i, source_index=185 + i, status=page_status, width=1000, height=3000
+        )
+        for i, page_status in enumerate(states, start=1)
+    ]
+    return book, pages
+
+
+def _config(body: str) -> dict:
+    return json.loads(
+        re.search(r'<script id="dashboard-config" type="application/json">(.*?)</script>', body, re.S).group(
+            1
+        )
+    )
+
+
+def _between(body: str, start: str, end: str) -> str:
+    i = body.index(start)
+    return body[i : body.index(end, i)]
+
+
+def test_guides_mode_for_a_book_awaiting_the_start(editor_client):
+    book, pages = _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.PREPROCESSED] * 3)
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    config = _config(body)
+    assert (
+        config["guidesMode"] is True and config["layoutStage"] is True and config["startAction"] == "startOcr"
+    )
+    assert 'class="bk-dashboard is-guides has-pages' in body
+    # the top bar: «بدء المعالجة» posts the start (disabled with its title while the pages are prepared), and
+    # «استخراج الصفحات» is the candidate of an uploaded or failed book; today's «بدء المعالجة» form is gone
+    bar = _between(body, 'class="bk-bar" x-data>', "</template>")
+    start = _between(bar, f'action="{reverse("books:start_ocr", args=[book.pk])}"', "</form>")
+    assert "d.primary === 'startOcr' || d.primary === 'startOcrDisabled'" in start
+    assert ":disabled=\"d.primary !== 'startOcr' || sent\"" in start and "<span>بدء المعالجة</span>" in start
+    assert "'يُتاح بعد اكتمال تجهيز الصفحات'" in start
+    assert "d.primary === 'extract' || d.primary === 'reextract'" in bar and "استخراج الصفحات" in bar
+    assert (
+        "d.primary === 'start'\"" not in bar and "d.primary === 'back'" in bar and "العودة إلى الصفحات" in bar
+    )
+    # «⋯»: «إعادة تجهيز الصفحات…» (asks first), «حذف الكتاب…», «كل الكتب» — nothing of «المعالجة»
+    menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
+    assert "إعادة تجهيز الصفحات…" in menu and "d.openRerun('preprocess', 'تجهيز الصفحات')" in menu
+    assert "حذف الكتاب…" in menu and "كل الكتب" in menu
+    for gone in ("تحويل إلى كتاب", "الإخراج", "نسخ نص الكتاب", "إعادة التشغيل من مرحلة", "data-rerun-stage"):
+        assert gone not in menu, gone
+    # the toolbar: V toggles the view (D69); the mode's chips; no follow toggle
+    chips = _between(body, "data-filter-chips>", "</div>")
+    assert chips.count('class="bk-chip"') == 3
+    for name, label in (("all", "الكل"), ("doubt", "تستحق نظرة"), ("override", "بضبط خاص")):
+        assert f"setFilter('{name}')" in chips and f'x-text="counts.{name}"' in chips and label in chips
+    assert 'title="صفحات (V)"' in body and 'title="شبكة (V)"' in body and "bk-follow" not in body
+    # the look banner, with the pages worth a look
+    assert "جُهّزت الصفحات واكتُشفت مناطقها. ألقِ نظرة واضبط ما يلزم، ثم اضغط «بدء المعالجة»." in body
+    assert 'x-text="doubtLine"' in body and 'x-text="doubtShow"' in body
+    assert "للكتاب طبقة نصية" not in body
+    # the side panel (_guides_side.html) replaces the summary; the component sits on .bk-layout
+    assert 'x-data="bookGuides()" @nassakh:page-shown.window="onPageShown($event.detail)"' in body
+    side = _between(body, '<aside class="bk-side gd-side"', "</aside>")
+    for needle in (
+        "التخطيط",
+        'x-text="preparedLine"',
+        "الصفحات 187–193 من 555",
+        "حذف الكتاب…",
+        "لكل الصفحات",
+        "ترويسة أعلى كل الصفحات",
+        "% من الأعلى",
+        "من هذه الصفحة",
+        "حاشية حيث لم تُكتشف",
+        'x-text="medianLabel"',
+        "إزالة الضبط العام",
+        "معاينة",
+        "تطبيق على كل الصفحات",
+        'x-text="keptText"',
+        "متن",
+        "حاشية",
+        "ترويسة",
+        "رقم الصفحة",
+        "تستحق نظرة",
+        "الصفحات</span>",
+        "data-film-track",
+    ):
+        assert needle in side, needle
+    assert "bk-summary" not in body and "bk-attention" not in body
+    # the toast's «تراجع» is bound to a boolean and never runs by itself (2a0bca2)
+    toast = _between(body, 'class="toast bk-toast gd-toast"', "</div>")
+    assert 'x-show="toast.hasAction" @click="runToastAction()">تراجع</button>' in toast
+    # the sheet body template: the prepared page, sliders, grips, the band menu, the lock, the save bar
+    tpl = _between(body, '<template id="sheet-guides">', "</template>")
+    for needle in (
+        '<figure class="gd-page"',
+        '<div class="gd-layer" dir="ltr">',
+        'class="guide-line gd-line is-header" role="slider"',
+        'aria-orientation="vertical" aria-label="حدّ الترويسة"',
+        'aria-label="بداية الحاشية"',
+        "+ ترويسة",
+        "+ حاشية",
+        "إزالة من هذه الصفحة",
+        "تطبيق على كل الصفحات…",
+        "ليس رقم صفحة",
+        "حفظ وإعادة التعرّف على الصفحة",
+        "gd-lock-text",
+        'class="sr-only gd-sr"',
+    ):
+        assert needle in tpl, needle
+    # shells, tiles and thumbs carry the mode's hidden parts
+    shell = _shell(body, 0)
+    for needle in (
+        'class="sheet-doubts" hidden',
+        'class="badge gd-own" hidden>بضبط خاص',
+        "gd-auto",
+        "التلقائي",
+        "gd-exclude",
+        "تجهيز الصفحة",
+    ):
+        assert needle in shell, needle
+    assert "x-" not in shell
+    assert (
+        body.count('<span class="gd-bands" aria-hidden="true"></span>') == 3 + 1 + 1
+    )  # tiles + tile shell + thumb shell
+    assert '<span class="bk-thumb-mark is-doubt" hidden>' in body
+    # the dialogs: re-run and delete (§3.13)
+    assert "data-rerun-dialog" in body and f"حذف الكتاب «{book.title}»؟" in body
+    assert "يُحذف الكتاب وملفه وكل صفحاته ونصوصها ومخطوطته وملفات إخراجه، ولا يمكن التراجع عن ذلك." in body
+    # D65: no user-facing text says «الأدلة»
+    assert "الأدلة" not in body
+
+
+def test_guides_mode_states_uploaded_preparing_and_error(editor_client):
+    book, _ = _awaiting(Book.Status.UPLOADED)
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    assert _config(body)["startAction"] == "extract"
+    extract = _between(body, f'action="{reverse("books:start", args=[book.pk])}"', "</form>")
+    assert "x-cloak" not in extract.split(">")[0] and ">استخراج الصفحات</span>" in extract
+    assert 'x-text="emptyTitle">لم تُستخرج الصفحات بعد</h2>' in body and 'x-text="emptyText"' in body
+    # while the pages are prepared: the chip counts them, «بدء المعالجة» waits, the empty state says so
+    book2, _ = _awaiting(Book.Status.PROCESSING)
+    body = editor_client.get(reverse("books:detail", args=[book2.pk])).content.decode()
+    assert _config(body)["startAction"] == "startOcrDisabled"
+    assert 'x-text="emptyTitle">تُستخرج الصفحات الآن</h2>' in body
+    assert 'aria-label="نسبة الصفحات المُجهَّزة" x-show="d.showBar"' in body
+    # every page failed: today's error banner and «إعادة استخراج الصفحات»
+    book3, _ = _awaiting(Book.Status.ERROR, [Page.Status.ERROR])
+    body = editor_client.get(reverse("books:detail", args=[book3.pk])).content.decode()
+    assert _config(body)["startAction"] == "reextract" and ">إعادة استخراج الصفحات</span>" in body
+    assert "x-show=\"status === 'error'\"" in body
+
+
+def test_guides_view_on_a_started_book_and_the_plain_dashboard(editor_client):
+    book, _ = _book(
+        [(Page.Status.OCR_DONE, "final"), (Page.Status.REVIEWED, "final")], status=Book.Status.REVIEWING
+    )
+    url = reverse("books:detail", args=[book.pk])
+    plain = editor_client.get(url).content.decode()
+    # outside the mode: no mode markup at all; «⋯» «التخطيط» opens `?view=guides`
+    for needle in ("is-guides", "sheet-guides", "bookGuides", "gd-", "startOcr", "العودة إلى الصفحات"):
+        assert needle not in plain, needle
+    assert _config(plain)["guidesMode"] is False
+    item = _between(plain, "data-guides-menu-item", "</a>")
+    assert "<span>التخطيط</span>" in item and f'href="{url}?view=guides"' in plain
+    body = editor_client.get(url + "?view=guides").content.decode()
+    config = _config(body)
+    assert config["guidesMode"] is True and config["layoutStage"] is False and config["startAction"] == "back"
+    assert 'class="bk-dashboard is-guides' in body
+    # «العودة إلى الصفحات», the re-read banner, today's «⋯» with «حذف الكتاب…» (and without «التخطيط»)
+    back = _between(body, "data-guides-back", "</a>")
+    assert "العودة إلى الصفحات" in back and "x-cloak" not in _between(
+        body, "x-show=\"d.primary === 'back'\"", ">"
+    )
+    assert (
+        "تغيير المناطق هنا يُعيد التعرّف على نص الصفحة. الصفحات المعتمدة وما فيه تصحيحات مراجعة لا تتغيّر."
+        in body
+    )
+    menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
+    assert (
+        menu.count("data-rerun-stage=") == 5 and "حذف الكتاب…" in menu and "data-guides-menu-item" not in menu
+    )
+    assert "تحويل إلى كتاب…" in menu and "bk-convert-host" in body
+    assert "جُهّزت الصفحات واكتُشفت مناطقها" not in body
+
+
+def test_guides_mode_for_a_proofreader_shows_the_layout_without_controls(client):
+    book, _ = _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.PREPROCESSED])
+    client.force_login(_user("reader", "proofreader"))
+    body = client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    assert "is-guides" in body and "لكل الصفحات" not in body and "حذف الكتاب" not in body
+    tpl = _between(body, '<template id="sheet-guides">', "</template>")
+    assert "gd-grip" not in tpl and "gd-menu" not in tpl and "gd-savebar" not in tpl and "gd-lock" in tpl
+    assert "d.primary === 'startOcr'" not in body and "gd-exclude" not in body
+
+
+def test_books_list_waits_for_the_start_instead_of_a_full_bar(editor_client):
+    _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.PREPROCESSED] * 2)
+    body = editor_client.get(reverse("books:list")).content.decode()
+    row = _between(body, "<tbody>", "</tbody>")
+    assert "بانتظار «بدء المعالجة»" in row and 'role="progressbar"' not in row and "dot-warning" in row
+    assert "تم التخطيط" in row
+
+
+def test_page_detail_and_the_preprocess_panel_speak_of_preparation(editor_client):
+    book, _ = _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.UPLOADED])
+    body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
+    assert ">المُجهَّزة</button>" in body and "'تتوافر بعد تجهيز الصفحة'" in body
+    assert "لا صورة لهذا العرض بعد؛ تُنشأ صور الصفحة بعد تجهيزها." in body
+    assert "المعالجة الأولية" not in body and "المعالَجة" not in body
+
+
+# ---------------------------------------------------------- «التخطيط» mode under Node, on the §3.11 fixtures
+
+
+class _Tree(HTMLParser):
+    """Rendered template HTML → a JSON tree {t, a, c} the Node harness builds its DOM from."""
+
+    VOID = {"img", "input", "br", "hr", "meta", "link", "use", "source"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.root = {"t": "#frag", "a": {}, "c": []}
+        self.stack = [self.root]
+
+    def handle_starttag(self, tag, attrs):
+        node = {"t": tag, "a": {k: ("" if v is None else v) for k, v in attrs}, "c": []}
+        self.stack[-1]["c"].append(node)
+        if tag not in self.VOID:
+            self.stack.append(node)
+
+    def handle_startendtag(self, tag, attrs):
+        self.stack[-1]["c"].append({"t": tag, "a": {k: ("" if v is None else v) for k, v in attrs}, "c": []})
+
+    def handle_endtag(self, tag):
+        for i in range(len(self.stack) - 1, 0, -1):
+            if self.stack[i]["t"] == tag:
+                del self.stack[i:]
+                return
+
+    def handle_data(self, data):
+        if data.strip():
+            self.stack[-1]["c"].append(data)
+
+
+def _tree(html: str) -> dict:
+    parser = _Tree()
+    parser.feed(html)
+    return parser.root
+
+
+def _template(body: str, tpl_id: str) -> dict:
+    inner = _between(body, f'<template id="{tpl_id}">', "</template>")[len(f'<template id="{tpl_id}">') :]
+    return _tree(inner)
+
+
+GUIDES_HARNESS = r"""
+// A small DOM with a selector engine (tag, .class, #id, [attr], [attr="v"], descendant, comma lists): enough for
+// books.js and processing.js to mount, patch and query the mode's templates, rendered by Django and passed in.
+class CL { constructor(el){ this.el = el; this.s = new Set(); } add(...c){ c.forEach((x) => this.s.add(x)); } remove(...c){ c.forEach((x) => this.s.delete(x)); }
+  toggle(c, f){ if (f === undefined) f = !this.s.has(c); if (f) this.s.add(c); else this.s.delete(c); return f; } contains(c){ return this.s.has(c); } toString(){ return [...this.s].join(' '); } }
+class N { constructor(){ this.childNodes = []; this.parentNode = null; }
+  appendChild(n){ if (n.tagName === '#FRAG') { [...n.childNodes].forEach((c) => this.appendChild(c)); return n; } if (n.parentNode) n.parentNode.removeChild(n); n.parentNode = this; this.childNodes.push(n); return n; }
+  insertBefore(n, ref){ if (n.parentNode) n.parentNode.removeChild(n); const i = ref ? this.childNodes.indexOf(ref) : -1; n.parentNode = this; if (i < 0) this.childNodes.push(n); else this.childNodes.splice(i, 0, n); return n; }
+  removeChild(n){ const i = this.childNodes.indexOf(n); if (i >= 0) this.childNodes.splice(i, 1); n.parentNode = null; return n; } }
+class T extends N { constructor(d){ super(); this.nodeValue = d; } get textContent(){ return this.nodeValue; } }
+const camel = (k) => k.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+class E extends N {
+  constructor(tag){ super(); this.tagName = String(tag).toUpperCase(); this.classList = new CL(this); this.attrs = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this.value = ''; this.listeners = {};
+    const st = {}; st.setProperty = (k, v) => { st[k] = String(v); }; st.getPropertyValue = (k) => st[k] || ''; this.style = st; }
+  set className(v){ this.classList = new CL(this); String(v).split(/\s+/).filter(Boolean).forEach((c) => this.classList.add(c)); } get className(){ return this.classList.toString(); }
+  setAttribute(k, v){ v = String(v); if (k === 'class') this.className = v; else if (k === 'hidden') this.hidden = true; else if (k === 'disabled') this.disabled = true; else if (k === 'value') this.value = v; else if (k.startsWith('data-')) this.dataset[camel(k.slice(5))] = v; else this.attrs[k] = v; }
+  getAttribute(k){ if (k === 'class') return this.className; if (k.startsWith('data-')) { const d = this.dataset[camel(k.slice(5))]; return d === undefined ? null : d; } if (k === 'name' || k === 'type') return k in this.attrs ? this.attrs[k] : null; return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k){ delete this.attrs[k]; }
+  get children(){ return this.childNodes.filter((n) => n instanceof E); }
+  set textContent(v){ this.childNodes.forEach((n) => { n.parentNode = null; }); this.childNodes = v === '' || v === null || v === undefined ? [] : [new T(String(v))]; }
+  get textContent(){ return this.childNodes.map((n) => n.textContent).join(''); }
+  get name(){ return this.attrs.name; } get type(){ return this.attrs.type || ''; }
+  set type(v){ this.attrs.type = v; }
+  addEventListener(t, fn){ (this.listeners[t] = this.listeners[t] || []).push(fn); }
+  dispatch(t, ev){ let el = this; ev.target = ev.target || this; while (el) { (el.listeners[t] || []).forEach((fn) => fn(ev)); el = el.parentNode; } }
+  focus(){ document.activeElement = this; }
+  getBoundingClientRect(){ return this._rect || { top: 0, left: 0, width: 0, height: 0, bottom: 0, right: 0 }; }
+  setPointerCapture(){}
+  matches(sel){ return sel.split(',').some((one) => matchComplex(this, one.trim().split(/\s+/))); }
+  closest(sel){ let el = this; while (el && el instanceof E) { if (el.matches(sel)) return el; el = el.parentNode; } return null; }
+  querySelectorAll(sel){ const out = []; const walk = (n) => n.children.forEach((c) => { if (c.matches(sel)) out.push(c); walk(c); }); walk(this); return out; }
+  querySelector(sel){ return this.querySelectorAll(sel)[0] || null; }
+}
+function matchCompound(el, c){
+  const m = /^([a-zA-Z][\w-]*)?/.exec(c); let rest = c.slice(m[0].length);
+  if (m[1] && el.tagName !== m[1].toUpperCase()) return false;
+  while (rest) {
+    let t;
+    if ((t = /^\.([\w-]+)/.exec(rest))) { if (!el.classList.contains(t[1])) return false; }
+    else if ((t = /^#([\w-]+)/.exec(rest))) { if (el.attrs.id !== t[1]) return false; }
+    else if ((t = /^\[([\w-]+)(?:="([^"]*)")?\]/.exec(rest))) { const v = el.getAttribute(t[1]); if (v === null || v === undefined || (t[2] !== undefined && String(v) !== t[2])) return false; }
+    else return false;
+    rest = rest.slice(t[0].length);
+  }
+  return true;
+}
+function matchComplex(el, parts){
+  if (!matchCompound(el, parts[parts.length - 1])) return false;
+  let i = parts.length - 2; let a = el.parentNode;
+  while (i >= 0 && a && a instanceof E) { if (matchCompound(a, parts[i])) i -= 1; a = a.parentNode; }
+  return i < 0;
+}
+const build = (node) => {
+  if (typeof node === 'string') return new T(node);
+  const el = new E(node.t);
+  Object.entries(node.a || {}).forEach(([k, v]) => el.setAttribute(k, v));
+  (node.c || []).forEach((c) => el.appendChild(build(c)));
+  return el;
+};
+const inits = []; const reg = {}; const timers = []; const stores = {}; const events = []; const winListeners = {};
+globalThis.window = globalThis;
+globalThis.document = { hidden: false, activeElement: null, createElement: (t) => new E(t), createTextNode: (d) => new T(d),
+  addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); }, getElementById: (id) => TEMPLATES[id] || null, querySelector: () => null, querySelectorAll: () => [] };
+globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) { stores[n] = v; return v; } return stores[n]; } };
+globalThis.CustomEvent = class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } };
+globalThis.dispatchEvent = (ev) => { events.push([ev.type, ev.detail]); return true; };
+globalThis.location = { pathname: '/books/25/', search: '', hash: '', assign: () => {}, reload: () => {} };
+globalThis.history = { replaceState: (_s, _t, url) => { const i = url.indexOf('#'); location.hash = i >= 0 ? url.slice(i) : ''; } };
+globalThis.addEventListener = (ev, fn) => { (winListeners[ev] = winListeners[ev] || []).push(fn); };
+globalThis.removeEventListener = (ev, fn) => { winListeners[ev] = (winListeners[ev] || []).filter((f) => f !== fn); };
+globalThis.requestAnimationFrame = (fn) => { fn(); return 1; };
+globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+globalThis.clearTimeout = (h) => { if (h && timers[h - 1]) timers[h - 1].fn = null; };
+const store = {}; globalThis.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+globalThis.sessionStorage = { getItem: () => null, setItem: () => {} };
+const fs = require('fs');
+const DATA = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const FX = DATA.fixtures;
+const TEMPLATES = {};
+Object.entries(DATA.templates).forEach(([id, tree]) => { TEMPLATES[id] = { content: { cloneNode: () => build(tree) } }; });
+for (const f of process.argv.slice(3)) eval(fs.readFileSync(f, 'utf8'));
+inits.forEach((fn) => fn());
+const toasts = []; window.Nassakh.toast = (m) => toasts.push(m);
+const fire = async (ms) => { const due = timers.filter((t) => t.ms === ms && t.fn); timers.length = 0; for (const t of due) await t.fn(); await new Promise((r) => setImmediate(r)); return due.length; };
+const settle = () => new Promise((r) => setImmediate(r));
+const out = {};
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+// --- the server: the §3.11 fixtures, answered by URL and body; every request is recorded
+const calls = [];
+let conflict = false;
+const reply = (status, data) => Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => clone(data) });
+const blocks = FX['sheet_guides_blocks.json'];
+const sheetBase = FX['sheets_guides.json'].pages[0];
+const BLOCK_OF = { 1: 'computed', 2: 'no_footnote', 3: 'computed', 4: 'computed', 5: 'computed', 6: 'computed', 7: 'footnote_from_type' };
+let stateFixture = 'book_guides_layout.json';
+let startedBlocks = false;
+const STARTED_OF = { 1: 'approved', 2: 'review', 3: 'derived', 4: 'derived', 5: 'derived', 6: 'derived', 7: 'derived_override_cut' };
+globalThis.fetch = (url, opts = {}) => {
+  const body = opts.body ? JSON.parse(opts.body) : null;
+  calls.push({ url, method: opts.method || 'GET', body });
+  const u = String(url);
+  if (u.startsWith('/api/books/25/sheets/')) {
+    const m = /from=(\d+)&to=(\d+)/.exec(u); const items = [];
+    for (let n = Number(m[1]); n <= Number(m[2]); n += 1) items.push({ ...sheetBase, id: 811 + n, number: n, display_url: `/media/books/25/pages/000${n}/display.webp`, guides: clone(blocks[(startedBlocks ? STARTED_OF : BLOCK_OF)[n]]) });
+    return reply(200, { pages: items, book_line_h_px: 40 });
+  }
+  if (u.startsWith('/api/books/25/guides/preview/')) return reply(200, FX['book_guides_preview.json'][body.stage === 'ocr' ? 'ocr' : 'layout'].response);
+  if (u.startsWith('/api/books/25/guides/') && (opts.method || 'GET') === 'GET') {
+    const st = clone(FX[stateFixture]);
+    const m = /from=(\d+)&to=(\d+)/.exec(u);
+    if (m) st.pages = st.pages.filter((p) => p.n >= Number(m[1]) && p.n <= Number(m[2]));
+    return reply(200, st);
+  }
+  if (u.startsWith('/api/books/25/guides/')) {
+    const A = FX['book_guides_apply.json'];
+    if (conflict) return reply(409, A.conflict.response);
+    if (body.undo) return reply(200, A.undo.response);
+    return reply(200, A[body.stage === 'ocr' ? 'ocr' : 'layout'].response);
+  }
+  const pm = /^\/api\/pages\/(\d+)\/guides\/$/.exec(u);
+  if (pm) {
+    const P = FX['page_guides.json'];
+    if (conflict) return reply(409, FX['errors.json'].started.response);
+    if (body.replace !== undefined) return reply(200, P.undo.response);
+    if (body.stage === 'ocr') return reply(200, P.ocr_save.response);
+    if (body.set && body.set.page_number_zone) return reply(200, P.remove_page_number.response);
+    return reply(200, P.merge.response);
+  }
+  return reply(404, {});
+};
+
+// --- the dashboard as the server renders it: shells and tiles from the templates, the stack in `.bk-layout`
+const tilesOf = (layout) => layout.pages.map((e) => ({ id: e.id, number: e.n, status: e.s, status_label: '', text_state: 'none', is_excluded: e.x, error: e.s === 'error', width: 1000, height: 3000, thumb_url: e.s === 'preprocessed' ? `/t/${e.n}.webp` : null }));
+function mountDashboard(cfgName, layoutName, extra = {}) {
+  const cfg = clone(FX['dashboard_config.json'][cfgName]);
+  const pages = tilesOf(FX[layoutName]);
+  const root = new E('div'); const layout = new E('div'); layout.className = 'bk-layout';
+  const stack = new E('div'); stack.setAttribute('data-sheet-stack', ''); const grid = new E('div'); grid.setAttribute('data-page-grid', '');
+  const film = new E('div'); film.setAttribute('data-film-track', '');
+  layout.appendChild(stack); layout.appendChild(grid); layout.appendChild(film); root.appendChild(layout);
+  pages.forEach((p) => {
+    const shell = build(DATA.templates['sheet-shell']).children[0]; shell.dataset.pageId = String(p.id); stack.appendChild(shell);
+    const tile = build(DATA.templates['tile-shell']).children[0]; tile.dataset.pageId = String(p.id); grid.appendChild(tile);
+  });
+  const d = reg.bookDashboard(Object.assign(cfg, { progressUrl: '/api/books/25/progress/', sheetsUrl: '/api/books/25/sheets/', bookUrl: '/books/25/', canEdit: true, bookId: 25,
+    active: false, status: 'needs_guides', statusLabel: 'تم التخطيط', stages: [], byStatus: { preprocessed: 7 }, total: 7, pages, urls: { page: '/books/25/pages/__n__/', review: '/books/25/review/__n__/', rerun: '/books/25/pages/__n__/rerun/', exclude: '/books/25/pages/__n__/exclude/' } }, extra));
+  d.$el = root; d.$watch = () => {}; d.$nextTick = (fn) => fn(); d.$refs = {};
+  d.init();
+  const g = reg.bookGuides(); g.$el = layout; g.$nextTick = (fn) => fn(); g.init();
+  return { d, g, root, layout, stack, grid, film };
+}
+const shellOf = (m, n) => m.stack.children.find((el) => el.dataset.number === String(n));
+const figOf = (m, n) => shellOf(m, n).querySelector('.gd-page');
+const tileOf = (m, n) => m.grid.children.find((el) => el.dataset.number === String(n));
+const bandsOf = (fig) => fig.querySelectorAll('.gd-band').map((b) => [b.dataset.kind, b.style.left, b.style.top, b.style.width, b.style.height, b.querySelector('.gd-chip').textContent, b.querySelector('.gd-chip').tagName.toLowerCase(), Boolean(b.querySelector('.gd-chip').disabled)]);
+const lineOf = (fig, kind) => { const l = fig.querySelector(`.guide-line.is-${kind}`); return l.hidden ? null : { top: l.style.top, handle: l.querySelector('.guide-handle').textContent, now: l.getAttribute('aria-valuenow'), text: l.getAttribute('aria-valuetext'), tab: l.getAttribute('tabindex'), dashed: l.classList.contains('is-dashed') }; };
+
+(async () => {
+  const G = window.NassakhGuides; const B = window.NassakhBooks;
+  // --- pure helpers: gap middles, snapping (Alt off, tolerance), the gaps for ⇧↑ / ⇧↓, where an added line lands
+  const rows = blocks.computed.rows;
+  out.gaps = G.gapMiddles(rows);
+  out.snap = { near: G.snapY(0.785, rows, 0.0107), far: G.snapY(0.795, rows, 0.0107), free: G.snapY(0.785, rows, 0.0107, true), tight: G.snapY(0.785, rows, 0.002) };
+  out.step = [G.stepGap(0.7817, rows, 1), G.stepGap(0.7817, rows, -1), G.stepGap(0.95, rows, 1)];
+  out.defaults = [G.defaultY('header', rows), G.defaultY('footnote', rows), G.defaultY('header', []), G.defaultY('footnote', [])];
+  out.adjMove = G.adjacentBands(blocks.computed.bands, 'footnote', 0.8).map((b) => [b.kind, ...b.bbox]);
+  out.adjAddHeader = G.adjacentBands(blocks.computed.bands, 'header', 0.06).map((b) => [b.kind, ...b.bbox]);
+  out.adjAddFoot = G.adjacentBands(blocks.no_footnote.bands, 'footnote', 0.8).map((b) => [b.kind, ...b.bbox]);
+  out.adjOff = G.adjacentBands(blocks.derived.bands, 'footnote', null).map((b) => [b.kind, ...b.bbox]);
+  out.noNumber = G.withoutNumber(blocks.computed.bands).map((b) => [b.kind, ...b.bbox]);
+  out.merge = [G.mergeBody({ footnote_line: 0.80001 }, ['header_cut', 'footnote_line']), G.mergeBody({}, [], true)];
+  out.inverse = [G.inverse(FX['page_guides.json'].merge.response), G.inverse(FX['book_guides_apply.json'].layout.response), G.inverse(FX['book_guides_apply.json'].ocr.response)];
+  out.ratio = [G.ratioOf('80.5'), G.ratioOf('٦٫٢'), G.ratioOf(''), G.ratioOf('6,25')];
+  out.draft = [G.draftLines(blocks.computed, { header_cut: 0.062, footnote_line: 0.9 }), G.draftLines(blocks.no_footnote, { footnote_line: 0.8 }), G.draftLines(blocks.derived_override_cut, { header_cut: 0.07 })];
+  out.compact = B.compactBands(blocks.derived.bands);
+
+  // --- the form's range probe (§3.13) on byte fixtures: a found count, a missing one, two /Count values
+  const pdf = (s) => `%PDF-1.4\n${s}\n%%EOF`;
+  out.probe = [
+    B.pdfPageCount(pdf('1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 555 >> endobj 3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << >> >> >> endobj')),
+    B.pdfPageCount(pdf('1 0 obj << /Type /ObjStm /N 5 /First 20 /Filter /FlateDecode >> stream xyz endstream endobj')),
+    B.pdfPageCount(pdf('4 0 obj << /Type /Pages /Parent 2 0 R /Kids [5 0 R] /Count 40 >> endobj 2 0 obj << /Count 96 /Kids [4 0 R 6 0 R] /Type/Pages >> endobj 5 0 obj << /Type /Page /Count 7 >> endobj')),
+  ];
+  const f = reg.bookForm({ pagesPerSheet: '1', skipFirst: '186', skipLast: '362' });
+  const bytes = Buffer.from(pdf('2 0 obj << /Type /Pages /Kids [] /Count 555 >> endobj'), 'latin1');
+  await f.onFile({ target: { files: [{ name: 'الحوليات الليبية.pdf', size: bytes.length, slice: (a, b) => ({ arrayBuffer: async () => bytes.subarray(a, b) }) }] } });
+  const lines = [f.fileName, f.sourcePages, f.range.text];
+  f.skipLast = 369; lines.push(f.range.text, f.range.error);
+  f.sourcePages = null; f.skipLast = 362; lines.push(f.range.text);
+  f.skipFirst = 0; f.skipLast = 0; lines.push(f.range.text);
+  f.sourcePages = 8; lines.push(f.range.text);
+  f.sourcePages = 52; f.skipFirst = 2; f.skipLast = 2; f.pagesPerSheet = 2; lines.push(f.range.text);
+  out.form = lines;
+
+  // --- the layout book in «تم التخطيط»: the mode opens on the grid; the state arrives; bands on tiles and thumbs
+  const L = mountDashboard('needs_guides', 'book_guides_layout.json');
+  const d = L.d; const g = L.g;
+  out.openView = d.view;
+  // bookGuides' scope sits inside the dashboard's: no name of it may shadow one of the dashboard's
+  out.collide = Object.keys(Object.getOwnPropertyDescriptors(g)).filter((k) => k in d && !['init', 'destroy'].includes(k) && !k.startsWith('$'));
+  await fire(60); await settle(); // the sheets of the mounted pages (no observer: every sheet mounts)
+  await settle();
+  out.primaryLayout = d.primary;
+  out.counts = { ...d.counts };
+  out.tileBands = tileOf(L, 1).querySelector('.gd-bands').children.map((s) => [s.className, s.style.left, s.style.top, s.style.width, s.style.height]);
+  out.tileAr = tileOf(L, 1).querySelector('.page-tile-thumb').style['--tile-ar'];
+  out.doubtMarks = [1, 7].map((n) => [tileOf(L, n).classList.contains('is-doubt'), !tileOf(L, n).querySelector('.tile-mark-doubt').hidden]);
+  out.thumbs = L.film.children.map((t) => [t.dataset.number, t.querySelector('.gd-bands').children.length, !t.querySelector('.bk-thumb-mark.is-doubt').hidden]);
+  // the filters: the chip «تستحق نظرة» keeps page 7; «بضبط خاص» nothing yet; stored per book
+  d.setFilter('doubt'); out.filterDoubt = [d.visibleNumbers(), store['nassakh.guidesFilter.25'], d.filteredOut];
+  d.setFilter('override'); out.filterOverride = [d.filteredOut]; d.setFilter('all');
+  out.stateCalls = calls.filter((c) => c.url.startsWith('/api/books/25/guides/')).map((c) => c.url);
+  out.sheetCalls = calls.filter((c) => c.url.startsWith('/api/books/25/sheets/')).map((c) => c.url);
+  // the viewer: V, a tile click, the page shown (the event the side panel follows)
+  out.keys = [d.keyAction({ key: 'ر', code: 'KeyV' }, false), d.keyAction({ key: 'n', code: 'KeyN' }, false), d.keyAction({ key: 'c', code: 'KeyC' }, false)];
+  d.onKey({ key: 'ر', code: 'KeyV', target: {}, preventDefault: () => {} });
+  out.afterV = [d.view, store['nassakh.bookView'] === undefined];
+  d.showPage(1, { instant: true });
+  out.shown = events.filter((e) => e[0] === 'nassakh:page-shown').map((e) => e[1]).slice(-1)[0];
+  out.pageId = g.pageId;
+  // patchGuidesBody: the computed block of page 1, drawn in physical percentages; lines as sliders
+  const fig1 = figOf(L, 1);
+  out.fig1 = { editable: fig1.classList.contains('is-editable'), img: fig1.querySelector('.gd-img').getAttribute('src'), alt: fig1.querySelector('.gd-img').getAttribute('alt'), bands: bandsOf(fig1), header: lineOf(fig1, 'header'), footnote: lineOf(fig1, 'footnote'),
+    grips: [fig1.querySelector('.gd-grip.is-header').hidden, fig1.querySelector('.gd-grip.is-footnote').hidden], sr: fig1.querySelector('.gd-sr').textContent, lock: fig1.querySelector('.gd-lock').hidden, savebar: fig1.querySelector('.gd-savebar').hidden };
+  const fig7 = figOf(L, 7);
+  out.head7 = { doubts: shellOf(L, 7).querySelector('.sheet-doubts').textContent, own: shellOf(L, 7).querySelector('.gd-own').hidden, auto: shellOf(L, 7).querySelector('.gd-auto').hidden, exclude: shellOf(L, 7).querySelector('.gd-exclude-label').textContent,
+    next: shellOf(L, 7).querySelector('.gd-exclude input[name="next"]').value, action: shellOf(L, 7).querySelector('.gd-exclude').getAttribute('action') };
+  out.fig7Foot = lineOf(fig7, 'footnote');
+
+  // --- fixing one page (§3.12): a drag of page 1's footnote line snaps to the gap and is saved at once
+  fig1._rect = { top: 0, left: 0, width: 333, height: 1000, bottom: 1000, right: 333 };
+  const footLine = fig1.querySelector('.guide-line.is-footnote');
+  footLine.dispatch('pointerdown', { button: 0, clientY: 781, pointerId: 1, preventDefault: () => {} });
+  g.onPointerMove({ clientY: 786, altKey: false });
+  out.dragPaint = { top: footLine.style.top, handle: footLine.querySelector('.guide-handle').textContent, body: bandsOf(fig1)[0].slice(0, 5), foot: bandsOf(fig1)[1].slice(0, 5) };
+  calls.length = 0;
+  g.onPointerUp({});
+  await settle(); await settle();
+  out.dragSave = calls.map((c) => [c.url, c.body]);
+  out.dragToast = [g.toast.message, g.toast.hasAction, g.toast.visible];
+  // the answer's block replaces the page's (the fixture answers for page 2's merge: the footnote at 0.8)
+  out.afterSave = lineOf(fig1, 'footnote');
+  // a toast action never runs by itself: showing it posts nothing, «تراجع» posts the inverse
+  const before = calls.length; await settle();
+  out.undoIdle = calls.length === before;
+  calls.length = 0; g.runToastAction(); await settle(); await settle();
+  out.undoPage = calls.map((c) => [c.url, c.body]);
+  out.undoToast = [g.toast.message, g.toast.hasAction];
+  // the merge fixture exactly: page 2 gains its footnote line (a grip adds it at the gap nearest 80 %)
+  const fig2 = figOf(L, 2); fig2._rect = { top: 0, left: 0, width: 333, height: 1000 };
+  out.grip2 = [fig2.querySelector('.gd-grip.is-footnote').hidden, fig2.querySelector('.gd-grip.is-footnote').textContent];
+  calls.length = 0;
+  fig2.querySelector('.gd-grip.is-footnote').dispatch('pointerdown', { button: 0, clientY: 900, preventDefault: () => {} });
+  g.onPointerUp({}); await settle(); await settle();
+  out.gripSave = calls.map((c) => c.body);
+  calls.length = 0;
+  await g.change(String(813), { set: { footnote_line: 0.8 } }, 'footnote'); await settle();
+  out.mergeRequest = calls.map((c) => [c.url, c.body]);
+  out.mergeFixture = FX['page_guides.json'].merge.request;
+  // keys on a focused line: ↓ moves 0.2 %, ⇧↓ to the next gap; saved once the keys rest (700 ms)
+  const line2 = fig2.querySelector('.guide-line.is-footnote');
+  calls.length = 0; timers.length = 0;
+  const kd = (key, shiftKey = false) => { const ev = { key, shiftKey, target: line2, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; L.stack.dispatch('keydown', ev); return ev.defaultPrevented; };
+  out.keyHandled = [kd('ArrowDown'), line2.style.top];
+  kd('ArrowDown', true); out.keyGap = line2.style.top;
+  out.keyNoSaveYet = calls.length;
+  await fire(700); await settle();
+  out.keySave = calls.map((c) => c.body);
+  // the band menu: «ليس رقم صفحة» on page 1
+  calls.length = 0;
+  const chipP = fig1.querySelectorAll('.gd-band').find((b) => b.dataset.kind === 'page_number').querySelector('.gd-chip');
+  L.stack.dispatch('click', { target: chipP, preventDefault: () => {} });
+  const menu = fig1.querySelector('.gd-menu');
+  out.menu = [menu.hidden, menu.querySelectorAll('[data-act]').filter((i) => !i.hidden).map((i) => i.textContent), chipP.getAttribute('aria-expanded')];
+  L.stack.dispatch('click', { target: menu.querySelector('[data-act="no-number"]'), preventDefault: () => {} });
+  await settle(); await settle();
+  out.noNumberRequest = calls.map((c) => c.body);
+  out.menuClosed = menu.hidden;
+
+  // --- all pages: the draft → preview → apply flow, and undo
+  calls.length = 0; timers.length = 0;
+  g.ctl.footnote = { on: true, pct: '80.5' }; g.onControl();
+  out.draftSet = clone(g.draft);
+  out.paused = figOf(L, g.pageNumber || d.current).classList.contains('is-paused');
+  await fire(250); await settle();
+  out.previewRequest = calls.map((c) => [c.url, c.body]);
+  out.previewFixture = FX['book_guides_preview.json'].layout.request;
+  out.previewText = [g.previewChanged, g.previewCut, g.cutPages, g.keptText, g.previewReocr, g.previewLocked];
+  // Esc drops the draft (after an unsaved move and the menu)
+  out.escape = [g.escape(), g.draft, g.ctl.footnote.on];
+  // the running head for every page, applied, then undone from the toast
+  calls.length = 0; timers.length = 0;
+  g.ctl.header = { on: true, pct: '6.2' }; g.onControl(); await fire(250); await settle();
+  calls.length = 0;
+  await g.applyDraft(); await settle();
+  out.applyRequest = calls.map((c) => [c.url, c.body]);
+  out.applyFixture = FX['book_guides_apply.json'].layout.request;
+  out.applied = { toast: [g.toast.message, g.toast.hasAction], book: g.book.source, ctl: clone(g.ctl), draft: g.draft, tileHead: tileOf(L, 1).querySelector('.gd-bands').children.map((s) => s.className)[0] };
+  const idle = calls.length; await settle(); out.applyIdle = calls.length === idle;
+  calls.length = 0; g.runToastAction(); await settle(); await settle();
+  out.undoBook = calls.map((c) => c.body);
+  out.undoBookFixture = FX['book_guides_apply.json'].undo.request;
+  out.afterUndo = [g.toast.message, g.book.source, g.ctl.header.on];
+  // started elsewhere: a 409 turns the banner on
+  conflict = true; g.ctl.header = { on: true, pct: '6.2' }; g.onControl(); await fire(250); await settle(); await g.applyDraft(); await settle();
+  out.conflict = d.startedElsewhere; conflict = false; g.dropDraft();
+  // the end of preparation: «اكتمل التخطيط · 7 صفحات», no action
+  d.active = true;
+  d.apply({ total: 7, percent: 100, flags: 0, status: 'needs_guides', status_label: 'تم التخطيط', dot: 'dot-warning', by_status: { preprocessed: 7 }, active: false, layout_stage: true, waiting: true, pages: [] });
+  out.doneToast = [d.doneToast.visible, d.doneText, d.doneToast.url];
+  // dialogs: the re-run estimate of «تجهيز الصفحات», the delete line
+  d.openRerun('preprocess', 'تجهيز الصفحات');
+  out.rerunDialog = [d.rerunTitle, d.rerunText, d.rerunNote];
+  d.onKey({ key: 'Escape', target: {}, preventDefault: () => {} }); out.dialogEsc = d.dialog.kind;
+  d.openDelete(); out.deleteWork = d.deleteWork; d.closeDialog();
+
+  // --- the chrome per state (§3.12): primary, chip, bar
+  const S = (cfgName, extra) => mountDashboard(cfgName, 'book_guides_layout.json', extra).d;
+  const pre = S('processing', { status: 'processing', active: true, byStatus: FX['progress.json'].processing.by_status, total: 6 });
+  out.states = {
+    uploaded: S('uploaded', { status: 'uploaded' }).primary,
+    processing: [pre.primary, pre.statusText, pre.showBar, pre.preparedLine],
+    needs_guides: d.primary,
+    error: S('error', { status: 'error' }).primary,
+    reader: S('needs_guides', { canEdit: false }).primary,
+  };
+  // a poll that says «المعالجة» began elsewhere
+  pre.apply({ ...FX['progress.json'].started, pages: [] }); out.startedPoll = pre.startedElsewhere;
+  // the mode opens on the viewer only with a #sheet-N address
+  location.hash = '#sheet-3'; out.hashView = S('needs_guides').view; location.hash = '';
+
+  // --- a started book (`?view=guides`): changes wait for the explicit save; locked pages have no handles
+  stateFixture = 'book_guides_started.json'; startedBlocks = true;
+  const M = mountDashboard('started_view_guides', 'book_guides_started.json', { status: 'reviewing', statusLabel: 'قيد المراجعة' });
+  await fire(60); await settle(); await settle();
+  out.startedPrimary = M.d.primary;
+  const f1 = figOf(M, 1);
+  out.locked = { lock: f1.querySelector('.gd-lock').hidden, text: f1.querySelector('.gd-lock-text').textContent, editable: f1.classList.contains('is-editable'), chipsDisabled: bandsOf(f1).filter((b) => b[6] === 'button').every((b) => b[7]), tab: lineOf(f1, 'header').tab };
+  out.lockedReview = figOf(M, 2).querySelector('.gd-lock-text').textContent;
+  M.d.showPage(3, { instant: true });
+  calls.length = 0;
+  M.g.change('814', { set: { footnote_line: 0.79 } }, 'footnote');
+  const f3 = figOf(M, 3);
+  out.pending = { calls: calls.length, savebar: f3.querySelector('.gd-savebar').hidden, dashed: lineOf(f3, 'footnote').dashed, top: lineOf(f3, 'footnote').top, pending: f3.classList.contains('is-pending') };
+  await M.g.savePending('814'); await settle();
+  out.ocrSave = calls.map((c) => [c.url, c.body]);
+  out.ocrSaveFixture = FX['page_guides.json'].ocr_save.request;
+  out.ocrToast = [M.g.toast.message, M.g.toast.hasAction];
+  // the preview in «المعالجة» names the re-read and the locked pages; the apply toast has no undo
+  calls.length = 0; timers.length = 0;
+  M.g.ctl.header = { on: true, pct: '7' }; M.g.onControl(); await fire(250); await settle();
+  out.ocrPreview = [calls.map((c) => c.body)[0], M.g.previewChanged, M.g.previewReocr, M.g.previewLocked, M.g.keptText, M.g.keptApply];
+  await M.g.applyDraft(); await settle();
+  out.ocrApply = [M.g.toast.message, M.g.toast.hasAction];
+  M.d.openRerun('ocr', 'التعرّف على النص');
+  out.ocrRerun = [M.d.rerunText, M.d.rerunNote];
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_guides_mode_logic_under_node_on_the_contract_fixtures(editor_client, tmp_path):
+    book, _ = _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.PREPROCESSED])
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    data = {
+        "templates": {
+            name: _template(body, name)
+            for name in ("sheet-guides", "sheet-shell", "tile-shell", "thumb-shell")
+        },
+        "fixtures": {
+            path.name: json.loads(path.read_text(encoding="utf-8")) for path in FIXTURES.glob("*.json")
+        },
+    }
+    (tmp_path / "data.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(GUIDES_HARNESS, encoding="utf-8")
+    files = [str(JS / name) for name in ("ui.js", "keys.js", "books.js", "processing.js")]
+    run = subprocess.run(
+        ["node", str(harness), str(tmp_path / "data.json"), *files],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+
+    # --- pure helpers (NassakhGuides): gap middles, snapping within the tolerance and never with ⌥, the gaps
+    # of ⇧↑ / ⇧↓, where an added line lands, the two bands beside a moved line, the merge body and the undo
+    # request
+    assert out["gaps"] == [0.0683, 0.1034, 0.4367, 0.7817, 0.815, 0.902]
+    assert out["snap"] == {"near": 0.7817, "far": 0.795, "free": 0.785, "tight": 0.785}
+    assert out["step"] == [0.815, 0.4367, 0.95]
+    assert out["defaults"] == [0.0683, 0.815, 0.06, 0.8]  # the gap after the first line; the gap nearest 80 %
+    assert out["adjMove"] == [
+        ["body", 0, 0, 1, 0.8],
+        ["footnote", 0, 0.8, 1, 0.972],
+        ["page_number", 0.46, 0.972, 0.53, 0.99],
+    ]
+    assert out["adjAddHeader"][:2] == [["running_header", 0, 0, 1, 0.06], ["body", 0, 0.06, 1, 0.781]]
+    assert out["adjAddFoot"][:2] == [["body", 0, 0, 1, 0.8], ["footnote", 0, 0.8, 1, 0.972]]
+    assert out["adjOff"][1] == ["body", 0, 0.062, 1, 0.972] and len(out["adjOff"]) == 3
+    assert out["noNumber"] == [["body", 0, 0, 1, 0.781], ["footnote", 0, 0.781, 1, 1]]
+    assert out["merge"] == [
+        {"merge": True, "set": {"footnote_line": 0.8}, "unset": ["header_cut"], "reset": False},
+        {"merge": True, "set": {}, "unset": [], "reset": True},
+    ]
+    apply_fx = data["fixtures"]["book_guides_apply.json"]
+    assert out["inverse"] == [{"replace": None}, {"undo": apply_fx["layout"]["response"]["undo"]}, None]
+    assert out["ratio"] == [0.805, 0.062, None, 0.0625]  # Eastern digits and «٫» read
+    # the draft is drawn on the page on screen only where it applies (no own cut, no detected footnote)
+    assert out["draft"] == [{"header": 0.062}, {"footnote": 0.8}, {}]
+    assert out["compact"] == [
+        ["h", 0, 0.062],
+        ["b", 0.062, 0.782],
+        ["f", 0.782, 0.972],
+        ["p", 0.972, 0.99, 0.46, 0.53],
+    ]
+
+    # --- the form (§3.13): the range probe on byte fixtures (found, missing, two /Count values) and the line
+    assert out["probe"] == [555, None, 96]
+    assert out["form"] == [
+        "الحوليات الليبية.pdf",
+        555,
+        "الملف 555 صفحة · تُستخرج الصفحات 187–193 (7 صفحات).",
+        "لا تبقى صفحات: الملف 555 صفحة والتجاوز 186 + 369.",
+        True,
+        "يُعرف عدد صفحات الملف بعد رفعه؛ تُستخرج الصفحات بعد أول 186 وقبل آخر 362.",
+        "تُستخرج كل صفحات الملف.",
+        "الملف 8 صفحات · تُستخرج كلها.",
+        "الملف 52 صفحة · تُستخرج الصفحات 3–50، وفي كل منها صفحتان (96 صفحة في الكتاب).",
+    ]
+
+    # --- the layout book: the mode opens on the grid; one api:book_guides call, one sheets range (guides=1)
+    assert out["openView"] == "grid" and out["primaryLayout"] == "startOcr" and out["collide"] == []
+    assert out["stateCalls"] == ["/api/books/25/guides/"]
+    assert out["sheetCalls"] == ["/api/books/25/sheets/?from=1&to=7&guides=1"]
+    assert out["counts"] == {"all": 7, "doubt": 1, "override": 0}
+    # bands on the grid's tiles and the filmstrip (physical percentages of the prepared image), the amber mark
+    assert out["tileBands"] == [
+        ["gd-b region-body", "0%", "0%", "100%", "78.1%"],
+        ["gd-b region-footnote", "0%", "78.1%", "100%", "19.1%"],
+        ["gd-b region-page_number", "46%", "97.2%", "7%", "1.8%"],
+    ]
+    assert out["tileAr"] == "1000 / 3000" and out["doubtMarks"] == [[False, False], [True, True]]
+    assert out["thumbs"] == [["1", 3, False], ["2", 2, False]] + [[str(n), 3, False] for n in range(3, 7)] + [
+        ["7", 3, True]
+    ]
+    assert out["filterDoubt"] == [[7], "doubt", False] and out["filterOverride"] == [True]
+    # V by physical key; N and C are not the mode's; the view is never remembered
+    assert out["keys"] == ["toggleView", None, None] and out["afterV"] == ["sheets", True]
+    assert out["shown"] == {"id": "812", "number": 1} and out["pageId"] == "812"
+    # patchGuidesBody: bands with their chips (the body's a label), the footnote line as a slider, the grip
+    # that adds the running head, the page's regions in reading order for screen readers
+    fig = out["fig1"]
+    assert (
+        fig["editable"] is True
+        and fig["img"].endswith("0001/display.webp?v=1727337600")
+        and fig["alt"] == "الصفحة 1 بعد التجهيز"
+    )
+    assert fig["bands"] == [
+        ["body", "0%", "0%", "100%", "78.1%", "متن", "span", False],
+        ["footnote", "0%", "78.1%", "100%", "19.1%", "حاشية", "button", False],
+        ["page_number", "46%", "97.2%", "7%", "1.8%", "رقم الصفحة", "button", False],
+    ]
+    assert fig["header"] is None
+    assert fig["footnote"] == {
+        "top": "78.1%",
+        "handle": "حاشية 78.1%",
+        "now": "78.1",
+        "text": "بداية الحاشية عند 78.1%",
+        "tab": "0",
+        "dashed": False,
+    }
+    assert fig["grips"] == [False, True] and fig["sr"] == "مناطق الصفحة: متن، حاشية، رقم الصفحة"
+    assert fig["lock"] is True and fig["savebar"] is True
+    head = out["head7"]
+    assert head["doubts"] == "حاشية من حجم الخط" and head["own"] is True and head["auto"] is True
+    assert (
+        head["exclude"] == "استثناء"
+        and head["next"] == "/books/25/#sheet-7"
+        and head["action"] == "/books/25/pages/7/exclude/"
+    )
+
+    # --- fixing one page: the drag moves the two bands live, snaps to the gap, saves at once with its undo
+    assert out["dragPaint"] == {
+        "top": "78.17%",
+        "handle": "حاشية 78.2%",
+        "body": ["body", "0%", "0%", "100%", "78.17%"],
+        "foot": ["footnote", "0%", "78.17%", "100%", "19.03%"],
+    }
+    assert out["dragSave"] == [
+        [
+            "/api/pages/812/guides/",
+            {"merge": True, "set": {"footnote_line": 0.7817}, "unset": [], "reset": False, "stage": "layout"},
+        ]
+    ]
+    assert out["dragToast"] == ["حُفظ لهذه الصفحة", True, True]
+    assert out["afterSave"]["top"] == "80%"  # the answer's block is drawn
+    # the toast's «تراجع» never runs by itself; pressed, it posts the answer's inverse
+    assert out["undoIdle"] is True
+    assert out["undoPage"] == [["/api/pages/812/guides/", {"replace": None, "stage": "layout"}]]
+    assert out["undoToast"] == ["أُلغي التغيير.", False]
+    # «+ حاشية» adds the line in the gap nearest 80 %; the merge body equals the contract's
+    assert out["grip2"] == [False, "+ حاشية"]
+    assert out["gripSave"] == [
+        {"merge": True, "set": {"footnote_line": 0.815}, "unset": [], "reset": False, "stage": "layout"}
+    ]
+    assert out["mergeRequest"] == [["/api/pages/813/guides/", out["mergeFixture"]]]
+    # ↓ moves a focused line by 0.2 %, ⇧↓ to the next gap; saved once the keys rest
+    assert out["keyHandled"] == [True, "80.2%"] and out["keyGap"] == "81.5%" and out["keyNoSaveYet"] == 0
+    assert out["keySave"] == [
+        {"merge": True, "set": {"footnote_line": 0.815}, "unset": [], "reset": False, "stage": "layout"}
+    ]
+    # the page number's chip offers «ليس رقم صفحة» only
+    assert out["menu"] == [False, ["ليس رقم صفحة"], "true"] and out["menuClosed"] is True
+    assert out["noNumberRequest"] == [data["fixtures"]["page_guides.json"]["remove_page_number"]["request"]]
+
+    # --- all pages: draft → preview (the contract's body) → apply → undo; editing on the page waits meanwhile
+    assert out["draftSet"] == {"set": {"footnote_line": 0.805}} and out["paused"] is True
+    assert out["previewRequest"] == [["/api/books/25/guides/preview/", out["previewFixture"]]]
+    assert out["previewText"] == [
+        "يغيّر هذا صفحة واحدة.",
+        "في صفحة واحدة يقطع خطٌّ سطرًا أو تغطّي منطقةٌ سطرًا من المتن:",
+        [2],
+        "",
+        "",
+        "",
+    ]
+    assert out["escape"] == [True, None, False]  # Esc drops the draft and the controls return to the book's
+    assert out["applyRequest"] == [["/api/books/25/guides/", out["applyFixture"]]]
+    applied = out["applied"]
+    assert (
+        applied["toast"] == ["طُبّق على 7 صفحات", True]
+        and applied["book"] == "manual"
+        and applied["draft"] is None
+    )
+    assert (
+        applied["ctl"]["header"] == {"on": True, "pct": "6.2"}
+        and applied["tileHead"] == "gd-b region-running_header"
+    )
+    assert out["applyIdle"] is True and out["undoBook"] == [out["undoBookFixture"]]
+    assert out["afterUndo"] == ["أُلغي التغيير.", "auto", False]
+    assert out["conflict"] is True  # a 409 `started` shows «بدأت المعالجة في نافذة أخرى»
+    assert out["doneToast"] == [True, "اكتمل التخطيط · 7 صفحات", ""]
+    assert out["rerunDialog"] == [
+        "إعادة تشغيل الكتاب من «تجهيز الصفحات»؟",
+        "تُعاد 7 صفحات من هذه المرحلة.",
+        "يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ.",
+    ]
+    assert out["dialogEsc"] == "" and out["deleteWork"] == ""
+
+    # --- the states of §3.12: primary, chip, bar, the side panel's line; a poll from «المعالجة»; #sheet-N
+    assert out["states"] == {
+        "uploaded": "extract",
+        "processing": ["startOcrDisabled", "قيد التخطيط · 3 من 6 صفحة", True, "جُهّزت 3 من 6 صفحات"],
+        "needs_guides": "startOcr",
+        "error": "reextract",
+        "reader": "",
+    }
+    assert out["startedPoll"] is True and out["hashView"] == "sheets"
+
+    # --- a started book (`?view=guides`): locked pages without handles; a change waits for the explicit save
+    assert out["startedPrimary"] == "back"
+    assert out["locked"] == {
+        "lock": False,
+        "text": "معتمدة: لا تتغيّر",
+        "editable": False,
+        "chipsDisabled": True,
+        "tab": "-1",
+    }
+    assert out["lockedReview"] == "فيها تصحيحات مراجعة: لا تتغيّر"
+    assert out["pending"] == {"calls": 0, "savebar": False, "dashed": True, "top": "79%", "pending": True}
+    assert out["ocrSave"] == [["/api/pages/814/guides/", out["ocrSaveFixture"]]]
+    assert out["ocrToast"] == ["يُعاد التعرّف على نص الصفحة 3.", False]
+    assert out["ocrPreview"] == [
+        data["fixtures"]["book_guides_preview.json"]["ocr"]["request"],
+        "يغيّر هذا 3 صفحات.",
+        "سيُعاد التعرّف على نص 3 صفحات؛ نحو دقيقة واحدة.",
+        "صفحتان معتمدتان أو فيهما تصحيحات مراجعة لا تتغيّران.",
+        "صفحة واحدة بضبط خاص تبقى كما هي",
+        "تطبيقه عليها أيضًا",
+    ]
+    assert out["ocrApply"] == ["طُبّق على 3 صفحات؛ يُعاد التعرّف على نصّها.", False]  # no undo in «المعالجة»
+    assert out["ocrRerun"] == [
+        "تُعاد 5 صفحات من هذه المرحلة، وتبقى صفحة واحدة معتمدة كما هي.",
+        "يُعاد التعرّف عليها بالنماذج: نحو دقيقتين على هذا الجهاز.",
+    ]

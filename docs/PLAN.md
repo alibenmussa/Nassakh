@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phases 1-4 built and reviewed; Phase 5 (chapter editor, book stylesheet, WeasyPrint page preview) built and verified 2026-09-25, awaiting the owner's test; decisions D1–D46.** Phase specs in `docs/PHASE2_SPEC.md`, `docs/PHASE3_SPEC.md`, `docs/DASHBOARD_SPEC.md`, `docs/PHASE4_SPEC.md`, `docs/PHASE5_SPEC.md`. Run instructions in `docs/RUNBOOK.md`. Phase 6 order: Word first, then PDF, then EPUB.
+Status: **Phases 1–6 built and reviewed; Phase 7 approved 2026-09-26 (D64–D79) and built in four sub-phases: 7a («التخطيط» first, then «المعالجة»; one keymap; a safe round trip) built and integrated 2026-09-26, awaiting the owner's hand test.** Phase specs in `docs/PHASE2_SPEC.md` … `docs/PHASE7_SPEC.md` and `docs/DASHBOARD_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 
@@ -202,6 +202,15 @@ TipTap bundle with semantic nodes (title, chapter, section, body, quote, poetry 
 
 ### Phase 6 — Export
 HTML + CSS Paged Media from manuscript + StyleSheet; front matter; TOC with page numbers; footnotes at page bottom; running headers; chapter openings on recto; ornaments. Print PDF (bleed, crop marks, embedded fonts), screen PDF (outline), EPUB 3 (RTL). `Export` history.
+
+### Phase 7 — «التخطيط» first, then «المعالجة»; a safe round trip; trust in the text
+Spec `docs/PHASE7_SPEC.md`, decisions D64–D79. Four sub-phases, each built only after the owner's hand test of the one before:
+**7a** (built 2026-09-26) «استخراج الصفحات» prepares the pages and draws their regions, the book waits in «تم التخطيط»
+(`Book.awaits_ocr_start`, D64) until «بدء المعالجة»; the dashboard's «التخطيط» mode replaces the guides screen (D67);
+the footnote rule accepts thick bars (D68); one keymap by physical key, Arabic layout included (D69); no silent chapter
+replacement, approval is not drift, live drift on the book page (D70); re-run and delete dialogs, undo on exclusions.
+**7b** trust in the text (flag policy v2, words only the second model read, honest page state, footnote and verse roles).
+**7c** navigation (the stage bar, review's origin), the page-by-page merge, fix everywhere. **7d** designed after 7c's test.
 
 ### Later (not scheduled)
 - **Tables** (sample 3): table node in the editor, table extraction from born-digital PDFs, table rendering in export.

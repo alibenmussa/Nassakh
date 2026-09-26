@@ -2,7 +2,10 @@
 server-rendered for every page at first paint, and once more with `t` = None inside <template id="sheet-shell">
 for pages ingested after load (books.js clones and patches it). No per-shell Alpine bindings: books.js patches
 the head (`patchSheet`) from the poll's changed set; the body mounts from <template id="sheet-body"> only while
-the sheet is near the viewport. Context: t (tile dict or None), book, role, request.{% endcomment %}
+the sheet is near the viewport. In the «التخطيط» mode (PHASE7 §3.12) the head also carries the page's doubts,
+«بضبط خاص», «التلقائي», «تجهيز الصفحة» on an error and «استثناء» / «إعادة إلى الكتاب» (patched by `patchSheetGuides`),
+and the body mounts from <template id="sheet-guides">. Context: t (tile dict or None), book, role, request,
+guides_mode.{% endcomment %}
 <article class="page-sheet{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"{% if t %} id="sheet-{{ t.number }}" data-page-id="{{ t.id }}" data-number="{{ t.number }}" data-status="{{ t.status }}" data-text="{{ t.text_state }}"{% else %} data-page-id="" data-number="" data-status="" data-text=""{% endif %} style="--sheet-ar: {% if t.width and t.height %}{{ t.width }} / {{ t.height }}{% else %}7 / 10{% endif %}">
   <header class="sheet-head">
     <a class="sheet-title num" href="{{ t.url }}">صفحة <bdi>{{ t.number }}</bdi></a>
@@ -13,6 +16,29 @@ the sheet is near the viewport. Context: t (tile dict or None), book, role, requ
     <span class="bk-reviewed"{% if not t.is_reviewed %} hidden{% endif %}><span class="bk-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span><span>مُراجَعة</span></span>
     <span class="badge badge-dark sheet-excluded"{% if not t.is_excluded %} hidden{% endif %}>مستثناة</span>
     <span class="sheet-flags">{% for label in t.flag_labels %}<span class="badge badge-warning">{{ label }}</span>{% endfor %}{% if t.sequence_issue %}<span class="badge badge-warning num">{{ t.sequence_issue }}</span>{% endif %}</span>
+    {% if guides_mode %}
+    <span class="sheet-doubts" hidden></span>
+    <span class="badge gd-own" hidden>بضبط خاص</span>
+    {% if role == 'admin' or role == 'editor' %}
+    <span class="sheet-guides-actions">
+      <button type="button" class="btn btn-ghost btn-sm gd-auto" hidden>التلقائي</button>
+      <form method="post" class="gd-prep" action="{{ t.rerun_url }}" hidden>
+        {% csrf_token %}
+        <input type="hidden" name="stage" value="preprocess">
+        <input type="hidden" name="next" value="">
+        <button type="submit" class="btn btn-sm">
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+          <span>تجهيز الصفحة</span>
+        </button>
+      </form>
+      <form method="post" class="gd-exclude" action="{% if t %}{% url 'books:toggle_exclude' book.pk t.number %}{% endif %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="">
+        <button type="submit" class="btn btn-ghost btn-sm"><span class="gd-exclude-label">{% if t.is_excluded %}إعادة إلى الكتاب{% else %}استثناء{% endif %}</span></button>
+      </form>
+    </span>
+    {% endif %}
+    {% endif %}
     <span class="sheet-actions">
       <a class="btn btn-ghost btn-sm sheet-review" href="{{ t.review_url }}"{% if t.text_state != 'final' or t.is_excluded %} hidden{% endif %}>مراجعة</a>
       <button type="button" class="btn btn-ghost btn-sm sheet-copy" hidden aria-label="نسخ نص الصفحة {{ t.number }}" title="نسخ نص الصفحة (C)">

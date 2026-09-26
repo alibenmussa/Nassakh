@@ -678,6 +678,28 @@
   }
   .bk-mark-check[hidden], .bk-mark-count[hidden] { display: none; }
 
+  /* ------------------------------------------------------------ the «التخطيط» mode (PHASE7_SPEC §3.12, D67) */
+  /* The same dashboard, showing the layout: the viewer holds the prepared page alone, fitted to the stage height as
+     in review (no text pane); the grid's thumbnails take their page's own ratio so the bands sit on the image. The
+     page's pieces live in processing.css (gd-). */
+  .bk-dashboard.is-guides .bk-viewer .sheet-body { gap: 0; }
+  .bk-dashboard.is-guides .bk-viewer .gd-page { width: min(calc(100cqh * var(--ar-n, .7)), 100cqw); }
+  .bk-dashboard.is-guides .page-tile-thumb { aspect-ratio: var(--tile-ar, 3 / 4); }
+  /* the head speaks of the layout: no text states; the status only while a page is not prepared */
+  .bk-dashboard.is-guides .sheet-head :is(.bk-provisional, .sheet-unresolved, .bk-reviewed, .sheet-flags, .sheet-actions, .sheet-printed) { display: none; }
+  .bk-dashboard.is-guides .page-sheet:not([data-status="uploaded"]):not([data-status="error"]) .sheet-head > .status { display: none; }
+  .sheet-doubts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .sheet-guides-actions { display: inline-flex; align-items: center; gap: 4px; margin-inline-start: auto; }
+  .sheet-guides-actions form { display: contents; }
+  .sheet-guides-actions .btn { animation: bk-fade-in 120ms ease-out both; }
+  /* tiles and thumbs: the text marks and the reading line are OCR's; a prepared page is done here */
+  .bk-dashboard.is-guides :is(.page-tile-flag, .tile-mark-count, .tile-mark-check) { display: none; }
+  .bk-dashboard.is-guides .bk-thumb-mark:is(.is-count, .is-check) { display: none; }
+  .bk-dashboard.is-guides .page-tile:not([data-status="uploaded"]) .page-tile-thumb::after { display: none; }
+  /* every page here is prepared: a status dot speaks only for a page still uploading or failed */
+  .bk-dashboard.is-guides .page-tile:not([data-status="uploaded"]):not([data-status="error"]) .page-tile-footer .dot { visibility: hidden; }
+  .bk-dashboard.is-guides .page-tile.is-doubt .page-tile-thumb { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-warning) 55%, transparent), var(--shadow-md); }
+
   /* ------------------------------------------------------------ keyframes (= rv-…) */
   @keyframes bk-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
   @keyframes bk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }

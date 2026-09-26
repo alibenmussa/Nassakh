@@ -59,9 +59,9 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
             <span class="bp-menu-glyph" aria-hidden="true">0</span>
             <span>تحويل الأرقام…</span>
           </button>
-          <button type="button" class="menu-item" role="menuitem" x-show="v.driftChapter" :disabled="v.reassembly.running" @click="open = false; v.reassembleChapter()">
+          <button type="button" class="menu-item" role="menuitem" x-show="v.driftChapter" :disabled="v.reassembly.running" @click="open = false; v.askReassemble()" data-rebuild-menu-item>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-            <span>إعادة تجميع الفصل من المراجعة</span>
+            <span>إعادة بناء الفصل من المراجعة…</span>
           </button>
           {% endif %}
           <a class="menu-item" role="menuitem" :href="v.pdfUrl || '#'" :aria-disabled="v.pdfUrl ? 'false' : 'true'" target="_blank" rel="noopener" @click="if (!v.pdfUrl) $event.preventDefault(); else open = false" data-pdf-link>
@@ -102,7 +102,8 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 {% else %}
 <div class="lo-screen bp-screen" data-book x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
      :class="{ 'is-spread': spreadOn, 'is-edit': mode === 'edit', 'is-open': Boolean(open), 'has-marks': pageMarks }" :data-fit="fit" :data-mode="mode"
-     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @hashchange.window="onHashChange()" @visibilitychange.document="onVisible()">
+     @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @hashchange.window="onHashChange()" @visibilitychange.document="onVisible()"
+     @focus.window="onWindowFocus()" @pageshow.window="onPageShow($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
   {# the render's faces for the live pages (publishing.fonts.browser_font_css): the same families as the PDF #}
   <style data-font-css x-text="fontCss">{{ config.fontCss }}</style>
@@ -120,9 +121,9 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
         </template>
       </span>
       {% if can_edit %}
-      <button type="button" class="btn btn-sm" :disabled="reassembly.running" @click="reassembleChapter()">
+      <button type="button" class="btn btn-sm" :disabled="reassembly.running" @click="askReassemble()" data-rebuild-button>
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-        <span>إعادة تجميع الفصل من المراجعة</span>
+        <span>إعادة بناء الفصل من المراجعة…</span>
       </button>
       <button type="button" class="btn btn-ghost btn-sm" @click="dismissDrift()">الاحتفاظ بالنص</button>
       {% endif %}
@@ -140,7 +141,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
     <div class="banner banner-danger" role="alert" x-show="reassembly.error" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
       <span class="grow" x-text="reassembly.error"></span>
-      {% if can_edit %}<button type="button" class="btn btn-sm" @click="reassembleChapter()">إعادة المحاولة</button>{% endif %}
+      {% if can_edit %}<button type="button" class="btn btn-sm" @click="askReassemble()">إعادة المحاولة</button>{% endif %}
     </div>
     <div class="banner banner-danger" role="alert" x-show="errorText && phase === 'pages'" x-cloak data-render-error>
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>

@@ -73,6 +73,21 @@
     return { ok: response.ok, status: response.status, data, message };
   }
 
+  // D70: every change saved here is announced to the book's other tabs on `BroadcastChannel('nassakh')` as
+  // `{type: 'review', book, page}`: the book page refreshes its review drift, the manuscript its state. Where the
+  // channel is missing, their focus and visibility checks cover it.
+  const CHANNEL = 'nassakh';
+  let channel = null;
+  function announce(message) {
+    try {
+      if (!channel && typeof BroadcastChannel === 'function') {
+        channel = new BroadcastChannel(CHANNEL);
+        if (typeof channel.unref === 'function') channel.unref(); // Node (the tests): never hold the process open
+      }
+      if (channel) channel.postMessage(message);
+    } catch (_) { /* no channel (an old browser, a sandbox) */ }
+  }
+
   const fill = (template, id) => String(template || '').replace('__id__', String(id));
   const plainToken = (word) => ({ t: word, alt: null, tess: null, conf: 'high', digit: isDigits(word), bbox: null, res: 'typed' });
   const splitWords = (text) => String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -83,39 +98,59 @@
     return [Math.min(...boxes.map((x) => x[0])), Math.min(...boxes.map((x) => x[1])), Math.max(...boxes.map((x) => x[2])), Math.max(...boxes.map((x) => x[3]))];
   };
 
-  // Keyboard map (PHASE3_SPEC §4), RTL: ArrowLeft = next page. Pure, so the tests can exercise it.
-  // ctx: inField (typing in an input), inFlow (Tab may be taken over), focused (a word is focused and the
-  // page is editable), optionKeys (digit hints of the open popover).
-  // D31: Alt+ArrowLeft merges the focused word with the next one (RTL: the next word is on the left),
-  // Alt+ArrowRight with the previous one, Backspace / Delete removes the focused word.
+  // Keyboard map (PHASE3_SPEC §4, PHASE7_SPEC §3.15 D69), RTL: ArrowLeft = next page. Pure, so the tests can
+  // exercise it. Keys are read through `NassakhKeys` (keys.js): letters by their place, so the Arabic layout's
+  // «ش» on the A key is A; digits in any script; nothing while an IME composes.
+  // ctx: inField (typing in an input), inPop (the target is inside the word menu), inFlow (Tab may be taken
+  // over), focused (a word is focused and the page is editable), open (the word menu is open), optionKeys
+  // (digit hints of the focused word's readings).
+  // Two modes, decided by the word menu:
+  //   word mode (the menu open on an editable word): 1–9 choose reading n, a digit beyond the readings and any
+  //     other printable character (Latin or Arabic, ؟ and − too) start the correction with that character;
+  //   page mode (the menu closed): A approve, E edit the line, N the next page to review, ? the sheet, + − 0
+  //     zoom, Space opens the focused word's menu, a digit still chooses a reading of a focused word; other
+  //     letters do nothing, so no correction starts by accident.
+  // In both: ← → PageDown PageUp Home End turn pages, Enter accepts, Tab / ⇧Tab move, ⌥← / ⌥→ merge the
+  // focused word with the next / previous one (D31, RTL: the next word is on the left), ⌫ deletes it, ⌘Z undoes,
+  // ⌘↵ approves the page from anywhere (the correction field of the word menu too).
   function keyAction(ev, ctx) {
+    const K = window.NassakhKeys;
+    if (K.composing(ev)) return null;
     const k = ev.key;
-    const mod = ev.metaKey || ev.ctrlKey;
+    const c = ctx || {};
     if (k === 'Escape') return 'close';
-    if (ctx.inField) return null; // an input keeps its own keys, including the native ⌘Z of its draft
-    if (mod) return (k === 'z' || k === 'Z') && !ev.shiftKey ? 'undo' : null;
-    if (k === 'Tab') return ctx.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
-    if (k === 'Enter') return ev.altKey ? 'insert' : (ctx.focused ? 'accept' : null);
+    if (k === 'Enter' && K.mod(ev) && !ev.altKey && !ev.shiftKey) return !c.inField || c.inPop ? 'approve' : null;
+    if (c.inField) return null; // an input keeps its own keys, including the native ⌘Z of its draft
+    if (K.mod(ev)) return K.letter(ev, 'mod') === 'z' ? 'undo' : null;
+    if (k === 'Tab') return c.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
+    if (k === 'Enter') return ev.altKey ? 'insert' : (c.focused ? 'accept' : null);
     if (ev.altKey) {
-      if (ctx.focused && k === 'ArrowLeft') return 'mergeNext';
-      if (ctx.focused && k === 'ArrowRight') return 'mergePrev';
+      if (c.focused && k === 'ArrowLeft') return 'mergeNext';
+      if (c.focused && k === 'ArrowRight') return 'mergePrev';
       return null;
     }
-    if ((k === 'Backspace' || k === 'Delete') && ctx.focused) return 'deleteWord';
-    if (k === '?') return 'sheet';
-    if (k === 'ArrowLeft') return 'nextPage';
-    if (k === 'ArrowRight') return 'prevPage';
-    if (k === '+' || k === '=') return 'zoomIn';
-    if (k === '-' || k === '_') return 'zoomOut';
-    if (k === '0') return 'zoomReset';
-    if (k === '1' || k === '2' || k === '3') {
-      if (ctx.focused && (ctx.optionKeys || []).includes(k)) return 'choose' + k;
-      return ctx.focused ? 'type' : null;
+    if ((k === 'Backspace' || k === 'Delete') && c.focused) return 'deleteWord';
+    if (k === 'ArrowLeft' || k === 'PageDown') return 'nextPage';
+    if (k === 'ArrowRight' || k === 'PageUp') return 'prevPage';
+    if (k === 'Home') return 'firstPage';
+    if (k === 'End') return 'lastPage';
+    const n = K.digit(ev);
+    const reading = n !== null && n >= 1 && c.focused && (c.optionKeys || []).includes(String(n));
+    if (reading) return 'choose' + n;
+    if (c.focused && c.open) {
+      // word mode: what the key types starts the correction (a space never does)
+      const ch = K.printable(ev);
+      return ch && ch.trim() ? 'type' : null;
     }
-    if (k === 'e' || k === 'E') return 'edit';
-    if (k === 'a' || k === 'A') return 'approve';
-    if (k === 'n' || k === 'N') return 'nextReview';
-    if (typeof k === 'string' && k.length === 1 && ctx.focused) return 'type';
+    if ((k === ' ' || ev.code === 'Space') && !ev.shiftKey) return c.focused ? 'openWord' : null;
+    if (K.is(ev, '?')) return 'sheet';
+    if (K.plus(ev)) return 'zoomIn';
+    if (K.minus(ev)) return 'zoomOut';
+    if (n === 0) return 'zoomReset';
+    const letter = K.letter(ev);
+    if (letter === 'a') return 'approve';
+    if (letter === 'e') return 'edit';
+    if (letter === 'n') return 'nextReview';
     return null;
   }
 
@@ -359,7 +394,7 @@
       move(dir) {
         const ref = this.nextUnresolved(dir);
         if (!ref) {
-          this.toast(this.counts.low_total ? 'حُسمت كل الكلمات في هذه الصفحة' : 'لا كلمات غير مؤكَّدة في هذه الصفحة');
+          this.toast(this.counts.low_total ? 'حُسمت كل الكلمات في هذه الصفحة' : 'لا علامات في هذه الصفحة؛ اقرأ الأسطر مع الصورة ثم اعتمدها.');
           return false;
         }
         this.focusWord(ref, { open: true });
@@ -974,12 +1009,14 @@
         const h = handlers || {};
         const gen = this.gen;
         const seq = ++this.actionSeq;
+        const where = { type: 'review', book: this.book.id || this.page.book_id || null, page: this.page.number };
         this.dismissUndo(); // a newer action makes the undo offer stale
         this.save.pending += 1;
         this.save.state = 'saving';
         this.syncBar();
         const run = this.queue.then(() => send()).then((res) => {
           this.save.pending = Math.max(0, this.save.pending - 1);
+          if (res.ok) announce(where); // saved on the server, whichever page is on screen now
           if (gen !== this.gen) {
             // the page this belonged to was swapped away meanwhile: nothing here to apply or roll back
             if (!res.ok) this.toast(res.message);
@@ -1200,6 +1237,17 @@
         if (item) { this.goTo(item); return; }
         if (this.nav.prev_url && hasDOM) window.location.assign(this.nav.prev_url);
         else this.toast('هذه أول صفحة');
+      },
+
+      // Home / End: the book's first (dir -1) or last (dir 1) page, from the filmstrip.
+      goEdgePage(dir) {
+        const items = (this.film.items || []).filter((p) => p && p.number);
+        if (!items.length) return false;
+        const numbers = items.map((p) => p.number);
+        const target = dir < 0 ? Math.min(...numbers) : Math.max(...numbers);
+        if (target === this.page.number) { this.toast(dir < 0 ? 'هذه أول صفحة' : 'هذه آخر صفحة'); return false; }
+        this.goTo(items.find((p) => p.number === target));
+        return true;
       },
 
       goNextReview() {
@@ -1567,7 +1615,8 @@
           this.refocusWord();
           return;
         }
-        if (this.pop.open) { this.closePop(); return; }
+        // the menu closes and the focus stays on its word (page mode: A, E, N are commands again)
+        if (this.pop.open) { this.closePop(); this.refocusWord(); return; }
         if (this.edit || this.insert) { this.cancelEdit(); return; }
         if (this.undoToast) { this.dismissUndo(); return; }
         if (this.focus) { this.focus = null; return; }
@@ -1587,15 +1636,37 @@
         if (this.dialog.open) { if (ev.key === 'Escape') { ev.preventDefault(); this.dialog.open = false; } return; }
         // Buttons and links keep their own keys (Enter / Space activate them, nothing deletes a word from
         // them), and inside the word popover the arrows belong to its menus, not to page navigation.
+        // (⌘↵ approves from anywhere, a button included)
         const k = ev.key;
-        if ((tag === 'button' || tag === 'a') && (k === 'Enter' || k === ' ' || k === 'Backspace' || k === 'Delete')) return;
+        const chord = ev.metaKey || ev.ctrlKey;
+        if ((tag === 'button' || tag === 'a') && ((k === 'Enter' && !chord) || k === ' ' || k === 'Backspace' || k === 'Delete')) return;
         const inPop = Boolean(target.closest && target.closest('.rv-pop'));
         if (inPop && !inField && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown')) return;
         const outside = Boolean(target.closest && target.closest('.rv-bar, .rv-film, .rv-toolbar, .sidebar, .topbar'));
         const inFlow = !inField && !outside && tag !== 'button' && tag !== 'a';
         const focused = Boolean(this.focused) && this.editable;
-        const action = keyAction(ev, { inField, inFlow, focused, optionKeys: this.options().map((o) => o.key) });
+        const open = focused && this.pop.open;
+        const action = keyAction(ev, { inField, inPop, inFlow, focused, open, optionKeys: this.options().map((o) => o.key) });
         if (action) this.runAction(action, ev);
+      },
+
+      // ⌘↵ / A: approve the page. From the word menu's correction a changed draft is saved first (the queue keeps
+      // the order, and the approval then counts it); an untouched prefill is dropped with the menu.
+      approveFromKeys() {
+        if (this.pop.open && this.pop.typing) {
+          const value = this.pop.typed.trim();
+          const tok = this.focused;
+          if (value && tok && this.editable && (value !== tok.t || this.isUnresolved(tok))) this.submitTyped();
+        }
+        this.closePop();
+        return this.approve(false);
+      },
+
+      // Space on a focused word: its menu, as a click opens it.
+      openWord() {
+        if (!this.focus || !this.focused) return false;
+        this.focusWord(this.focus, { open: true, pan: false });
+        return true;
       },
 
       runAction(action, ev) {
@@ -1607,23 +1678,27 @@
           case 'prev': stop(); this.move(-1); break;
           case 'insert': stop(); this.startInsert(); break;
           case 'accept': stop(); this.accept(); break;
-          case 'choose1': stop(); this.chooseNth(1); break;
-          case 'choose2': stop(); this.chooseNth(2); break;
-          case 'choose3': stop(); this.chooseNth(3); break;
           case 'type': stop(); this.startTyping(ev.key); break;
+          case 'openWord': stop(); this.openWord(); break;
           case 'edit': stop(); this.startEdit(); break;
           case 'mergeNext': stop(); this.mergeWord(1); break;
           case 'mergePrev': stop(); this.mergeWord(-1); break;
           case 'deleteWord': stop(); this.deleteWord(); break;
-          case 'approve': stop(); this.approve(false); break;
+          case 'approve': stop(); this.approveFromKeys(); break;
           case 'nextReview': stop(); this.goNextReview(); break;
           case 'nextPage': stop(); this.goNextPage(); break;
           case 'prevPage': stop(); this.goPrevPage(); break;
+          case 'firstPage': stop(); this.goEdgePage(-1); break;
+          case 'lastPage': stop(); this.goEdgePage(1); break;
           case 'zoomIn': stop(); this.zoomIn(); break;
           case 'zoomOut': stop(); this.zoomOut(); break;
           case 'zoomReset': stop(); this.zoomReset(); break;
           case 'sheet': stop(); this.openSheet(); break;
-          default: break;
+          default: {
+            const reading = /^choose([1-9])$/.exec(action);
+            if (reading) { stop(); this.chooseNth(Number(reading[1])); }
+            break;
+          }
         }
       },
     }));

@@ -29,6 +29,8 @@
   const MINUTES = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
   const HOURS = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
   const DAYS = ['يوم', 'يومين', 'أيام', 'يومًا'];
+  const LIVE_MS = 2000; // D70: the live drift is fetched at most once every 2 s
+  const CHANNEL = 'nassakh'; // review.js announces its saved changes there
   const CHECKS = { missing_font: 'خط غير مثبّت', footnote_overflow: 'حاشية أطول من صفحتها', almost_empty_page: 'صفحة شبه فارغة', heading_at_foot: 'عنوان في أسفل الصفحة' };
 
   function relativeTime(iso, now) {
@@ -60,6 +62,8 @@
     let sourceGen = 0;
     let lastTrigger = null;
     let pollFailures = 0;
+    let liveAt = 0; // the last live drift request (D70)
+    let liveChannel = null;
     let listHost = null;
     let listKey = '';
     const tabFor = (mode) => { const t = U.readLocal(TAB_KEY + mode, DEFAULT_TAB[mode]); return TABS.includes(t) ? t : DEFAULT_TAB[mode]; };
@@ -81,12 +85,18 @@
       snapshots: { open: false, list: [], busy: false, label: '', loading: false, error: '' },
       digits: { open: false, style: 'western', scope: 'chapter', busy: false },
       sheetOpen: false,
-      // the review drift (D41)
+      // the review drift (D41), live (D70): `{edited, pages, chapters}`, refreshed from `api:review_drift`
+      drift: { edited: Boolean(cfg.drift && cfg.drift.edited), pages: ((cfg.drift && cfg.drift.pages) || []).slice(), chapters: ((cfg.drift && cfg.drift.chapters) || []).slice() },
       dismissedDrift: [],
       reassembly: { running: false, runId: null, error: '' },
+      rebuild: { open: false, chapter: null, title: '' }, // D70: «إعادة بناء الفصل من المراجعة؟»
 
       _init_panel() {
         if (this.uncertain.count && this.tab === 'uncertain') this.loadUncertain();
+        this.bindLiveDrift();
+      },
+      _destroy_panel() {
+        if (liveChannel) { try { liveChannel.close(); } catch (_) { /* closed */ } liveChannel = null; }
       },
 
       // ------------------------------------------------------------ tabs
@@ -717,11 +727,53 @@
         const cid = this.focusChapter;
         if (!cid || this.dismissedDrift.includes(cid)) return null;
         const s = this.summaryOf(cid);
-        const listed = ((cfg.drift && cfg.drift.chapters) || []).includes(cid);
+        const listed = (this.drift.chapters || []).includes(cid);
         if (!(s && s.drift) && !listed) return null;
         const range = s && s.source_pages;
-        const pages = ((cfg.drift && cfg.drift.pages) || []).filter((n) => !range || (n >= range.first && n <= (range.last || range.first)));
+        const pages = (this.drift.pages || []).filter((n) => !range || (n >= range.first && n <= (range.last || range.first)));
         return { id: cid, title: this.chapterTitle(cid), pages };
+      },
+      // ---- the live drift (D70): refreshed when the tab comes back into view (visibility, focus, a return from
+      // the back-forward cache) and on the review screen's message for this book; at most one request every
+      // LIVE_MS, a trigger inside that window kept for its end. Where BroadcastChannel is missing, focus and
+      // visibility cover it.
+      bindLiveDrift() {
+        try {
+          if (typeof BroadcastChannel === 'function') {
+            liveChannel = new BroadcastChannel(CHANNEL);
+            if (typeof liveChannel.unref === 'function') liveChannel.unref(); // Node (the tests): never hold the process open
+            liveChannel.onmessage = (e) => {
+              const m = e && e.data;
+              if (m && m.type === 'review' && Number(m.book) === Number(cfg.bookId)) this.refreshDrift();
+            };
+          }
+        } catch (_) { liveChannel = null; }
+      },
+      onWindowFocus() { this.refreshDrift(); },
+      onPageShow(e) { if (e && e.persisted) this.refreshDrift(); },
+      refreshDrift() {
+        if (!urls.drift) return false;
+        const wait = liveAt + LIVE_MS - Date.now();
+        if (wait > 0) {
+          if (!T.drift) T.drift = setTimeout(() => { T.drift = null; this.refreshDrift(); }, wait);
+          return false;
+        }
+        liveAt = Date.now();
+        return this.fetchDrift();
+      },
+      async fetchDrift() {
+        const r = await U.api(urls.drift);
+        if (!r.ok || !r.data) return false;
+        this.applyDrift(r.data);
+        return true;
+      },
+      // A new set of changed pages brings a dismissed banner back: «الاحتفاظ بالنص» kept the text as it was then.
+      applyDrift(d) {
+        const next = { edited: Boolean(d && d.edited), pages: Array.isArray(d && d.pages) ? d.pages.slice() : [], chapters: Array.isArray(d && d.chapters) ? d.chapters.slice() : [] };
+        if (next.pages.join(',') !== (this.drift.pages || []).join(',')) this.dismissedDrift = [];
+        this.drift = next;
+        this.summaries.forEach((s) => { s.drift = next.chapters.includes(s.id); });
+        this.renderChapters();
       },
       get driftText() {
         const d = this.driftChapter;
@@ -733,13 +785,37 @@
         if (d) this.dismissedDrift = [...this.dismissedDrift, d.id];
         this.renderChapters();
       },
-      async reassembleChapter() {
+      // «إعادة بناء الفصل من المراجعة…» (D70): over a text edited here the rebuild replaces the whole chapter, so
+      // the dialog names what is lost first; an unedited text loses nothing and is rebuilt at once (a 409 from
+      // a text edited meanwhile opens the dialog then).
+      get textEdited() { return Boolean(this.drift.edited) || cfg.origin === 'editor'; },
+      askReassemble() {
         const cid = this.focusChapter;
+        if (!this.canEdit || !cid || this.reassembly.running) return false;
+        if (!this.textEdited) { this.reassembleChapter(false); return true; }
+        this.openRebuild(cid);
+        return true;
+      },
+      openRebuild(cid) {
+        this.closePop();
+        this.rememberTrigger();
+        this.rebuild = { open: true, chapter: cid, title: this.chapterTitle(cid) };
+        if (this.$nextTick) this.$nextTick(() => U.focus(this.$refs && this.$refs.rebuildCancel));
+      },
+      closeRebuild() { if (!this.rebuild.open) return; this.rebuild = { open: false, chapter: null, title: '' }; this.restoreTrigger(); },
+      confirmRebuild() {
+        const cid = this.rebuild.chapter;
+        this.closeRebuild();
+        return this.reassembleChapter(true, cid);
+      },
+      async reassembleChapter(replace, chapterId) {
+        const cid = chapterId || this.focusChapter;
         if (!this.canEdit || !cid || this.reassembly.running) return false;
         await this.closeBlock({ commit: true });
         await this.saveNow();
         if (this.editDirty) { U.toast('تعذّر الحفظ قبل إعادة التجميع'); return false; }
-        const r = await U.api(U.fill(urls.reassemble, cid), { method: 'POST', body: {} });
+        const r = await U.api(U.fill(urls.reassemble, cid), { method: 'POST', body: replace ? { replace_edited: true } : {} });
+        if (r.status === 409 && r.data && r.data.edited) { this.drift = Object.assign({}, this.drift, { edited: true }); this.openRebuild(cid); return false; }
         if (!r.ok || !r.data) { U.toast(r.message); return false; }
         this.reassembly = { running: true, runId: r.data.run_id, error: '', chapter: cid };
         this.liveMessage = 'تُعاد قراءة الفصل من صفحات المراجعة';
@@ -769,7 +845,7 @@
         if (this.reassembly.error) { U.toast(this.reassembly.error); return; }
         const s = this.summaryOf(cid);
         if (s) s.drift = false;
-        if (cfg.drift && Array.isArray(cfg.drift.chapters)) cfg.drift.chapters = cfg.drift.chapters.filter((c) => c !== cid);
+        this.drift = Object.assign({}, this.drift, { chapters: (this.drift.chapters || []).filter((c) => c !== cid) });
         chapterCache.delete(cid);
         await this.afterServerEdit();
         U.toast('أُعيد تجميع الفصل من المراجعة؛ النص السابق محفوظ نسخةً');
@@ -786,6 +862,7 @@
         return shell ? 'rail' : null;
       },
       topLayer() {
+        if (this.rebuild.open) return 'rebuild';
         if (this.sheetOpen) return 'sheet';
         if (this.snapshots.open) return 'snapshots';
         if (this.digits.open) return 'digits';
@@ -799,7 +876,8 @@
         const outside = this.outsideLayer();
         if (outside) return outside;
         const layer = this.topLayer();
-        if (layer === 'sheet') this.closeSheet();
+        if (layer === 'rebuild') this.closeRebuild();
+        else if (layer === 'sheet') this.closeSheet();
         else if (layer === 'snapshots') this.closeSnapshots();
         else if (layer === 'digits') this.closeDigits();
         else if (layer === 'styleMenu') this.styleMenu = false;
@@ -820,7 +898,7 @@
         if (action === 'escape') { if (e.defaultPrevented) return; const done = this.escape(); if (done && done !== 'menu' && done !== 'rail') e.preventDefault(); return; }
         if (e.defaultPrevented) return; // the open paragraph's editor took it
         // a dialog is open (the snapshots, the digits, the shortcut sheet): the page's keys wait behind it
-        if (['sheet', 'snapshots', 'digits'].includes(this.topLayer())) return;
+        if (['rebuild', 'sheet', 'snapshots', 'digits'].includes(this.topLayer())) return;
         switch (action) {
           case 'save': e.preventDefault(); if (this.canEdit) { this.saveNow(); this.flushSheet(); } return;
           case 'find': e.preventDefault(); this.setTab('find', { quiet: true }); return;
@@ -829,9 +907,10 @@
           case 'source': e.preventDefault(); this.toggleDrawer(); return;
           case 'jump': e.preventDefault(); this.focusJump(); return;
           case 'spread': this.toggleSpread(); return;
+          case 'marks': if (this.canEdit) { e.preventDefault(); this.toggleMarksKey(); } return;
           case 'fitHeight': this.setFit('height'); return;
-          case 'fitWidth': this.setFit('width'); return;
-          case 'fitActual': this.setFit('actual'); return;
+          case 'fitIn': this.setFit(G.stepFit(this.fit, 1)); return;
+          case 'fitOut': this.setFit(G.stepFit(this.fit, -1)); return;
           case 'next': case 'prev': e.preventDefault(); this.turn(action === 'next' ? 1 : -1); return;
           case 'first': case 'last': if (this.pages.length) { e.preventDefault(); this.showIndex(action === 'first' ? 0 : this.pages.length - 1, { manual: true }); } return;
           case 'undo': e.preventDefault(); this.undo(); return;
@@ -844,6 +923,12 @@
           default:
             if (Object.values(G.STYLE_KEYS).includes(action)) { e.preventDefault(); this.setStyle(action); }
         }
+      },
+      // S (D69): the scan page marks «فواصل الصفحات الأصلية». They are drawn in edit mode; in preview the key
+      // still sets them, and a toast says so (nothing on the page would show it).
+      toggleMarksKey() {
+        this.togglePageMarks();
+        if (this.mode !== 'edit') U.toast(this.pageMarks ? 'تظهر فواصل الصفحات الأصلية في وضع التحرير' : 'أُخفيت فواصل الصفحات الأصلية');
       },
       // ⌘[ / ⌘]: the chapter before or after the one under the eyes, from its first page
       stepChapter(dir) {

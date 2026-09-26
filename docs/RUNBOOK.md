@@ -44,7 +44,8 @@ make superuser                               # first user; superusers pass every
 `make db` needs nothing else. From a shell: `PGPORT=5433 psql -d nassakh`.
 
 Give a non-superuser a role in `/admin/` (groups `admin`, `editor`, `proofreader`). `editor` is needed to
-create books, start processing, re-run stages, apply guides and change preprocessing parameters;
+create books («استخراج الصفحات»), set the layout in «التخطيط», press «بدء المعالجة», re-run stages, delete books and
+change preprocessing parameters;
 `proofreader` only reads (review screens come in Phase 3).
 
 `.env` keys (all optional, defaults in `nassakh/settings.py`; comments must be on their own lines):
@@ -89,31 +90,43 @@ inside the web request (the OCR models too, so «بدء المعالجة» block
 Frontend while editing templates or `static/src/**`: `make css-watch` (rebuilds `static/dist/app.css`,
 which is committed; `npm run build` also re-vendors Alpine and the fonts).
 
-## 4. What happens after «بدء المعالجة»
+## 4. From «استخراج الصفحات» to the text: «التخطيط», then «المعالجة»
 
 ```
-ingest_book_task  →  group(preprocess_page × N)  →  after_preprocess  →  per page: layout_page → ocr_page_fast → ocr_page_full
-Book:  uploaded → processing → ocr → ready_for_review                         (error when the PDF cannot be read)
-Page:  uploaded → preprocessed → layout_done → ocr_done                       (error keeps error_from; excluded pages are skipped)
+«استخراج الصفحات» (upload)  ingest_book_task → chord(preprocess_page × N) → after_preprocess(continue_ocr=False) → pause
+«بدء المعالجة» (start_ocr)   start_ocr_task → per page: layout_page → ocr_page_fast → ocr_page_full
+Book:  uploaded → processing «قيد التخطيط» → needs_guides «تم التخطيط» ─«بدء المعالجة»→ ocr «قيد المعالجة» → ready_for_review
+Page:  uploaded → preprocessed «مُجهَّزة» ─«بدء المعالجة»→ layout_done «بانتظار التعرّف» → ocr_done  (error keeps error_from; excluded pages are skipped)
 Text:  none → provisional (Tesseract, after ocr_page_fast) → final (after ocr_page_full)
 ```
 
+- **Two stages (D64, Phase 7a).** A book made by the upload form or by `smoke_pipeline` (both through
+  `books.services.create_book`) has `Book.awaits_ocr_start = True`. «استخراج الصفحات» extracts and prepares its pages,
+  shows their regions (computed, not stored) and stops at «تم التخطيط». No model reads anything before
+  «بدء المعالجة»: `books.services.start_ocr` claims the start once (flag → False, status `ocr`) and queues
+  `start_ocr_task`, which enqueues the per-page chains. While the flag is True, `layout_page` and the OCR tasks return
+  at once, and only «تجهيز الصفحات» can be re-run. Books with the flag False (every book made before 7a, fixtures and
+  scripts that call `Book.objects.create`) go straight from preprocess to layout and OCR, as before.
 - **Ingest** renders the selected PDF pages `[skip_first, N − skip_last)` at the scan's native DPI (D2), splits
   two-page sheets at the detected gutter, right page first (D3), and stores `original.png` per page.
 - **Preprocess** deskews, flattens, removes dark borders and facing-page strips (D18), crops, binarises, detects lines
   and, **on each page separately**: the footnote separator (solid, dotted, dashed or short rule;
   `Preprocess.footnote_rule_y`), else a block of smaller type at the bottom (`footnote_block_y`), and the printed
-  page number (a short isolated first/last line in the top 12 % / bottom 15 %; `page_number_box`). Flags
+  page number (a short isolated first/last line in the top 12 % / bottom 15 %; `page_number_box`). Since D68 a
+  thicker solid bar (up to half a line high, filled ≥ 60 %) also counts as a rule when no thin rule is found; existing
+  books change only when a page is prepared again. Flags
   `large_skew`, `deskew_low_confidence`, `no_lines_detected`, `edge_strip_removed`.
-- **Guides**: the book-level proposal (median rule position and its confidence) is computed for the guides screen
-  only. Processing never stops for guides: every book goes straight on to layout + OCR (`needs_guides` is kept as a
-  status value but is no longer set). The lines on «ضبط الأدلة» are a manual fallback: the header cut applies to
-  every page; the footnote line and page-number zone apply only after «تطبيق على كل الصفحات» (guides become
-  `manual`) and only on pages where nothing was detected.
-- **Layout** derives the regions per page (`processing.services.page_layout`). Footnote top: page override →
+- **The layout («التخطيط»)**: the book-level proposal (median rule position and its confidence) is computed after
+  preprocessing for display only; it stays inert until the owner changes something. The dashboard's «التخطيط» mode
+  (§14) moves a page's running-head cut or footnote line, adds or removes a band, or sets a rule for all pages. While
+  the book awaits the start a change is only saved (pages stay «مُجهَّزة»); on a started book (`?view=guides`) it
+  re-derives the page's regions and re-reads its text, except on approved pages and pages with review corrections,
+  which are locked.
+- **Layout** derives the regions per page (`processing.services.resolve_layout`, through `page_layout` and
+  `page_region_specs`; «التخطيط» draws the same bands before they are stored). Footnote top: page override →
   detected rule → detected smaller-type block → manual book footnote line → none (the body runs to the bottom; an
   automatically proposed book line is never applied). Page number: page override → detected box (+6 px) → manual
-  book zone → none (no automatic bottom zone). A page can override from its detail screen
+  book zone → none (no automatic bottom zone). A page can override from the «التخطيط» viewer or its detail screen
   (`POST /api/pages/<id>/guides/`).
 - **Fast OCR** (Tesseract `ara+eng` on the B&W crops) gives the provisional text and the word boxes. Page numbers
   never reach the text: the page-number region is not transcribed, and as a safety net a first or last line that is
@@ -139,13 +152,13 @@ from its last completed stage.
 
 | Where | What it does |
 |---|---|
-| Dashboard `/books/<id>/` → «إعادة التشغيل» | all non-excluded pages from the chosen stage (`books.tasks.rerun_book_from`). Runs the per-page chain directly (the guides proposal of §4 is not repeated; nothing waits for it). Also resumes a book an earlier version parked in `needs_guides` |
+| Dashboard `/books/<id>/` → «⋯» → a stage «…» | a dialog first names the pages that run, the approved pages kept and the model time (`books.services.rerun_estimate`); then all non-excluded, unapproved pages from that stage (`books.tasks.rerun_book_from`). In «التخطيط» only «إعادة تجهيز الصفحات…» is offered, and it stops again at «تم التخطيط» |
 | Page detail `/books/<id>/pages/<n>/` → «إعادة التشغيل» | this page from the chosen stage (`books.services.run_stage(page, stage)`) |
 | Page detail error banner → «إعادة المحاولة من هذه المرحلة» | the failed stage again |
 | Dashboard → «تحتاج انتباهًا» → «إعادة <stage>» on a failed page | the failed stage again, then back to the dashboard (same `books:rerun` with `next`) |
-| Page detail → panel «المعالجة الأولية» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
-| Guides `/books/<id>/guides/` → «تطبيق على كل الصفحات» | regions re-derived for every preprocessed page; OCR re-queued only for pages whose regions changed |
-| Dashboard / page detail → «استثناء الصفحة» | excludes a page from every stage and from the book's progress; toggle again to bring it back |
+| Page detail → panel «تجهيز الصفحة» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
+| Dashboard → «⋯» → «التخطيط» (`?view=guides`) → «تطبيق على كل الصفحات» | a preview first (pages that change, lines cut, pages with their own override, pages re-read); on a started book only the changed pages that are unapproved and have no review work are re-derived and re-read. The old address `/books/<id>/guides/` redirects there |
+| Dashboard / page detail → «استثناء الصفحة» | excludes a page from every stage and from the book's progress; the toast's «تراجع» brings it back (so does toggling again) |
 
 **After upgrading to per-page footnote / page-number detection** (migrations `processing/0003`, `books/0003`):
 existing books still carry regions from the old book-level guides and no detection results. Re-run each book from
@@ -197,12 +210,18 @@ On 2026-09-24 `playground/poc/input/sample 2.pdf` (19 landscape sheets with two 
 layer, footnotes under a rule) went through the whole pipeline with the **real engines** (PyTorch on MPS) in
 eager mode, through `books.services.create_book(...)` with `pages_per_sheet=2, skip_first=2, skip_last=15`
 (so 2 sheets = 4 pages) and then `books.services.start_processing(book)`. The management command
-`smoke_pipeline` does exactly that and prints one row per page:
+`smoke_pipeline` does exactly that and prints one row per page. Since Phase 7a it stops at «تم التخطيط», calls
+`books.services.start_ocr(book)` and then prints the rows; `--layout-only` stops at the pause and prints each page's
+bands and doubts instead (run it on a copy of the database: it creates a book):
 
 ```sh
 CELERY_TASK_ALWAYS_EAGER=true LOG_LEVEL=INFO .venv/bin/python manage.py smoke_pipeline \
-    "playground/poc/input/sample 2.pdf" --pages-per-sheet 2 --skip-first 2 --skip-last 15
+    "playground/poc/input/sample 2.pdf" --pages-per-sheet 2 --skip-first 2 --skip-last 15 [--layout-only]
 ```
+
+Phase 7a integration (2026-09-26, `OCR_BACKEND=mlx`, on the copy `nassakh_p7check`): `--layout-only` stopped at
+`needs_guides` after 1 s with a rule on 4 of 4 pages and a page number on 3, no doubts; the full run reached
+`ready_for_review` in 105 s, 4 pages `ocr_done` / `final`, 18–19 lines and 919–971 characters per page.
 
 Result on the M5 Pro after the review fixes (2026-09-24, commit 35c18e8), 134 s wall clock for the 4 pages:
 
@@ -248,7 +267,7 @@ best-effort metadata. A template-matching digit reader is the planned improvemen
 - No review screen yet (Phase 3); pages stop at `ocr_done` and books at `ready_for_review`.
 - Users and roles are managed in Django admin (`/admin/`), linked from the sidebar for admins.
 - Tables in born-digital books are not extracted (deferred).
-- Running-header detection is manual: set the header cut on the guides screen. Headings and poetry inside the
+- Running-header detection is manual: set the header cut in the dashboard's «التخطيط» mode (§14). Headings and poetry inside the
   body are not detected yet (regions are geometric: per-page footnote top and page-number box, manual header cut).
 - Footnote detection needs a separator rule at least 12 % of the text width, or at least two lines of clearly
   smaller type (≤ 0.8 × the body size) after a visible gap; a single small-type footnote without a rule, or a
@@ -494,7 +513,79 @@ The calibration pass (PHASE6_SPEC §11.6: margins, footnote numbers, kashida in 
 with Amiri disabled in Font Book, the contents field…) and a 5-minute reference file made in Word
 (`playground/word/reference/r1.docx`) settle the Word conventions (D62) in `publishing/word/options.py`.
 
-## 14. Troubleshooting
+## 14. Phase 7a — «التخطيط» first, then «المعالجة»
+
+Spec `docs/PHASE7_SPEC.md` §3, decisions D64–D70.
+
+**Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`books.0007_book_awaits_ocr_start`:
+the pause flag and the new labels; `processing.0004_labels`: labels only; no data change) and `npm run build`, then start
+both workers and the web server again. Until the migration runs, every screen that loads a book fails with
+`column books_book.awaits_ocr_start does not exist`. Messages already queued in Redis are safe: every existing book has
+the flag False and keeps the old path. Rolling the code back leaves an unused column.
+
+**A new book.**
+1. «كتاب جديد» → choose the PDF («اختيار ملف PDF»), the pages to skip and the pages per sheet. The line under the fields
+   says which pages will be extracted (read from the PDF in the browser), e.g. «الملف 555 صفحة · تُستخرج الصفحات
+   187–193 (7 صفحات).». «استخراج الصفحات» creates the book and starts extraction at once; the message repeats the range.
+2. The dashboard opens in «التخطيط» on the grid: pages appear one by one («قيد التخطيط · 3 من 7 صفحة»), each thumbnail
+   with its bands (متن · حاشية · ترويسة · رقم الصفحة). When the last page is prepared: «اكتمل التخطيط · 7 صفحات».
+3. One glance. «تستحق نظرة» (amber) lists the pages worth a look: «حاشية من حجم الخط», «خط يقطع سطرًا», «سطر من المتن خارج
+   المتن», «لا أسطر في الصفحة». Most books need nothing.
+4. Only when needed: click a page to open it in the viewer (V switches grid and viewer). Drag the running-head cut or the
+   footnote line (it snaps to the gap between lines; ⌥ drags freely; ↑/↓ nudge a focused line), add one with
+   «+ ترويسة» / «+ حاشية», or open a band's menu («إزالة من هذه الصفحة», «تطبيق على كل الصفحات…», «ليس رقم صفحة»). Each
+   change is saved at once: «حُفظ لهذه الصفحة · تراجع». «التلقائي» puts the page back to what was detected. For every page
+   at once use the side panel's «لكل الصفحات» (e.g. «ترويسة أعلى كل الصفحات» and its percentage): a dashed draft, then
+   «معاينة» (pages that change, lines it would cut, pages with their own override), then «تطبيق على كل الصفحات» or
+   «إلغاء»; «إزالة الضبط العام» returns to the automatic guides.
+5. «بدء المعالجة» (disabled until every page is prepared) sends the pages into «المعالجة», and the dashboard is today's.
+   A book nobody touched in «التخطيط» is read exactly as before, with one extra click.
+
+**A started book.** «⋯» → «التخطيط» opens `?view=guides`: the same grid with bands. A change turns the line dashed and asks
+«حفظ وإعادة التعرّف على الصفحة» · «إلغاء»; approved pages («معتمدة: لا تتغيّر») and pages with review corrections are
+locked. «العودة إلى الصفحات» leaves the mode.
+
+**Re-runs and exclusions.** Every book-wide re-run in «⋯» asks first (pages, approved pages kept, model time). In
+«التخطيط» only «إعادة تجهيز الصفحات…» is offered; layout and OCR are refused with «لم تبدأ المعالجة بعد؛ اضغط «بدء
+المعالجة» أولًا.». Excluding a page shows a toast with «تراجع» (it never runs by itself).
+
+**Deleting a book.** «⋯» → «حذف الكتاب…» (also in the «التخطيط» side panel) asks once, naming what is lost (reviewed
+pages, an edited manuscript), then removes the book and every row that hangs on it in one transaction, and its folder
+`media/books/<id>/` after the commit (`books.services.delete_book`, `POST /books/<id>/delete/`, editor role). It cannot
+be undone. Tasks still running for the book end quietly.
+
+**Labels.**
+
+| Where | Before | Now |
+|---|---|---|
+| Book `processing` / `needs_guides` / `ocr` | «قيد المعالجة» / «بانتظار ضبط الأدلة» / «قيد التعرّف على النص» | «قيد التخطيط» / «تم التخطيط» / «قيد المعالجة» |
+| Page `preprocessed` / `layout_done` | «مُعالَجة» / «تم التخطيط» | «مُجهَّزة» / «بانتظار التعرّف» |
+| Stage `preprocess` / `layout` | «المعالجة الأولية» / «التخطيط» | «تجهيز الصفحات» / «تحديد المناطق» |
+| Guides, page override, region source | «أدلة التخطيط», «أدلة خاصة بالصفحة», «من الأدلة» | «التخطيط العام», «تخطيط خاص بالصفحة», «من التخطيط» |
+| «ضبط الأدلة» (screen and button) | – | gone; the dashboard's «التخطيط» mode |
+
+**Keys (D69).** Every screen matches letters by physical key (`static/src/js/keys.js`), so the shortcuts work with the
+Arabic keyboard layout too. Review: with the word menu open, 1–9 in any script choose a reading and any other
+character starts the correction (ش included); with it closed, A E N ? + − 0, ← →, Home / End drive the page and Space
+opens the focused word's menu; ⌘↵ approves from anywhere. Dashboard: V switches the view (was 1 / 2). Book page: V one
+page / spread, S «فواصل الصفحات الأصلية», + − 0 the fit (were 1 / 2 / 3).
+
+**A safe round trip (D70).**
+- «إعادة بناء الفصل من المراجعة…» asks before it replaces an edited chapter («استبدال الفصل»); the API answers 409
+  `{edited: true}` without `replace_edited`.
+- Approving a page is no longer drift: `assembly.services.drift_pages`.
+- The book page refreshes the drift banner live (`GET /api/books/<id>/drift/`) when the tab comes back, on focus, and
+  when review saves a change in another tab.
+- The manuscript's amber mark follows each page's current review state.
+- A merge keeps both paragraphs' source pages.
+- A page with no uncertain words reads «لا علامات».
+
+**Endpoints** (under `/api/`, names in the `api` namespace): `book_guides` (GET the mode's compact state; POST a change
+for all pages, a reset or an undo), `book_guides_preview` (POST), `page_guides_override` (POST merge / replace / undo),
+`book_sheets?guides=1` (each sheet's bands and doubts), `review_drift` (GET). HTML: `books:start` («استخراج الصفحات»),
+`books:start_ocr`, `books:delete`. The request and answer bodies are fixed in `books/fixtures/guides/` (`index.json`).
+
+## 15. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -506,6 +597,9 @@ with Amiri disabled in Font Book, the contents field…) and a 5-minute referenc
 | gpu worker very slow or swapping | both models need about 9 GB; close other GPU-heavy apps, or set `OCR_BACKEND=mlx` (about 1.8× faster in the PoC) |
 | an export stays «في الانتظار» | the worker was started before Phase 6 and does not consume the `export` queue: stop it and `make worker` again (`-Q default,layout,export`) |
 | the export page fails with `relation "publishing_export" does not exist` | `make migrate` (`publishing.0003_export`) |
-| dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
+| `column books_book.awaits_ocr_start does not exist` | the database is older than Phase 7a: stop the workers, `make migrate`, start them again (§14) |
+| a new book stays «تم التخطيط» | by design: look at the pages, then press «بدء المعالجة» (§14) |
+| «لم تبدأ المعالجة بعد؛ اضغط «بدء المعالجة» أولًا.» on a re-run | the book is still in «التخطيط»: only «تجهيز الصفحات» runs before «بدء المعالجة» |
+| dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` («قيد التخطيط») or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
 | `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `book_text`, `book_sheets`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`, and the review names in §10) |
 | review screen read-only | the user has no `proofreader` / `editor` / `admin` group (Django admin → Users), or the page has no final text yet |

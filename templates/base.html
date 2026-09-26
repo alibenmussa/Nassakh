@@ -120,12 +120,22 @@
             </button>
           </div>
           {% else %}
-          <div class="toast" x-data="{ open: true }" x-show="open" x-init="setTimeout(() => open = false, 6000)" x-transition.opacity>
+          {% with undo=message|undo_action %}
+          {# a message with `undo:<url>` (PHASE7_SPEC §3.6) offers «تراجع»: a small POST form, back to this page; it never submits by itself. The server never sees the address's #sheet-N, so the click adds it to `next`: the viewer reopens on the same page #}
+          <div class="toast" x-data="{ open: true }" x-show="open" x-init="setTimeout(() => open = false, {% if undo %}8000{% else %}6000{% endif %})"{% if undo %} @submit="$event.target.querySelector('input[name=next]').value += location.hash"{% endif %} x-transition.opacity>
             <span class="grow">{{ message }}</span>
+            {% if undo %}
+            <form method="post" action="{{ undo }}" class="contents" data-toast-undo>
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button type="submit" class="btn">تراجع</button>
+            </form>
+            {% endif %}
             <button type="button" class="toast-close" aria-label="إغلاق" @click="open = false">
               <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
             </button>
           </div>
+          {% endwith %}
           {% endif %}
         {% endfor %}
       </div>
@@ -145,6 +155,7 @@
 </div>
 
 <script src="{% static 'src/js/ui.js' %}"></script>
+<script src="{% static 'src/js/keys.js' %}"></script>
 <script src="{% static 'src/js/decode.js' %}"></script>
 <script src="{% static 'src/js/books.js' %}"></script>
 <script src="{% static 'src/js/processing.js' %}"></script>

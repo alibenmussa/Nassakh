@@ -4,7 +4,8 @@
   polling; `compact` gives the small tiles of `services.page_tile(compact=True)`)
 - GET /api/pages/<id>/status/    → `services.page_status` (page detail / text panel polling)
 - GET /api/books/<id>/text/      → `services.book_text` (copy the clean text of the whole book)
-- GET /api/books/<id>/sheets/?from=<n>&to=<n> → `services.book_sheets` (stacked view, ≤ 40 pages)
+- GET /api/books/<id>/sheets/?from=<n>&to=<n>[&guides=1] → `services.book_sheets` (stacked view, ≤ 40
+  pages; `guides=1` adds each page's «التخطيط» block and skips the lines)
 """
 
 from django.shortcuts import get_object_or_404
@@ -47,4 +48,5 @@ def book_sheets(request: Request, book_id: int) -> Response:
         first, last = services.sheets_range(request.query_params.get("from"), request.query_params.get("to"))
     except services.SheetsRangeError as exc:
         return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-    return Response(services.book_sheets(book, first, last))
+    guides = request.query_params.get("guides") in ("1", "true")
+    return Response(services.book_sheets(book, first, last, guides=guides))

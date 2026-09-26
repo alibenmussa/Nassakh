@@ -911,7 +911,7 @@ def test_preprocess_task_unexpected_failure_sets_an_arabic_error(page_with_origi
         assert tasks.preprocess_page.delay(page.pk).get() == page.pk
     page.refresh_from_db()
     assert page.status == Page.Status.ERROR and page.error_from == "preprocess"
-    assert "boom" not in page.error_message and "المعالجة الأولية" in page.error_message
+    assert "boom" not in page.error_message and "فشل تجهيز الصفحة" in page.error_message
 
 
 # ---------------------------------------------------------------- views
@@ -927,56 +927,19 @@ def test_guides_screen_requires_an_editor(client, book, users, urls):
 
 
 @pytest.mark.django_db
-def test_guides_screen_empty_state_and_editor(client, book, users, urls):
+def test_guides_url_redirects_to_the_dashboard(client, book, users, urls):
+    # D67: the guides screen is gone; its address lands on the dashboard («التخطيط» mode)
     client.force_login(users.editor)
     url = reverse("processing:guides", kwargs={"book_id": book.pk})
-    body = client.get(url).content.decode()
-    assert "لا توجد صفحات معالَجة بعد" in body
-    assert f'href="/books/{book.pk}/"' in body
-
-    for n, rule in enumerate([1200, 1230, 1170, None], start=1):
-        make_page(book, n, rule_y=rule)
-    services.propose_guides(book)
     response = client.get(url)
-    body = response.content.decode()
-    assert response.status_code == 200
-    assert "تطبيق على كل الصفحات" in body
-    assert 'من <b class="tabular-nums">4</b> صفحة معالَجة' in body
-    assert '<b class="tabular-nums">3</b>' in body and ">75</span>%" in body
-    assert ">80.0</span>%" in body  # proposed ratio, Western digits
-    assert f"/media/books/{book.pk}/pages/0001/display.webp" in body  # page 1 sits on the median
-    config = json_block(body, "guides-config")
-    assert config["footnote_line"] == 0.8 and config["proposal"] == 0.8
-    assert config["detected_rule"] == 0.8 and config["output"] == {"width": 1000, "height": 1500}
-    # another reference page via ?page=
-    body2 = client.get(url + "?page=4").content.decode()
-    assert f"/media/books/{book.pk}/pages/0004/display.webp" in body2
-    assert json_block(body2, "guides-config")["detected_rule"] is None
-
-
-@pytest.mark.django_db
-def test_guides_screen_post_applies_and_redirects(client, book, users, urls):
-    client.force_login(users.editor)
-    page = make_page(book, 1, rule_y=1200)
-    url = reverse("processing:guides", kwargs={"book_id": book.pk})
-    data = {
-        "header_cut": "0.0800",
-        "footnote_line": "0.8000",
-        "page_number_zone": "bottom",
-        "page_number_height": "0.0600",
-        "reference_page": str(page.pk),
-    }
-    with patch("books.services.run_stage") as run_stage:
-        response = client.post(url, data)
-    assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/"
-    guides = LayoutGuides.objects.get(book=book)
-    assert (guides.header_cut, guides.footnote_line, guides.source) == (0.08, 0.8, "manual")
-    assert guides.reference_page_id == page.pk
-    assert run_stage.call_count == 1
-    assert [r.kind for r in page.regions.all()] == ["running_header", "body", "footnote", "page_number"]
-
-    bad = client.post(url, {**data, "header_cut": "0.45", "footnote_line": "0.4"}, follow=True)
-    assert "أعلى من خط الحاشية" in bad.content.decode()
+    assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/?view=guides"
+    response = client.get(url + "?page=4")
+    assert response["Location"] == f"/books/{book.pk}/?view=guides#sheet-4"
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True)
+    response = client.get(url + "?page=²")
+    assert response["Location"] == f"/books/{book.pk}/"
+    assert client.post(url, {"footnote_line": "0.8"}).status_code == 405  # the form's POST branch is gone
+    assert not LayoutGuides.objects.filter(book=book).exists()
 
 
 # ---------------------------------------------------------------- API
@@ -1071,7 +1034,8 @@ def test_api_page_guides_override(client, book, users):
     data = response.json()
     assert [r["kind"] for r in data["regions"]] == ["body", "page_number"]
     assert data["regions"][0]["label"] == "متن" and data["regions"][0]["bbox"] == [0, 0, 1000, 1410]
-    assert data["guides"]["footnote_line"] is None and data["override"] == {"footnote_line": None}
+    assert data["effective"]["footnote_line"] is None and data["override"] == {"footnote_line": None}
+    assert data["guides"]["derived"] is True and data["undo"] is None  # «المعالجة»: re-read, no undo
     assert data["ocr_enqueued"] is True and data["status"] == "layout_done"
     assert run_stage.call_count == 1
 
@@ -1097,7 +1061,7 @@ def test_preprocess_panel_partial_renders_config_for_a_page(book, urls):
     page = make_page(book, 1, rule_y=1200)
     html = render_to_string("processing/_preprocess_panel.html", {"page": page, "book": book})
     assert 'id="preprocess-config"' in html and "preprocessPanel(" in html
-    assert "إعادة المعالجة" in html and "استعادة القيم التلقائية" in html
+    assert "إعادة التجهيز" in html and "استعادة القيم التلقائية" in html
     config = json_block(html, "preprocess-config")
     assert config["api_url"] == f"/api/pages/{page.pk}/preprocess/"
     assert config["has_preprocess"] is True and config["stats"]["footnote_rule_y"] == 1200
@@ -1109,7 +1073,7 @@ def test_preprocess_panel_partial_renders_config_for_a_page(book, urls):
     bare = Page.objects.create(book=book, number=5, source_index=4)
     html2 = render_to_string("processing/_preprocess_panel.html", {"page": bare, "book": book})
     config2 = json_block(html2, "preprocess-config")
-    assert config2["has_preprocess"] is False and "تشغيل المعالجة" in html2
+    assert config2["has_preprocess"] is False and "تشغيل التجهيز" in html2
 
 
 # ---------------------------------------------------------------- review regressions
@@ -1239,12 +1203,335 @@ def test_json_api_enforces_csrf_and_base_layout_exposes_the_token(book, users):
     assert ok.status_code == 200
 
 
-@pytest.mark.django_db
-@pytest.mark.parametrize("requested", ["²", "abc", "", None, "٢"])
-def test_guides_reference_page_ignores_non_decimal_page_numbers(book, requested):
+@pytest.mark.parametrize("requested", ["²", "abc", "", None, "٢", "4"])
+def test_parse_page_number_ignores_non_decimal_page_numbers(requested):
     # F23: "²" passes str.isdigit() but int() rejects it; Arabic-Indic digits are accepted
-    first, second = make_page(book, 1), make_page(book, 2)
-    page = services.guides_reference_page(book, None, requested)
-    assert page == (second if requested == "٢" else first)
-    context = services.guides_context(book, requested)
-    assert context["reference"] == page and len(context["pages"]) == 2
+    expected = {"٢": 2, "4": 4}.get(requested)
+    assert services.parse_page_number(requested) == expected
+
+
+# ---------------------------------------------------------------- Phase 7a: thick rules (D68)
+
+RULE_LINES = [
+    {"x0": 100, "y0": 400, "x1": 900, "y1": 420},
+    {"x0": 100, "y0": 950, "x1": 900, "y1": 970},
+    {"x0": 100, "y0": 1100, "x1": 900, "y1": 1120},
+]
+
+
+def _blank(width: int = 1000, height: int = 1500) -> np.ndarray:
+    page = np.full((height, width), 255, dtype=np.uint8)
+    for ln in RULE_LINES:  # specks where the lines are (too far apart to close into a bar), so Otsu sees ink
+        for x in range(ln["x0"], ln["x1"], 40):
+            page[ln["y0"] + 6 : ln["y1"] - 6, x : x + 3] = 0
+    return page
+
+
+def test_a_thick_rule_is_accepted_when_there_is_no_strict_one():
+    # book 25: 7 px bars at a line height of 20 (limit max(3, 0.3 × 20) = 6), fill ≥ 0.6
+    gray = _blank()
+    gray[900:907, 500:900] = 0
+    y = pipeline.detect_footnote_rule(gray, RULE_LINES, 20.0)
+    assert y is not None and abs(y - 903) <= 1
+    # before D68 the same bar was refused: thicker than the strict limit
+    assert pipeline.NEAR_RULE_THICKNESS == 0.5 and pipeline.RULE_MIN_FILL == 0.6
+
+
+def test_a_closed_text_row_with_a_low_fill_stays_refused():
+    # a 6 px band with 10 px "ascenders" every 50 px: mean thickness 8 (thick range), fill 0.5
+    gray = _blank()
+    gray[910:916, 300:900] = 0
+    for x in range(300, 900, 50):
+        gray[900:910, x : x + 10] = 0
+    assert pipeline.detect_footnote_rule(gray, RULE_LINES, 20.0) is None
+
+
+def test_a_strict_rule_wins_over_a_wider_thick_bar():
+    # book 16 page 2: a 3 px rule and a wider, thicker bar; a single "widest wins" would move the rule
+    gray = _blank()
+    gray[900:903, 600:900] = 0
+    gray[1000:1007, 200:900] = 0
+    y = pipeline.detect_footnote_rule(gray, RULE_LINES, 20.0)
+    assert y is not None and abs(y - 901) <= 1
+    too_thick = _blank()
+    too_thick[1000:1012, 200:900] = 0  # 12 px > 0.5 × 20: a text row, not a rule
+    assert pipeline.detect_footnote_rule(too_thick, RULE_LINES, 20.0) is None
+
+
+# ---------------------------------------------------------------- Phase 7a: bands before regions (§3.9)
+
+
+def _pre(page: Page, **kwargs) -> Preprocess:
+    defaults = {
+        "output_width": 1000,
+        "output_height": 1500,
+        "line_boxes": [
+            {"x0": 100, "y0": 100, "x1": 900, "y1": 130},
+            {"x0": 100, "y0": 1100, "x1": 900, "y1": 1130},
+        ],
+        "n_lines": 2,
+        "footnote_rule_y": None,
+        "footnote_block_y": None,
+        "page_number_box": None,
+    }
+    defaults.update(kwargs)
+    pre, _ = Preprocess.objects.update_or_create(page=page, defaults=defaults)
+    return pre
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("manual", [False, True])
+@pytest.mark.parametrize(
+    "override",
+    [
+        None,
+        {},
+        {"footnote_line": None},
+        {"footnote_line": 0.7},
+        {"page_number_zone": "none"},
+        {"header_cut": 0.05},
+    ],
+)
+@pytest.mark.parametrize("detected", ["rule", "block", "none"])
+def test_resolve_layout_and_page_bands_equal_page_layout_and_page_region_specs(
+    book, manual, override, detected
+):
+    LayoutGuides.objects.create(
+        book=book,
+        header_cut=0.04,
+        footnote_line=0.85,
+        page_number_zone="bottom",
+        source="manual" if manual else "auto",
+    )
+    page = make_page(book, 1)
+    Page.objects.filter(pk=page.pk).update(guides_override=override)
+    page.refresh_from_db()
+    pre = _pre(
+        page,
+        footnote_rule_y=1000 if detected == "rule" else None,
+        footnote_block_y=1050 if detected == "block" else None,
+        page_number_box={"bbox": [480, 1420, 520, 1450], "position": "bottom"}
+        if detected != "none"
+        else None,
+    )
+    guides = LayoutGuides.objects.get(book=book)
+    values = services.guides_values(guides)
+    assert services.resolve_layout(values, manual, override, pre) == services.page_layout(page, pre)
+    assert services.page_bands(pre, values, manual, override) == services.page_region_specs(page, pre)
+
+
+@pytest.mark.django_db
+def test_page_layout_costs_one_query(book, django_assert_num_queries):
+    page = make_page(book, 1, rule_y=1000)
+    pre = Preprocess.objects.get(page=page)
+    with django_assert_num_queries(1):
+        services.page_layout(page, pre)
+
+
+@pytest.mark.django_db
+def test_layout_doubts_one_per_code_and_their_suppression(book):
+    page = make_page(book, 1)
+    values, manual = services.guides_values(None), False
+
+    def doubts(pre, override=None):
+        layout = services.resolve_layout(values, manual, override, pre)
+        return services.layout_doubts(pre, layout, override, services.layout_specs(layout, pre))
+
+    assert doubts(_pre(page, footnote_rule_y=1000)) == []
+    assert doubts(_pre(page, footnote_block_y=1050)) == ["footnote_from_type"]
+    assert doubts(_pre(page, footnote_block_y=1050), {"footnote_line": 0.7}) == []  # an explicit choice
+    assert doubts(_pre(page, footnote_rule_y=1115)) == ["line_cut"]  # the rule runs through a line
+    assert doubts(_pre(page, footnote_rule_y=1102)) == []  # within 2 px of the edge: no cut
+    assert doubts(_pre(page), {"header_cut": 0.1}) == ["text_hidden"]  # a full line in the running head
+    narrow = [{"x0": 400, "y0": 100, "x1": 600, "y1": 130}, {"x0": 100, "y0": 1100, "x1": 900, "y1": 1130}]
+    assert doubts(_pre(page, line_boxes=narrow), {"header_cut": 0.1}) == []  # a running head is narrow
+    assert doubts(_pre(page, line_boxes=[], n_lines=0)) == ["no_lines"]
+    # a rule that `detect_lines` kept as a thin box lies inside it: not a cut (book 25 after D68)
+    rule_box = {"x0": 500, "y0": 996, "x1": 900, "y1": 1004}
+    lines = [*_pre(page).line_boxes, rule_box]
+    assert doubts(_pre(page, line_boxes=lines, median_line_height=30, footnote_rule_y=1000)) == []
+    assert doubts(_pre(page, line_boxes=lines, median_line_height=12, footnote_rule_y=1000)) == ["line_cut"]
+    assert services.doubt_items(["line_cut"]) == [{"code": "line_cut", "label": "خط يقطع سطرًا"}]
+
+
+# ---------------------------------------------------------------- Phase 7a: guide edits and the stage rule
+
+
+@pytest.fixture
+def waiting(book) -> Book:
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES)
+    book.refresh_from_db()
+    return book
+
+
+@pytest.mark.django_db
+def test_guide_edits_in_the_layout_stage_only_save(waiting):
+    pages = [make_page(waiting, n, rule_y=1000 if n == 1 else None) for n in (1, 2)]
+    services.propose_guides(waiting)
+    with patch("books.services.run_stage") as run_stage:
+        answer = services.apply_book_guides(waiting, {"header_cut": 0.05}, stage="layout")
+        services.set_page_guides(pages[1], {"footnote_line": 0.8}, stage="layout")
+        services.set_page_guides_override(pages[0], {"footnote_line": None}, stage="layout")
+    run_stage.assert_not_called()
+    assert not Region.objects.filter(page__book=waiting).exists()
+    assert set(waiting.pages.values_list("status", flat=True)) == {Page.Status.PREPROCESSED}
+    # the inert start: only the running head became live, no zone and no proposal line
+    guides = LayoutGuides.objects.get(book=waiting)
+    assert (guides.source, guides.header_cut, guides.footnote_line, guides.page_number_zone) == (
+        "manual",
+        0.05,
+        None,
+        "none",
+    )
+    assert answer["changed"] == [1, 2] and answer["reocr"] == 0 and answer["undo"]["book"]["source"] == "auto"
+
+
+@pytest.mark.django_db
+def test_set_page_guides_merges_unsets_and_resets(waiting):
+    page = make_page(waiting, 1)
+    Page.objects.filter(pk=page.pk).update(guides_override={"header_cut": 0.05})
+    page.refresh_from_db()
+    result = services.set_page_guides(page, {"footnote_line": 0.8}, stage="layout")
+    assert Page.objects.get(pk=page.pk).guides_override == {"header_cut": 0.05, "footnote_line": 0.8}
+    assert result["undo"] == {"replace": {"header_cut": 0.05}} and result["ocr_enqueued"] is False
+    services.set_page_guides(page, {}, unset=["header_cut"], stage="layout")
+    assert Page.objects.get(pk=page.pk).guides_override == {"footnote_line": 0.8}
+    services.set_page_guides(page, {}, reset=True, stage="layout")
+    assert Page.objects.get(pk=page.pk).guides_override is None
+    with pytest.raises(ValidationError):
+        services.set_page_guides(page, {"header_cut": 0.4, "footnote_line": 0.3}, stage="layout")
+    with pytest.raises(ValidationError):
+        services.set_page_guides(page, {}, unset=["colour"], stage="layout")
+    with pytest.raises(services.GuidesConflict):
+        services.set_page_guides(page, {"footnote_line": 0.8}, stage="ocr")
+
+
+@pytest.mark.django_db
+def test_preview_counts_changed_cut_kept_and_locked_in_few_queries(book, django_assert_max_num_queries):
+    from ocr.models import Line
+
+    LayoutGuides.objects.create(book=book, header_cut=None, source="manual", page_number_zone="none")
+    pages = []
+    for n in range(1, 9):
+        page = make_page(book, n)
+        _pre(page)
+        pages.append(page)
+    Page.objects.filter(pk=pages[2].pk).update(guides_override={"header_cut": 0.02})
+    for page in pages:
+        page.refresh_from_db()
+        services.derive_regions(page)
+    Page.objects.filter(pk=pages[0].pk).update(
+        status=Page.Status.REVIEWED, reviewed_at="2026-09-26T10:00:00Z"
+    )
+    Line.objects.create(page=pages[1], order=0, is_reviewed=True)
+    with django_assert_max_num_queries(6):
+        preview = services.preview_book_guides(book, {"header_cut": 0.08}, stage="ocr")
+    assert preview["locked"] == [1, 2] and preview["kept_overrides"] == [3]
+    assert preview["pages"] == [4, 5, 6, 7, 8] and preview["changed"] == 5 and preview["reocr"] == 5
+    assert preview["cut"] == [4, 5, 6, 7, 8]  # 0.08 × 1500 = 120 runs through the first line
+    assert preview["minutes"] == 2  # 5 pages × 20 s without Qari runs
+    # reset_overrides takes page 3 along
+    again = services.preview_book_guides(book, {"header_cut": 0.08}, ["header_cut"], stage="ocr")
+    assert again["kept_overrides"] == [] and 3 in again["pages"]
+
+
+@pytest.mark.django_db
+def test_in_ocr_only_unlocked_changed_pages_are_rederived_and_reread(book):
+    from ocr.models import Line
+
+    LayoutGuides.objects.create(book=book, source="manual", page_number_zone="none")
+    pages = [make_page(book, n) for n in (1, 2, 3)]
+    for page in pages:
+        _pre(page)
+        services.derive_regions(page)
+    Page.objects.filter(pk=pages[0].pk).update(
+        status=Page.Status.REVIEWED, reviewed_at="2026-09-26T10:00:00Z"
+    )
+    Line.objects.create(page=pages[1], order=0, is_reviewed=True)
+    with patch("processing.services._run_stage") as run_stage:
+        answer = services.apply_book_guides(book, {"header_cut": 0.03}, stage="ocr")
+    assert [call.args[0].number for call in run_stage.call_args_list] == [3]
+    assert answer["changed"] == [3] and answer["undo"] is None
+    for page in pages[:2]:
+        assert not page.regions.filter(kind="running_header").exists()
+    # the full legacy form follows the same rule
+    with patch("processing.services._run_stage") as run_stage:
+        services.apply_guides(book, {"header_cut": "0.04", "page_number_zone": "none"})
+    assert [call.args[0].number for call in run_stage.call_args_list] == [3]
+    # a page with review work is refused (422 in the API)
+    with pytest.raises(services.ProcessingError, match="تصحيحات مراجعة"):
+        services.set_page_guides(Page.objects.get(pk=pages[1].pk), {"footnote_line": 0.8}, stage="ocr")
+    with pytest.raises(services.ProcessingError, match="تصحيحات مراجعة"):
+        services.set_page_guides_override(Page.objects.get(pk=pages[1].pk), {"footnote_line": 0.8})
+
+
+@pytest.mark.django_db
+def test_rerun_preprocess_still_rederives_a_page_with_review_work(page_with_original):
+    # §2.6: freezing regions inside `_derive_regions` would leave them in the old image's pixels
+    from ocr.models import Line
+
+    page = page_with_original
+    services.preprocess_page(page)
+    services.derive_regions(page)
+    Line.objects.create(page=page, order=0, is_reviewed=True)
+    with patch("processing.services.derive_regions", wraps=services.derive_regions) as derive:
+        services.rerun_preprocess(page, {"angle": 0.5})
+    derive.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_preprocess_task_refreshes_a_waiting_book_and_layout_page_waits(book):
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True, status=Book.Status.PROCESSING)
+    first = Page.objects.create(book=book, number=1, source_index=0, width=900, height=1200)
+    second = Page.objects.create(book=book, number=2, source_index=1, width=900, height=1200)
+    for page in (first, second):
+        page.original_image.save("original.png", ContentFile(png_bytes(render_page(n_lines=8))), save=True)
+    with patch("processing.services.refresh_waiting_book", wraps=services.refresh_waiting_book) as refresh:
+        tasks.preprocess_page.delay(first.pk).get()
+        book.refresh_from_db()
+        assert book.status == Book.Status.PROCESSING  # page 2 is still being prepared
+        tasks.preprocess_page.delay(second.pk).get()
+    assert refresh.call_count == 2
+    book.refresh_from_db()
+    assert book.status == Book.Status.NEEDS_GUIDES
+    assert tasks.layout_page.delay(first.pk).get() == first.pk
+    first.refresh_from_db()
+    assert first.status == Page.Status.PREPROCESSED and not first.regions.exists()
+    # a book whose «المعالجة» started is not touched by the preprocess refresh
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=False, status=Book.Status.OCR)
+    services.refresh_waiting_book(book.pk)
+    book.refresh_from_db()
+    assert book.status == Book.Status.OCR
+
+
+@pytest.mark.django_db
+def test_preprocess_api_refreshes_a_waiting_book(client, page_with_original, users):
+    from books.models import ALL_PAGES_FAILED_LAYOUT
+
+    page = page_with_original
+    Book.objects.filter(pk=page.book_id).update(
+        awaits_ocr_start=True, status=Book.Status.ERROR, error_message=ALL_PAGES_FAILED_LAYOUT
+    )
+    page.set_error("preprocess", "فشل")
+    client.force_login(users.editor)
+    response = client.post(
+        reverse("api:page_preprocess", kwargs={"page_id": page.pk}), "{}", content_type="application/json"
+    )
+    assert response.status_code == 200, response.content
+    book = Book.objects.get(pk=page.book_id)
+    assert book.status == Book.Status.NEEDS_GUIDES and book.error_message == ""
+
+
+@pytest.mark.django_db
+def test_book_guides_api_enforces_csrf(book, users):
+    from django.test import Client
+
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES)
+    make_page(book, 1)
+    strict = Client(enforce_csrf_checks=True)
+    strict.force_login(users.editor)
+    url = reverse("api:book_guides", kwargs={"book_id": book.pk})
+    body = json.dumps({"set": {"header_cut": 0.05}, "stage": "layout"})
+    assert strict.post(url, body, content_type="application/json").status_code == 403
+    assert strict.get(url).status_code == 200
+    assert not LayoutGuides.objects.filter(book=book, source="manual").exists()

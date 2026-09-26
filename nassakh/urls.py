@@ -5,15 +5,17 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 - `/admin/`                 Django admin (users and groups are managed here for now)
 - `/accounts/`              login / logout                       namespace `accounts`
 - `/books/`                 books app HTML routes                namespace `books`
-- `/books/`                 processing HTML routes (guides)      namespace `processing`
+- `/books/`                 processing HTML routes (the retired guides address, which redirects to the
+                            dashboard's «التخطيط» mode)          namespace `processing`
 - `/books/`                 review screens (Phase 3)             namespace `review`
 - `/books/`                 manuscript view (Phase 4)            namespace `assembly`
 - `/books/`                 editor and layout pages (Phase 5)    namespace `editor`
 - `/books/`                 the export page and downloads (6)    namespace `publishing`
 - `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
 - `/api/`                   JSON routes from books/processing/ocr/review/assembly/editor/publishing
-                            `api_urlpatterns`, all in
-                            the single namespace `api` (reverse as `api:<name>`)
+                            `api_urlpatterns`, all in the single namespace `api` (reverse as
+                            `api:<name>`; the «التخطيط» mode's `api:book_guides` and
+                            `api:book_guides_preview` come from processing)
 - `/media/<path>`           uploaded and derived files through the login-protected view
 """
 

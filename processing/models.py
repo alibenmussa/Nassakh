@@ -93,8 +93,8 @@ class LayoutGuides(models.Model):
     updated_at = models.DateTimeField("عُدّلت في", auto_now=True)
 
     class Meta:
-        verbose_name = "أدلة التخطيط"
-        verbose_name_plural = "أدلة التخطيط"
+        verbose_name = "التخطيط العام"
+        verbose_name_plural = "التخطيط العام"
 
     def __str__(self) -> str:
         return f"guides for book {self.book_id}"
@@ -113,7 +113,7 @@ class Region(models.Model):
         OTHER = "other", "أخرى"
 
     class Source(models.TextChoices):
-        GUIDES = "guides", "من الأدلة"
+        GUIDES = "guides", "من التخطيط"
         AUTO = "auto", "تلقائي"
         MANUAL = "manual", "يدوي"
 

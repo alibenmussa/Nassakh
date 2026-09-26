@@ -5,8 +5,9 @@ Tasks call the services and return the `page_id` they received so they chain
 (`layout_page → ocr_page_fast → ocr_page_full`). `OSError` is retried twice (network/storage
 hiccups); every other failure marks the page `error` for its stage and does not re-raise, so a
 broken page never blocks the rest of the book. A page already in `error` (an earlier task of the
-chain failed) is skipped so the original error is kept. Engines stay loaded between tasks through the
-registry cache; the gpu worker runs with `--pool=solo`.
+chain failed) is skipped so the original error is kept, and so is every page of a book that awaits
+«بدء المعالجة» (D64: the gate; books with OCR history all have the flag False). Engines stay loaded
+between tasks through the registry cache; the gpu worker runs with `--pool=solo`.
 """
 
 from __future__ import annotations
@@ -37,6 +38,9 @@ def _run_stage(task, page_id: int, stage: str, action: Callable[[Page], None], h
         log.warning("%s: page %s does not exist", stage, page_id)
         return page_id
     if page.is_excluded:
+        return page_id
+    if page.book.awaits_ocr_start:  # «التخطيط» (D64): nothing is read before «بدء المعالجة»
+        log.info("%s: page %s skipped, book %s awaits «بدء المعالجة»", stage, page_id, page.book_id)
         return page_id
     if page.status == Page.Status.ERROR:
         # `run_stage` clears errors before enqueuing, so this is a failure earlier in the same

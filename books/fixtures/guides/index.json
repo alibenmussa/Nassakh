@@ -1,0 +1,84 @@
+{
+  "about": "The §3.11 contract of the «التخطيط» mode (docs/PHASE7_SPEC.md). Every file holds real payloads of the books built by `books/tests.py::guides_book` (book 25, pages 812–818 = numbers 1–7, prepared image 1000 × 3000 px); `books/tests.py` checks the live payloads against these files (the `?v=` stamp of image URLs and region ids are normalised). Ratios are of the prepared image, 4 decimals.",
+  "books": {
+    "layout": "awaits_ocr_start, needs_guides «تم التخطيط», auto guides (the stored proposal footnote_line 0.781 is inert), pages 1–7 preprocessed; rules on 1, 3–6, a smaller-type block on 7 (doubt footnote_from_type), page 2 without footnotes, a detected page number on every page",
+    "preparing": "awaits_ocr_start, processing «قيد التخطيط»: pages 1–3 preprocessed, 4 failed in preprocess, 5–6 uploaded, 7 excluded",
+    "started": "«المعالجة» started (flag False), reviewing, manual guides header_cut 0.062; page 1 approved (locked approved), 2 has a reviewed line (locked review), 3–5 ocr_done, 6 excluded, 7 ocr_done with override {header_cut 0.05, footnote_line 0.805} (doubt line_cut); regions derived"
+  },
+  "files": {
+    "dashboard_config.json": "the keys `book_dashboard(book, view)` adds to `config`, per state: uploaded, processing, needs_guides, error (all awaiting the start), started_view_guides (`?view=guides` on a started book) and started (outside the mode: only guidesMode / layoutStage false and the re-run estimates; everything else is today's config)",
+    "progress.json": "the `_progress_payload` part of `api:book_progress` (also each row of the books list): + `layout_stage` (the book awaits «بدء المعالجة») and `waiting` (awaits and needs_guides); in «التخطيط» `percent` is the prepared share of the non-excluded pages",
+    "sheet_guides_blocks.json": "the `guides` block of a sheet item, per state (computed before derivation, derived after, locked approved / review, uploaded page, page override)",
+    "sheets_guides.json": "GET api:book_sheets?from=1&to=2&guides=1 on the layout book: today's items with `lines` and `provisional_lines` empty (not loaded) and the `guides` block",
+    "book_guides_layout.json": "GET api:book_guides on the layout book",
+    "book_guides_preparing.json": "GET api:book_guides on the preparing book",
+    "book_guides_started.json": "GET api:book_guides on the started book",
+    "book_guides_apply.json": "POST api:book_guides: {request, status, response} per case; `book` names the starting state",
+    "book_guides_preview.json": "POST api:book_guides_preview",
+    "page_guides.json": "POST api:page_guides_override (merge, undo, «ليس رقم صفحة», an explicit save in «المعالجة»)",
+    "errors.json": "400 / 422 / 409 answers of the guides writes"
+  },
+  "names": {
+    "band kinds (full / compact)": {"running_header": "h", "body": "b", "footnote": "f", "page_number": "p"},
+    "band source": {
+      "body": ["auto"],
+      "running_header": ["book", "override"],
+      "footnote": ["rule", "block", "book", "override"],
+      "page_number": ["detected", "book", "override"]
+    },
+    "doubt codes": {
+      "footnote_from_type": "حاشية من حجم الخط",
+      "line_cut": "خط يقطع سطرًا",
+      "text_hidden": "سطر من المتن خارج المتن",
+      "no_lines": "لا أسطر في الصفحة"
+    },
+    "locked": ["", "approved", "review"],
+    "startAction": {
+      "extract": "uploaded: «استخراج الصفحات» posts guidesUrls.extract",
+      "reextract": "error: «إعادة استخراج الصفحات» posts guidesUrls.extract",
+      "startOcr": "needs_guides: «بدء المعالجة» posts guidesUrls.startOcr",
+      "startOcrDisabled": "processing: «بدء المعالجة» disabled, title «يُتاح بعد اكتمال تجهيز الصفحات»",
+      "back": "`?view=guides` on a started book: «العودة إلى الصفحات» links to guidesUrls.back"
+    },
+    "template filter": "undo_action: `{{ message|undo_action }}` gives the URL of a message whose extra_tags carry `undo:<url>` ('' otherwise); the toast posts it with `next`"
+  },
+  "rows": "the guides block's `rows`: [y0, y1] of the detected text-line boxes, for snapping and for drawing a cut; boxes thinner than half the median line height (a rule kept by line detection) are left out, so they never count for line_cut",
+  "compact page entry (api:book_guides)": {
+    "id": "page id",
+    "n": "page number",
+    "b": "bands [kind, y0, y1] top to bottom; the page number also carries [x0, x1]; [] before preparation",
+    "d": "number of doubts (0 for excluded pages)",
+    "o": "the page has an override",
+    "l": "locked: '' | 'approved' | 'review' (only once «المعالجة» started)",
+    "s": "page status",
+    "x": "excluded"
+  },
+  "counts": "all = non-excluded pages; doubt = non-excluded pages with d > 0 or in error; override = non-excluded pages with an override; error = non-excluded pages in error",
+  "writes": {
+    "POST api:book_guides": {
+      "body": "{set: {header_cut?, footnote_line?, page_number_zone?, page_number_height?}, reset_overrides: [keys], from_page?: page id, stage: 'layout' | 'ocr'} | {reset: true, stage} («إزالة الضبط العام»: back to the automatic guides) | {undo: <the undo of an earlier answer>, stage}",
+      "answer": "{changed: [page numbers whose bands changed], reocr: n, undo: {book: <stored guides before>, overrides: {page id: <override before> | null}} (only in «التخطيط», else null), book: {...}, pages: [compact entries of the pages whose bands or override changed]}",
+      "notes": "the first manual change of an auto book starts from the inert values (no footnote line, zone none); `from_page` drops the set keys from that page's override; `reset_overrides` removes those keys from every page's override (the undo restores them)"
+    },
+    "POST api:book_guides_preview": {
+      "body": "as api:book_guides without undo",
+      "answer": "{changed: n, pages: [numbers], cut: [numbers of changed pages that would show line_cut or text_hidden], kept_overrides: [numbers of pages whose own override keeps a set key], locked: [approved / review-work pages that would change but stay, only in «المعالجة»], reocr: n (0 in «التخطيط»), minutes: n | null (null in «التخطيط»)}"
+    },
+    "POST api:page_guides_override": {
+      "body": "today's replace body (keys, or {reset: true}); {merge: true, set: {...}, unset: [keys], reset: bool, stage}; or {replace: {...} | null, stage} (undo)",
+      "answer": "{page_id, status, status_label, effective (was `guides`: the book guides overlaid with the override), override (null when none), regions (Region rows, gray pixels), ocr_enqueued, guides: <the block>, undo: {replace: <override before> | null} in «التخطيط», else null}"
+    },
+    "409": "{detail: «بدأت المعالجة في نافذة أخرى؛ حدّث الصفحة.», started: true} when `stage` is no longer the book's"
+  },
+  "dashboard template context (besides config)": {
+    "guides_mode": "bool",
+    "layout_stage": "bool: the book awaits «بدء المعالجة»",
+    "start_action": "one of startAction, '' outside the mode",
+    "kept_range": "as config.keptRange",
+    "guides_stats": "as config.guidesStats",
+    "rerun_stages": "[{value, label}] filtered: in «التخطيط» only preprocess, and only when needs_guides or error with pages; else today's five",
+    "rerun": "as config.rerun",
+    "guides_url": "the «⋯» «التخطيط» link: /books/<id>/?view=guides",
+    "start_ocr_url / delete_url / extract_url": "the POST targets"
+  }
+}

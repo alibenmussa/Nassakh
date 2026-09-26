@@ -24,9 +24,11 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         </button>
       </div>
 
-      <div class="rv-progress" x-show="!b.pending && !b.error" :title="'حُسمت ' + b.resolved + ' من ' + b.lowTotal + ' كلمة'">
-        <span class="rv-progress-text meta">حُسمت <bdi class="num rv-counter" x-text="b.shown"></bdi> من <bdi class="num" x-text="b.lowTotal"></bdi> كلمة</span>
-        <div class="progress rv-progress-bar" role="progressbar" aria-label="الكلمات المحسومة" aria-valuemin="0" :aria-valuemax="b.lowTotal" :aria-valuenow="b.resolved">
+      {# D73: a page with no uncertain words reads «لا علامات», never «حُسمت 0 من 0» (which read as proofread) #}
+      <div class="rv-progress" x-show="!b.pending && !b.error" :title="b.lowTotal ? 'حُسمت ' + b.resolved + ' من ' + b.lowTotal + ' كلمة' : 'لا كلمات غير مؤكَّدة في هذه الصفحة؛ اقرأ الأسطر مع الصورة ثم اعتمدها.'">
+        <span class="rv-progress-text meta" x-show="b.lowTotal > 0">حُسمت <bdi class="num rv-counter" x-text="b.shown"></bdi> من <bdi class="num" x-text="b.lowTotal"></bdi> كلمة</span>
+        <span class="rv-progress-text meta rv-no-flags" x-show="!b.lowTotal" data-no-flags>لا علامات</span>
+        <div class="progress rv-progress-bar" role="progressbar" x-show="b.lowTotal > 0" aria-label="الكلمات المحسومة" aria-valuemin="0" :aria-valuemax="b.lowTotal" :aria-valuenow="b.resolved">
           <div class="progress-fill" :class="{ 'is-success': b.pct === 100 && b.lowTotal > 0 }" :style="'width:' + b.pct + '%'"></div>
         </div>
       </div>
@@ -46,7 +48,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         </span>
       </template>
       <template x-if="!b.reviewed">
-        <button type="button" class="btn btn-primary btn-sm rv-approve" :disabled="!b.canApprove" @click="act('approve', false)" title="اعتماد الصفحة (A)">اعتماد الصفحة</button>
+        <button type="button" class="btn btn-primary btn-sm rv-approve" :disabled="!b.canApprove" @click="act('approve', false)" title="اعتماد الصفحة (A، أو ⌘↵ من قائمة الكلمة)">اعتماد الصفحة</button>
       </template>
     </div>
   </template>
@@ -299,7 +301,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
           <p class="rv-legend meta" x-show="counts.low_total > 0" x-cloak>
             <span class="rv-legend-swatch" aria-hidden="true">أ</span>
-            <span>تحتها خط: كلمة غير مؤكَّدة. <span x-show="editable"><kbd class="kbd">Tab</kbd> للانتقال بينها، <kbd class="kbd">1</kbd>–<kbd class="kbd">3</kbd> لاختيار قراءة، أو اكتب التصحيح مباشرة.</span></span>
+            <span>تحتها خط: كلمة غير مؤكَّدة. <span x-show="editable"><kbd class="kbd">Tab</kbd> للانتقال بينها، <kbd class="kbd">1</kbd>–<kbd class="kbd">3</kbd> لاختيار قراءة، أو اكتب التصحيح مباشرة؛ <kbd class="kbd">⌘↵</kbd> لاعتماد الصفحة.</span></span>
           </p>
         </div>
       </div>
@@ -359,25 +361,33 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
           <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
         </button>
       </div>
+      {% comment %}D69: two groups — the word menu's keys (letters and digits edit the word) and the page's (letters
+      are commands); letters are shown as Latin capitals and work by their place on the Arabic layout too.{% endcomment %}
       <dl class="rv-keys">
-        <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">Shift</kbd><kbd class="kbd">Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
+        <dt><span class="group-label">في قائمة الكلمة</span></dt><dd></dd>
         <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
-        <dt><span class="meta">نقرة على كلمة</span></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
-        <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي</dd>
-        <dt><span class="meta">أيّ حرف</span></dt><dd>بدء تصحيح مكتوب للكلمة، ثم <kbd class="kbd">Enter</kbd> أو <kbd class="kbd">Tab</kbd> لحفظه والانتقال</dd>
-        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة أو إلغاء التحرير</dd>
-        <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">←</kbd> / <kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>
+        <dt><span class="meta">أيّ حرف، عربيًا كان أو لاتينيًا</span></dt><dd>بدء تصحيح مكتوب للكلمة، ثم <kbd class="kbd">Enter</kbd> أو <kbd class="kbd">Tab</kbd> لحفظه والانتقال</dd>
+        <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">⇧Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
+        <dt><kbd class="kbd">⌥←</kbd> / <kbd class="kbd">⌥→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>
         <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة</dd>
-        <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
-        <dt><kbd class="kbd">Alt</kbd><kbd class="kbd">Enter</kbd></dt><dd>إدراج سطر بعد السطر الحالي</dd>
-        <dt><kbd class="kbd">⌘</kbd><kbd class="kbd">Z</kbd></dt><dd>تراجع</dd>
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة، ويبقى التحديد على الكلمة</dd>
+        <dt><kbd class="kbd">⌘↵</kbd></dt><dd>اعتماد الصفحة</dd>
+        <dt><span class="group-label">في الصفحة</span></dt><dd></dd>
+        <dt><span class="meta">نقرة على كلمة</span> / <kbd class="kbd">Space</kbd></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
+        <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي</dd>
         <dt><kbd class="kbd">A</kbd></dt><dd>اعتماد الصفحة</dd>
+        <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
         <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية بانتظار المراجعة</dd>
         <dt><kbd class="kbd">←</kbd> / <kbd class="kbd">→</kbd></dt><dd>الصفحة التالية / السابقة</dd>
+        <dt><kbd class="kbd">Home</kbd> / <kbd class="kbd">End</kbd></dt><dd>أول صفحة / آخر صفحة</dd>
         <dt><kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd> <kbd class="kbd">0</kbd></dt><dd>تكبير الصورة، تصغيرها، العودة إلى <span x-text="fitLabel"></span></dd>
+        <dt><kbd class="kbd">⌥Enter</kbd></dt><dd>إدراج سطر بعد السطر الحالي</dd>
+        <dt><kbd class="kbd">⌘Z</kbd></dt><dd>تراجع</dd>
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إلغاء التحرير</dd>
         <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
       </dl>
+      <p class="meta mt-3">تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه.</p>
     </div>
   </div>
 </div>

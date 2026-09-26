@@ -1,16 +1,150 @@
 // Alpine components for the books screens: new-book form, dashboard, page detail viewer.
 // This file runs before the deferred Alpine bundle, so components are registered on `alpine:init`.
 // Digits shown to the user are always Western (no locale-aware number formatting here).
+
+// Pure helpers of the books screens, shared with processing.js and the Node tests (window.NassakhBooks).
+(function () {
+  'use strict';
+
+  // «صفحة واحدة», «صفحتان», «5 صفحات», «214 صفحة», «103 صفحات» (= assembly.render.ar_count)
+  const arCount = (n, forms) => {
+    n = Number(n) || 0;
+    if (n === 1) return forms[0];
+    if (n === 2) return forms[1];
+    const units = n % 100;
+    return `${n} ${units >= 3 && units <= 10 ? forms[2] : forms[3]}`;
+  };
+  const PAGE_FORMS = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  // The dual after a preposition or as an object: «على صفحتين», «يغيّر هذا صفحتين».
+  const PAGE_FORMS_GEN = ['صفحة واحدة', 'صفحتين', 'صفحات', 'صفحة'];
+
+  // The dictionary (`<< … >>`) around offset `at` of a PDF's text, or null.
+  function enclosingDict(text, at) {
+    let depth = 0;
+    let start = -1;
+    for (let i = at - 1; i > 0; i -= 1) {
+      if (text[i] === '>' && text[i - 1] === '>') { depth += 1; i -= 1; } else if (text[i] === '<' && text[i - 1] === '<') {
+        if (depth === 0) { start = i - 1; break; }
+        depth -= 1;
+        i -= 1;
+      }
+    }
+    if (start < 0) return null;
+    depth = 0;
+    for (let i = at; i < text.length - 1; i += 1) {
+      if (text[i] === '<' && text[i + 1] === '<') { depth += 1; i += 1; } else if (text[i] === '>' && text[i + 1] === '>') {
+        if (depth === 0) return text.slice(start, i + 2);
+        depth -= 1;
+        i += 1;
+      }
+    }
+    return null;
+  }
+  // D66: the page count a PDF declares, read from the Latin-1 text of its first and last bytes: the largest
+  // `/Count n` of a `/Type /Pages` dictionary (never `/Page`). Null when none is readable (compressed object
+  // streams); the server's check stays authoritative (books/forms.py).
+  function pdfPageCount(text) {
+    const re = /\/Type\s*\/Pages(?![A-Za-z0-9])/g;
+    let best = null;
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+      const dict = enclosingDict(text, m.index);
+      const c = dict ? /\/Count\s+(\d+)/.exec(dict) : null;
+      const n = c ? parseInt(c[1], 10) : 0;
+      if (n > 0 && (best === null || n > best)) best = n;
+    }
+    return best;
+  }
+  // The form's line under the skip fields (PHASE7 §3.13, §3.14): which PDF pages are extracted. `count` is the
+  // file's page count when the browser could read it, else null (the rule in words). `error` marks the case
+  // where nothing is left.
+  function rangeLine({ count = null, skipFirst = 0, skipLast = 0, perSheet = 1 } = {}) {
+    const first = Math.max(0, parseInt(skipFirst, 10) || 0);
+    const last = Math.max(0, parseInt(skipLast, 10) || 0);
+    const two = Number(perSheet) === 2;
+    if (!(Number(count) > 0)) {
+      if (!first && !last) return { text: 'تُستخرج كل صفحات الملف.', error: false };
+      const rule = [first ? `بعد أول ${first}` : '', last ? `قبل آخر ${last}` : ''].filter(Boolean).join(' و');
+      return { text: `يُعرف عدد صفحات الملف بعد رفعه؛ تُستخرج الصفحات ${rule}.`, error: false };
+    }
+    const file = `الملف ${arCount(count, PAGE_FORMS)}`;
+    if (first + last >= count) return { text: `لا تبقى صفحات: ${file} والتجاوز ${first} + ${last}.`, error: true };
+    const from = first + 1;
+    const to = count - last;
+    const sheets = to - from + 1;
+    const pagesNote = `(${arCount(sheets * 2, PAGE_FORMS)} في الكتاب)`;
+    if (!first && !last) return { text: two ? `${file} · تُستخرج كلها، وفي كل منها صفحتان ${pagesNote}.` : `${file} · تُستخرج كلها.`, error: false };
+    const span = from === to ? `الصفحة ${from}` : `الصفحات ${from}–${to}`;
+    if (two) return { text: `${file} · تُستخرج ${span}، وفي كل منها صفحتان ${pagesNote}.`, error: false };
+    return { text: `${file} · تُستخرج ${span}${from === to ? '' : ` (${arCount(sheets, PAGE_FORMS)})`}.`, error: false };
+  }
+  // A guides block's full bands as the compact `b` of api:book_guides: [kind, y0, y1] (+ x0, x1 for the page
+  // number), kinds h / b / f / p.
+  const KIND_CODES = { running_header: 'h', body: 'b', footnote: 'f', page_number: 'p' };
+  const r4 = (v) => Math.round(Number(v) * 10000) / 10000;
+  function compactBands(bands) {
+    return (bands || []).filter((b) => b && KIND_CODES[b.kind] && Array.isArray(b.bbox)).map((b) => {
+      const [x0, y0, x1, y1] = b.bbox.map(r4);
+      return b.kind === 'page_number' ? ['p', y0, y1, x0, x1] : [KIND_CODES[b.kind], y0, y1];
+    });
+  }
+
+  window.NassakhBooks = Object.assign(window.NassakhBooks || {}, { arCount, PAGE_FORMS, PAGE_FORMS_GEN, pdfPageCount, rangeLine, compactBands, KIND_CODES });
+})();
+
 document.addEventListener('alpine:init', () => {
   const POLL_INTERVAL = 2000;
   const POLL_MAX_INTERVAL = 15000;
   const FAILURES_BEFORE_NOTICE = 3;
 
   // ---------------------------------------------------------------- new book form
+  // «استخراج الصفحات» (D66): the file picker names the chosen file, and the line under the skip fields says which
+  // PDF pages will be extracted before anything is queued. The page count is read in the browser from the first
+  // and last 2 MB of the file; the server check stays authoritative.
+  const PROBE_BYTES = 2 * 1024 * 1024;
   Alpine.data('bookForm', (cfg = {}) => ({
     pagesPerSheet: Number(cfg.pagesPerSheet) || 1,
     splitRatio: Number(cfg.splitRatio) || 0.5,
     submitting: false,
+    fileName: '',
+    sourcePages: null, // the page count the chosen PDF declares, null when unknown
+    skipFirst: Number(cfg.skipFirst) || 0,
+    skipLast: Number(cfg.skipLast) || 0,
+    probeId: 0,
+
+    // The skip fields are plain Django widgets: their values are read on input (no x-model on them).
+    readSkips(root) {
+      const field = (name) => (root && root.querySelector ? root.querySelector(`[name="${name}"]`) : null);
+      const a = field('skip_first');
+      const b = field('skip_last');
+      if (a) this.skipFirst = Math.max(0, parseInt(a.value, 10) || 0);
+      if (b) this.skipLast = Math.max(0, parseInt(b.value, 10) || 0);
+    },
+    get range() {
+      return window.NassakhBooks.rangeLine({ count: this.sourcePages, skipFirst: this.skipFirst, skipLast: this.skipLast, perSheet: this.pagesPerSheet });
+    },
+    async onFile(event) {
+      const file = event && event.target && event.target.files ? event.target.files[0] : null;
+      this.fileName = file ? file.name : '';
+      this.sourcePages = null;
+      if (!file) return;
+      const id = (this.probeId += 1);
+      const count = await this.probe(file);
+      if (id === this.probeId) this.sourcePages = count;
+    },
+    // Latin-1 text of the file's first and last 2 MB → the declared page count (NassakhBooks.pdfPageCount).
+    async probe(file) {
+      try {
+        const decoder = new TextDecoder('latin1');
+        const read = async (blob) => decoder.decode(await blob.arrayBuffer());
+        const head = await read(file.slice(0, PROBE_BYTES));
+        const tail = file.size > PROBE_BYTES ? await read(file.slice(Math.max(PROBE_BYTES, file.size - PROBE_BYTES))) : '';
+        const counts = [window.NassakhBooks.pdfPageCount(head), window.NassakhBooks.pdfPageCount(tail)].filter((n) => n > 0);
+        return counts.length ? Math.max(...counts) : null;
+      } catch (e) {
+        return null; // unreadable here: the form states the rule in words
+      }
+    },
 
     get splitPercent() {
       return `${Math.round(Number(this.splitRatio) * 100)}%`;
@@ -55,7 +189,7 @@ document.addEventListener('alpine:init', () => {
   const PROCESSING_STATUSES = ['uploaded', 'preprocessed', 'layout_done'];
   const CHANGE_KEYS = ['status', 'text_state', 'n_unresolved', 'is_reviewed', 'n_flags', 'sequence_issue', 'error', 'is_excluded', 'printed_number'];
   // Fallbacks until the backend config carries statusLabels / statusDots / urls (§12.2).
-  const STATUS_LABELS = { uploaded: 'مرفوعة', preprocessed: 'مُعالَجة', layout_done: 'تم التخطيط', ocr_done: 'تم التعرّف', reviewed: 'مُراجَعة', assembled: 'مُجمَّعة', error: 'خطأ', excluded: 'مستثناة' };
+  const STATUS_LABELS = { uploaded: 'مرفوعة', preprocessed: 'مُجهَّزة', layout_done: 'بانتظار التعرّف', ocr_done: 'تم التعرّف', reviewed: 'مُراجَعة', assembled: 'مُجمَّعة', error: 'خطأ', excluded: 'مستثناة' };
   const STATUS_DOTS = { uploaded: 'dot-neutral', preprocessed: 'dot-accent', layout_done: 'dot-accent', ocr_done: 'dot-success', reviewed: 'dot-success', assembled: 'dot-success', error: 'dot-danger', excluded: 'dot-neutral' };
   const FILTERS = {
     all: () => true,
@@ -65,6 +199,29 @@ document.addEventListener('alpine:init', () => {
     reviewed: (p) => !p.is_excluded && REVIEWED_STATUSES.includes(p.status),
   };
   const EASTERN_DIGITS = /[٠-٩۰-۹]/g;
+  // «التخطيط» mode (D67, PHASE7 §3.12)
+  const GUIDES_FILTER_KEY = 'nassakh.guidesFilter.';
+  const GUIDES_BATCH = 400; // pages per api:book_guides range request (about 60 B each)
+  const PREPARED_STATUSES = ['preprocessed', 'layout_done', 'ocr_done', 'reviewed', 'assembled'];
+  const KIND_OF = { h: 'running_header', b: 'body', f: 'footnote', p: 'page_number' };
+  const BAND_LABELS = { running_header: 'ترويسة', body: 'متن', footnote: 'حاشية', page_number: 'رقم الصفحة' };
+  const BAND_ORDER = { running_header: 0, body: 1, footnote: 2, page_number: 3 };
+  const LINE_KINDS = { header: 'running_header', footnote: 'footnote' };
+  const MINUTE_FORMS = ['دقيقة واحدة', 'دقيقتين', 'دقائق', 'دقيقة']; // after «نحو»: «نحو دقيقتين»
+  const pct1 = (y) => (Math.round(Number(y) * 1000) / 10).toFixed(1);
+  // Letters by physical key (D69) through static/src/js/keys.js, with a fallback of its own rule.
+  const keyLetter = (e) => {
+    const K = window.NassakhKeys;
+    if (K && typeof K.letter === 'function') return K.letter(e) || '';
+    const m = /^Key([A-Z])$/.exec(e.code || '');
+    if (m) return m[1].toLowerCase();
+    return /^[a-zA-Z]$/.test(e.key || '') ? e.key.toLowerCase() : '';
+  };
+  const keyComposing = (e) => {
+    const K = window.NassakhKeys;
+    if (K && typeof K.composing === 'function') return Boolean(K.composing(e));
+    return Boolean(e.isComposing || e.keyCode === 229);
+  };
 
   function readLocal(key, fallback) {
     try {
@@ -112,14 +269,7 @@ document.addEventListener('alpine:init', () => {
   }
   const norm = (v) => (v === undefined || v === null || v === false ? '' : v === true ? '1' : String(v));
   // «صفحة واحدة», «صفحتان», «5 صفحات», «214 صفحة» (= NassakhManuscript.arCount / assembly.render.ar_count)
-  const arCount = (n, forms) => {
-    n = Number(n) || 0;
-    if (n === 1) return forms[0];
-    if (n === 2) return forms[1];
-    const units = n % 100;
-    return `${n} ${units >= 3 && units <= 10 ? forms[2] : forms[3]}`;
-  };
-  const PAGE_FORMS = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  const { arCount, PAGE_FORMS, PAGE_FORMS_GEN, compactBands } = window.NassakhBooks;
   const NOTE_FORMS = ['ملاحظة واحدة', 'ملاحظتان', 'ملاحظات', 'ملاحظة'];
   const csrfToken = () => {
     const meta = typeof document !== 'undefined' && document.querySelector ? document.querySelector('meta[name="csrf-token"]') : null;
@@ -186,6 +336,29 @@ document.addEventListener('alpine:init', () => {
     const statusDots = Object.assign({}, STATUS_DOTS, cfg.statusDots || {});
     const fill = (template, n) => String(template || '').replace('__n__', String(n));
     const id = (p) => String(p.id);
+    // «التخطيط» mode (D67): chosen by the server (`guidesMode`); outside it every path below is today's.
+    const guidesMode = Boolean(cfg.guidesMode);
+    const guidesUrls = cfg.guidesUrls || {};
+    const guideEntries = new Map(); // page id -> compact api:book_guides entry {id, n, b, d, o, l, s, x}
+    const guidesPending = new Set(); // page numbers waiting for a guides-state request
+    let guidesTimer = null;
+    let guidesTpl = null; // <template id="sheet-guides">: the body of a mounted sheet in the mode
+    let guidesHooks = null; // the bookGuides component (processing.js): Esc layers, the view of a page on screen
+    const entryOf = (p) => (p ? guideEntries.get(id(p)) : null) || null;
+    // The mode's chips (§3.12): every page, the pages worth a look (a doubt or an error), the pages with
+    // their own guides. Excluded pages never count and never carry a doubt.
+    const GUIDE_FILTERS = {
+      all: () => true,
+      doubt: (p) => !p.is_excluded && (Boolean(p.error) || p.status === 'error' || Number((entryOf(p) || {}).d) > 0),
+      override: (p) => !p.is_excluded && Boolean((entryOf(p) || {}).o),
+    };
+    const filters = guidesMode ? GUIDE_FILTERS : FILTERS;
+    const filterKey = (guidesMode ? GUIDES_FILTER_KEY : FILTER_KEY) + (cfg.bookId || '');
+    const hashPage = () => {
+      const hash = typeof window !== 'undefined' && window.location ? window.location.hash || '' : '';
+      const m = /^#sheet-(\d+)$/.exec(hash);
+      return m ? Number(m[1]) : 0;
+    };
 
     return {
     progressUrl: cfg.progressUrl,
@@ -212,10 +385,24 @@ document.addEventListener('alpine:init', () => {
     editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: layout (the book page), chapters, …
     convert: { open: false, busy: false, error: '', label: 'تحويل', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
-    view: readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
+    // the mode opens on the grid (never remembered), except that a #sheet-N address opens the viewer (§3.12)
+    view: guidesMode ? (hashPage() ? 'sheets' : 'grid') : readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
     filter: 'all',
     follow: readLocal(FOLLOW_KEY, '0') === '1',
-    counts: { all: 0, processing: 0, review: 0, attention: 0, reviewed: 0 },
+    counts: guidesMode ? { all: 0, doubt: 0, override: 0 } : { all: 0, processing: 0, review: 0, attention: 0, reviewed: 0 },
+    // ---- «التخطيط» mode (D67): the server's config; `layoutStage` = the book awaits «بدء المعالجة»
+    guidesMode,
+    layoutStage: Boolean(cfg.layoutStage),
+    startAction: cfg.startAction || '',
+    waiting: Boolean(cfg.layoutStage) && cfg.status === 'needs_guides',
+    guidesBook: cfg.guides || null, // {source, header_cut, footnote_line, …}: the book's guides
+    guidesStats: cfg.guidesStats || null, // {pages, rule, block, number, median_rule, text}
+    keptRange: cfg.keptRange || null, // books.services.kept_range: {source_pages, first, last, sheets, pages, text}
+    textLayer: Boolean(cfg.textLayer),
+    guidesUrls,
+    startedElsewhere: false, // a guides request answered 409 `started`, or the poll says «المعالجة» began
+    rerun: cfg.rerun || {}, // books.services.rerun_estimate per offered stage: {pages, kept, minutes}
+    dialog: { kind: '', stage: '', label: '' }, // kind '' | rerun | delete (rv-modal look, §3.13)
     attention: [],
     nPages: 0,
     filteredOut: false,
@@ -234,16 +421,18 @@ document.addEventListener('alpine:init', () => {
 
     init() {
       (cfg.pages || []).forEach((raw) => { const p = this.completePage(raw, null); pages.set(id(p), p); byNumber.set(p.number, id(p)); });
-      const savedFilter = readLocal(FILTER_KEY + (cfg.bookId || ''), 'all');
-      this.filter = FILTERS[savedFilter] ? savedFilter : 'all';
+      const savedFilter = readLocal(filterKey, 'all');
+      this.filter = filters[savedFilter] ? savedFilter : 'all';
       this.recount();
       this.bindDom();
       if (typeof Alpine.store === 'function' && Alpine.store('book')) Alpine.store('book').dash = this;
       if (this.active) this.schedule(POLL_INTERVAL);
       if (this.$watch) this.$watch('view', () => this.onViewChange());
+      if (guidesMode) this.fetchGuides(); // the whole book once; then only the pages the poll reports as changed
     },
     destroy() {
       clearTimeout(this.timer);
+      clearTimeout(guidesTimer);
       clearTimeout(flushTimer);
       clearTimeout(sheetRetryTimer);
       clearTimeout(doneTimer);
@@ -358,6 +547,11 @@ document.addEventListener('alpine:init', () => {
       if (d.editor) this.editor = d.editor;
       if (d.layout) this.layout = d.layout;
       this.active = Boolean(d.active);
+      if (guidesMode) {
+        if ('waiting' in d) this.waiting = Boolean(d.waiting);
+        // «بدء المعالجة» pressed in another window: the pause is over, this page is out of date
+        if (this.layoutStage && d.layout_stage === false) this.startedElsewhere = true;
+      }
       const changed = [];
       const added = [];
       (d.pages || []).forEach((raw) => {
@@ -382,6 +576,8 @@ document.addEventListener('alpine:init', () => {
         const ahead = new Set([this.neighbour(1), this.neighbour(-1), this.active && this.follow ? this.followTarget(changed) : null]);
         changed.forEach(({ after }) => { if (mounted.has(id(after)) || this.tileNear(id(after)) || ahead.has(after.number)) this.queueSheet(after.number); });
       }
+      // the mode's bands and doubts follow the pages that changed (a page prepared, failed or re-included)
+      if (guidesMode) this.queueGuides([...added, ...changed.map((c) => c.after)].filter((p) => p.status !== 'uploaded').map((p) => p.number));
       if (wasActive && !this.active) this.onProcessingEnd();
       else if (this.active && this.follow && changed.length) this.followChanged(changed);
       this.ensureSheet(this.current); // safety net: the page on screen never stays without its data
@@ -390,7 +586,13 @@ document.addEventListener('alpine:init', () => {
     onProcessingEnd() {
       this.stopEffects();
       this.refreshFilmSoon(0);
-      this.doneToast = { visible: true, count: this.nPages, url: this.nextReviewUrl };
+      if (guidesMode) {
+        this.fetchGuides(); // the stats line and every page's bands, once the pages are prepared
+        // only a finished preparation is announced: not a failure, not `?view=guides` on a started book
+        if (!this.layoutStage || this.status !== 'needs_guides') return;
+      }
+      // «اكتمل التخطيط · 7 صفحات» with no action (the primary is enabled now), else today's toast
+      this.doneToast = { visible: true, count: guidesMode ? this.preparedCount : this.nPages, url: guidesMode ? '' : this.nextReviewUrl };
       clearTimeout(doneTimer);
       doneTimer = setTimeout(() => { this.doneToast.visible = false; }, DONE_TOAST_MS);
     },
@@ -444,6 +646,12 @@ document.addEventListener('alpine:init', () => {
     },
     recount() {
       const all = [...pages.values()];
+      if (guidesMode) {
+        this.counts = { all: all.length, doubt: all.filter(GUIDE_FILTERS.doubt).length, override: all.filter(GUIDE_FILTERS.override).length };
+        this.nPages = all.length;
+        this.filteredOut = this.nPages > 0 && this.filter !== 'all' && this.counts[this.filter] === 0;
+        return;
+      }
       const c = { all: all.length, processing: 0, review: 0, attention: 0, reviewed: 0 };
       all.forEach((p) => {
         if (FILTERS.processing(p)) c.processing += 1;
@@ -480,11 +688,113 @@ document.addEventListener('alpine:init', () => {
       return this.done > 0;
     },
     get statusText() {
+      if (this.active && this.layoutStage) return `قيد التخطيط · ${this.preparedCount} من ${this.total} صفحة`;
       if (this.active) return `قيد المعالجة · ${this.done} من ${this.total} صفحة`;
       return this.statusLabel;
     },
     get barClass() {
+      if (this.layoutStage) return { 'is-danger': this.status === 'error' }; // the prepared share, accent (§3.12)
       return { 'is-success': this.percent >= 100 && this.status !== 'error', 'is-danger': this.status === 'error', 'is-warning': this.status === 'needs_guides' };
+    },
+    // ------------------------------------------------------------ «التخطيط» mode: the chrome (§3.12, §3.14)
+    // pages prepared so far (non-excluded; every status past `uploaded` except an error)
+    get preparedCount() {
+      return PREPARED_STATUSES.reduce((n, s) => n + (this.byStatus[s] || 0), 0);
+    },
+    // the bar shows only while the pages are prepared; on a started book it is today's
+    get showBar() {
+      return this.nPages > 0 && (!this.layoutStage || this.status === 'processing');
+    },
+    // the side panel: «جُهّزت 7 من 7 صفحات»
+    get preparedLine() {
+      const total = this.total || this.nPages;
+      const units = total % 100;
+      return `جُهّزت ${this.preparedCount} من ${total} ${total >= 3 && units >= 3 && units <= 10 ? 'صفحات' : 'صفحة'}`;
+    },
+    // «صفحة واحدة تستحق نظرة», «صفحتان تستحقان نظرة», «3 صفحات تستحق نظرة» ('' at 0)
+    get doubtLine() {
+      const n = this.counts.doubt || 0;
+      if (!n) return '';
+      return n === 2 ? 'صفحتان تستحقان نظرة' : `${arCount(n, PAGE_FORMS)} تستحق نظرة`;
+    },
+    get doubtShow() {
+      return (this.counts.doubt || 0) === 2 ? 'عرضهما' : 'عرضها';
+    },
+    // the chip «تستحق نظرة» on, the first such page on screen in the viewer
+    showDoubts() {
+      this.setFilter('doubt');
+      if (this.view === 'sheets') { const first = this.visibleNumbers()[0]; if (first) this.showPage(first, { instant: true, manual: true }); }
+    },
+    // the end-of-preparation toast: «اكتمل التخطيط · 7 صفحات»
+    get doneText() {
+      return `اكتمل التخطيط · ${arCount(this.doneToast.count, PAGE_FORMS)}`;
+    },
+    get emptyTitle() {
+      return this.status === 'processing' ? 'تُستخرج الصفحات الآن' : 'لم تُستخرج الصفحات بعد';
+    },
+    get emptyText() {
+      if (this.status === 'processing') return 'تظهر الصفحات هنا واحدةً واحدة، ثم تُجهَّز وتُرسم مناطقها.';
+      const k = this.keptRange || {};
+      const action = this.status === 'error' ? 'إعادة استخراج الصفحات' : 'استخراج الصفحات';
+      const span = k.first && k.last ? (k.first === k.last ? `الصفحة ${k.first}` : `الصفحات ${k.first}–${k.last}`) : 'صفحات الملف';
+      return `اضغط «${action}»؛ تُستخرج ${span} من الملف وتُجهَّز وتُرسم مناطقها.`;
+    },
+    // ---- dialogs (§3.13, rv-modal look): re-run the book from a stage, delete the book
+    openRerun(stage, label) {
+      this.dialog = { kind: 'rerun', stage: String(stage || ''), label: String(label || stage || '') };
+      this.focusDialog();
+    },
+    openDelete() {
+      this.dialog = { kind: 'delete', stage: '', label: '' };
+      this.focusDialog();
+    },
+    closeDialog() {
+      this.dialog = { kind: '', stage: '', label: '' };
+    },
+    // Tab stays inside the open dialog (= review.js trapTab).
+    trapTab(ev, root) {
+      if (!root || !root.querySelectorAll) return;
+      const items = Array.from(root.querySelectorAll('button, [href], input, textarea, select, [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => !el.disabled && el.type !== 'hidden' && el.offsetParent !== null);
+      if (!items.length) { ev.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); } else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    },
+    // focus goes to the safe button («إلغاء») once the dialog is shown
+    focusDialog() {
+      const run = () => { const safe = this.$refs && this.$refs[this.dialog.kind === 'delete' ? 'deleteSafe' : 'rerunSafe']; if (safe && safe.focus) safe.focus(); };
+      if (this.$nextTick) this.$nextTick(run);
+    },
+    get rerunTitle() {
+      return `إعادة تشغيل الكتاب من «${this.dialog.label}»؟`;
+    },
+    // «تُعاد 81 صفحة من هذه المرحلة، وتبقى 12 صفحة معتمدة كما هي.» (the second part only when pages are kept)
+    get rerunText() {
+      const est = this.rerun[this.dialog.stage] || {};
+      const n = Number(est.pages);
+      const kept = Number(est.kept) || 0;
+      const head = Number.isFinite(n) && est.pages !== undefined && est.pages !== null ? `تُعاد ${arCount(n, PAGE_FORMS)} من هذه المرحلة` : 'تُعاد صفحات الكتاب غير المعتمدة من هذه المرحلة';
+      if (!kept) return `${head}.`;
+      const keptText = kept === 1 ? 'صفحة واحدة معتمدة كما هي' : kept === 2 ? 'صفحتان معتمدتان كما هما' : `${arCount(kept, PAGE_FORMS)} معتمدة كما هي`;
+      return `${head}، وتبقى ${keptText}.`;
+    },
+    // the cost before a costly action (not a progress estimate, D22): the models' time, or what preprocessing keeps
+    get rerunNote() {
+      const est = this.rerun[this.dialog.stage] || {};
+      if (this.dialog.stage === 'preprocess') return 'يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ.';
+      if (Number(est.minutes) > 0) return `يُعاد التعرّف عليها بالنماذج: نحو ${arCount(Math.ceil(Number(est.minutes)), MINUTE_FORMS)} على هذا الجهاز.`;
+      return '';
+    },
+    // «فيه 12 صفحة مُراجَعة ومخطوطة محرَّرة.» ('' for a book with no work in it)
+    get deleteWork() {
+      const reviewed = Number((this.review || {}).reviewed) || 0;
+      const m = this.manuscript || {};
+      const parts = [];
+      if (reviewed) parts.push(reviewed === 1 ? 'صفحة واحدة مُراجَعة' : reviewed === 2 ? 'صفحتان مُراجَعتان' : `${arCount(reviewed, PAGE_FORMS)} مُراجَعة`);
+      if (this.edited) parts.push('مخطوطة محرَّرة');
+      else if (m.exists) parts.push('مخطوطة');
+      return parts.length ? `فيه ${parts.join(' و')}.` : '';
     },
     // The progress payload carries `review` (its `next_review_url` is null when no page waits);
     // until it does, the summary is derived from the tiles and the template's guarded review:next URL.
@@ -512,8 +822,8 @@ document.addEventListener('alpine:init', () => {
     // first edit the review drift is resolved per chapter there, D41), everyone else the manuscript; else copy
     // the book's text.
     get primary() {
+      if (guidesMode) return this.guidesPrimary;
       if (this.canEdit && (this.status === 'uploaded' || this.status === 'error')) return 'start';
-      if (this.canEdit && this.status === 'needs_guides' && cfg.guidesUrl) return 'guides';
       if (this.nextReviewUrl) return 'review';
       if (this.allReviewed) {
         const m = this.manuscript || {};
@@ -525,6 +835,18 @@ document.addEventListener('alpine:init', () => {
         if (this.bookTextUrl) return 'copy';
       }
       return '';
+    },
+    // The mode's primary (§3.12 `startAction`), from the live status: «استخراج الصفحات» (uploaded), «إعادة
+    // استخراج الصفحات» (error), «بدء المعالجة» disabled while the pages are prepared and enabled at «تم التخطيط»;
+    // on a started book (`?view=guides`) «العودة إلى الصفحات».
+    get guidesPrimary() {
+      if (!this.layoutStage) return 'back';
+      if (!this.canEdit) return '';
+      if (this.status === 'uploaded') return 'extract';
+      if (this.status === 'error') return 'reextract';
+      if (this.status === 'processing') return 'startOcrDisabled';
+      if (this.status === 'needs_guides') return 'startOcr';
+      return this.startAction || '';
     },
     // ------------------------------------------------------------ the manuscript (Phase 4, §4.1)
     get hasManuscript() {
@@ -656,7 +978,10 @@ document.addEventListener('alpine:init', () => {
     // ------------------------------------------------------------ views, filters, follow
     setView(view) {
       this.view = view === 'grid' ? 'grid' : 'sheets';
-      writeLocal(VIEW_KEY, this.view);
+      if (!guidesMode) writeLocal(VIEW_KEY, this.view); // the mode always opens on the grid
+    },
+    toggleView() {
+      this.setView(this.view === 'grid' ? 'sheets' : 'grid');
     },
     onViewChange() {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this.updateSheetHeight());
@@ -666,8 +991,8 @@ document.addEventListener('alpine:init', () => {
       else this.centerFilm();
     },
     setFilter(name) {
-      this.filter = FILTERS[name] ? name : 'all';
-      writeLocal(FILTER_KEY + (cfg.bookId || ''), this.filter);
+      this.filter = filters[name] ? name : 'all';
+      writeLocal(filterKey, this.filter);
       this.applyFilter();
       this.filteredOut = this.nPages > 0 && this.filter !== 'all' && this.counts[this.filter] === 0;
       // the viewer moves to the first page the filter keeps when the shown one is filtered out
@@ -675,7 +1000,7 @@ document.addEventListener('alpine:init', () => {
       if (shown && !this.matches(shown)) { const first = this.visibleNumbers()[0]; if (first) this.showPage(first, { instant: true }); }
     },
     matches(p) {
-      return FILTERS[this.filter](p);
+      return filters[this.filter](p);
     },
     isShown(pid) {
       return Boolean(this.current) && byNumber.get(this.current) === String(pid);
@@ -752,17 +1077,17 @@ document.addEventListener('alpine:init', () => {
       if (field && field.focus) { field.focus(); if (field.select) field.select(); }
     },
     // Keyboard map (§8.8), RTL-aware; never fires inside a field. Pure enough for the tests: returns the action.
+    // Letters by physical key (D69, NassakhKeys): G, V (the view, was 1 / 2), and outside the mode N and C.
     keyAction(e, inField) {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return null;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || keyComposing(e)) return null;
       const k = e.key;
-      const code = e.code || '';
       if (k === 'Escape') return inField ? 'blur' : 'clearFilter';
       if (inField) return null;
-      if (code === 'KeyG' || k === 'g' || k === 'G') return 'jump';
-      if (code === 'KeyN' || k === 'n' || k === 'N') return 'nextReview';
-      if (code === 'KeyC' || k === 'c' || k === 'C') return 'copy';
-      if (k === '1') return 'sheets';
-      if (k === '2') return 'grid';
+      const letter = keyLetter(e);
+      if (letter === 'g') return 'jump';
+      if (letter === 'v') return 'toggleView';
+      if (letter === 'n' && !guidesMode) return 'nextReview';
+      if (letter === 'c' && !guidesMode) return 'copy';
       if (k === 'ArrowLeft' || k === 'PageDown') return 'nextSheet'; // RTL: the next page is on the left
       if (k === 'ArrowRight' || k === 'PageUp') return 'prevSheet';
       if (k === 'Home') return 'firstSheet';
@@ -772,16 +1097,24 @@ document.addEventListener('alpine:init', () => {
       return null;
     },
     onKey(e) {
+      if (this.dialog.kind) { // an open dialog takes the keys: Esc cancels it
+        if (e.key === 'Escape') { e.preventDefault(); this.closeDialog(); }
+        return;
+      }
       const t = e.target;
       const inField = Boolean(t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable));
       const action = this.keyAction(e, inField);
       if (!action) return;
       if (action === 'blur') { if (t && t.blur) t.blur(); return; }
-      if (action === 'clearFilter') { if (this.filter !== 'all') this.setFilter('all'); return; }
+      // Esc in the mode: an unsaved move first, then the draft, then the filter (§3.12)
+      if (action === 'clearFilter') {
+        if (guidesHooks && guidesHooks.escape && guidesHooks.escape()) { e.preventDefault(); return; }
+        if (this.filter !== 'all') this.setFilter('all');
+        return;
+      }
       if (action === 'jump') { e.preventDefault(); this.focusJump(); return; }
       if (action === 'nextReview') { if (this.nextReviewUrl) window.location.assign(this.nextReviewUrl); return; }
-      if (action === 'sheets') { this.setView('sheets'); return; }
-      if (action === 'grid') { this.setView('grid'); return; }
+      if (action === 'toggleView') { this.toggleView(); return; }
       if (action === 'nextSheet' || action === 'prevSheet') { e.preventDefault(); this.stepSheet(action === 'nextSheet' ? 1 : -1); return; }
       if (action === 'firstSheet' || action === 'lastSheet') {
         if (this.view !== 'sheets') return;
@@ -925,6 +1258,10 @@ document.addEventListener('alpine:init', () => {
         try { history.replaceState(null, '', `${window.location.pathname}${window.location.search}#sheet-${n}`); } catch (e) { /* sandboxed */ }
       }
       this.centerFilm();
+      // the «التخطيط» side panel follows the page on screen («من هذه الصفحة», the draft drawn on it)
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('nassakh:page-shown', { detail: { id: pid, number: n } }));
+      }
     },
     // The neighbours' data is fetched ahead, so the next turn lands on a laid-out page.
     prefetchAround(n) {
@@ -1034,6 +1371,7 @@ document.addEventListener('alpine:init', () => {
       const count = q(el, '.bk-thumb-mark.is-count');
       if (count) { setHidden(count, !(unresolved > 0)); setText(count, unresolved); }
       setHidden(q(el, '.bk-thumb-mark.is-live'), !(this.active && PROCESSING_STATUSES.includes(p.status) && !p.error && !p.is_excluded));
+      if (guidesMode) this.patchThumbGuides(el, p);
       setHidden(el, !this.matches(p));
     },
     markThumb(el, current) {
@@ -1055,7 +1393,11 @@ document.addEventListener('alpine:init', () => {
         const data = await res.json();
         (Array.isArray(data) ? data : (data && data.pages) || []).forEach((item) => {
           const p = item && item.id != null ? pages.get(String(item.id)) : null;
-          if (p && item.thumb_url && item.thumb_url !== p.thumb_url) { p.thumb_url = item.thumb_url; this.patchThumb(thumbs.get(id(p)), p); }
+          if (p && item.thumb_url && item.thumb_url !== p.thumb_url) {
+            p.thumb_url = item.thumb_url;
+            this.patchThumb(thumbs.get(id(p)), p);
+            if (guidesMode) this.patchTile(tiles.get(id(p)), p); // the mode's grid draws bands on the prepared image
+          }
         });
       } catch (e) {
         // thumbnails only: the next refresh retries
@@ -1098,6 +1440,7 @@ document.addEventListener('alpine:init', () => {
       tileTpl = document.getElementById('tile-shell');
       bodyTpl = document.getElementById('sheet-body');
       thumbTpl = document.getElementById('thumb-shell');
+      guidesTpl = guidesMode ? document.getElementById('sheet-guides') : null;
       if (stackEl) stackEl.querySelectorAll('.page-sheet').forEach((el) => { if (el.dataset.pageId) shells.set(el.dataset.pageId, el); });
       if (gridEl) gridEl.querySelectorAll('.page-tile').forEach((el) => { if (el.dataset.pageId) tiles.set(el.dataset.pageId, el); });
       if (filmEl && thumbTpl) {
@@ -1196,7 +1539,9 @@ document.addEventListener('alpine:init', () => {
       mounted.add(pid);
       const p = pages.get(pid) || {};
       const body = q(el, '.sheet-body');
-      if (body && bodyTpl && bodyTpl.content) {
+      if (guidesMode) { // the prepared page with its bands (_sheet_guides.html); no decode handle
+        if (body && guidesTpl && guidesTpl.content) { body.appendChild(guidesTpl.content.cloneNode(true)); this.patchGuidesBody(el, p); }
+      } else if (body && bodyTpl && bodyTpl.content) {
         body.appendChild(bodyTpl.content.cloneNode(true));
         this.wireBody(el, p);
         const D = decode();
@@ -1244,7 +1589,7 @@ document.addEventListener('alpine:init', () => {
         if (cleanSrc && cleanImg.getAttribute('src') !== cleanSrc) {
           cleanImg.classList.remove('is-ready');
           cleanImg.setAttribute('src', cleanSrc);
-          cleanImg.setAttribute('alt', `الصفحة ${p.number} بعد المعالجة`);
+          cleanImg.setAttribute('alt', `الصفحة ${p.number} بعد التجهيز`);
           cleanImg.onload = () => cleanImg.classList.add('is-ready');
           if (cleanImg.complete && cleanImg.naturalWidth) cleanImg.classList.add('is-ready');
         }
@@ -1305,7 +1650,10 @@ document.addEventListener('alpine:init', () => {
         setHidden(retry, !(p.error && p.retry_stage));
       }
       setHidden(el, !this.matches(p) && !this.isShown(id(p)));
-      if (mounted.has(id(p))) this.wireBody(el, p);
+      if (guidesMode) {
+        this.patchSheetGuides(el, p);
+        if (mounted.has(id(p))) this.patchGuidesBody(el, p);
+      } else if (mounted.has(id(p))) this.wireBody(el, p);
     },
     patchTile(el, p) {
       if (!el || typeof el.querySelector !== 'function') return;
@@ -1363,7 +1711,336 @@ document.addEventListener('alpine:init', () => {
         setHidden(q(toggle, '.tile-icon-exclude'), Boolean(p.is_excluded));
         setHidden(q(toggle, '.tile-icon-restore'), !p.is_excluded);
       }
+      if (guidesMode) this.patchTileGuides(el, p);
       setHidden(el, !this.matches(p));
+    },
+
+    // ------------------------------------------------------------ «التخطيط» mode: the guides state (D67, §3.11)
+    // api:book_guides feeds the grid, the filmstrip and the chips: the whole book once on load (and when the
+    // pages are prepared), then only ranges of the pages the poll reports as changed, batched like the sheets.
+    fetchGuides(from, to) {
+      const url = guidesUrls.state;
+      if (!url || typeof fetch !== 'function') return Promise.resolve(false);
+      const sep = url.includes('?') ? '&' : '?';
+      return fetch(from ? `${url}${sep}from=${from}&to=${to}` : url, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((data) => { this.applyGuidesState(data); return true; })
+        .catch(() => {
+          if (from) { for (let n = from; n <= to; n += 1) guidesPending.add(n); } // retried with the next change
+          return false;
+        });
+    },
+    queueGuides(numbers) {
+      (numbers || []).forEach((n) => { if (Number(n) > 0) guidesPending.add(Number(n)); });
+      if (!guidesPending.size) return;
+      clearTimeout(guidesTimer);
+      guidesTimer = setTimeout(() => this.flushGuides(), SHEET_FLUSH_MS);
+    },
+    flushGuides() {
+      const ranges = batchRanges([...guidesPending], GUIDES_BATCH);
+      guidesPending.clear();
+      return Promise.all(ranges.map(([from, to]) => this.fetchGuides(from, to)));
+    },
+    applyGuidesState(data) {
+      if (!data) return;
+      if (data.book) {
+        this.guidesBook = data.book;
+        if (this.layoutStage && data.book.awaits_ocr_start === false) this.startedElsewhere = true;
+      }
+      if (data.stats) this.guidesStats = data.stats;
+      this.applyGuideEntries(data.pages || []);
+      if (guidesHooks && guidesHooks.onState) guidesHooks.onState(data);
+    },
+    // Compact entries (api:book_guides, and the answers of the guides writes). Tiles, thumbs and heads follow;
+    // a mounted page whose bands, doubts or override differ from its loaded block is fetched again.
+    applyGuideEntries(entries) {
+      let any = false;
+      (entries || []).forEach((e) => {
+        if (!e || e.id == null) return;
+        const pid = String(e.id);
+        guideEntries.set(pid, e);
+        const p = pages.get(pid);
+        if (!p) return;
+        any = true;
+        // a loaded block that no longer matches is stale: fetched again now when mounted, else at its mount
+        const s = sheets.get(pid);
+        const differs = !s || !s.guides || this.entryKey(this.compactOf(s)) !== this.entryKey(e);
+        if (differs && s) p.stale = true;
+        if (differs && mounted.has(pid)) { p.stale = true; this.queueSheet(p.number); }
+        this.patchTile(tiles.get(pid), p);
+        this.patchThumb(thumbs.get(pid), p);
+        this.patchSheet(shells.get(pid), p);
+      });
+      if (any) this.recount();
+    },
+    entryKey(e) {
+      return e ? JSON.stringify([e.b || [], Number(e.d) || 0, Boolean(e.o), e.l || '']) : '';
+    },
+    // The compact entry of a sheet item's full `guides` block (the same shape as api:book_guides').
+    compactOf(s) {
+      const g = (s && s.guides) || {};
+      const before = s ? guideEntries.get(String(s.id)) || {} : {};
+      return Object.assign({}, before, {
+        id: s.id,
+        n: s.number != null ? s.number : before.n,
+        b: compactBands(g.bands),
+        d: (g.doubts || []).length,
+        o: Boolean(g.override && Object.keys(g.override).length),
+        l: g.locked || '',
+        s: s.status || before.s,
+        x: s.is_excluded !== undefined ? Boolean(s.is_excluded) : Boolean(before.x),
+      });
+    },
+    entryFromGuides(pid, s) {
+      guideEntries.set(String(pid), this.compactOf(s));
+      const p = pages.get(String(pid));
+      if (p) { this.patchTile(tiles.get(String(pid)), p); this.patchThumb(thumbs.get(String(pid)), p); }
+    },
+    // A page's fresh `guides` block after a write (processing.js bookGuides): stored, drawn, counted.
+    setPageGuides(pid, block) {
+      const key = String(pid);
+      const p = pages.get(key);
+      const s = sheets.get(key) || { id: Number(key), number: p ? p.number : null };
+      s.guides = block;
+      sheets.set(key, s);
+      if (p) p.stale = false;
+      this.entryFromGuides(key, s);
+      if (p) this.patchSheet(shells.get(key), p);
+      this.recount();
+      if (guidesHooks && guidesHooks.onSheets) guidesHooks.onSheets();
+    },
+    guidesSheet(pid) {
+      const s = sheets.get(String(pid));
+      return s && s.guides ? s.guides : null;
+    },
+    guidesEntry(pid) {
+      return guideEntries.get(String(pid)) || null;
+    },
+    pageIdOf(number) {
+      return byNumber.get(Number(number)) || null;
+    },
+    // processing.js bookGuides registers {view, escape, onState}; the dashboard asks it before drawing a page
+    registerGuides(hooks) {
+      guidesHooks = hooks || null;
+      shells.forEach((el, pid) => { if (mounted.has(pid)) this.patchGuidesBody(el, pages.get(pid) || {}); });
+    },
+    rerenderGuides(pid) {
+      const key = String(pid);
+      const el = shells.get(key);
+      if (el && mounted.has(key)) this.patchGuidesBody(el, pages.get(key) || {});
+    },
+    // this address with the viewer on page n: where a form posted from the page comes back to
+    hereUrl(n) {
+      const loc = typeof window !== 'undefined' && window.location ? window.location : { pathname: '', search: '' };
+      return `${loc.pathname || ''}${loc.search || ''}#sheet-${n}`;
+    },
+    // Bands on a thumb or a tile: one span per band, placed with physical percentages (compact entry `b`).
+    patchBands(box, list) {
+      if (!box || !box.childNodes) return;
+      const bands = Array.isArray(list) ? list : [];
+      while (box.children.length > bands.length) box.removeChild(box.children[box.children.length - 1]);
+      bands.forEach((band, i) => {
+        let span = box.children[i];
+        if (!span) { span = document.createElement('span'); box.appendChild(span); }
+        const kind = KIND_OF[band[0]] || 'body';
+        if (span.className !== `gd-b region-${kind}`) span.className = `gd-b region-${kind}`;
+        const wide = band.length < 5;
+        this.place(span, wide ? 0 : band[3], band[1], wide ? 1 : band[4], band[2]);
+      });
+    },
+    // Physical left / top / width / height in percent of the image (image pixels never flip with RTL).
+    place(el, x0, y0, x1, y1) {
+      if (!el || !el.style) return;
+      const pc = (v) => `${Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100000) / 1000}%`;
+      el.style.left = pc(x0);
+      el.style.top = pc(y0);
+      el.style.width = pc(Number(x1) - Number(x0));
+      el.style.height = pc(Number(y1) - Number(y0));
+    },
+    prepared(p) {
+      return Boolean(p) && PREPARED_STATUSES.includes(p.status) && !p.error;
+    },
+    // A grid tile in the mode: the prepared thumbnail at its own ratio, its bands, the amber mark; a prepared
+    // page is done in «التخطيط», so its stage bar fills and fades.
+    patchTileGuides(el, p) {
+      const e = entryOf(p);
+      const thumb = q(el, '.page-tile-thumb');
+      if (thumb && thumb.style && p.width > 0 && p.height > 0) {
+        const ar = `${p.width} / ${p.height}`;
+        if (thumb.style.getPropertyValue('--tile-ar') !== ar) thumb.style.setProperty('--tile-ar', ar);
+      }
+      const clean = (sheets.get(id(p)) || {}).thumb_url || p.thumb_url;
+      this.patchBands(q(el, '.gd-bands'), e && clean && this.prepared(p) && !p.is_excluded ? e.b : []);
+      const doubt = GUIDE_FILTERS.doubt(p);
+      el.classList.toggle('is-doubt', doubt);
+      setHidden(q(el, '.tile-mark-doubt'), !doubt);
+      const stage = q(el, '.tile-stage');
+      if (stage && this.layoutStage) {
+        stage.classList.toggle('is-done', p.status !== 'uploaded' || Boolean(p.is_excluded));
+        const fillEl = q(stage, '.tile-stage-fill');
+        if (fillEl) fillEl.style.width = p.status === 'uploaded' && !p.error ? '12%' : '100%';
+      }
+    },
+    patchThumbGuides(el, p) {
+      const e = entryOf(p);
+      const clean = p.thumb_url || (sheets.get(id(p)) || {}).thumb_url;
+      this.patchBands(q(el, '.gd-bands'), e && clean && this.prepared(p) && !p.is_excluded ? e.b : []);
+      setHidden(q(el, '.bk-thumb-mark.is-doubt'), !GUIDE_FILTERS.doubt(p));
+      if (this.layoutStage) { // a prepared page is not pending in «التخطيط»; only pages still being prepared are live
+        el.classList.toggle('is-pending', p.status === 'uploaded' && !p.error);
+        setHidden(q(el, '.bk-thumb-mark.is-live'), !(this.active && p.status === 'uploaded' && !p.error && !p.is_excluded));
+      }
+    },
+    // The sheet head in the mode (§3.12): the doubts, «بضبط خاص», «التلقائي», «تجهيز الصفحة» on an error, and
+    // «استثناء» / «إعادة إلى الكتاب»; the forms come back to this page in the viewer.
+    patchSheetGuides(el, p) {
+      const e = entryOf(p) || {};
+      const g = (sheets.get(id(p)) || {}).guides || null;
+      const doubts = q(el, '.sheet-doubts');
+      if (doubts) {
+        doubts.textContent = '';
+        const labels = p.is_excluded || !g ? [] : (g.doubts || []).map((d) => d.label).filter(Boolean);
+        labels.forEach((label) => { const b = document.createElement('span'); b.className = 'badge badge-warning'; b.textContent = label; doubts.appendChild(b); });
+        setHidden(doubts, !labels.length);
+      }
+      const own = Boolean(e.o) && !p.is_excluded;
+      setHidden(q(el, '.gd-own'), !own);
+      const locked = e.l || (g && g.locked) || '';
+      setHidden(q(el, '.gd-auto'), !(this.canEdit && own && !locked && this.prepared(p)));
+      const next = this.hereUrl(p.number);
+      const ex = q(el, '.gd-exclude');
+      if (ex) {
+        ex.setAttribute('action', p.exclude_url || fill(urls.exclude, p.number));
+        const nx = q(ex, 'input[name="next"]');
+        if (nx) nx.value = next;
+        setText(q(ex, '.gd-exclude-label'), p.is_excluded ? 'إعادة إلى الكتاب' : 'استثناء');
+      }
+      const prep = q(el, '.gd-prep');
+      if (prep) {
+        prep.setAttribute('action', p.rerun_url || fill(urls.rerun, p.number));
+        const nx = q(prep, 'input[name="next"]');
+        if (nx) nx.value = next;
+        setHidden(prep, !(p.error || p.status === 'error') || p.is_excluded);
+      }
+    },
+    // The mounted page of the viewer (_sheet_guides.html): the prepared image, its bands with their chips, the
+    // two guide lines (sliders) or their grips, the lock, the book-wide draft (dashed) and the save bar of a
+    // started book. `guidesHooks.view` lays a pending change and the draft over the page's block.
+    patchGuidesBody(el, p) {
+      const body = q(el, '.sheet-body');
+      const fig = q(body, '.gd-page');
+      if (!fig || !p || p.id == null) return;
+      const pid = id(p);
+      const s = sheets.get(pid) || {};
+      const base = s.guides || null;
+      const view = base ? (guidesHooks && guidesHooks.view ? guidesHooks.view(pid, base) : Object.assign({ dashed: {}, draft: null, paused: false, pending: false }, base)) : null;
+      const prepared = this.prepared(p);
+      const img = q(fig, '.gd-img');
+      const src = prepared ? (base && base.image_url) || s.display_url || s.thumb_url || p.thumb_url || '' : s.scan_thumb_url || p.scan_thumb_url || '';
+      if (img) {
+        if (src && img.getAttribute('src') !== src) {
+          img.onload = () => this.onGuidesImage(el, img);
+          img.setAttribute('src', src);
+        }
+        img.setAttribute('alt', `الصفحة ${p.number} بعد التجهيز`);
+        setHidden(img, !src);
+      }
+      if (fig.dataset) fig.dataset.pageId = pid;
+      const show = Boolean(prepared && !p.is_excluded && view);
+      const locked = show ? view.locked || '' : '';
+      const editable = show && this.canEdit && !locked;
+      fig.classList.toggle('is-sweep', Boolean(this.active && p.status === 'uploaded' && !p.is_excluded && !p.error));
+      fig.classList.toggle('is-excluded', Boolean(p.is_excluded));
+      fig.classList.toggle('is-error', Boolean(p.error));
+      fig.classList.toggle('is-editable', editable);
+      fig.classList.toggle('is-paused', Boolean(show && view.paused));
+      fig.classList.toggle('is-pending', Boolean(show && view.pending));
+      const bands = show ? [...(view.bands || [])].sort((a, b) => (a.bbox[1] - b.bbox[1]) || (BAND_ORDER[a.kind] - BAND_ORDER[b.kind])) : [];
+      this.renderBands(q(fig, '.gd-bands-full'), bands, editable);
+      this.renderLines(fig, show ? view : null, editable);
+      const lock = q(fig, '.gd-lock');
+      setHidden(lock, !locked);
+      if (locked) setText(q(lock, '.gd-lock-text'), locked === 'approved' ? 'معتمدة: لا تتغيّر' : 'فيها تصحيحات مراجعة: لا تتغيّر');
+      setText(q(fig, '.gd-sr'), bands.length ? `مناطق الصفحة: ${bands.map((b) => BAND_LABELS[b.kind] || b.kind).join('، ')}` : '');
+      setHidden(q(body, '.gd-savebar'), !(show && view.pending && !this.layoutStage));
+    },
+    // The page's bands: `.region-box.region-<kind>` (the page detail's vocabulary), each with its chip; the chips of
+    // the running head, the footnotes and the page number open the band menu (processing.js), the body's is a label.
+    renderBands(box, bands, editable) {
+      if (!box || !box.childNodes) return;
+      while (box.children.length > bands.length) box.removeChild(box.children[box.children.length - 1]);
+      bands.forEach((band, i) => {
+        let div = box.children[i];
+        if (!div) { div = document.createElement('div'); box.appendChild(div); }
+        const kind = band.kind;
+        const cls = `region-box gd-band region-${kind}`;
+        if (div.className !== cls) div.className = cls;
+        if (div.dataset) div.dataset.kind = kind;
+        const [x0, y0, x1, y1] = band.bbox;
+        this.place(div, x0, y0, x1, y1);
+        const menu = kind !== 'body';
+        let chip = div.children[0];
+        if (!chip || chip.tagName.toLowerCase() !== (menu ? 'button' : 'span')) {
+          if (chip) div.removeChild(chip);
+          chip = document.createElement(menu ? 'button' : 'span');
+          div.appendChild(chip);
+        }
+        chip.className = 'gd-chip';
+        setText(chip, BAND_LABELS[kind] || kind);
+        if (menu) {
+          chip.setAttribute('type', 'button');
+          chip.setAttribute('aria-haspopup', 'menu');
+          chip.setAttribute('aria-expanded', 'false');
+          chip.setAttribute('aria-label', `خيارات منطقة ${BAND_LABELS[kind] || kind}`);
+          if (chip.dataset) chip.dataset.kind = kind;
+          chip.disabled = !editable;
+        }
+      });
+    },
+    renderLines(fig, view, editable) {
+      const active = Boolean(view) && editable && !view.paused;
+      Object.keys(LINE_KINDS).forEach((kind) => {
+        const line = q(fig, `.guide-line.is-${kind}`);
+        const at = view && view.lines ? view.lines[kind] : null;
+        const y = at && at.y !== null && at.y !== undefined ? Number(at.y) : null;
+        const draft = view && view.draft && kind in view.draft ? view.draft[kind] : undefined;
+        if (line) {
+          setHidden(line, y === null);
+          if (y !== null) {
+            line.style.top = `${Math.round(y * 100000) / 1000}%`;
+            line.classList.remove('is-moving');
+            line.classList.toggle('is-dashed', Boolean(view.dashed && view.dashed[kind]));
+            line.classList.toggle('is-draft-off', draft === null);
+            line.classList.toggle('is-static', !active);
+            line.setAttribute('tabindex', active ? '0' : '-1');
+            line.setAttribute('aria-disabled', active ? 'false' : 'true');
+            line.setAttribute('aria-valuenow', pct1(y));
+            line.setAttribute('aria-valuetext', `${kind === 'header' ? 'حدّ الترويسة' : 'بداية الحاشية'} عند ${pct1(y)}%`);
+            if (line.dataset) line.dataset.source = at.source || '';
+            setText(q(line, '.guide-handle'), `${kind === 'header' ? 'ترويسة' : 'حاشية'} ${pct1(y)}%`);
+          }
+        }
+        setHidden(q(fig, `.gd-grip.is-${kind}`), !(active && y === null));
+        const ghost = q(fig, `.gd-draft.is-${kind}`);
+        if (ghost) {
+          const on = draft !== undefined && draft !== null;
+          setHidden(ghost, !on);
+          if (on) {
+            ghost.style.top = `${Math.round(Number(draft) * 100000) / 1000}%`;
+            setText(q(ghost, '.guide-handle'), `${kind === 'header' ? 'ترويسة' : 'حاشية'} ${pct1(draft)}%`);
+          }
+        }
+      });
+    },
+    // The prepared image decides the page's box in the viewer (its own width / height).
+    onGuidesImage(el, img) {
+      const w = img && img.naturalWidth;
+      const h = img && img.naturalHeight;
+      if (!(w > 0 && h > 0) || !el || !el.style || !el.style.setProperty) return;
+      el.style.setProperty('--ar-n', String(Math.round((w / h) * 10000) / 10000));
     },
 
     // ------------------------------------------------------------ hover / focus / click linking (§3)
@@ -1413,7 +2090,7 @@ document.addEventListener('alpine:init', () => {
     async fetchSheets(from, to) {
       const sep = this.sheetsUrl.includes('?') ? '&' : '?';
       try {
-        const res = await fetch(`${this.sheetsUrl}${sep}from=${from}&to=${to}`, {
+        const res = await fetch(`${this.sheetsUrl}${sep}from=${from}&to=${to}${guidesMode ? '&guides=1' : ''}`, {
           headers: { Accept: 'application/json' },
           credentials: 'same-origin',
           cache: 'no-store',
@@ -1451,6 +2128,7 @@ document.addEventListener('alpine:init', () => {
         if (!s || s.id == null) return;
         const pid = String(s.id);
         sheets.set(pid, s);
+        if (guidesMode && s.guides) this.entryFromGuides(pid, s); // the thumbs and tiles follow the full block
         const p = pages.get(pid);
         if (p) {
           p.stale = false;
@@ -1465,6 +2143,10 @@ document.addEventListener('alpine:init', () => {
         if (h) h.update({ page: this.sheetFor(pid), active: this.active });
         if (pid === byNumber.get(this.current)) { const el = shells.get(pid); if (el && el.style && el.style.setProperty) el.style.setProperty('--ar-n', String(this.aspectNumber(pages.get(pid) || {}))); }
       });
+      if (guidesMode && items.length) {
+        this.recount();
+        if (guidesHooks && guidesHooks.onSheets) guidesHooks.onSheets();
+      }
     },
     lineBoxes(pid) {
       const s = sheets.get(String(pid));
@@ -1514,7 +2196,7 @@ document.addEventListener('alpine:init', () => {
   };
 
   // ---------------------------------------------------------------- page detail viewer
-  const TAB_LABELS = { original: 'الأصل', gray: 'المعالَجة', bw: 'أبيض وأسود' };
+  const TAB_LABELS = { original: 'الأصل', gray: 'المُجهَّزة', bw: 'أبيض وأسود' };
   const TAB_KEYS = { 1: 'original', 2: 'gray', 3: 'bw' };
 
   Alpine.data('pageDetail', (cfg = {}) => ({

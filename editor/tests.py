@@ -580,7 +580,15 @@ def test_review_drift_after_editing_and_chapter_reassembly(editor_user):
     progress = book_progress(book)
     assert progress["editor"] == {"edited": True, "version": 2, "drift_pages": [2]}
 
-    response = post_json(logged(editor_user), reverse("api:chapter_reassemble", args=[book.pk, first]))
+    # D70: over an edited text the rebuild must be confirmed; the refusal names what is at stake
+    url = reverse("api:chapter_reassemble", args=[book.pk, first])
+    refused = post_json(logged(editor_user), url)
+    assert refused.status_code == 409 and refused.json() == {
+        "detail": "حُرِّر نص هذا الفصل في «الكتاب»؛ إعادة بنائه من المراجعة تستبدله كله. أكّد الاستبدال أولًا.",
+        "edited": True,
+    }
+    assert Manuscript.objects.get(book=book).version == 2  # nothing replaced, no run queued
+    response = post_json(logged(editor_user), url, {"replace_edited": True})
     assert response.status_code == 202 and response.json()["status"] == "done"
     manuscript.refresh_from_db()
     assert manuscript.version == 3 and manuscript.origin == "editor"
@@ -592,6 +600,76 @@ def test_review_drift_after_editing_and_chapter_reassembly(editor_user):
     assert services.review_drift(book)["pages"] == []
     assert Page.objects.get(pk=two.pk).status == Page.Status.ASSEMBLED
     assert manuscript.run.settings["scope"] == "chapter" and manuscript.run.settings["chapter"] == first
+
+
+def test_an_unedited_manuscript_rebuilds_a_chapter_without_the_flag(editor_user):
+    """D70: re-assembly of an unedited manuscript loses nothing, so it needs no confirmation."""
+    pages, (one, _two, _three) = assembled_book(editor_user)
+    book = pages.book
+    first = Manuscript.objects.get(book=book).chapters()[0].id
+    review_services.edit_line(one.lines.get(order=1), "نص الفصل الأول مصحح.", editor_user)
+    response = post_json(logged(editor_user), reverse("api:chapter_reassemble", args=[book.pk, first]))
+    assert response.status_code == 202 and response.json()["status"] == "done"
+    with pytest.raises(services.EditorNotFound):
+        services.reassemble_chapter(book, "zz9", editor_user)
+
+
+def test_approval_only_pages_are_not_review_drift(editor_user):
+    """Book 26's shape (D70): after an edit on the book page, approving pages whose lines did not change is
+    not announced as «تغيّر نص … بعد التحرير»; a text change still is."""
+    pages = Pages()
+    one, two, three = pages.page(1), pages.page(2, Page.Status.OCR_DONE), pages.page(3, Page.Status.OCR_DONE)
+    pages.line(one, "الفصل الأول", (300, 700), role="heading")
+    pages.line(one, "نص الفصل الأول.", (100, 850))
+    pages.line(two, "تكملة الفصل الأول.", (100, 850))
+    pages.line(three, "خاتمة الفصل الأول.", (100, 850))
+    assembly_services.start_assembly(pages.book, editor_user)
+    book = pages.book
+    first = Manuscript.objects.get(book=book).chapters()[0].id
+    chapter = services.chapter_document(book, first)
+    chapter["content"]["content"][0]["content"][0]["text"] = "الفصل الأول وقد عدّله المحرر"
+    services.save_chapter(book, first, chapter["content"], chapter["version"], editor_user)
+    for page in (two, three):
+        review_services.approve_page(page, editor_user, force=True)
+    assert assembly_services.manuscript_state(book)["stale_pages"] == [2, 3]  # still stale (D36) …
+    assert services.review_drift(book) == {"edited": True, "pages": [], "chapters": {}}  # … but not drift
+    assert services.chapter_summaries(book)[0]["drift"] is False
+    assert book_progress(book)["editor"]["drift_pages"] == []
+    review_services.edit_line(three.lines.get(order=0), "خاتمة مصححة للفصل الأول.", editor_user)
+    assert services.review_drift(book) == {"edited": True, "pages": [3], "chapters": {first: [3]}}
+
+
+def test_live_drift_api_answers_in_three_queries(editor_user, reader_user, django_assert_num_queries):
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    from editor import api
+
+    pages, (one, two, _three) = assembled_book(editor_user)
+    book = pages.book
+    first, second = [c.id for c in Manuscript.objects.get(book=book).chapters()]
+    chapter = services.chapter_document(book, second)
+    chapter["content"]["content"][1]["content"][0]["text"] = "نص عدّله المحرر."
+    services.save_chapter(book, second, chapter["content"], chapter["version"], editor_user)
+    review_services.edit_line(two.lines.get(order=0), "تكملة مصححة للفصل الأول.", editor_user)
+    url = reverse("api:review_drift", args=[book.pk])
+    assert url == f"/api/books/{book.pk}/drift/"
+    assert services.editor_urls(book)["drift"] == url
+    request = APIRequestFactory().get(url)
+    force_authenticate(request, user=reader_user)
+    with django_assert_num_queries(3):
+        response = api.review_drift(request, book_id=book.pk)
+    assert response.status_code == 200
+    assert response.data == {"edited": True, "pages": [2], "chapters": [first]}
+    # a proofreader may read it; an anonymous visitor may not; no manuscript → no drift; no book → 404
+    assert logged(reader_user).get(url).json() == {"edited": True, "pages": [2], "chapters": [first]}
+    assert Client().get(url).status_code == 403
+    bare = Book.objects.create(title="كتاب بلا مخطوطة")
+    assert logged(reader_user).get(reverse("api:review_drift", args=[bare.pk])).json() == {
+        "edited": False,
+        "pages": [],
+        "chapters": [],
+    }
+    assert logged(reader_user).get(reverse("api:review_drift", args=[10**6])).status_code == 404
 
 
 def test_reassembly_refused_while_an_assembly_runs_and_for_unknown_chapters(editor_user, reader_user):
@@ -889,7 +967,7 @@ def test_chapter_reassembly_keeps_a_review_heading_split_whole(editor_user):
     services.save_chapter(book, second, chapter["content"], chapter["version"], editor_user)
     review_services.set_line_role(one.lines.get(order=3), "heading", editor_user)  # «فقرة ثانية …»
     first = Manuscript.objects.get(book=book).chapters()[0].id
-    run = services.reassemble_chapter(book, first, editor_user)
+    run = services.reassemble_chapter(book, first, editor_user, replace_edited=True)
     assert run.status == "done", run.error
     texts = texts_of(book)
     assert texts == [
@@ -922,7 +1000,7 @@ def test_chapter_reassembly_respects_a_chapter_split_in_the_editor(editor_user):
     saved = services.save_chapter(book, first, chapter["content"], chapter["version"], editor_user)
     assert saved["reload"] is True and len(saved["chapters"]) == 2
     edit_first_line(one, "فقرة أولى مصححة", editor_user)
-    run = services.reassemble_chapter(book, first, editor_user)
+    run = services.reassemble_chapter(book, first, editor_user, replace_edited=True)
     assert run.status == "done", run.error
     texts = texts_of(book)
     assert texts == [
@@ -940,7 +1018,7 @@ def test_chapter_reassembly_respects_a_chapter_split_in_the_editor(editor_user):
     # the new chapter (typed heading, no source line) re-assembles with its heading kept
     new_chapter = Manuscript.objects.get(book=book).chapters()[1]
     assert new_chapter.title == "فصل جديد"
-    run = services.reassemble_chapter(book, new_chapter.id, editor_user)
+    run = services.reassemble_chapter(book, new_chapter.id, editor_user, replace_edited=True)
     assert run.status == "done", run.error
     assert texts_of(book) == texts
 
@@ -958,7 +1036,7 @@ def test_chapter_reassembly_after_a_merge_in_the_editor_loses_nothing(editor_use
     edit_first_line(one, "فقرة أولى مصححة", editor_user)
     first = Manuscript.objects.get(book=book).chapters()[0].id
     assert len(Manuscript.objects.get(book=book).chapters()) == 1
-    run = services.reassemble_chapter(book, first, editor_user)
+    run = services.reassemble_chapter(book, first, editor_user, replace_edited=True)
     assert run.status == "done", run.error
     assert texts_of(book) == [
         "الفصل الأول",

@@ -1,6 +1,6 @@
 {% comment %}The book page's layers (PHASE5_SPEC §9.2): the one overlay (= rv-pop: the footnote's editor or a word's
 readings, at most one open), the source drawer («عرض الأصل», = ms-drawer), the dialogs (= rv-modal: snapshots, the
-digit conversion, the shortcut sheet) and the undo toast. Inside the bookPage component (layout.html).
+digit conversion, the chapter's rebuild from review, the shortcut sheet) and the undo toast. Inside the bookPage component (layout.html).
 Context: can_edit.{% endcomment %}
 {# ------------------------------------------------------------ the one overlay #}
 <div class="menu ed-pop" x-ref="pop" x-show="pop.kind" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-note': pop.kind === 'note', 'is-word': pop.kind === 'word' }"
@@ -146,6 +146,18 @@ Context: can_edit.{% endcomment %}
     </div>
   </div>
 </div>
+
+{# ------------------------------------------------------------ D70: a chapter rebuilt from review over an edited text #}
+<div class="rv-scrim" x-show="rebuild.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeRebuild()">
+  <div class="rv-modal rv-dialog" role="alertdialog" aria-modal="true" aria-labelledby="bp-rebuild-title" aria-describedby="bp-rebuild-text" @keydown.tab="trapTab($event, $el)" @keydown.escape.stop.prevent="closeRebuild()" data-rebuild-dialog>
+    <h2 class="rv-modal-title" id="bp-rebuild-title">إعادة بناء الفصل «<span x-text="rebuild.title"></span>» من المراجعة؟</h2>
+    <p class="meta" id="bp-rebuild-text">يُستبدل نص الفصل كله بنص صفحاته في المراجعة، فتضيع تعديلاته في الكتاب: العناوين والحواشي والكلمات. تبقى منه نسخة في «نسخة محفوظة».</p>
+    <div class="rv-modal-actions">
+      <button type="button" class="btn" x-ref="rebuildCancel" @click="closeRebuild()">إلغاء</button>
+      <button type="button" class="btn btn-danger" :disabled="reassembly.running" @click="confirmRebuild()">استبدال الفصل</button>
+    </div>
+  </div>
+</div>
 {% endif %}
 
 {# ------------------------------------------------------------ the shortcut sheet (= rv-shortcuts): both modes #}
@@ -162,10 +174,11 @@ Context: can_edit.{% endcomment %}
       <dt><kbd class="kbd">←</kbd> <kbd class="kbd">→</kbd> <kbd class="kbd">PageUp</kbd> <kbd class="kbd">PageDown</kbd></dt><dd>الصفحة التالية / السابقة</dd>
       <dt><kbd class="kbd">Home</kbd> / <kbd class="kbd">End</kbd></dt><dd>أول صفحة / آخر صفحة</dd>
       <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة</dd>
-      <dt><kbd class="kbd">S</kbd></dt><dd>صفحة واحدة أو صفحتان</dd>
-      <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>ملء الارتفاع · ملء العرض · الحجم الحقيقي</dd>
+      <dt><kbd class="kbd">V</kbd></dt><dd>صفحة واحدة أو صفحتان</dd>
+      <dt><kbd class="kbd">0</kbd> <kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd></dt><dd>ملء الارتفاع · تكبير (إلى ملء العرض ثم الحجم الحقيقي) · تصغير</dd>
       {% if can_edit %}
       <dt><kbd class="kbd">E</kbd></dt><dd>التحرير والمعاينة (أو نقرتان على سطر)</dd>
+      <dt><kbd class="kbd">S</kbd></dt><dd>فواصل الصفحات الأصلية (تظهر في التحرير)</dd>
       <dt><span class="group-label">التحرير</span></dt><dd></dd>
       <dt><span class="meta">نقرة على سطر</span></dt><dd>فتح الفقرة في مكانها والمؤشّر حيث نقرت</dd>
       <dt><kbd class="kbd">Enter</kbd> / <kbd class="kbd">⇧Enter</kbd></dt><dd>فقرة جديدة / سطر جديد داخل الفقرة</dd>
@@ -183,6 +196,7 @@ Context: can_edit.{% endcomment %}
       <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق الطبقة العليا، ثم الفقرة، ثم وضع التحرير</dd>
       <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
     </dl>
+    <p class="meta mt-3">تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه.</p>
   </div>
 </div>
 

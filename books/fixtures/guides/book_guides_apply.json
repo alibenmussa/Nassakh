@@ -1,0 +1,259 @@
+{
+  "layout": {
+    "book": "book_guides_layout.json",
+    "request": {
+      "set": {"header_cut": 0.062},
+      "reset_overrides": [],
+      "stage": "layout"
+    },
+    "status": 200,
+    "response": {
+      "changed": [1, 2, 3, 4, 5, 6, 7],
+      "reocr": 0,
+      "undo": {
+        "book": {
+          "source": "auto",
+          "header_cut": null,
+          "footnote_line": 0.781,
+          "page_number_zone": "bottom",
+          "page_number_height": 0.06
+        },
+        "overrides": {}
+      },
+      "book": {"source": "manual", "header_cut": 0.062, "footnote_line": null, "awaits_ocr_start": true},
+      "pages": [
+        {
+          "id": 812,
+          "n": 1,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 813,
+          "n": 2,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 814,
+          "n": 3,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.782], ["f", 0.782, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 815,
+          "n": 4,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.78], ["f", 0.78, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 816,
+          "n": 5,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 817,
+          "n": 6,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.783], ["f", 0.783, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 818,
+          "n": 7,
+          "b": [["h", 0.0, 0.062], ["b", 0.062, 0.7933], ["f", 0.7933, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 1,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        }
+      ]
+    }
+  },
+  "undo": {
+    "book": "book_guides_layout.json, after the `layout` request",
+    "request": {
+      "undo": {
+        "book": {
+          "source": "auto",
+          "header_cut": null,
+          "footnote_line": 0.781,
+          "page_number_zone": "bottom",
+          "page_number_height": 0.06
+        },
+        "overrides": {}
+      },
+      "stage": "layout"
+    },
+    "status": 200,
+    "response": {
+      "changed": [1, 2, 3, 4, 5, 6, 7],
+      "reocr": 0,
+      "undo": {
+        "book": {
+          "source": "manual",
+          "header_cut": 0.062,
+          "footnote_line": null,
+          "page_number_zone": "none",
+          "page_number_height": 0.06
+        },
+        "overrides": {}
+      },
+      "book": {"source": "auto", "header_cut": null, "footnote_line": null, "awaits_ocr_start": true},
+      "pages": [
+        {
+          "id": 812,
+          "n": 1,
+          "b": [["b", 0.0, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 813,
+          "n": 2,
+          "b": [["b", 0.0, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 814,
+          "n": 3,
+          "b": [["b", 0.0, 0.782], ["f", 0.782, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 815,
+          "n": 4,
+          "b": [["b", 0.0, 0.78], ["f", 0.78, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 816,
+          "n": 5,
+          "b": [["b", 0.0, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 817,
+          "n": 6,
+          "b": [["b", 0.0, 0.783], ["f", 0.783, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        },
+        {
+          "id": 818,
+          "n": 7,
+          "b": [["b", 0.0, 0.7933], ["f", 0.7933, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 1,
+          "o": false,
+          "l": "",
+          "s": "preprocessed",
+          "x": false
+        }
+      ]
+    }
+  },
+  "ocr": {
+    "book": "book_guides_started.json",
+    "request": {
+      "set": {"header_cut": 0.07},
+      "reset_overrides": [],
+      "stage": "ocr"
+    },
+    "status": 200,
+    "response": {
+      "changed": [3, 4, 5],
+      "reocr": 3,
+      "undo": null,
+      "book": {"source": "manual", "header_cut": 0.07, "footnote_line": null, "awaits_ocr_start": false},
+      "pages": [
+        {
+          "id": 814,
+          "n": 3,
+          "b": [["h", 0.0, 0.07], ["b", 0.07, 0.782], ["f", 0.782, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "layout_done",
+          "x": false
+        },
+        {
+          "id": 815,
+          "n": 4,
+          "b": [["h", 0.0, 0.07], ["b", 0.07, 0.78], ["f", 0.78, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "layout_done",
+          "x": false
+        },
+        {
+          "id": 816,
+          "n": 5,
+          "b": [["h", 0.0, 0.07], ["b", 0.07, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+          "d": 0,
+          "o": false,
+          "l": "",
+          "s": "layout_done",
+          "x": false
+        }
+      ]
+    }
+  },
+  "conflict": {
+    "book": "book_guides_started.json",
+    "request": {
+      "set": {"header_cut": 0.062},
+      "reset_overrides": [],
+      "stage": "layout"
+    },
+    "status": 409,
+    "response": {"detail": "بدأت المعالجة في نافذة أخرى؛ حدّث الصفحة.", "started": true}
+  }
+}

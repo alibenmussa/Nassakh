@@ -44,8 +44,8 @@
     <div class="viewer-toolbar">
       <div class="segmented" role="tablist" aria-label="عرض الصورة">
         <button type="button" role="tab" :aria-selected="tab === 'original'" :class="{ 'is-selected': tab === 'original' }" @click="select('original')" :disabled="!has('original')">الأصل</button>
-        <button type="button" role="tab" :aria-selected="tab === 'gray'" :class="{ 'is-selected': tab === 'gray' }" @click="select('gray')" :disabled="!has('gray')" :title="has('gray') ? '' : 'تتوافر بعد المعالجة الأولية'">المعالَجة</button>
-        <button type="button" role="tab" :aria-selected="tab === 'bw'" :class="{ 'is-selected': tab === 'bw' }" @click="select('bw')" :disabled="!has('bw')" :title="has('bw') ? '' : 'تتوافر بعد المعالجة الأولية'">أبيض وأسود</button>
+        <button type="button" role="tab" :aria-selected="tab === 'gray'" :class="{ 'is-selected': tab === 'gray' }" @click="select('gray')" :disabled="!has('gray')" :title="has('gray') ? '' : 'تتوافر بعد تجهيز الصفحة'">المُجهَّزة</button>
+        <button type="button" role="tab" :aria-selected="tab === 'bw'" :class="{ 'is-selected': tab === 'bw' }" @click="select('bw')" :disabled="!has('bw')" :title="has('bw') ? '' : 'تتوافر بعد تجهيز الصفحة'">أبيض وأسود</button>
       </div>
       <label class="check meta" x-show="regions.length > 0 && tab !== 'original'" x-cloak>
         <input type="checkbox" x-model="showRegions">
@@ -68,7 +68,7 @@
       </div>
       <div class="viewer-empty" x-show="!src" x-cloak>
         <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-image"/></svg>
-        <span>لا صورة لهذا العرض بعد؛ تُنشأ الصور المعالَجة بعد المعالجة الأولية.</span>
+        <span>لا صورة لهذا العرض بعد؛ تُنشأ صور الصفحة بعد تجهيزها.</span>
       </div>
     </div>
 

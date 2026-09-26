@@ -4,16 +4,17 @@ After a re-run the component sets `src` on every element with `data-page-image="
 and dispatches `nassakh:page-updated` on `window` with {pageId, images, output, regions, status, flags}.{% endcomment %}
 {% if page %}
 {% preprocess_panel_config page "preprocess-config" %}
-<section class="pp-panel" x-data="preprocessPanel(JSON.parse(document.getElementById('preprocess-config').textContent))" aria-labelledby="pp-title">
+{# «التخطيط» (D64): while the book awaits «بدء المعالجة», a re-run says nothing about reading the text #}
+<section class="pp-panel" x-data="preprocessPanel(Object.assign(JSON.parse(document.getElementById('preprocess-config').textContent), { layoutStage: {% if book.awaits_ocr_start %}true{% else %}false{% endif %} }))" aria-labelledby="pp-title">
   <div class="card-header">
-    <h2 class="section-title" id="pp-title">المعالجة الأولية</h2>
-    <span class="badge" :class="{ 'badge-accent': state.is_manual }" x-text="state.has_preprocess ? (state.is_manual ? 'معدّلة يدويًا' : 'تلقائية') : 'لم تُعالَج'"></span>
+    <h2 class="section-title" id="pp-title">تجهيز الصفحة</h2>
+    <span class="badge" :class="{ 'badge-accent': state.is_manual }" x-text="state.has_preprocess ? (state.is_manual ? 'معدّلة يدويًا' : 'تلقائية') : 'لم تُجهَّز'"></span>
   </div>
 
   <template x-if="!state.has_preprocess">
     <div class="stack">
-      <p class="help">لم تُعالَج هذه الصفحة بعد. شغّل المعالجة الأولية لاستقامة الصفحة وقصّها وتنظيفها.</p>
-      <div><button type="button" class="btn" @click="reset()" :disabled="busy">تشغيل المعالجة</button></div>
+      <p class="help">لم تُجهَّز هذه الصفحة بعد. شغّل التجهيز لاستقامة الصفحة وقصّها وتنظيفها.</p>
+      <div><button type="button" class="btn" @click="reset()" :disabled="busy">تشغيل التجهيز</button></div>
       <div class="banner banner-danger" x-show="error" x-cloak role="alert">
         <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span x-text="error"></span>
       </div>
@@ -65,7 +66,7 @@ and dispatches `nassakh:page-updated` on `window` with {pageId, images, output, 
       <div class="pp-actions">
         <button type="button" class="btn" @click="rerun()" :disabled="busy">
           <span class="spinner spinner-sm" x-show="busy" x-cloak aria-hidden="true"></span>
-          <span>إعادة المعالجة</span>
+          <span>إعادة التجهيز</span>
         </button>
         <button type="button" class="btn btn-ghost" @click="reset()" :disabled="busy || !state.is_manual">استعادة القيم التلقائية</button>
       </div>

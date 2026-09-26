@@ -1,0 +1,251 @@
+{
+  "computed": {
+    "bands": [
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.0, 1.0, 0.781],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.781, 1.0, 0.972],
+        "source": "rule"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": null,
+      "footnote": {"y": 0.781, "source": "rule"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0001/display.webp?v=1727337600",
+    "derived": false,
+    "locked": ""
+  },
+  "no_footnote": {
+    "bands": [
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.0, 1.0, 0.972],
+        "source": "auto"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {"header": null, "footnote": null},
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0002/display.webp?v=1727337600",
+    "derived": false,
+    "locked": ""
+  },
+  "footnote_from_type": {
+    "bands": [
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.0, 1.0, 0.7933],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.7933, 1.0, 0.972],
+        "source": "block"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": null,
+      "footnote": {"y": 0.7933, "source": "block"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [{"code": "footnote_from_type", "label": "حاشية من حجم الخط"}],
+    "image_url": "/media/books/25/pages/0007/display.webp?v=1727337600",
+    "derived": false,
+    "locked": ""
+  },
+  "override": {
+    "bands": [
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.0, 1.0, 0.8],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.8, 1.0, 0.972],
+        "source": "override"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": null,
+      "footnote": {"y": 0.8, "source": "override"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {"footnote_line": 0.8},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0002/display.webp?v=1727337600",
+    "derived": false,
+    "locked": ""
+  },
+  "uploaded": {
+    "bands": [],
+    "lines": {"header": null, "footnote": null},
+    "rows": [],
+    "override": {},
+    "doubts": [],
+    "image_url": null,
+    "derived": false,
+    "locked": ""
+  },
+  "derived": {
+    "bands": [
+      {
+        "kind": "running_header",
+        "bbox": [0.0, 0.0, 1.0, 0.062],
+        "source": "book"
+      },
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.062, 1.0, 0.782],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.782, 1.0, 0.972],
+        "source": "rule"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": {"y": 0.062, "source": "book"},
+      "footnote": {"y": 0.782, "source": "rule"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0003/display.webp?v=1727337600",
+    "derived": true,
+    "locked": ""
+  },
+  "approved": {
+    "bands": [
+      {
+        "kind": "running_header",
+        "bbox": [0.0, 0.0, 1.0, 0.062],
+        "source": "book"
+      },
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.062, 1.0, 0.781],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.781, 1.0, 0.972],
+        "source": "rule"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": {"y": 0.062, "source": "book"},
+      "footnote": {"y": 0.781, "source": "rule"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0001/display.webp?v=1727337600",
+    "derived": true,
+    "locked": "approved"
+  },
+  "review": {
+    "bands": [
+      {
+        "kind": "running_header",
+        "bbox": [0.0, 0.0, 1.0, 0.062],
+        "source": "book"
+      },
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.062, 1.0, 0.972],
+        "source": "auto"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": {"y": 0.062, "source": "book"},
+      "footnote": null
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {},
+    "doubts": [],
+    "image_url": "/media/books/25/pages/0002/display.webp?v=1727337600",
+    "derived": true,
+    "locked": "review"
+  },
+  "derived_override_cut": {
+    "bands": [
+      {
+        "kind": "running_header",
+        "bbox": [0.0, 0.0, 1.0, 0.05],
+        "source": "override"
+      },
+      {
+        "kind": "body",
+        "bbox": [0.0, 0.05, 1.0, 0.805],
+        "source": "auto"
+      },
+      {
+        "kind": "footnote",
+        "bbox": [0.0, 0.805, 1.0, 0.972],
+        "source": "override"
+      },
+      {
+        "kind": "page_number",
+        "bbox": [0.46, 0.972, 0.53, 0.99],
+        "source": "detected"
+      }
+    ],
+    "lines": {
+      "header": {"y": 0.05, "source": "override"},
+      "footnote": {"y": 0.805, "source": "override"}
+    },
+    "rows": [[0.04, 0.0533], [0.0833, 0.0967], [0.11, 0.1233], [0.75, 0.7633], [0.8, 0.81], [0.82, 0.83], [0.974, 0.988]],
+    "override": {"header_cut": 0.05, "footnote_line": 0.805},
+    "doubts": [{"code": "line_cut", "label": "خط يقطع سطرًا"}],
+    "image_url": "/media/books/25/pages/0007/display.webp?v=1727337600",
+    "derived": true,
+    "locked": ""
+  }
+}

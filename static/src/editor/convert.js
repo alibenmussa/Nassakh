@@ -460,13 +460,31 @@ export function splitNode(node, offset) {
   return [before, after];
 }
 
+// The union of two blocks' source marks (numbers, sorted, each once); an attribute neither block has stays absent.
+function unionMarks(x, y) {
+  const values = [x, y].filter(Array.isArray);
+  if (!values.length) return undefined;
+  const seen = new Set();
+  values.flat().forEach((v) => { const n = Number(v); if (Number.isFinite(n)) seen.add(n); });
+  return [...seen].sort((p, q) => p - q);
+}
+
 // Backspace at the start of `b`: `{node, offset}` — `a` with `b`'s text after it and the caret at the seam;
-// null when `a` has no text to join (a separator: the caller removes it instead).
+// null when `a` has no text to join (a separator: the caller removes it instead). The merged block keeps both
+// blocks' source marks (D70): `sourcePages` and `sourceLineIds` are the union of the two (sorted, unique), and
+// it is `reviewed` only when both were, so «الأصل» still shows both pages and the page-by-page merge (D78)
+// finds every line.
 export function mergeNodes(a, b) {
   if (!isObj(a) || !isObj(b) || a.type === 'separator') return null;
   const offset = plainText(a).length;
   const attrs = { ...attrsOf(a) };
-  if (attrsOf(b).keepWithNext === true) attrs.keepWithNext = true;
+  const other = attrsOf(b);
+  if (other.keepWithNext === true) attrs.keepWithNext = true;
+  ['sourcePages', 'sourceLineIds'].forEach((key) => {
+    const marks = unionMarks(attrs[key], other[key]);
+    if (marks !== undefined) attrs[key] = marks;
+  });
+  if (attrs.reviewed === false || other.reviewed === false) attrs.reviewed = false;
   const node = { ...a, attrs, content: normalizeContent([...(a.content || []), ...(b.content || [])]) };
   return { node, offset };
 }

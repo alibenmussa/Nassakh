@@ -278,8 +278,11 @@
         clearTimeout(T.poll);
         return this.poll();
       },
+      // The tab came back into view: the review drift is refreshed always (D70: a change made in review
+      // meanwhile shows without a reload); the render is polled again only while one is on (or failing).
       onVisible() {
         if (U.hasDOM && document.hidden) return false;
+        if (typeof this.refreshDrift === 'function') this.refreshDrift();
         if (this.stopped || !(this.active || this.failures)) return false;
         this.pollNow();
         return true;
@@ -477,7 +480,7 @@
         void this.painted;
         const count = this.pageCount;
         const focus = this.focusChapter;
-        const driftIds = new Set((cfg.drift && cfg.drift.chapters) || []);
+        const driftIds = new Set((this.drift && this.drift.chapters) || []);
         const dismissed = new Set(this.dismissedDrift || []);
         // one pass over each list (800 chapters stay cheap on every paint)
         const rangeOf = new Map(this.ranges.map((x) => [x.id, x]));

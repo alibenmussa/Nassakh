@@ -211,6 +211,8 @@ inits.forEach((fn) => fn());
   out.onlyK = panel.manualOverrides();
   panel.fullCrop();
   out.crop = panel.manualOverrides().crop_box;
+  // PHASE7 §3.14: in «التخطيط» (the book awaits «بدء المعالجة») a re-run says nothing about the text
+  out.notice = [reg.preprocessPanel({ has_preprocess: false, layoutStage: true }).doneNotice, panel.doneNotice];
   // F42: a 403 stops the text panel for good; a slow request never overlaps the next poll
   const tp = reg.textPanel({ statusUrl: '/s', textUrl: '/t', runsUrl: '/r' });
   tp.active = true; tp.status = 'layout_done';
@@ -247,7 +249,70 @@ def test_alpine_components_copy_overrides_and_polling(tmp_path):
     assert out["plain"] == "قال الأمير في سنة 1966\n\nوَفِي 12"  # Western digits, diacritics kept
     assert out["untouched"] == {} and out["onlyK"] == {"sauvola_k": 0.3}
     assert out["crop"] == [0, 0, 900, 1100]
+    assert out["notice"] == [
+        "جُهّزت الصفحة من جديد.",
+        "جُهّزت الصفحة من جديد. أعد تشغيل التعرّف على النص من قائمة إعادة التشغيل إن أردت تحديث النص.",
+    ]
     assert out["noOverlap"] is True
     assert out["stopped"] == {"polling": False, "authLost": True, "timers": 0}
     assert out["copyProvisional"] == "مبدئي" and out["copyFinal"] == "نهائي"
     assert out["errorSplit"] == ["تعذّر.", "RuntimeError: boom"]
+
+
+# ------------------------------------------------------------ PHASE7 §3.13–§3.14: the upload form, the CSS
+
+
+def _between(body: str, start: str, end: str) -> str:
+    i = body.index(start)
+    return body[i : body.index(end, i)]
+
+
+CSS = ROOT / "static" / "dist" / "app.css"
+
+
+def test_upload_form_extracts_and_names_the_kept_range(editor_client):
+    body = editor_client.get(reverse("books:create")).content.decode()
+    assert '<span x-show="!submitting">استخراج الصفحات</span>' in body and "إنشاء الكتاب" not in body
+    assert "تُستخرج الصفحات فور الرفع وتُكتشف مناطقها، ثم تنتظر «بدء المعالجة»." in body
+    picker = _between(body, 'class="file-pick"', '<p class="help"')
+    assert 'type="file" name="source_pdf"' in picker and 'accept="application/pdf,.pdf"' in picker
+    assert "<span>اختيار ملف PDF</span>" in picker and "x-text=\"fileName || 'لم يُختر ملف'\"" in picker
+    assert '@change="onFile($event)"' in picker
+    assert '@input="readSkips($el)"' in body and 'x-text="range.text" data-range-line' in body
+    assert "يمكن استثناء صفحات بعينها لاحقًا<" in body
+
+
+def test_compiled_css_has_the_guides_mode():
+    css = CSS.read_text(encoding="utf-8")
+    assert re.search(
+        r"\.bk-dashboard\.is-guides \.bk-viewer \.gd-page"
+        r"\{width:min\(calc\(100cqh \* var\(--ar-n,\s*\.7\)\),\s*100cqw\)\}",
+        css,
+    )
+    for cls in (
+        "gd-page",
+        "gd-band",
+        "gd-chip",
+        "gd-grip",
+        "gd-menu",
+        "gd-preview",
+        "gd-legend",
+        "gd-bands",
+        "gd-b",
+        "gd-savebar",
+        "gd-lock",
+        "guide-line",
+        "guide-handle",
+        "tile-mark-doubt",
+        "file-pick",
+        "range-line",
+    ):
+        assert re.search(rf"\.{cls}[{{.:\[ ,]", css), cls
+    assert re.search(r"\.guide-line:before\{[^}]*height:20px", css)  # the 20 px hit area
+    assert ".guides-layout" not in css  # the guides screen is gone
+    reduced = css[css.rindex("prefers-reduced-motion:reduce") :]
+    assert ".gd-band" in reduced or ".gd-band" in css[css.index("prefers-reduced-motion:reduce") :]
+
+
+def test_the_guides_screen_template_is_gone():
+    assert not (ROOT / "templates" / "processing" / "guides.html").exists()

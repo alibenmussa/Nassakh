@@ -1,0 +1,38 @@
+{% comment %}The body of a mounted sheet in the dashboard's «التخطيط» mode (PHASE7_SPEC §3.12, D67), rendered once inside
+<template id="sheet-guides"> and cloned by books.js (`mountSheet`) into `.sheet-body`; no decode handle. The prepared
+page fitted to the stage height, with no text pane. Over it, a `dir="ltr"` layer in image space (physical left / top
+percentages, as the page detail's overlay): the bands (`.region-box.region-<kind>`, drawn by `patchGuidesBody`), the
+running-head cut and the footnote start as sliders with their pills, the grips that add them, the book-wide draft
+(dashed), the band menu and the lock of an approved or reviewed page. Under a started book's page, the save bar.
+Drag, keys and menus: `bookGuides` (static/src/js/processing.js). Context: role.{% endcomment %}
+<figure class="gd-page" data-page-id="">
+  <img class="gd-img" alt="" decoding="async" draggable="false" hidden>
+  <div class="gd-layer" dir="ltr">
+    <div class="gd-bands-full"></div>
+    <div class="guide-line gd-line is-header" role="slider" tabindex="-1" aria-orientation="vertical" aria-label="حدّ الترويسة" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+      <span class="guide-handle" aria-hidden="true"></span>
+    </div>
+    <div class="guide-line gd-line is-footnote" role="slider" tabindex="-1" aria-orientation="vertical" aria-label="بداية الحاشية" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+      <span class="guide-handle" aria-hidden="true"></span>
+    </div>
+    <div class="gd-draft is-header" aria-hidden="true" hidden><span class="guide-handle"></span></div>
+    <div class="gd-draft is-footnote" aria-hidden="true" hidden><span class="guide-handle"></span></div>
+    {% if role == 'admin' or role == 'editor' %}
+    <button type="button" class="gd-grip is-header" hidden>+ ترويسة</button>
+    <button type="button" class="gd-grip is-footnote" hidden>+ حاشية</button>
+    <div class="menu gd-menu" role="menu" hidden>
+      <button type="button" class="menu-item" role="menuitem" data-act="remove">إزالة من هذه الصفحة</button>
+      <button type="button" class="menu-item" role="menuitem" data-act="all">تطبيق على كل الصفحات…</button>
+      <button type="button" class="menu-item" role="menuitem" data-act="no-number">ليس رقم صفحة</button>
+    </div>
+    {% endif %}
+  </div>
+  <div class="gd-lock" hidden><svg class="icon icon-sm" aria-hidden="true"><use href="#i-check-circle"/></svg><span class="gd-lock-text"></span></div>
+  <p class="sr-only gd-sr"></p>
+  {% if role == 'admin' or role == 'editor' %}
+  <div class="gd-savebar" hidden>
+    <button type="button" class="btn btn-primary btn-sm" data-act="save">حفظ وإعادة التعرّف على الصفحة</button>
+    <button type="button" class="btn btn-sm" data-act="cancel">إلغاء</button>
+  </div>
+  {% endif %}
+</figure>

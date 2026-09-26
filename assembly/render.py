@@ -118,6 +118,18 @@ class _Ctx:
     chapter_notes: list[dict] = field(default_factory=list)  # footnote nodes met in the open chapter
     book_notes: list[dict] = field(default_factory=list)
     block_id: str = ""
+    # page number → reviewed now (D70): the amber mark follows the live status; None → the block attribute
+    reviewed: dict[int, bool] | None = None
+
+
+def _is_reviewed(pages: list[int], attrs: dict, live: dict[int, bool] | None) -> bool:
+    """Whether a block reads as reviewed (D35's amber mark when not): from the live status of its source pages
+    when it has any and the status is known (a page left out of the book since keeps the block's attribute),
+    else from the attribute the assembly stored."""
+    stored = bool(attrs.get("reviewed", True))
+    if live is None or not pages:
+        return stored
+    return all(live.get(page, stored) for page in pages)
 
 
 def _text_html(node: dict, ctx: _Ctx) -> str:
@@ -279,7 +291,7 @@ def _block_html(node: dict, ctx: _Ctx) -> str:
     ctx.block_id = block_id
     pages = _ints(attrs.get("sourcePages"))
     lines = _ints(attrs.get("sourceLineIds"))
-    reviewed = bool(attrs.get("reviewed", True))
+    reviewed = _is_reviewed(pages, attrs, ctx.reviewed)
     if node.get("type") == "heading":
         level = 2 if attrs.get("level") == 2 else 1
         tag, cls = ("h3", "ms-h2") if level == 2 else ("h2", "ms-h1")
@@ -329,9 +341,13 @@ def _unmatched_markers(warnings) -> dict[str, list[str]]:
     return out
 
 
-def render_document(doc: dict | None, *, notes: str = "chapter", warnings=None) -> str:
+def render_document(
+    doc: dict | None, *, notes: str = "chapter", warnings=None, reviewed: dict[int, bool] | None = None
+) -> str:
     """The manuscript as HTML (§4.4). `notes`: `chapter` (a list after each chapter), `book` (one list
-    at the end) or `none`. `warnings` (the run's, optional) tint the unmatched markers they name."""
+    at the end) or `none`. `warnings` (the run's, optional) tint the unmatched markers they name.
+    `reviewed` (page number → reviewed now, `services.live_reviewed`) draws `data-reviewed` from the live
+    status of each block's source pages (D70); without it, from the blocks' stored attribute."""
     if notes not in NOTE_MODES:
         raise ValueError(f"unknown notes mode {notes!r}")
     doc = doc if isinstance(doc, dict) else {}
@@ -340,7 +356,7 @@ def render_document(doc: dict | None, *, notes: str = "chapter", warnings=None) 
     pending = sorted(
         (s for s in seams.values() if s.get("mode") in ("split", "missing")), key=lambda s: int(s["page"])
     )
-    ctx = _Ctx(seams=seams, notes_mode=notes, unmatched=_unmatched_markers(warnings))
+    ctx = _Ctx(seams=seams, notes_mode=notes, unmatched=_unmatched_markers(warnings), reviewed=reviewed)
     out: list[str] = ['<article class="ms-doc" dir="rtl">']
     chapter = -1
     open_section = False
@@ -518,7 +534,7 @@ def fragment_context(payload: dict | None) -> dict:
     return {
         "has_document": True,
         "version": payload.get("version") or 0,
-        "document_html": render_document(doc, warnings=warnings),
+        "document_html": render_document(doc, warnings=warnings, reviewed=payload.get("reviewed")),
         "outline": toc,
         "warning_groups": group_warnings(warnings),
         "warnings_total": len(warnings),

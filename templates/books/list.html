@@ -16,7 +16,7 @@
 {% block content %}
 {% if role == 'admin' or role == 'editor' %}{% url 'books:create' as create_url %}{% endif %}
 {% if not rows %}
-  {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب بعد" text="ارفع ملف PDF لكتاب مصوّر أو رقمي، حدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة، ثم اضغط «بدء المعالجة» ليستخرج نسّاخ الصفحات ويتعرّف على نصّها." action_url=create_url action_label="كتاب جديد" %}
+  {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب بعد" text="ارفع ملف PDF لكتاب مصوّر أو رقمي، وحدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة. يستخرج نسّاخ الصفحات ويكتشف مناطقها، ثم تضغط «بدء المعالجة» ليتعرّف على نصّها." action_url=create_url action_label="كتاب جديد" %}
 {% else %}
   <div class="page-header">
     <p class="meta">عدد الكتب: <span class="num">{{ rows|length }}</span></p>
@@ -46,8 +46,13 @@
           </td>
           <td>{% include "partials/_status_dot.html" with status=row.status label=row.status_label %}</td>
           <td class="books-progress-cell">
+            {% if row.waiting %}
+            {# «تم التخطيط» waits for the owner: a full green bar would read as finished (§3.12) #}
+            <span class="meta books-waiting">بانتظار «بدء المعالجة»</span>
+            {% else %}
             {% progress_bar percent=row.percent state=row.bar_state label="نسبة التقدّم" %}
             <span class="meta num">{{ row.percent }}%</span>
+            {% endif %}
           </td>
           <td class="meta" dir="ltr">{{ row.book.updated_at|date:"Y/m/d H:i" }}</td>
         </tr>

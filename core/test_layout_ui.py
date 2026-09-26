@@ -151,7 +151,7 @@ def test_book_page_first_paint_before_any_layout(editor):
     for label in (
         "نسخة محفوظة…",
         "تحويل الأرقام…",
-        "إعادة تجميع الفصل من المراجعة",
+        "إعادة بناء الفصل من المراجعة…",
         "PDF المعاينة",
         "اختصارات لوحة المفاتيح",
         "المخطوطة",
@@ -564,6 +564,13 @@ out.midHeading = convert.splitNode(h, 3).map((n) => [n.type, n.attrs.level]);
 // Backspace at the start: the texts joined, the caret at the seam; nothing to join to a separator
 out.merge = convert.mergeNodes(a, b);
 out.mergeSeparator = convert.mergeNodes({ type: 'separator', attrs: {} }, b);
+// D70: a merge keeps both blocks' source marks (union, sorted, unique) and is reviewed only when both were
+const para = (id, attrs, text) => ({ type: 'paragraph', attrs: { id, ...attrs }, content: [{ type: 'text', text }] });
+out.mergeMarks = [
+  convert.mergeNodes(para('p1', { sourcePages: [4, 3], sourceLineIds: [31, 30], reviewed: true }, 'أ'), para('p2', { sourcePages: [4, 5], sourceLineIds: [40, 31, 41], reviewed: false }, 'ب')).node.attrs,
+  convert.mergeNodes(para('p1', {}, 'أ'), para('p2', { sourcePages: [6], sourceLineIds: [60] }, 'ب')).node.attrs,
+  convert.mergeNodes(para('p1', { sourcePages: [2], reviewed: true }, 'أ'), para('p2', {}, 'ب')).node.attrs,
+];
 // a paste of three paragraphs inside the text
 const pasted = [{ type: 'paragraph', content: [{ type: 'text', text: 'أ' }] }, { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'ب' }] }, { type: 'paragraph', attrs: { style: 'quote' }, content: [{ type: 'text', text: 'ج' }] }];
 const ins = convert.insertBlocks(p11, 3, 6, pasted);
@@ -733,6 +740,12 @@ def test_schema_module_conversion_matching_and_block_helpers_under_node(tmp_path
         out["merge"]["node"]["attrs"]["id"] == "p11" and out["merge"]["node"]["attrs"]["keepWithNext"] is True
     )
     assert out["mergeSeparator"] is None
+    # D70: both paragraphs' source marks survive a merge
+    assert out["mergeMarks"] == [
+        {"id": "p1", "sourcePages": [3, 4, 5], "sourceLineIds": [30, 31, 40, 41], "reviewed": False},
+        {"id": "p1", "sourcePages": [6], "sourceLineIds": [60]},
+        {"id": "p1", "sourcePages": [2], "reviewed": True},
+    ]
     paste = out["paste"]
     base = doc.inline_text(nodes[2]["content"])
     assert paste["types"] == ["paragraph", "heading:2", "paragraph:quote"] and paste["firstId"] == "p11"
@@ -906,6 +919,7 @@ GEOMETRY_HARNESS = r"""
 const fs = require('fs');
 const fixture = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
 globalThis.window = globalThis;
+eval(fs.readFileSync(process.argv[5], 'utf8')); // keys.js (NassakhKeys, D69)
 eval(fs.readFileSync(process.argv[2], 'utf8'));
 eval(fs.readFileSync(process.argv[3], 'utf8'));
 const G = globalThis.NassakhBook.geo;
@@ -985,6 +999,11 @@ out.shown = [G.shown(seq, 0, false), G.shown(seq, 0, true), G.shown(seq, 1, true
 // ---- the keyboard maps (nothing fires inside a field; the open paragraph keeps its own keys)
 const k = (key, extra = {}, ctx = {}) => G.keyAction(Object.assign({ key, code: extra.code || '' }, extra), Object.assign({ mode: 'preview' }, ctx));
 out.preview = [k('ArrowLeft'), k('ArrowRight'), k('PageDown'), k('PageUp'), k('Home'), k('End'), k('g', { code: 'KeyG' }), k('s', { code: 'KeyS' }), k('e', { code: 'KeyE' }), k('ث', { code: 'KeyE' }), k('1'), k('2'), k('3'), k('?'), k('؟'), k('f', { code: 'KeyF', metaKey: true }), k('z', { code: 'KeyZ', metaKey: true }), k('o', { code: 'KeyO' }), k('Escape')];
+// D69: V is the spread, S the scan page marks, + − 0 the fits (0 the height, + up to the width then 100 %, − back);
+// by the key's place on the Arabic layout too; nothing while an IME composes
+out.moved = [k('v', { code: 'KeyV' }), k('ر', { code: 'KeyV' }), k('س', { code: 'KeyS' }), k('+', { code: 'Equal', shiftKey: true }), k('=', { code: 'Equal' }), k('-', { code: 'Minus' }), k('+', { code: 'NumpadAdd' }),
+  k('0', { code: 'Digit0' }), k('٠', { code: 'Digit0' }), k('v', { code: 'KeyV', shiftKey: true }), k('v', { code: 'KeyV', isComposing: true }), k('Process', { code: 'KeyV', keyCode: 229 })];
+out.fitSteps = [G.stepFit('height', 1), G.stepFit('width', 1), G.stepFit('actual', 1), G.stepFit('actual', -1), G.stepFit('width', -1), G.stepFit('height', -1), G.stepFit('nonsense', 1)];
 const e = (key, extra = {}, ctx = {}) => k(key, extra, Object.assign({ mode: 'edit' }, ctx));
 out.edit = [e('s', { code: 'KeyS', metaKey: true }), e('z', { code: 'KeyZ', metaKey: true }), e('z', { code: 'KeyZ', metaKey: true, shiftKey: true }), e('y', { code: 'KeyY', ctrlKey: true }), e('f', { code: 'KeyF', metaKey: true }), e('f', { code: 'KeyF', metaKey: true, shiftKey: true }),
   e('b', { code: 'KeyB', metaKey: true }), e('i', { code: 'KeyI', metaKey: true }), e('1', { code: 'Digit1', metaKey: true, altKey: true }), e('0', { code: 'Digit0', metaKey: true, altKey: true }), e('6', { code: 'Digit6', metaKey: true, altKey: true }),
@@ -1147,6 +1166,7 @@ def test_live_page_geometry_under_node(tmp_path):
         str(BOOK_JS / "geometry.js"),
         str(BOOK_JS / "edit.js"),
         str(tmp_path / "fixture.json"),
+        str(JS / "keys.js"),
     )
 
     # --- a real page: one element per line at its box, in points (the CSS scales them with the page)
@@ -1311,12 +1331,12 @@ def test_live_page_geometry_under_node(tmp_path):
         "first",
         "last",
         "jump",
-        "spread",
+        "marks",  # D69: S is «فواصل الصفحات الأصلية» (the spread moved to V)
         "mode",
         "mode",
-        "fitHeight",
-        "fitWidth",
-        "fitActual",
+        None,  # 1 / 2 / 3 are free (the fits moved to 0 + −)
+        None,
+        None,
         "sheet",
         "sheet",
         "find",
@@ -1324,6 +1344,21 @@ def test_live_page_geometry_under_node(tmp_path):
         None,
         "escape",
     ]
+    assert out["moved"] == [
+        "spread",
+        "spread",
+        "marks",
+        "fitIn",
+        "fitIn",
+        "fitOut",
+        "fitIn",
+        "fitHeight",
+        "fitHeight",
+        None,  # ⇧V is not V
+        None,  # composing
+        None,
+    ]
+    assert out["fitSteps"] == ["width", "actual", "actual", "width", "height", "height", "width"]
     assert out["edit"] == [
         "save",
         "undo",
@@ -1343,7 +1378,7 @@ def test_live_page_geometry_under_node(tmp_path):
         "next",
         "deleteSelected",
         None,
-        None,
+        "marks",  # S in edit mode too
         "escape",
     ]
     # inside a field or the open paragraph nothing fires but Esc and ⌘S / ⌘F
@@ -1454,6 +1489,7 @@ globalThis.clearTimeout = (id) => { const t = timers.find((x) => x.id === id); i
 const local = {}; globalThis.localStorage = { getItem: (k) => (k in local ? local[k] : null), setItem: (k, v) => { local[k] = String(v); } };
 const session = {}; globalThis.sessionStorage = { getItem: (k) => (k in session ? session[k] : null), setItem: (k, v) => { session[k] = String(v); } };
 globalThis.Nassakh = { toast: (m) => toasts.push(m) };
+const channels = []; globalThis.BroadcastChannel = class { constructor(name) { this.name = name; this.onmessage = null; channels.push(this); } postMessage() {} close() { this.closed = true; } };
 const settle = async () => { for (let i = 0; i < 12; i += 1) await new Promise((r) => setImmediate(r)); };
 const pending = (ms) => timers.filter((t) => !t.cleared && (ms === undefined || t.ms === ms));
 const fire = async (ms) => { const list = pending(ms); const t = list[list.length - 1]; if (!t) return false; t.cleared = true; await t.fn(); await settle(); return true; };
@@ -1489,6 +1525,8 @@ globalThis.fetch = async (url, init = {}) => {
   if (url === '/api/books/1/stylesheet/') return server.sheet ? server.sheet(body) : reply(200, { ...fixture.sheetPayload, saved: true });
   if (url.startsWith('/api/books/1/sheets/')) return reply(200, { pages: [{ number: Number(/from=(\d+)/.exec(url)[1]), id: 9, width: 1000, height: 1400, display_url: '/m/scan.webp', lines: [{ id: 1, bbox: [0.1, 0.2, 0.9, 0.25] }, { id: 2, bbox: [0.1, 0.3, 0.9, 0.35] }] }] });
   if (url === '/api/books/1/snapshots/') return reply(200, []);
+  if (url === '/api/books/1/drift/') return reply(200, server.drift || { edited: false, pages: [], chapters: [] });
+  if ((m = /^\/api\/books\/1\/chapters\/(\w+)\/reassemble\/$/.exec(url))) return server.reassemble ? server.reassemble(m[1], body) : reply(202, { run_id: 12, status: 'queued', stage: '' });
   return reply(404, { detail: 'لا' });
 };
 
@@ -1539,6 +1577,7 @@ globalThis.NassakhEditor = Object.assign({}, convert, {
   createNote(host, opts) { const n = { host, opts, calls: [] }; Object.assign(n, { focus() { n.calls.push('focus'); }, destroy() { n.calls.push('destroy'); }, setContent(c) { n.calls.push(['set', c]); }, toggleBold() {}, toggleItalic() {} }); notes.push(n); return n; },
 });
 
+(0, eval)(readFileSync(`${root}/static/src/js/keys.js`, 'utf8')); // NassakhKeys (D69)
 for (const name of ['geometry.js', 'stage.js', 'style.js', 'edit.js', 'panel.js', 'page.js']) (0, eval)(readFileSync(`${root}/static/src/js/book/${name}`, 'utf8'));
 globalThis.NassakhBook.register();
 
@@ -2376,7 +2415,8 @@ const out = {};
 
   // ---- the fit keys by their place (an Arabic keyboard types «١»)
   const K = globalThis.NassakhBook.geo.keyAction;
-  out.fitKeys = [K({ key: '١', code: 'Digit1' }, { mode: 'preview' }), K({ key: '2', code: 'Digit2' }, { mode: 'preview' }), K({ key: '#', code: 'Digit3', shiftKey: true }, { mode: 'preview' })];
+  // D69: the fits are + − 0 by their place (the Arabic layout's «٠»), ⇧ with a digit key is a symbol
+  out.fitKeys = [K({ key: '٠', code: 'Digit0' }, { mode: 'preview' }), K({ key: '+', code: 'Equal', shiftKey: true }, { mode: 'preview' }), K({ key: '-', code: 'Minus' }, { mode: 'preview' }), K({ key: ')', code: 'Digit0', shiftKey: true }, { mode: 'preview' }), K({ key: '١', code: 'Digit1' }, { mode: 'preview' })];
 
   // ---- the contents line: a heading whose page is not held yet goes to its printed page number
   v.ranges = v.ranges.filter((c) => c.id !== 'hx');
@@ -2452,7 +2492,7 @@ def test_book_page_review_fixes_under_node(tmp_path):
         "closed": True,
         "mode": "edit",
     }
-    assert out["fitKeys"] == ["fitHeight", "fitWidth", None]
+    assert out["fitKeys"] == ["fitHeight", "fitIn", "fitOut", None, None]
     assert out["contents"] is True and out["contentsPage"] == 4
     # the word's page from the layout held (2), not the list's (5); its paragraph open with the word selected
     assert out["picked"] == {"current": 2, "open": "p11", "calls": [["setOffset", 4]]}
@@ -2569,6 +2609,162 @@ const out = {};
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
+
+
+# ---------------------------------------------------------------- round-trip safety (D70) and the keys (D69)
+
+ROUNDTRIP_SCENARIO = r"""
+const out = {};
+const realNow = Date.now; let clock = realNow(); Date.now = () => clock;
+const later = () => { clock += 2100; };
+const driftGets = () => gets().filter((u) => u === '/api/books/1/drift/').length;
+const posts = () => calls.filter((c) => c[0] === 'POST');
+(async () => {
+  const urls = { ...fixture.config.urls, drift: '/api/books/1/drift/' };
+  // ---- the live drift: the review screen's message for this book refreshes it (another book's is ignored)
+  server.drift = { edited: true, pages: [3], chapters: ['h10'] };
+  const d = mk({ urls, origin: 'editor' }); await settle();
+  d.showPage(2, { instant: true }); await settle();
+  const ch = channels[channels.length - 1];
+  out.before = { banner: d.driftChapter, channel: ch.name };
+  calls.length = 0;
+  ch.onmessage({ data: { type: 'review', book: 2, page: 3 } }); await settle();
+  const otherBook = driftGets();
+  ch.onmessage({ data: { type: 'review', book: 1, page: 3 } }); await settle();
+  out.message = { otherBook, gets: driftGets(), drift: clone(d.drift), banner: d.driftChapter, text: d.driftText, summary: d.summaryOf('h10').drift };
+  // inside 2 s a trigger waits for the window's end: one trailing request for a burst
+  calls.length = 0;
+  d.onWindowFocus(); d.onVisible(); d.onPageShow({ persisted: true });
+  out.throttled = { gets: driftGets(), trailing: Boolean(d.ctx().timers.drift) };
+  later(); await d.ctx().timers.drift && pending().length; drop(); d.ctx().timers.drift = null;
+  // each trigger on its own, after the window: focus, visibility, a return from the back-forward cache
+  const each = {};
+  for (const [name, fn] of [['focus', () => d.onWindowFocus()], ['visible', () => d.onVisible()], ['pageshow', () => d.onPageShow({ persisted: true })], ['pageshowFresh', () => d.onPageShow({ persisted: false })]]) {
+    later(); calls.length = 0; fn(); await settle(); each[name] = driftGets();
+  }
+  out.each = each;
+  // «الاحتفاظ بالنص» hides the banner until other pages change in review
+  d.dismissDrift();
+  const dismissed = d.driftChapter;
+  server.drift = { edited: true, pages: [2, 3], chapters: ['h10'] };
+  later(); ch.onmessage({ data: { type: 'review', book: 1, page: 2 } }); await settle();
+  out.dismiss = { dismissed, back: d.driftChapter };
+  // no drift any more (the page approved without a text change, D70): the banner goes
+  server.drift = { edited: true, pages: [], chapters: [] };
+  later(); d.onWindowFocus(); await settle();
+  out.cleared = { banner: d.driftChapter, summary: d.summaryOf('h10').drift };
+  // ---- «إعادة بناء الفصل من المراجعة…» over an edited text: the dialog first, «إلغاء» posts nothing,
+  // «استبدال الفصل» posts `replace_edited`
+  server.drift = { edited: true, pages: [3], chapters: ['h10'] };
+  later(); d.onWindowFocus(); await settle();
+  calls.length = 0;
+  d.askReassemble(); await settle();
+  out.ask = { open: d.rebuild.open, chapter: d.rebuild.chapter, title: d.rebuild.title, posts: posts().length, layer: d.topLayer() };
+  const turnBehind = d.current; d.onKey({ key: 'ArrowLeft', code: 'ArrowLeft', target: el('div'), preventDefault() {} }); await settle();
+  out.behind = d.current === turnBehind;
+  d.escape(); out.escaped = d.rebuild.open;
+  d.askReassemble(); await d.confirmRebuild(); await settle();
+  out.confirm = { post: posts().map((c) => [c[1], c[2]]), running: d.reassembly.running, open: d.rebuild.open };
+  // an unedited text is rebuilt at once without the flag; a 409 (edited meanwhile, another tab) opens the dialog
+  const u = mk({ urls, origin: 'assembly', drift: { edited: false, pages: [3], chapters: ['h10'] } }); await settle();
+  u.showPage(2, { instant: true }); await settle();
+  server.reassemble = () => reply(409, { detail: 'حُرِّر نص هذا الفصل في «الكتاب»', edited: true });
+  calls.length = 0;
+  u.askReassemble(); await settle();
+  out.unedited = { post: posts().map((c) => [c[1], c[2]]), open: u.rebuild.open, edited: u.drift.edited };
+  server.reassemble = null;
+  // ---- D69 through onKey: V the spread, S the page marks (a toast in preview), + − 0 the fits; the Arabic layout
+  const k = mk({ urls }); await settle();
+  const press = (key, code, extra = {}) => k.onKey(Object.assign({ key, code, target: el('div'), preventDefault() {} }, extra));
+  const spread0 = k.spread; press('ر', 'KeyV'); const spread1 = k.spread;
+  const marks0 = k.pageMarks; toasts.length = 0; press('س', 'KeyS');
+  out.keys = { spread: [spread0, spread1], marks: [marks0, k.pageMarks], toast: toasts.slice(-1)[0] };
+  press('+', 'Equal', { shiftKey: true }); const f1 = k.fit; press('=', 'Equal'); const f2 = k.fit; press('=', 'Equal'); const f3 = k.fit;
+  press('-', 'Minus'); const f4 = k.fit; press('٠', 'Digit0'); const f5 = k.fit; press('٢', 'Digit2'); const f6 = k.fit;
+  out.fits = [f1, f2, f3, f4, f5, f6];
+  Date.now = realNow;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_book_page_round_trip_safety_and_keys_under_node(tmp_path):
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    base = COMPONENT_HARNESS.split("\nconst out = {};\n")[0]
+    out = _run_node(
+        folder, "roundtrip.mjs", base + ROUNDTRIP_SCENARIO, str(ROOT), str(folder / "fixture.json")
+    )
+    banner = {"id": "h10", "title": "الفصل الأول", "pages": [3]}
+    # the config's drift (none) until the review screen's message; then the banner, from live state
+    assert out["before"] == {"banner": None, "channel": "nassakh"}
+    assert out["message"] == {
+        "otherBook": 0,
+        "gets": 1,
+        "drift": {"edited": True, "pages": [3], "chapters": ["h10"]},
+        "banner": banner,
+        "text": "تغيّر نص صفحة واحدة من هذا الفصل في المراجعة بعد التحرير:",
+        "summary": True,
+    }
+    assert out["throttled"] == {"gets": 0, "trailing": True}
+    assert out["each"] == {"focus": 1, "visible": 1, "pageshow": 1, "pageshowFresh": 0}
+    assert out["dismiss"] == {
+        "dismissed": None,
+        "back": {"id": "h10", "title": "الفصل الأول", "pages": [2, 3]},
+    }
+    assert out["cleared"] == {"banner": None, "summary": False}
+    # the rebuild asks first; the keys behind it wait; Esc closes it; the confirmation posts the flag
+    assert out["ask"] == {
+        "open": True,
+        "chapter": "h10",
+        "title": "الفصل الأول",
+        "posts": 0,
+        "layer": "rebuild",
+    }
+    assert out["behind"] is True and out["escaped"] is False
+    assert out["confirm"]["post"] == [["/api/books/1/chapters/h10/reassemble/", {"replace_edited": True}]]
+    assert out["confirm"]["running"] is True and out["confirm"]["open"] is False
+    assert out["unedited"] == {
+        "post": [["/api/books/1/chapters/h10/reassemble/", {}]],
+        "open": True,
+        "edited": True,
+    }
+    # D69: V, S and the fits by the key's place (Arabic layout)
+    assert out["keys"] == {
+        "spread": [False, True],
+        "marks": [True, False],
+        "toast": "أُخفيت فواصل الصفحات الأصلية",
+    }
+    assert out["fits"] == ["width", "actual", "actual", "width", "height", "height"]
+
+
+def test_book_page_rebuild_dialog_and_moved_keys_in_the_templates(editor):
+    body, _config = _page(_logged(editor), _book())
+    dialog = _between(body, "data-rebuild-dialog", "</div>\n</div>")
+    assert (
+        'role="alertdialog"' in body
+        and 'إعادة بناء الفصل «<span x-text="rebuild.title"></span>» من المراجعة؟' in body
+    )
+    assert (
+        "يُستبدل نص الفصل كله بنص صفحاته في المراجعة، فتضيع تعديلاته في الكتاب: العناوين والحواشي والكلمات."
+        " تبقى منه نسخة في «نسخة محفوظة»." in dialog
+    )
+    assert dialog.index('x-ref="rebuildCancel"') < dialog.index("استبدال الفصل")
+    assert 'class="btn btn-danger"' in dialog and '@click="confirmRebuild()"' in dialog
+    assert body.count("إعادة بناء الفصل من المراجعة…") == 2 and "إعادة تجميع الفصل من المراجعة" not in body
+    assert body.count('@click="askReassemble()"') == 2 and "الاحتفاظ بالنص" in body
+    assert '@focus.window="onWindowFocus()"' in body and '@pageshow.window="onPageShow($event)"' in body
+    # D69: the toolbar titles and the sheet name the moved keys, Latin capitals that work on the Arabic layout
+    assert body.count('title="صفحة واحدة أو صفحتان (V)"') == 2
+    assert body.count('title="ملء الارتفاع (0) · تكبير (+) · تصغير (−)"') == 3
+    assert 'title="فواصل الصفحات الأصلية (S)"' in body
+    sheet = _between(body, 'id="bp-sheet-title"', "</dl>")
+    assert '<kbd class="kbd">V</kbd></dt><dd>صفحة واحدة أو صفحتان' in sheet
+    assert '<kbd class="kbd">S</kbd></dt><dd>فواصل الصفحات الأصلية' in sheet
+    assert '<kbd class="kbd">0</kbd> <kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd>' in sheet
+    assert '<kbd class="kbd">1</kbd>' not in sheet
+    assert "تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه." in body
 
 
 def test_book_page_chrome_fixes_under_node(tmp_path):

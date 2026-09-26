@@ -14,6 +14,12 @@ ALL_PAGES_FAILED = (
     "تعذّرت معالجة كل صفحات الكتاب. افتح إحدى الصفحات لمعرفة السبب ثم أعد تشغيل مرحلتها، "
     "أو اضغط «بدء المعالجة» للبدء من جديد."
 )
+# The same, for a book in «التخطيط» (D64): every page failed its preparation.
+ALL_PAGES_FAILED_LAYOUT = (
+    "تعذّر تجهيز كل صفحات الكتاب. افتح إحدى الصفحات لمعرفة السبب، أو أعد المحاولة من الزر أعلى الصفحة."
+)
+# Error messages that `refresh_status` owns (re-derived); any other `error` is an ingest failure.
+ALL_PAGES_FAILED_MESSAGES: tuple[str, ...] = (ALL_PAGES_FAILED, ALL_PAGES_FAILED_LAYOUT)
 
 
 class Book(models.Model):
@@ -21,9 +27,9 @@ class Book(models.Model):
 
     class Status(models.TextChoices):
         UPLOADED = "uploaded", "مرفوع"
-        PROCESSING = "processing", "قيد المعالجة"
-        NEEDS_GUIDES = "needs_guides", "بانتظار ضبط الأدلة"
-        OCR = "ocr", "قيد التعرّف على النص"
+        PROCESSING = "processing", "قيد التخطيط"
+        NEEDS_GUIDES = "needs_guides", "تم التخطيط"
+        OCR = "ocr", "قيد المعالجة"
         READY_FOR_REVIEW = "ready_for_review", "جاهز للمراجعة"
         REVIEWING = "reviewing", "قيد المراجعة"
         ASSEMBLED = "assembled", "مُجمَّع"
@@ -62,6 +68,9 @@ class Book(models.Model):
 
     status = models.CharField("الحالة", max_length=20, choices=Status.choices, default=Status.UPLOADED)
     error_message = models.TextField("رسالة الخطأ", blank=True)
+    # The pause between «التخطيط» and «المعالجة» (D64): `create_book` sets it, `start_ocr` clears it,
+    # nothing else writes it. False (the default: every older book and every fixture) is today's path.
+    awaits_ocr_start = models.BooleanField("بانتظار «بدء المعالجة»", default=False)
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -100,41 +109,42 @@ class Book(models.Model):
     def refresh_status(self, save: bool = True) -> str:
         """Derive the book status from its pages and store it. Returns the (possibly unchanged) status.
 
-        An empty book and an ingest failure (`error` with any other message than
-        `ALL_PAGES_FAILED`) are left alone. `needs_guides` is kept while the guides are still the
-        automatic proposal and a page waits at `preprocessed` (only applying the guides moves those
-        pages on). Once no page has pipeline work left (`uploaded`, `preprocessed`, `layout_done`)
-        the book settles: `ready_for_review`/`reviewing`/`assembled` when at least one page is done
-        (pages in error show in the attention list), `error` with `ALL_PAGES_FAILED` when every page
-        failed. It never stays `processing`/`ocr` with nothing left to run.
+        An empty book and an ingest failure (`error` with any other message than the
+        `ALL_PAGES_FAILED_MESSAGES`) are left alone. A book in «التخطيط» (`awaits_ocr_start`, D64)
+        is `processing` while a page is still `uploaded`, `needs_guides` («تم التخطيط») once the
+        pages are prepared, and `error` with `ALL_PAGES_FAILED_LAYOUT` when every page failed: nothing
+        is read before «بدء المعالجة». Otherwise (today's path) `needs_guides` is kept while the
+        guides are still the automatic proposal and a page waits at `preprocessed` (a book an older
+        version parked there); once no page has pipeline work left (`uploaded`, `preprocessed`,
+        `layout_done`) the book settles (`_settled`). It never stays `processing`/`ocr` with nothing
+        left to run.
         """
         counts = self.progress()
         total = sum(counts.values())
         if total == 0:
             return self.status
-        if self.status == self.Status.ERROR and self.error_message != ALL_PAGES_FAILED:
+        if self.status == self.Status.ERROR and self.error_message not in ALL_PAGES_FAILED_MESSAGES:
             return self.status
 
         ps = Page.Status
-        errors = counts[ps.ERROR]
         n_done = counts[ps.OCR_DONE] + counts[ps.REVIEWED] + counts[ps.ASSEMBLED]
         pending = counts[ps.UPLOADED] + counts[ps.PREPROCESSED] + counts[ps.LAYOUT_DONE]
 
-        if (
+        if self.awaits_ocr_start:  # «التخطيط» (D64): nothing is read before «بدء المعالجة»
+            if counts[ps.UPLOADED]:
+                new_status = self.Status.PROCESSING  # «قيد التخطيط»: pages are still being prepared
+            elif counts[ps.PREPROCESSED] or counts[ps.LAYOUT_DONE]:
+                new_status = self.Status.NEEDS_GUIDES  # «تم التخطيط»: waits for «بدء المعالجة»
+            else:
+                new_status = self._settled(counts, total)  # every page failed → error
+        elif (
             self.status == self.Status.NEEDS_GUIDES
             and counts[ps.PREPROCESSED]
             and not self._has_manual_guides()
         ):
             new_status = self.Status.NEEDS_GUIDES
         elif pending == 0:
-            if errors == total:
-                new_status = self.Status.ERROR
-            elif counts[ps.ASSEMBLED] == total:
-                new_status = self.Status.ASSEMBLED
-            elif counts[ps.REVIEWED] + counts[ps.ASSEMBLED] > 0:
-                new_status = self.Status.REVIEWING
-            else:
-                new_status = self.Status.READY_FOR_REVIEW
+            new_status = self._settled(counts, total)
         elif counts[ps.LAYOUT_DONE] or n_done:
             new_status = self.Status.OCR
         elif counts[ps.UPLOADED]:
@@ -144,12 +154,26 @@ class Book(models.Model):
         else:
             new_status = self.Status.PROCESSING
 
-        if new_status != self.status:
+        failed = ALL_PAGES_FAILED_LAYOUT if self.awaits_ocr_start else ALL_PAGES_FAILED
+        message = failed if new_status == self.Status.ERROR else ""
+        if new_status != self.status or (new_status == self.Status.ERROR and message != self.error_message):
             self.status = new_status
-            self.error_message = ALL_PAGES_FAILED if new_status == self.Status.ERROR else ""
+            self.error_message = message
             if save:
                 self.save(update_fields=["status", "error_message", "updated_at"])
         return self.status
+
+    def _settled(self, counts: dict[str, int], total: int) -> str:
+        """Status of a book with no pipeline work left: `error` when every page failed, else `assembled`
+        when every page is, `reviewing` once a page is approved, `ready_for_review` otherwise."""
+        ps = Page.Status
+        if counts[ps.ERROR] == total:
+            return self.Status.ERROR
+        if counts[ps.ASSEMBLED] == total:
+            return self.Status.ASSEMBLED
+        if counts[ps.REVIEWED] + counts[ps.ASSEMBLED] > 0:
+            return self.Status.REVIEWING
+        return self.Status.READY_FOR_REVIEW
 
     def _has_manual_guides(self) -> bool:
         """True when the owner set the layout guides by hand (the guides screen was applied)."""
@@ -164,8 +188,8 @@ class Page(models.Model):
 
     class Status(models.TextChoices):
         UPLOADED = "uploaded", "مرفوعة"
-        PREPROCESSED = "preprocessed", "مُعالَجة"
-        LAYOUT_DONE = "layout_done", "تم التخطيط"
+        PREPROCESSED = "preprocessed", "مُجهَّزة"
+        LAYOUT_DONE = "layout_done", "بانتظار التعرّف"
         OCR_DONE = "ocr_done", "تم التعرّف"
         REVIEWED = "reviewed", "مُراجَعة"
         ASSEMBLED = "assembled", "مُجمَّعة"
@@ -203,7 +227,7 @@ class Page(models.Model):
     is_excluded = models.BooleanField("مستثناة", default=False)
 
     text_layer_text = models.TextField("نص الطبقة النصية", blank=True)
-    guides_override = models.JSONField("أدلة خاصة بالصفحة", null=True, blank=True)
+    guides_override = models.JSONField("تخطيط خاص بالصفحة", null=True, blank=True)
     # The number printed on the page (Western digits), read by OCR; metadata only, never in the text.
     printed_number = models.CharField("الرقم المطبوع", max_length=20, blank=True)
 

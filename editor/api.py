@@ -7,7 +7,10 @@ manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, 
 - GET  /api/books/<id>/chapters/                      → `services.chapter_summaries`
 - GET  /api/books/<id>/chapters/<cid>/                → `services.chapter_document`
 - PUT  /api/books/<id>/chapters/<cid>/                `{content, version}` → `services.save_chapter`
-- POST /api/books/<id>/chapters/<cid>/reassemble/     → 202 run (`assembly.services.run_payload`)
+- POST /api/books/<id>/chapters/<cid>/reassemble/     `{replace_edited?}` → 202 run
+                                                        (`assembly.services.run_payload`); over an edited text
+                                                        without `replace_edited`: 409 `{detail, edited: true}`
+- GET  /api/books/<id>/drift/                         → `{edited, pages, chapters}` (`services.drift_of`, D70)
 - POST /api/books/<id>/find-replace/                  `{chapter, query, replacement, match_tashkeel,
                                                         fold_alef, whole_word, replace, version?}`
 - POST /api/books/<id>/convert-digits/                `{chapter, style}` → `{changed, …}`
@@ -61,7 +64,16 @@ def _book(book_id: int) -> Book:
     return book
 
 
+def _replace(data: dict) -> bool:
+    """Whether the request confirms that an edited chapter is replaced by its rebuild from review (D70)."""
+    from assembly.services import _parse_bool
+
+    return _parse_bool(data.get("replace_edited")) is True
+
+
 def _refused(exc: services.EditorError) -> Response:
+    if isinstance(exc, services.EditorEdited):
+        return Response({"detail": str(exc), "edited": True}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, services.ChapterConflict):
         return Response(
             {"detail": str(exc), "id": exc.chapter_id, "version": exc.version, "content": exc.content},
@@ -106,15 +118,29 @@ def chapter(request: Request, book_id: int, chapter_id: str) -> Response:
 @api_view(["POST"])
 @permission_classes([IsEditor])
 def chapter_reassemble(request: Request, book_id: int, chapter_id: str) -> Response:
-    """Re-assemble one chapter from the reviewed pages (D41); the old chapter is kept as a snapshot."""
+    """Re-assemble one chapter from the reviewed pages (D41); the old chapter is kept as a snapshot. Over an
+    edited text the request must confirm the replacement (`replace_edited`, D70), else 409."""
     from assembly.services import run_payload
 
     book = _book(book_id)
     try:
-        run = services.reassemble_chapter(book, chapter_id, request.user)
+        run = services.reassemble_chapter(
+            book, chapter_id, request.user, replace_edited=_replace(_data(request))
+        )
     except services.EditorError as exc:
         return _refused(exc)
     return Response(run_payload(run), status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["GET"])
+def review_drift(request: Request, book_id: int) -> Response:
+    """The live review drift (D70): the book page refreshes it on focus, on a return to the tab and on the
+    review screen's message. Without a manuscript, no drift."""
+    drift = services.drift_of(book_id)
+    if drift is None:
+        _book(book_id)  # 404 for a book that does not exist
+        return Response({"edited": False, "pages": [], "chapters": []})
+    return Response(drift)
 
 
 @api_view(["POST"])

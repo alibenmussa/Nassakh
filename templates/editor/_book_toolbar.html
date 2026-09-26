@@ -1,5 +1,5 @@
 {% comment %}The book page's toolbar (PHASE5_SPEC §9.2), hanging from the top bar (= bk-toolbar): «معاينة | تحرير» (E)
-first, then the mode's tools — preview: spread and fit; edit: undo / redo (the chapter's), the style picker,
+first, then the mode's tools — preview: spread (V) and fit (0 + −, D69); edit: undo / redo (the chapter's), the style picker,
 B / I, «حاشية», «فواصل الصفحات الأصلية»; the page counter at the end, the jump field in preview, the primary «تم»
 in edit mode. The groups swap with a 200 ms fade (none under reduced motion); the page does not move. Inside
 the bookPage component (layout.html). Context: can_edit.{% endcomment %}
@@ -16,13 +16,13 @@ the bookPage component (layout.html). Context: can_edit.{% endcomment %}
     {# ---- preview: one page or a spread, the fit #}
     <div class="bp-tools is-preview" x-show="mode !== 'edit'" x-transition.opacity.duration.200ms data-preview-tools>
       <div class="segmented" role="group" aria-label="عدد الصفحات المعروضة" data-spread-toggle>
-        <button type="button" :aria-pressed="!spread" aria-pressed="true" @click="setSpread(false)" title="صفحة واحدة (S)">صفحة</button>
-        <button type="button" :aria-pressed="spread" aria-pressed="false" @click="setSpread(true)" title="صفحتان متقابلتان (S)">صفحتان</button>
+        <button type="button" :aria-pressed="!spread" aria-pressed="true" @click="setSpread(false)" title="صفحة واحدة أو صفحتان (V)">صفحة</button>
+        <button type="button" :aria-pressed="spread" aria-pressed="false" @click="setSpread(true)" title="صفحة واحدة أو صفحتان (V)">صفحتان</button>
       </div>
       <div class="segmented" role="group" aria-label="مقاس العرض" data-fit-toggle>
-        <button type="button" :aria-pressed="fit === 'height'" aria-pressed="true" @click="setFit('height')" title="ملء الارتفاع (1)">ملء الارتفاع</button>
-        <button type="button" :aria-pressed="fit === 'width'" aria-pressed="false" @click="setFit('width')" title="ملء العرض (2)">ملء العرض</button>
-        <button type="button" :aria-pressed="fit === 'actual'" aria-pressed="false" @click="setFit('actual')" title="الحجم الحقيقي (3)"><bdi>100 %</bdi></button>
+        <button type="button" :aria-pressed="fit === 'height'" aria-pressed="true" @click="setFit('height')" title="ملء الارتفاع (0) · تكبير (+) · تصغير (−)">ملء الارتفاع</button>
+        <button type="button" :aria-pressed="fit === 'width'" aria-pressed="false" @click="setFit('width')" title="ملء الارتفاع (0) · تكبير (+) · تصغير (−)">ملء العرض</button>
+        <button type="button" :aria-pressed="fit === 'actual'" aria-pressed="false" @click="setFit('actual')" title="ملء الارتفاع (0) · تكبير (+) · تصغير (−)"><bdi>100 %</bdi></button>
       </div>
     </div>
 
@@ -61,7 +61,7 @@ the bookPage component (layout.html). Context: can_edit.{% endcomment %}
         <span class="ed-tb-note-glyph" aria-hidden="true">١</span>
         <span class="bp-tb-label">حاشية</span>
       </button>
-      <button type="button" class="bk-chip" :aria-pressed="pageMarks" @mousedown.prevent @click="togglePageMarks()" title="علامات صفحات المسح على الصفحات (ص 12)" data-marks-toggle>فواصل الصفحات الأصلية</button>
+      <button type="button" class="bk-chip" :aria-pressed="pageMarks" @mousedown.prevent @click="togglePageMarks()" title="فواصل الصفحات الأصلية (S)" data-marks-toggle>فواصل الصفحات الأصلية</button>
     </div>
     {% endif %}
   </div>

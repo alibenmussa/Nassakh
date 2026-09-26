@@ -4,12 +4,16 @@
 header_actions (outside the component root) and read the dashboard through Alpine.store('book').dash; everything
 else is the `bookDashboard` component in static/src/js/books.js; styles in static/src/components/theatre.css.
 Sheets and tiles are static shells patched from the poll (no per-page Alpine bindings), so an 800-page book
-stays light. Western digits everywhere; numbers inside Arabic strings sit in <bdi>.{% endcomment %}
+stays light. Western digits everywhere; numbers inside Arabic strings sit in <bdi>.
+«التخطيط» mode (PHASE7_SPEC §3.12, D67): while the book awaits «بدء المعالجة», or with `?view=guides`, the server
+sets `guides_mode` and the same dashboard shows the prepared pages with their bands (`{% if guides_mode %}` blocks,
+_guides_side.html, _sheet_guides.html; `bookGuides` in static/src/js/processing.js). Outside the mode the markup is
+today's.{% endcomment %}
 {% block head_title %}{{ book.title }} · نسّاخ{% endblock %}
 {% block title %}{{ book.title }}{% endblock %}
 
 {% block header_actions %}
-{% optional_url 'api:book_text' book.pk as book_text_url %}
+{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'books:start_ocr' book.pk as start_ocr_action %}
 <div class="bk-bar" x-data>
   <a class="btn btn-ghost btn-sm" href="{% url 'books:list' %}">
     <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
@@ -21,9 +25,15 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <span class="dot" :class="d.active ? 'dot-accent' : d.dot" aria-hidden="true"></span>
         <span x-text="d.statusText"></span>
       </span>
+      {% if guides_mode %}
+      <div class="progress bk-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="d.percent" aria-label="نسبة الصفحات المُجهَّزة" x-show="d.showBar">
+        <div class="progress-fill" :class="d.barClass" :style="`width:${d.percent}%`"></div>
+      </div>
+      {% else %}
       <div class="progress bk-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="d.percent" aria-label="نسبة إتمام المعالجة" x-show="d.nPages > 0">
         <div class="progress-fill" :class="d.barClass" :style="`width:${d.percent}%`"></div>
       </div>
+      {% endif %}
       <button type="button" class="bk-poll" x-show="d.pollState === 'error'" x-cloak @click="d.pollNow()" title="إعادة محاولة التحديث الآن">
         <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
       </button>
@@ -31,6 +41,33 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
       </a>
 
+      {% if guides_mode %}
+      {# «التخطيط» (§3.12): «استخراج الصفحات», «بدء المعالجة» (disabled while the pages are prepared), or «العودة إلى الصفحات» on a started book #}
+      {% if role == 'admin' or role == 'editor' %}
+      <form method="post" action="{% url 'books:start' book.pk %}" x-show="d.primary === 'extract' || d.primary === 'reextract'"{% if start_action != 'extract' and start_action != 'reextract' %} x-cloak{% endif %}>
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary" data-guides-extract>
+          <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+          <span x-text="d.primary === 'reextract' ? 'إعادة استخراج الصفحات' : 'استخراج الصفحات'">{% if start_action == 'reextract' %}إعادة استخراج الصفحات{% else %}استخراج الصفحات{% endif %}</span>
+        </button>
+      </form>
+      {% if start_ocr_action %}
+      <form method="post" action="{{ start_ocr_action }}" x-show="d.primary === 'startOcr' || d.primary === 'startOcrDisabled'"{% if start_action != 'startOcr' and start_action != 'startOcrDisabled' %} x-cloak{% endif %} x-data="{ sent: false }" @submit="if (d.primary !== 'startOcr' || sent) { $event.preventDefault(); } else { sent = true; }">
+        {% csrf_token %}
+        <span class="bk-start-wrap" :title="d.primary === 'startOcrDisabled' ? 'يُتاح بعد اكتمال تجهيز الصفحات' : ''">
+          <button type="submit" class="btn btn-primary" data-guides-start :disabled="d.primary !== 'startOcr' || sent">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
+            <span>بدء المعالجة</span>
+          </button>
+        </span>
+      </form>
+      {% endif %}
+      {% endif %}
+      <a class="btn btn-primary" href="{% url 'books:detail' book.pk %}" x-show="d.primary === 'back'"{% if start_action != 'back' %} x-cloak{% endif %} data-guides-back>
+        <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+        <span>العودة إلى الصفحات</span>
+      </a>
+      {% else %}
       {# the one primary button: chosen client-side from the poll (§2.1), candidates rendered role-gated #}
       {% if role == 'admin' or role == 'editor' %}
       <form method="post" action="{% url 'books:start' book.pk %}" x-show="d.primary === 'start'">
@@ -40,11 +77,6 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           <span x-text="d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'">بدء المعالجة</span>
         </button>
       </form>
-      {% if guides_url and tiles %}
-      <a class="btn btn-primary" href="{{ guides_url }}" x-show="d.primary === 'guides'">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
-        <span>ضبط الأدلة</span>
-      </a>
       {% endif %}
       {% endif %}
       <a class="btn btn-primary" x-show="d.primary === 'review'" :href="d.nextReviewUrl" data-review-next title="الصفحة التالية للمراجعة (N)">
@@ -86,6 +118,19 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
         </button>
         <div class="menu menu-popover bk-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+          {% if guides_mode and layout_stage %}
+          {# «التخطيط» (§3.12 states): re-prepare the pages once they exist, delete, all books #}
+          {% if role == 'admin' or role == 'editor' %}
+          <button type="button" class="menu-item" role="menuitem" x-show="d.status === 'needs_guides' || (d.status === 'error' && d.nPages > 0)" @click="open = false; d.openRerun('preprocess', '{{ 'preprocess'|stage_label|escapejs }}')" data-guides-reprepare>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>إعادة تجهيز الصفحات…</span>
+          </button>
+          <button type="button" class="menu-item is-danger" role="menuitem" @click="open = false; d.openDelete()" data-delete-menu-item>
+            <span>حذف الكتاب…</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
+          {% endif %}
+          {% else %}
           {% if book_text_url %}
           <button type="button" class="menu-item" role="menuitem" x-show="d.primary !== 'copy'" @click="open = false; d.copyBook()" :disabled="d.copying"
                   :title="d.active ? 'ينسخ نص الصفحات التي اكتملت حتى الآن' : 'ينسخ النص النهائي لكل صفحات الكتاب'">
@@ -114,22 +159,24 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           <div class="menu-sep" role="separator"></div>
           {% endif %}
           {% if role == 'admin' or role == 'editor' %}
-          {% if guides_url and tiles %}
-          <a class="menu-item" role="menuitem" href="{{ guides_url }}" x-show="d.primary !== 'guides'">
+          {% if guides_url and tiles and not guides_mode %}
+          {# the «التخطيط» mode of a started book (D67): each change there is saved explicitly and re-reads its page #}
+          <a class="menu-item" role="menuitem" href="{{ guides_url }}" data-guides-menu-item>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
-            <span>ضبط الأدلة</span>
+            <span>التخطيط</span>
           </a>
-          <div class="menu-sep" role="separator" x-show="d.primary !== 'guides'"></div>
+          <div class="menu-sep" role="separator"></div>
           {% endif %}
           {% if tiles %}
           <div class="menu-label">إعادة التشغيل من مرحلة</div>
           {% for stage in rerun_stages %}
-          <form method="post" action="{% url 'books:rerun' book.pk %}">
-            {% csrf_token %}
-            <input type="hidden" name="stage" value="{{ stage.value }}">
-            <button type="submit" class="menu-item" role="menuitem">{{ stage.label }}</button>
-          </form>
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openRerun('{{ stage.value|escapejs }}', '{{ stage.label|escapejs }}')" data-rerun-stage="{{ stage.value }}">{{ stage.label }}…</button>
           {% endfor %}
+          <div class="menu-sep" role="separator"></div>
+          {% endif %}
+          <button type="button" class="menu-item is-danger" role="menuitem" @click="open = false; d.openDelete()" data-delete-menu-item>
+            <span>حذف الكتاب…</span>
+          </button>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
           {% endif %}
@@ -139,9 +186,9 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
           </a>
         </div>
       </div>
-      {% if role == 'admin' or role == 'editor' %}
+      {% if role == 'admin' or role == 'editor' %}{% if not layout_stage %}
       <div class="bk-convert-host" x-data="{ get ms() { return d; } }">{% include "assembly/_convert_popover.html" %}</div>
-      {% endif %}
+      {% endif %}{% endif %}
     </div>
   </template>
 </div>
@@ -149,9 +196,9 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
 
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
-{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}
-<div class="bk-dashboard{% if tiles %} has-pages{% endif %}{% if progress.active %} is-active{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0, 'is-active': active }"
-     x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', guidesUrl: '{% if guides_url and tiles %}{{ guides_url|escapejs }}{% endif %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
+{% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}{% optional_url 'books:delete' book.pk as delete_action %}
+<div class="bk-dashboard{% if guides_mode %} is-guides{% endif %}{% if tiles %} has-pages{% endif %}{% if progress.active %} is-active{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0, 'is-active': active }"
+     x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
      @keydown.window="onKey($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
@@ -159,16 +206,24 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
   <div class="bk-toolbar" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
     <div class="bk-toolbar-start">
       <div class="segmented" role="group" aria-label="طريقة عرض الصفحات" data-view-toggle>
-        <button type="button" :aria-pressed="view === 'sheets'" aria-pressed="true" @click="setView('sheets')" title="صفحات (1)">
+        <button type="button" :aria-pressed="view === 'sheets'" aria-pressed="{% if guides_mode %}false{% else %}true{% endif %}" @click="setView('sheets')" title="صفحات (V)">
           <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
           <span>صفحات</span>
         </button>
-        <button type="button" :aria-pressed="view === 'grid'" aria-pressed="false" @click="setView('grid')" title="شبكة (2)">
+        <button type="button" :aria-pressed="view === 'grid'" aria-pressed="{% if guides_mode %}true{% else %}false{% endif %}" @click="setView('grid')" title="شبكة (V)">
           <svg class="icon icon-sm" aria-hidden="true"><use href="#i-image"/></svg>
           <span>شبكة</span>
         </button>
       </div>
     </div>
+    {% if guides_mode %}
+    {# «التخطيط»: every page, the pages worth a look (a doubt or an error), the pages with guides of their own #}
+    <div class="bk-chips" role="group" aria-label="تصفية الصفحات" data-filter-chips>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'all'" @click="setFilter('all')">الكل <bdi class="num" x-text="counts.all">{{ tiles|length }}</bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'doubt'" :disabled="counts.doubt === 0" @click="setFilter('doubt')"><span class="gd-doubt-dot" aria-hidden="true"></span>تستحق نظرة <bdi class="num" x-text="counts.doubt"></bdi></button>
+      <button type="button" class="bk-chip" :aria-pressed="filter === 'override'" :disabled="counts.override === 0" @click="setFilter('override')">بضبط خاص <bdi class="num" x-text="counts.override"></bdi></button>
+    </div>
+    {% else %}
     <div class="bk-chips" role="group" aria-label="تصفية الصفحات" data-filter-chips>
       <button type="button" class="bk-chip" :aria-pressed="filter === 'all'" @click="setFilter('all')">الكل <bdi class="num" x-text="counts.all">{{ tiles|length }}</bdi></button>
       <button type="button" class="bk-chip" :aria-pressed="filter === 'processing'" :disabled="counts.processing === 0" @click="setFilter('processing')">قيد المعالجة <bdi class="num" x-text="counts.processing"></bdi></button>
@@ -176,6 +231,7 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
       <button type="button" class="bk-chip" :aria-pressed="filter === 'attention'" :disabled="counts.attention === 0" @click="setFilter('attention')">تحتاج انتباهًا <bdi class="num" x-text="counts.attention"></bdi></button>
       <button type="button" class="bk-chip" :aria-pressed="filter === 'reviewed'" :disabled="counts.reviewed === 0" @click="setFilter('reviewed')">مُراجَعة <bdi class="num" x-text="counts.reviewed"></bdi></button>
     </div>
+    {% endif %}
     <div class="bk-toolbar-end">
       <span class="bk-counter" x-show="view === 'sheets' && current" x-cloak aria-live="polite">صفحة <bdi class="num" x-text="current"></bdi> من <bdi class="num" x-text="nPages"></bdi></span>
       <label class="bk-jump">
@@ -184,10 +240,12 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
                @keydown.enter.prevent="jump($el.value); $el.value = ''" @blur="if ($el.value.trim()) { jump($el.value); $el.value = ''; }" @keydown.escape.stop="$el.value = ''; $el.blur()">
         <kbd class="kbd" aria-hidden="true">G</kbd>
       </label>
+      {% if not guides_mode %}
       <button type="button" class="btn-icon bk-follow" x-show="active" x-cloak :aria-pressed="follow" @click="toggleFollow()" title="تتبّع المعالجة: ينتقل إلى آخر صفحة تقدّمت" aria-label="تتبّع المعالجة">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-eye"/></svg>
         <span>تتبّع المعالجة</span>
       </button>
+      {% endif %}
     </div>
   </div>
 
@@ -200,10 +258,31 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <details class="error-details" x-show="errorDetail"><summary class="meta">التفاصيل التقنية</summary><pre dir="ltr" x-text="errorDetail">{{ error_detail }}</pre></details>
       </div>
     </div>
-    <div class="banner" x-show="status === 'needs_guides'"{% if book.status != 'needs_guides' %} x-cloak{% endif %}>
+    {% if guides_mode %}
+    {% if layout_stage %}
+    {# the look banner: one glance, then «بدء المعالجة» (§3.12) #}
+    <div class="banner banner-info gd-banner" x-show="status === 'needs_guides' && !startedElsewhere"{% if book.status != 'needs_guides' %} x-cloak{% endif %}>
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-      <span class="grow">لم يُكتشف خط الحاشية في عدد كافٍ من الصفحات. افتح «ضبط الأدلة»، حدّد خط الحاشية وحدّ الترويسة على صفحة مرجعية، ثم طبّقهما على كل الصفحات لتستكمل المعالجة.</span>
+      <div class="grow stack-sm">
+        <span>جُهّزت الصفحات واكتُشفت مناطقها. ألقِ نظرة واضبط ما يلزم، ثم اضغط «بدء المعالجة».</span>
+        {% if config.textLayer %}<span class="gd-banner-note">للكتاب طبقة نصية يُؤخذ منها نصّه؛ المناطق هنا لا تغيّر النص.</span>{% endif %}
+      </div>
+      <span class="gd-banner-doubts" x-show="counts.doubt > 0" x-cloak><span x-text="doubtLine"></span> · <button type="button" class="link" @click="showDoubts()" x-text="doubtShow">عرضها</button></span>
     </div>
+    {% else %}
+    <div class="banner gd-banner" x-show="!startedElsewhere">
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <div class="grow stack-sm">
+        <span>تغيير المناطق هنا يُعيد التعرّف على نص الصفحة. الصفحات المعتمدة وما فيه تصحيحات مراجعة لا تتغيّر.</span>
+        {% if config.textLayer %}<span class="gd-banner-note">للكتاب طبقة نصية يُؤخذ منها نصّه؛ المناطق هنا لا تغيّر النص.</span>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+    <div class="banner gd-banner" role="alert" x-show="startedElsewhere" x-cloak>
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span class="grow">بدأت المعالجة في نافذة أخرى · <button type="button" class="link" @click="window.location.reload()">تحديث الصفحة</button></span>
+    </div>
+    {% endif %}
     <div class="banner banner-info" x-show="sheetsFailed" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
       <span class="grow">تعذّر تحميل بيانات بعض الصفحات. تُعاد المحاولة عند تحديث الحالة التالي.</span>
@@ -211,6 +290,14 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
   </div>
 
   {# ------------------------------------------------------------ empty state: nothing ingested yet #}
+  {% if guides_mode %}
+  <div class="empty-state" x-show="nPages === 0"{% if tiles %} x-cloak{% endif %}>
+    <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-image"/></svg>
+    <h2 class="empty-title" x-text="emptyTitle">{% if book.status == 'processing' %}تُستخرج الصفحات الآن{% else %}لم تُستخرج الصفحات بعد{% endif %}</h2>
+    <p class="empty-text" x-text="emptyText"></p>
+    <span class="status meta" x-show="active"{% if not progress.active %} x-cloak{% endif %}><span class="dot dot-accent" aria-hidden="true"></span><span>تُستخرج الصفحات الآن</span></span>
+  </div>
+  {% else %}
   <div class="empty-state" x-show="nPages === 0"{% if tiles %} x-cloak{% endif %}>
     <svg class="icon icon-lg text-text-3" aria-hidden="true"><use href="#i-image"/></svg>
     <h2 class="empty-title">لم تُستخرج الصفحات بعد</h2>
@@ -220,9 +307,10 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
     </p>
     <span class="status meta" x-show="active"{% if not progress.active %} x-cloak{% endif %}><span class="dot dot-accent" aria-hidden="true"></span><span>تُستخرج الصفحات الآن</span></span>
   </div>
+  {% endif %}
 
   {# ------------------------------------------------------------ pages beside a side panel (D34): «صفحات» (the viewer, D33) or «شبكة» (static tiles), then the summary and the filmstrip #}
-  <div class="bk-layout" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}>
+  <div class="bk-layout" x-show="nPages > 0"{% if not tiles %} x-cloak{% endif %}{% if guides_mode %} x-data="bookGuides()" @nassakh:page-shown.window="onPageShown($event.detail)"{% endif %}>
     <div class="bk-main">
       <section class="bk-viewer" data-viewer aria-label="عارض الصفحات" x-show="view === 'sheets'">
         <div class="bk-stage" x-ref="stage" :class="turnClass" @wheel="onStageWheel($event)" @pointerdown="onStagePointerDown($event)" @pointerup="onStagePointerUp($event)" @pointercancel="swipeCancel()">
@@ -243,6 +331,24 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
       <p class="bk-empty-filter meta" x-show="filteredOut" x-cloak>لا صفحات تطابق هذا المرشّح</p>
     </div>
 
+    {% if guides_mode %}
+    <aside class="bk-side gd-side" aria-label="التخطيط">
+      {% include "books/_guides_side.html" %}
+      <nav class="bk-film" aria-label="شريط الصفحات" x-show="view === 'sheets'">
+        <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="filmCount"></bdi></div>
+        <div class="bk-film-track" x-ref="film" data-film-track></div>
+      </nav>
+    </aside>
+    {# the mode's toast: «حُفظ لهذه الصفحة · تراجع», «طُبّق على 118 صفحة · تراجع» …; «تراجع» never runs by itself #}
+    <div class="toast bk-toast gd-toast" role="status" x-show="toast.visible" x-cloak x-transition.opacity.duration.200ms>
+      <span class="grow" x-text="toast.message"></span>
+      <button type="button" class="btn" x-show="toast.hasAction" @click="runToastAction()">تراجع</button>
+      <button type="button" class="toast-close" aria-label="إغلاق" @click="hideToast()">
+        <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+      </button>
+    </div>
+    <p class="sr-only" aria-live="polite" x-text="live"></p>
+    {% else %}
     <aside class="bk-side" aria-label="ملخّص الكتاب">
       {# summary (§2.4): stage counters, review state, the attention list #}
       <div class="bk-summary" role="group" aria-label="التقدّم">
@@ -314,21 +420,33 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
         <div class="bk-film-track" x-ref="film" data-film-track></div>
       </nav>
     </aside>
+    {% endif %}
   </div>
 
   <template id="sheet-shell">{% include "books/_page_sheet.html" with t=None %}</template>
   <template id="tile-shell">{% include "books/_page_tile.html" with t=None %}</template>
   <template id="sheet-body">{% include "books/_sheet_body.html" %}</template>
+  {% if guides_mode %}<template id="sheet-guides">{% include "books/_sheet_guides.html" %}</template>{% endif %}
   <template id="thumb-shell">
     <button type="button" class="bk-thumb" data-number="" title="">
-      <span class="bk-thumb-img"><img alt="" loading="lazy" decoding="async" hidden></span>
+      <span class="bk-thumb-img"><img alt="" loading="lazy" decoding="async" hidden>{% if guides_mode %}<span class="gd-bands" aria-hidden="true"></span>{% endif %}</span>
       <span class="bk-thumb-num num"></span>
       <span class="bk-thumb-mark is-check" hidden><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
       <span class="bk-thumb-mark is-count num" hidden></span>
       <span class="bk-thumb-mark is-live" hidden aria-hidden="true"></span>
+      {% if guides_mode %}<span class="bk-thumb-mark is-doubt" hidden><span class="sr-only">تستحق نظرة</span></span>{% endif %}
     </button>
   </template>
 
+  {% if guides_mode %}
+  {# the end of preparation (§3.12): no action, the primary is enabled now #}
+  <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>
+    <span class="grow" x-text="doneText"></span>
+    <button type="button" class="toast-close" aria-label="إغلاق" @click="doneToast.visible = false">
+      <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
+  </div>
+  {% else %}
   {# the end-of-processing toast (§6) #}
   <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>
     <span class="grow">اكتملت المعالجة · <bdi class="num" x-text="doneToast.count"></bdi> صفحة</span>
@@ -337,5 +455,34 @@ stays light. Western digits everywhere; numbers inside Arabic strings sit in <bd
       <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </div>
+  {% endif %}
+
+  {% if role == 'admin' or role == 'editor' %}
+  {# dialogs (§3.13, the rv-modal look of «نسخة محفوظة»): focus on the safe button, Esc cancels #}
+  <div class="rv-scrim bk-scrim" x-show="dialog.kind" x-cloak x-transition.opacity.duration.150ms @click.self="closeDialog()">
+    <div class="rv-modal bk-dialog" role="alertdialog" aria-modal="true" aria-labelledby="bk-rerun-title" aria-describedby="bk-rerun-text" x-show="dialog.kind === 'rerun'" @keydown.tab="trapTab($event, $el)" data-rerun-dialog>
+      <h2 class="rv-modal-title" id="bk-rerun-title" x-text="rerunTitle"></h2>
+      <p class="bk-dialog-text" id="bk-rerun-text"><span x-text="rerunText"></span> <span class="meta" x-show="rerunNote" x-text="rerunNote"></span></p>
+      <form method="post" action="{% url 'books:rerun' book.pk %}" class="rv-modal-actions">
+        {% csrf_token %}
+        <input type="hidden" name="stage" :value="dialog.stage">
+        <button type="button" class="btn" x-ref="rerunSafe" @click="closeDialog()">إلغاء</button>
+        <button type="submit" class="btn btn-primary">إعادة التشغيل</button>
+      </form>
+    </div>
+    {% if delete_action %}
+    <div class="rv-modal bk-dialog" role="alertdialog" aria-modal="true" aria-labelledby="bk-delete-title" aria-describedby="bk-delete-text" x-show="dialog.kind === 'delete'" @keydown.tab="trapTab($event, $el)" data-delete-dialog>
+      <h2 class="rv-modal-title" id="bk-delete-title">حذف الكتاب «{{ book.title }}»؟</h2>
+      <p class="bk-dialog-text" id="bk-delete-text">يُحذف الكتاب وملفه وكل صفحاته ونصوصها ومخطوطته وملفات إخراجه، ولا يمكن التراجع عن ذلك.</p>
+      <p class="bk-dialog-work" x-show="deleteWork" x-text="deleteWork"></p>
+      <form method="post" action="{{ delete_action }}" class="rv-modal-actions">
+        {% csrf_token %}
+        <button type="button" class="btn" x-ref="deleteSafe" @click="closeDialog()">إلغاء</button>
+        <button type="submit" class="btn btn-danger">حذف الكتاب</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

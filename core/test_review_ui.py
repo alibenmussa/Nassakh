@@ -181,7 +181,14 @@ def test_review_template_structure_rtl_counters_and_config():
         'حُسمت <bdi class="num rv-counter" x-text="b.shown"></bdi> من '
         '<bdi class="num" x-text="b.lowTotal"></bdi> كلمة' in body
     )
-    assert 'class="progress rv-progress-bar" role="progressbar"' in body
+    assert 'class="progress rv-progress-bar" role="progressbar" x-show="b.lowTotal > 0"' in body
+    # D73: a page with no uncertain words reads «لا علامات», never «حُسمت 0 من 0 كلمة»
+    assert (
+        '<span class="rv-progress-text meta rv-no-flags" x-show="!b.lowTotal" data-no-flags>لا علامات</span>'
+        in body
+    )
+    assert "'لا كلمات غير مؤكَّدة في هذه الصفحة؛ اقرأ الأسطر مع الصورة ثم اعتمدها.'" in body
+    assert '<span class="rv-progress-text meta" x-show="b.lowTotal > 0">حُسمت' in body
     assert "يحفظ…" in body and "محفوظ" in body and "تعذّر الحفظ · إعادة المحاولة" in body
     assert body.count("btn btn-primary") == 1 and "اعتماد الصفحة" in body
     # split view: scan pane, lines pane, swap toggle, tabs, filmstrip
@@ -232,6 +239,13 @@ def test_review_template_words_popover_editing_and_states():
     assert 'aria-labelledby="rv-sheet-title"' in body and "اختصارات لوحة المفاتيح" in body
     assert body.count('@keydown.tab="trapTab($event, $el)"') == 2
     assert "الصفحة التالية / السابقة" in body  # ArrowLeft/ArrowRight row of the sheet
+    # D69: the sheet in two groups, letters as Latin capitals that work on the Arabic layout; ⌘↵ approves
+    sheet = body[body.index('<dl class="rv-keys">') : body.index("</dl>", body.index('<dl class="rv-keys">'))]
+    assert sheet.index("في قائمة الكلمة") < sheet.index("⌘↵") < sheet.index("في الصفحة") < sheet.index(">A<")
+    assert '<kbd class="kbd">Space</kbd>' in sheet and '<kbd class="kbd">Home</kbd>' in sheet
+    assert "تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه." in body
+    assert 'title="اعتماد الصفحة (A، أو ⌘↵ من قائمة الكلمة)"' in body
+    assert 'أو اكتب التصحيح مباشرة؛ <kbd class="kbd">⌘↵</kbd> لاعتماد الصفحة.' in body
     assert "spinner" not in body
 
 
@@ -263,8 +277,10 @@ globalThis.document = { hidden: false, addEventListener: (e, fn) => { if (e === 
 globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
 globalThis.setTimeout = (fn) => 1; globalThis.clearTimeout = () => {};
 globalThis.Nassakh = { toast: (m) => calls.push(['toast', m]), copyText: (t) => { calls.push(['copy', t]); return true; } };
+const posted = []; globalThis.BroadcastChannel = class { constructor(name) { this.name = name; } postMessage(m) { posted.push([this.name, m]); } };
 const fs = require('fs');
 const config = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+eval(fs.readFileSync(process.argv[4], 'utf8')); // keys.js (NassakhKeys)
 eval(fs.readFileSync(process.argv[2], 'utf8'));
 inits.forEach((fn) => fn());
 const reply = (status, data) => async (url, init) => { calls.push([init && init.method || 'GET', url, init && init.body ? JSON.parse(init.body) : null]); return { ok: status < 400, status, json: async () => data }; };
@@ -325,11 +341,13 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   // keyboard map (RTL: ArrowLeft = next page)
   const ka = NassakhReview.keyAction;
   const ctx = { inField: false, inFlow: true, focused: true, optionKeys: ['1', '2'] };
+  const word = { ...ctx, open: true }; // the word menu is open: letters and digits edit the word (D69)
   out.keys = {
     left: ka({ key: 'ArrowLeft' }, ctx), right: ka({ key: 'ArrowRight' }, ctx),
     tab: ka({ key: 'Tab' }, ctx), shiftTab: ka({ key: 'Tab', shiftKey: true }, ctx), tabOutside: ka({ key: 'Tab' }, { ...ctx, inFlow: false }),
     undo: ka({ key: 'z', metaKey: true }, ctx), sheet: ka({ key: '?' }, ctx), enter: ka({ key: 'Enter' }, ctx), altEnter: ka({ key: 'Enter', altKey: true }, ctx),
-    one: ka({ key: '1' }, ctx), three: ka({ key: '3' }, ctx), letter: ka({ key: 'ك' }, ctx), letterUnfocused: ka({ key: 'ك' }, { ...ctx, focused: false }),
+    one: ka({ key: '1' }, ctx), three: ka({ key: '3' }, word), threePage: ka({ key: '3' }, ctx), letter: ka({ key: 'ك' }, word), letterPage: ka({ key: 'ك' }, ctx),
+    letterUnfocused: ka({ key: 'ك' }, { ...ctx, focused: false }),
     edit: ka({ key: 'e' }, ctx), approve: ka({ key: 'A' }, ctx), next: ka({ key: 'n' }, ctx), zoom: [ka({ key: '+' }, ctx), ka({ key: '-' }, ctx), ka({ key: '0' }, ctx)],
     inField: ka({ key: 'a' }, { ...ctx, inField: true }), escInField: ka({ key: 'Escape' }, { ...ctx, inField: true }),
     undoInField: ka({ key: 'z', metaKey: true }, { ...ctx, inField: true }), redo: ka({ key: 'z', metaKey: true, shiftKey: true }, ctx),
@@ -538,6 +556,55 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   cf.lines[0].v = 'v7'; globalThis.fetch = reply(200, { line: Object.assign(clone(cf.lines[0]), { role: 'heading', v: 'v8' }) }); calls.length = 0;
   await cf.setRole(cf.lines[0], 'heading');
   out.roleSent = (calls.filter((x) => x[0] === 'POST').pop() || [])[2];
+  // ------------------------------------------------------------ Phase 7a (D69, D70, D73)
+  // every saved change is announced on BroadcastChannel('nassakh'); a failed one is not
+  const bc = reg.reviewScreen(clone(config)); bc.init(); posted.length = 0;
+  globalThis.fetch = answer(() => ({ line: line51(), counts: {} }));
+  bc.focusWord({ lineId: 51, index: 1 }); await bc.choose('secondary');
+  bc.startEdit(bc.lines[1]); bc.edit.text = 'وفي الكتاب حكايات'; await bc.saveEdit();
+  globalThis.fetch = answer(() => ({ line: Object.assign(clone(config.lines[0]), { role: 'heading' }) })); await bc.setRole(bc.lines[0], 'heading');
+  globalThis.fetch = answer(() => ({ line: clone(delLine), counts: {} })); bc.focusWord({ lineId: 53, index: 2 }); await bc.deleteWord();
+  globalThis.fetch = answer(() => ({ line: clone(mergedLine), counts: {} })); bc.focusWord({ lineId: 52, index: 1 }); await bc.mergeWord(1);
+  globalThis.fetch = answer(() => ({ line: Object.assign(clone(config.lines[1]), { id: 60, order: 2 }), counts: {} })); bc.startInsert(bc.lines[1]); bc.insert.text = 'سطر جديد'; await bc.saveInsert();
+  globalThis.fetch = answer(() => ({ deleted_id: 60, counts: {} })); await bc.removeLine(bc.lineById(60));
+  globalThis.fetch = reply(500, { message: 'تعذّر' }); await bc.setRole(bc.lines[1], 'subheading');
+  globalThis.fetch = answer(() => clone(config)); bc.save.failed = []; await bc.undo();
+  globalThis.fetch = answer(() => ({ status: 'reviewed' })); bc.counts.unresolved = 0; bc.celebrate = () => {}; await bc.approve(true);
+  globalThis.fetch = answer(() => clone(config)); await bc.reopen();
+  out.channel = posted.slice();
+  // «لا علامات»: Tab on a page with no uncertain words
+  const nf = clone(config); nf.lines.forEach((l) => l.tokens.forEach((t) => { t.conf = 'high'; })); nf.counts = { low_total: 0, unresolved: 0, resolved: 0 };
+  const nfc = reg.reviewScreen(nf); nfc.init(); calls.length = 0; nfc.move(1);
+  out.noFlags = { toast: calls.filter((x) => x[0] === 'toast').pop()[1], bar: stores.review.bar.lowTotal };
+  // the two modes through onKey (Arabic layout): ش types into an open menu, approves with it closed; Esc keeps the word
+  const md = reg.reviewScreen(clone(config)); md.init();
+  const press = (inst, ev, target) => { let prevented = false; inst.onKey(Object.assign({ target: target || { tagName: 'SPAN', closest: () => null }, preventDefault: () => { prevented = true; } }, ev)); return prevented; };
+  md.focusWord({ lineId: 51, index: 1 }, { open: true });
+  press(md, { key: 'ش', code: 'KeyA' });
+  out.wordMode = { typing: md.pop.typing, typed: md.pop.typed, open: md.pop.open };
+  md.closeTop(); md.closeTop();
+  out.escKeeps = { open: md.pop.open, focus: clone(md.focus) };
+  let approved = 0; md.approve = () => { approved += 1; return Promise.resolve(true); };
+  press(md, { key: 'ش', code: 'KeyA' });
+  out.pageMode = { approved, typing: md.pop.typing };
+  press(md, { key: ' ', code: 'Space' });
+  out.space = { open: md.pop.open, focus: clone(md.focus) };
+  press(md, { key: '٢', code: 'Digit2' });
+  out.arabicDigit = { t: md.lines[0].tokens[1].t, res: md.lines[0].tokens[1].res };
+  // ⌘↵ from the correction field: a changed draft is saved first, then the page approved
+  globalThis.fetch = answer(() => ({ line: line51(), counts: {} })); calls.length = 0;
+  md.focusWord({ lineId: 51, index: 4 }, { open: true }); md.startTyping('1'); md.pop.typed = '1967';
+  press(md, { key: 'Enter', code: 'Enter', metaKey: true }, { tagName: 'INPUT', closest: (sel) => (sel === '.rv-pop' ? {} : null) });
+  await flush();
+  out.cmdEnter = { approved, post: (calls.filter((x) => x[0] === 'POST').pop() || [])[2], open: md.pop.open };
+  // ⌘↵ in the line editor (a field outside the word menu) stays the field's
+  md.startEdit(md.lines[1]); const before = approved;
+  press(md, { key: 'Enter', metaKey: true }, { tagName: 'TEXTAREA', closest: () => null });
+  out.cmdEnterInEditor = approved - before;
+  // Home / End: the first and last page of the filmstrip
+  const he = reg.reviewScreen(clone(config)); he.init(); he.film = clone(film); const went = []; he.goTo = (item) => went.push(item.number);
+  he.goEdgePage(-1); he.goEdgePage(1);
+  out.edges = went;
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -550,7 +617,7 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     fixture = tmp_path / "config.json"
     fixture.write_text(json.dumps(_config(), ensure_ascii=False), encoding="utf-8")
     run = subprocess.run(
-        ["node", str(harness), str(JS / "review.js"), str(fixture)],
+        ["node", str(harness), str(JS / "review.js"), str(fixture), str(JS / "keys.js")],
         capture_output=True,
         text=True,
         timeout=30,
@@ -709,10 +776,9 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
         and keys["enter"] == "accept"
         and keys["altEnter"] == "insert"
     )
-    assert (
-        keys["one"] == "choose1" and keys["three"] == "type"
-    )  # no third reading → the digit starts a correction
-    assert keys["letter"] == "type" and keys["letterUnfocused"] is None
+    # no third reading: in the word menu the digit starts a correction; with the menu closed it does nothing
+    assert keys["one"] == "choose1" and keys["three"] == "type" and keys["threePage"] is None
+    assert keys["letter"] == "type" and keys["letterPage"] is None and keys["letterUnfocused"] is None
     assert keys["edit"] == "edit" and keys["approve"] == "approve" and keys["next"] == "nextReview"
     assert keys["zoom"] == ["zoomIn", "zoomOut", "zoomReset"]
     assert keys["inField"] is None and keys["escInField"] == "close"
@@ -793,6 +859,23 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     }
     # one toast at a time
     assert out["oneToast"] == {"hidShared": 1, "undoShown": True, "after": None}
+    # --- Phase 7a
+    # D70: a message on the channel after every saved change (resolve, edit, role, drop word, merge, insert,
+    # delete a line, undo, approve, reopen); the failed role change posts nothing
+    msg = ["nassakh", {"type": "review", "book": 1, "page": 3}]
+    assert out["channel"] == [msg] * 10
+    # D73: no uncertain words → «لا علامات» on Tab
+    assert out["noFlags"] == {"toast": "لا علامات في هذه الصفحة؛ اقرأ الأسطر مع الصورة ثم اعتمدها.", "bar": 0}
+    # D69: the word menu decides the mode
+    assert out["wordMode"] == {"typing": True, "typed": "ش", "open": True}
+    assert out["escKeeps"] == {"open": False, "focus": {"lineId": 51, "index": 1}}
+    assert out["pageMode"] == {"approved": 1, "typing": False}
+    assert out["space"] == {"open": True, "focus": {"lineId": 51, "index": 1}}
+    assert out["arabicDigit"] == {"t": "الامير", "res": "secondary"}  # «٢» chose the second reading
+    assert out["cmdEnter"]["approved"] == 2 and out["cmdEnter"]["open"] is False
+    assert out["cmdEnter"]["post"]["choice"] == "typed" and out["cmdEnter"]["post"]["text"] == "1967"
+    assert out["cmdEnterInEditor"] == 0
+    assert out["edges"] == [2, 4]
     # direction-aware page turns
     assert out["turns"] == [
         ["/api/pages/6/review/", -1],

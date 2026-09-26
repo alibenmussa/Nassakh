@@ -1,0 +1,75 @@
+{% comment %}The side panel of the dashboard's «التخطيط» mode (PHASE7_SPEC §3.12, D67), on the end side (RTL: the left, D34).
+Top: the stage — «جُهّزت 7 من 7 صفحات», the pages worth a look, the kept PDF range (D66) and «حذف الكتاب…». Then, for
+editors, «لكل الصفحات»: a running head and a footnote line for all pages as a draft with its preview box (the
+`bookGuides` component, static/src/js/processing.js, on `.bk-layout`), the detection line and «إزالة الضبط العام».
+Last, the legend. Scope: bookGuides over bookDashboard. Context: book, role, config.{% endcomment %}
+<section class="gd-stage" aria-labelledby="gd-stage-title">
+  <div class="bk-side-head"><span id="gd-stage-title">التخطيط</span></div>
+  <span class="status gd-stage-line"><span class="dot" :class="active ? 'dot-accent' : (status === 'error' ? 'dot-danger' : 'dot-success')" aria-hidden="true"></span><span x-text="preparedLine"></span></span>
+  <button type="button" class="gd-stage-doubts" x-show="counts.doubt > 0" x-cloak @click="showDoubts()"><span class="gd-doubt-dot" aria-hidden="true"></span><span x-text="doubtLine"></span></button>
+  {% if config.keptRange %}<span class="meta num gd-stage-range">{{ config.keptRange.text }}</span>{% endif %}
+  {% if role == 'admin' or role == 'editor' %}
+  <button type="button" class="link gd-stage-delete" @click="openDelete()" data-delete-side>حذف الكتاب…</button>
+  {% endif %}
+</section>
+
+{% if role == 'admin' or role == 'editor' %}
+<section class="gd-all" aria-labelledby="gd-all-title">
+  <div class="bk-side-head"><span id="gd-all-title">لكل الصفحات</span></div>
+
+  <div class="gd-field">
+    <label class="check"><input type="checkbox" x-model="ctl.header.on" @change="onControl()"><span>ترويسة أعلى كل الصفحات</span></label>
+    <div class="gd-input" x-show="ctl.header.on" x-cloak>
+      <input type="text" class="input" inputmode="decimal" dir="ltr" x-model="ctl.header.pct" @input.debounce.200ms="onControl()" @keydown.enter.prevent="onControl()" aria-label="حدّ الترويسة لكل الصفحات بالنسبة المئوية من الأعلى">
+      <span class="meta">% من الأعلى</span>
+      <button type="button" class="link gd-from-page" x-show="view === 'sheets' && pageCut !== null" @click="fromThisPage()">من هذه الصفحة</button>
+    </div>
+  </div>
+
+  <div class="gd-field">
+    <label class="check"><input type="checkbox" x-model="ctl.footnote.on" @change="onControl()"><span>حاشية حيث لم تُكتشف</span></label>
+    <div class="gd-input" x-show="ctl.footnote.on" x-cloak>
+      <input type="text" class="input" inputmode="decimal" dir="ltr" x-model="ctl.footnote.pct" @input.debounce.200ms="onControl()" @keydown.enter.prevent="onControl()" aria-label="بداية الحاشية لكل الصفحات بالنسبة المئوية من الأعلى">
+      <span class="meta">%</span>
+      <button type="button" class="link gd-median" x-show="medianRule !== null" @click="useMedian()" x-text="medianLabel"></button>
+    </div>
+  </div>
+
+  <p class="meta gd-stats" x-show="statsText" x-text="statsText">{{ config.guidesStats.text }}</p>
+  <button type="button" class="link gd-reset-book" x-show="isManual && !draft" x-cloak @click="resetBook()">إزالة الضبط العام</button>
+
+  {# the draft's preview (§3.12): nothing is saved before «تطبيق على كل الصفحات» #}
+  <div class="gd-preview" role="group" aria-labelledby="gd-preview-title" x-show="draft" x-cloak x-transition.opacity.duration.150ms>
+    <div class="gd-preview-title" id="gd-preview-title">معاينة</div>
+    <p class="gd-preview-line" x-show="!preview"><span class="gd-preview-wait" aria-hidden="true"></span></p>
+    <p class="gd-preview-line" x-show="preview" x-text="previewChanged"></p>
+    <p class="gd-preview-line gd-preview-cut" x-show="cutPages.length">
+      <span class="gd-doubt-dot" aria-hidden="true"></span><span x-text="previewCut"></span>
+      <span class="gd-preview-pages">
+        <template x-for="(n, i) in cutPages" :key="n"><span><span x-show="i > 0" aria-hidden="true"> · </span><button type="button" class="link num" @click="goToPage(n)" x-text="n" :aria-label="`الصفحة ${n}`"></button></span></template>
+      </span>
+    </p>
+    <label class="check gd-preview-keep" x-show="keptCount > 0">
+      <input type="checkbox" x-model="keepOverrides" @change="schedulePreview()">
+      <span><span x-text="keptText"></span> · <span x-text="keptApply"></span></span>
+    </label>
+    <p class="gd-preview-line" x-show="previewReocr" x-text="previewReocr"></p>
+    <p class="gd-preview-line meta" x-show="previewLocked" x-text="previewLocked"></p>
+    <div class="gd-preview-actions">
+      <button type="button" class="btn btn-sm" @click="dropDraft()">إلغاء</button>
+      <button type="button" class="btn btn-primary btn-sm" @click="applyDraft()" :disabled="busy || !preview || !preview.changed" data-guides-apply>تطبيق على كل الصفحات</button>
+    </div>
+  </div>
+  <p class="field-error gd-error" role="alert" x-show="error" x-cloak x-text="error"></p>
+</section>
+{% endif %}
+
+<section class="gd-legend" aria-label="دليل الألوان">
+  <ul class="gd-legend-list">
+    <li><span class="gd-swatch region-body" aria-hidden="true"></span>متن</li>
+    <li><span class="gd-swatch region-footnote" aria-hidden="true"></span>حاشية</li>
+    <li><span class="gd-swatch region-running_header" aria-hidden="true"></span>ترويسة</li>
+    <li><span class="gd-swatch region-page_number" aria-hidden="true"></span>رقم الصفحة</li>
+    <li><span class="gd-doubt-dot" aria-hidden="true"></span>تستحق نظرة</li>
+  </ul>
+</section>

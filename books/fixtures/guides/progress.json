@@ -1,0 +1,68 @@
+{
+  "processing": {
+    "total": 6,
+    "by_status": {
+      "uploaded": 2,
+      "preprocessed": 3,
+      "layout_done": 0,
+      "ocr_done": 0,
+      "reviewed": 0,
+      "assembled": 0,
+      "error": 1,
+      "excluded": 0
+    },
+    "percent": 50,
+    "active": true,
+    "flags": 1,
+    "status": "processing",
+    "status_label": "قيد التخطيط",
+    "dot": "dot-accent",
+    "bar_state": "",
+    "layout_stage": true,
+    "waiting": false
+  },
+  "needs_guides": {
+    "total": 7,
+    "by_status": {
+      "uploaded": 0,
+      "preprocessed": 7,
+      "layout_done": 0,
+      "ocr_done": 0,
+      "reviewed": 0,
+      "assembled": 0,
+      "error": 0,
+      "excluded": 0
+    },
+    "percent": 100,
+    "active": false,
+    "flags": 0,
+    "status": "needs_guides",
+    "status_label": "تم التخطيط",
+    "dot": "dot-warning",
+    "bar_state": "warning",
+    "layout_stage": true,
+    "waiting": true
+  },
+  "started": {
+    "total": 6,
+    "by_status": {
+      "uploaded": 0,
+      "preprocessed": 0,
+      "layout_done": 0,
+      "ocr_done": 5,
+      "reviewed": 1,
+      "assembled": 0,
+      "error": 0,
+      "excluded": 0
+    },
+    "percent": 100,
+    "active": false,
+    "flags": 0,
+    "status": "reviewing",
+    "status_label": "قيد المراجعة",
+    "dot": "dot-accent",
+    "bar_state": "success",
+    "layout_stage": false,
+    "waiting": false
+  }
+}

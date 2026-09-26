@@ -262,6 +262,8 @@ def test_manuscript_view_ready_renders_the_document_the_panel_and_the_chrome(edi
     # (bk-side, bk-side-head sections: the steps, the contents, the warnings; no tabs, no numbers), the one
     # overlay (the shared menu) with its three faces, the drawer, the sheet, the bar
     assert "data-seam-toggle" in body and 'title="إظهار فواصل الصفحات (S)"' in body
+    # D69: the sheet says the letters work by their place on the Arabic layout too
+    assert "تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه." in body
     assert 'placeholder="إلى صفحة…"' in body and '<kbd class="kbd" aria-hidden="true">G</kbd>' in body
     start = body.index('<aside class="bk-side ms-side"')
     side = body[start : body.index("</aside>", start)]
@@ -830,7 +832,7 @@ const parse = (html) => { const f = new Fragment(); parseInto(f, html); return f
 const reg = {}; const inits = []; const stores = {}; const calls = []; const timers = []; const scrolls = []; const assigned = [];
 globalThis.window = globalThis;
 globalThis.document = { hidden: false, activeElement: null, createElement: (t) => new Element(t), createTextNode: (d) => new Text(d),
-  addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); }, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] };
+  addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); }, removeEventListener: () => {}, getElementById: () => null, querySelector: () => null, querySelectorAll: () => [] };
 globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
 globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; }; globalThis.clearTimeout = () => {};
 globalThis.setInterval = () => 1; globalThis.clearInterval = () => {};
@@ -839,8 +841,10 @@ globalThis.innerHeight = 800; globalThis.innerWidth = 1200;
 globalThis.location = { assign: (u) => assigned.push(u), pathname: '/books/1/manuscript/', search: '', hash: '' };
 const store = {}; globalThis.localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
 globalThis.Nassakh = { toast: (m) => calls.push(['toast', m]), copyText: async (t) => { calls.push(['copy', t]); return true; } };
+const channels = []; globalThis.BroadcastChannel = class { constructor(name) { this.name = name; this.onmessage = null; channels.push(this); } postMessage() {} close() { this.closed = true; } };
 const fs = require('fs');
 const fixture = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+eval(fs.readFileSync(process.argv[4], 'utf8')); // keys.js (NassakhKeys)
 eval(fs.readFileSync(process.argv[2], 'utf8'));
 inits.forEach((fn) => fn());
 NassakhManuscript.parseFragment = parse;
@@ -1047,6 +1051,26 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   const late = make(fixture.state_v1, fixture.fragment_v1); await flush();
   respond409 = true; await late.c.reassemble(); await flush(); respond409 = false;
   out.late = { edited: late.c.edited, open: late.c.convert.open, label: late.c.convert.label };
+  // ---- D70: the live state. The review screen's message (this book only) fetches the state; a changed set of
+  // stale pages swaps the document too (the amber marks follow the live status); one fetch per 2 s, a trigger
+  // inside the window waits for its end; nothing while a run is polled
+  const lv = make(fixture.state_ready, fixture.fragment_v1); await flush();
+  const ch = channels[channels.length - 1];
+  calls.length = 0; timers.length = 0; stateQueue = [fixture.state_stale]; fragment = fixture.fragment_v1;
+  ch.onmessage({ data: { type: 'review', book: 2, page: 4 } }); await flush();
+  const otherBook = reqs().length;
+  ch.onmessage({ data: { type: 'review', book: 1, page: 4 } }); await flush(); await flush(); await flush();
+  out.live = { channel: ch.name, otherBook, reqs: reqs(), stale: lv.c.stalePages, pill: lv.c.pill.text };
+  calls.length = 0; timers.length = 0;
+  ch.onmessage({ data: { type: 'review', book: 1, page: 2 } }); await flush();
+  ch.onmessage({ data: { type: 'review', book: 1, page: 3 } }); await flush(); // one trailing refresh for both
+  const waiting = timers.filter((t) => t.ms > 0 && t.ms <= 2000);
+  out.liveThrottled = { reqs: reqs().length, waiting: waiting.length };
+  // the same stale pages: the state is taken, the document stays
+  lv.c.fetchLive && (await lv.c.fetchLive()); await flush();
+  out.liveSame = reqs();
+  lv.c.destroy();
+  out.liveClosed = ch.closed === true;
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -1208,7 +1232,13 @@ def test_manuscript_component_under_node(tmp_path):
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
     run = subprocess.run(
-        ["node", str(harness), str(JS / "manuscript.js"), str(tmp_path / "fixture.json")],
+        [
+            "node",
+            str(harness),
+            str(JS / "manuscript.js"),
+            str(tmp_path / "fixture.json"),
+            str(JS / "keys.js"),
+        ],
         capture_output=True,
         text=True,
         timeout=60,
@@ -1277,6 +1307,13 @@ def test_manuscript_component_under_node(tmp_path):
         "arabic": None,
     }
     assert out["jumpFocused"] == "jump" and out["seamsOff"] == {"seams": False, "stored": "0"}
+    # D70: the live state
+    assert out["live"]["channel"] == "nassakh" and out["live"]["otherBook"] == 0
+    assert out["live"]["reqs"] == ["/api/books/1/manuscript/state/", "/books/1/manuscript/document/"]
+    assert out["live"]["stale"] == [2, 4] and out["live"]["pill"] == "تغيّر النص بعد التجميع"
+    assert out["liveThrottled"] == {"reqs": 0, "waiting": 1}
+    assert out["liveSame"] == ["/api/books/1/manuscript/state/"]
+    assert out["liveClosed"] is True
     assert out["moveFocus"] == {"focused": "p10", "active": "p10", "tools": "p10", "toolsClass": True}
     assert out["moveBack"] == "h1" and out["arrowDown"] == "p10"
     # warnings: ] after h1 lands on the warning of the nearest later block in document order (p10's uncertain

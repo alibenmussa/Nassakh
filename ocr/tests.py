@@ -930,6 +930,23 @@ def test_ocr_tasks_skip_excluded_and_missing_pages(page):
     run.assert_not_called()
 
 
+def test_ocr_tasks_do_nothing_while_the_book_awaits_the_start(page):
+    # D64: the gate; nothing is read before «بدء المعالجة», and the page and its runs stay as they are
+    add_regions(page)
+    Book.objects.filter(pk=page.book_id).update(awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES)
+    before = Page.objects.filter(pk=page.pk).values("status", "text_state", "task_id", "error_message").get()
+    with (
+        mock.patch.object(services, "run_fast_ocr") as fast,
+        mock.patch.object(services, "run_full_ocr") as full,
+    ):
+        assert tasks.ocr_page_fast.apply(args=[page.pk]).get() == page.pk
+        assert tasks.ocr_page_full.apply(args=[page.pk]).get() == page.pk
+    fast.assert_not_called()
+    full.assert_not_called()
+    after = Page.objects.filter(pk=page.pk).values("status", "text_state", "task_id", "error_message").get()
+    assert after == before and not OcrRun.objects.filter(page=page).exists()
+
+
 def test_ocr_task_marks_the_page_error_on_unexpected_failures(page):
     with mock.patch.object(services, "run_full_ocr", side_effect=ValueError("bad tensor")):
         assert tasks.ocr_page_full.apply(args=[page.pk]).get() == page.pk

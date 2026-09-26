@@ -117,3 +117,21 @@ def optional_url(name: str, *args) -> str:
         return reverse(name, args=args)
     except NoReverseMatch:
         return ""
+
+
+UNDO_TAG = "undo:"
+
+
+@register.filter
+def undo_action(message) -> str:
+    """The URL of a message's «تراجع» (`extra_tags="undo:<url>"`), '' when it has none.
+
+    The shared toast in `base.html` renders a small POST form to it (with `next`, never submitted by
+    itself). Only a same-site path is returned.
+    """
+    for tag in str(getattr(message, "extra_tags", "") or "").split():
+        if tag.startswith(UNDO_TAG):
+            url = tag[len(UNDO_TAG) :]
+            if url.startswith("/") and not url.startswith("//"):
+                return url
+    return ""

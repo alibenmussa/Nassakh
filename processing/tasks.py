@@ -4,6 +4,10 @@ Both are idempotent, bound, retry on I/O errors and return the `page_id` they re
 can be chained. Failures that are not retryable are recorded with `Page.set_error` and the task
 returns normally, so a group/chord over many pages is not aborted by one bad page; downstream
 tasks skip pages that are in `error` from an earlier stage.
+
+«التخطيط» (D64): while a book awaits «بدء المعالجة», `preprocess_page` refreshes the book after each
+page (under the book's row lock), which gives the dashboard its live count and moves the book to
+«تم التخطيط»; `layout_page` does nothing, since no region is written before the start.
 """
 
 from __future__ import annotations
@@ -66,16 +70,24 @@ def preprocess_page(self, page_id: int, manual: dict | None = None) -> int:
         logger.exception("preprocess_page(%s) failed", page_id)
         page.set_error(
             services.STAGE_PREPROCESS,
-            "فشلت المعالجة الأولية للصفحة. افحص الصورة الأصلية ثم أعد تشغيل المرحلة من صفحة التفاصيل.",
+            "فشل تجهيز الصفحة. افحص الصورة الأصلية ثم أعد تشغيل المرحلة من صفحة التفاصيل.",
         )
+    if page.book.awaits_ocr_start:
+        services.refresh_waiting_book(page.book_id)
     return page_id
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,), retry_backoff=True)
 def layout_page(self, page_id: int) -> int:
-    """Derive the page's regions from the effective guides; skipped for excluded or failed pages."""
+    """Derive the page's regions from the effective guides; skipped for excluded or failed pages.
+
+    Does nothing while the book awaits «بدء المعالجة» (D64): no region exists before the start.
+    """
     page = _load_page(page_id)
     if page is None or page.is_excluded or _failed_upstream(page):
+        return page_id
+    if page.book.awaits_ocr_start:
+        logger.info("layout_page(%s): skipped, book %s awaits «بدء المعالجة»", page_id, page.book_id)
         return page_id
     _remember_task(page, self.request.id)
     try:
@@ -85,12 +97,13 @@ def layout_page(self, page_id: int) -> int:
             raise self.retry(exc=exc, countdown=RETRY_COUNTDOWN * (self.request.retries + 1)) from exc
         logger.exception("layout_page(%s): I/O failure after retries", page_id)
         page.set_error(
-            services.STAGE_LAYOUT, "تعذّر الوصول إلى قاعدة البيانات أو الملفات أثناء التخطيط. أعد التشغيل."
+            services.STAGE_LAYOUT,
+            "تعذّر الوصول إلى قاعدة البيانات أو الملفات أثناء تحديد المناطق. أعد التشغيل.",
         )
     except services.ProcessingError as exc:
         logger.warning("layout_page(%s): %s", page_id, exc)
         page.set_error(services.STAGE_LAYOUT, str(exc))
     except Exception:
         logger.exception("layout_page(%s) failed", page_id)
-        page.set_error(services.STAGE_LAYOUT, "فشل تخطيط الصفحة. راجع الأدلة ثم أعد تشغيل المرحلة.")
+        page.set_error(services.STAGE_LAYOUT, "فشل تحديد مناطق الصفحة. راجع تخطيطها ثم أعد تشغيل المرحلة.")
     return page_id

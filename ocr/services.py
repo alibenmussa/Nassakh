@@ -169,18 +169,18 @@ def _preprocess_of(page: Page) -> Preprocess:
     try:
         return page.preprocess
     except ObjectDoesNotExist:
-        raise OcrError("لا توجد معالجة أولية لهذه الصفحة؛ شغّل مرحلة المعالجة الأولية أولًا.") from None
+        raise OcrError("لم تُجهَّز هذه الصفحة بعد؛ شغّل «تجهيز الصفحات» أولًا.") from None
 
 
 def _load_field_image(field: FieldFile, label: str) -> np.ndarray:
     """Read a stored image field as a 2-D uint8 array, with an Arabic error when it is missing."""
     if not field or not field.name:
-        raise OcrError(f"الصورة {label} غير متوفرة؛ أعد تشغيل المعالجة الأولية.")
+        raise OcrError(f"الصورة {label} غير متوفرة؛ أعد تجهيز الصفحة.")
     try:
         with field.open("rb") as fh:
             return load_gray(fh)
     except FileNotFoundError:
-        raise OcrError(f"ملف الصورة {label} مفقود من التخزين؛ أعد تشغيل المعالجة الأولية.") from None
+        raise OcrError(f"ملف الصورة {label} مفقود من التخزين؛ أعد تجهيز الصفحة.") from None
 
 
 def _targets(page: Page, shape: tuple[int, ...], ocr_only: bool) -> list[Target]:
@@ -222,7 +222,7 @@ def _crop_image(array: np.ndarray, bbox: list[int], upscale: int = 1) -> np.ndar
     """Crop `bbox` out of `array`; upscale with Lanczos when `upscale > 1` (footnotes, D11)."""
     part = crop(array, bbox)
     if part.size == 0:
-        raise OcrError("منطقة فارغة خارج حدود الصورة؛ راجع أدلة التخطيط لهذه الصفحة.")
+        raise OcrError("منطقة فارغة خارج حدود الصورة؛ راجع تخطيط هذه الصفحة.")
     if upscale > 1:
         img = Image.fromarray(part)
         img = img.resize((img.width * upscale, img.height * upscale), Image.LANCZOS)

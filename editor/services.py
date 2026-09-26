@@ -44,6 +44,7 @@ CONFLICT = "تغيّر هذا الفصل في نافذة أخرى."
 REASSEMBLY_ERROR = "تعذّرت إعادة تجميع الفصل؛ بقي الفصل كما هو. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم."
 CHAPTER_GONE = "لم يُعثر على نص هذا الفصل في الصفحات؛ بقي الفصل كما هو."
 SUPERSEDED = "أُعيد تجميع الكتاب كله في أثناء ذلك؛ بقي الفصل كما جاء في التجميع الجديد."
+CHAPTER_EDITED = "حُرِّر نص هذا الفصل في «الكتاب»؛ إعادة بنائه من المراجعة تستبدله كله. أكّد الاستبدال أولًا."
 _RE_CHAPTER_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
@@ -63,6 +64,13 @@ class ChapterConflict(EditorError):
         self.chapter_id = chapter_id
         self.version = version
         self.content = {"type": "doc", "content": nodes}
+
+
+class EditorEdited(EditorError):
+    """A chapter rebuild from review asked for over an edited text without `replace_edited` (D70, API 409)."""
+
+    def __init__(self):
+        super().__init__(CHAPTER_EDITED)
 
 
 class StyleSheetError(EditorError):
@@ -567,13 +575,14 @@ def _chapters_of_page(chapters: list[tuple[str, list[int]]], page: int) -> list[
 
 
 def review_drift(book: Book, manuscript: Manuscript | None = None, chapters=None) -> dict:
-    """Pages whose text or status changed in review since the manuscript was built (D41), and the chapters
-    they fall in: `{edited, pages: [n…], chapters: {chapter id: [n…]}}`. The same comparison as the
-    manuscript's staleness (`assembly.services.stale_pages`, against the pages the manuscript's run read;
-    a chapter re-assembly moves that baseline for its pages). A page where one chapter ends and the next
-    begins is listed under both (the change may be in either). Three queries."""
+    """Pages whose text changed in review since the manuscript was built (D41), and the chapters they fall
+    in: `{edited, pages: [n…], chapters: {chapter id: [n…]}}`. The manuscript's staleness against the pages
+    its run read, without the approval-only pages (`assembly.services.drift_pages`, D70: approving a page
+    whose lines did not change is not a change of its text); a chapter re-assembly moves that baseline for
+    its pages. A page where one chapter ends and the next begins is listed under both (the change may be in
+    either). Three queries (the manuscript with its run, the page rows, the signatures)."""
     from assembly.pipeline import normalize_settings
-    from assembly.services import page_rows, stale_pages
+    from assembly.services import drift_pages, page_rows
 
     if manuscript is None:
         manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
@@ -583,7 +592,7 @@ def review_drift(book: Book, manuscript: Manuscript | None = None, chapters=None
     run = manuscript.run
     if run is None:
         return {"edited": edited, "pages": [], "chapters": {}}
-    pages = stale_pages(run.included, page_rows(book), normalize_settings(book.assembly_settings))
+    pages = drift_pages(run.included, page_rows(book), normalize_settings(book.assembly_settings))
     document = manuscript.document or {}
     slices = chapters if chapters is not None else doc.chapters_of(document)
     spans = [(chapter.id, doc.chapter_pages(chapter.nodes(document))) for chapter in slices]
@@ -594,15 +603,29 @@ def review_drift(book: Book, manuscript: Manuscript | None = None, chapters=None
     return {"edited": edited, "pages": pages, "chapters": by_chapter}
 
 
+def drift_of(book_id: int) -> dict | None:
+    """The live review drift of the book page (D70, `api:review_drift`): `{edited, pages: [n…], chapters:
+    [ids]}`, or None when the book has no manuscript. The book comes with the manuscript and its run, so
+    three queries in all (`review_drift`)."""
+    manuscript = Manuscript.objects.filter(book_id=book_id).select_related("run", "book").first()
+    if manuscript is None:
+        return None
+    drift = review_drift(manuscript.book, manuscript)
+    return {"edited": drift["edited"], "pages": drift["pages"], "chapters": sorted(drift["chapters"])}
+
+
 # ====================================================================== chapter re-assembly (D41)
 
 
-def reassemble_chapter(book: Book, chapter_id: str, user):
+def reassemble_chapter(book: Book, chapter_id: str, user, replace_edited: bool = False):
     """Start re-assembling one chapter from the reviewed pages (D41); returns the queued `AssemblyRun`.
 
     The run's settings carry `{"scope": "chapter", "chapter": <id>}`; the task (`editor.tasks`) runs
     the whole pipeline in memory and replaces only this chapter, keeping the old one as an `edit`
-    snapshot. Refused (400) while an assembly of the book is queued or running.
+    snapshot. Over a text edited on the book page the rebuild replaces the owner's headings, notes and
+    words of the chapter, so it needs `replace_edited` (D70, as D49 does for the whole book): without it
+    `EditorEdited` (409). An unedited manuscript loses nothing and needs no flag. Refused (400) while an
+    assembly of the book is queued or running.
     """
     from assembly.models import AssemblyRun
     from assembly.pipeline import normalize_settings
@@ -611,6 +634,8 @@ def reassemble_chapter(book: Book, chapter_id: str, user):
     manuscript = manuscript_of(book)
     if doc.find_chapter(manuscript.document or {}, chapter_id) is None:
         raise EditorNotFound(NO_CHAPTER)
+    if manuscript.origin == Manuscript.Origin.EDITOR and not replace_edited:
+        raise EditorEdited()
     with transaction.atomic():
         Book.objects.select_for_update().filter(pk=book.pk).first()
         active = AssemblyRun.objects.filter(book_id=book.pk, status__in=("queued", "running"))
@@ -1092,7 +1117,8 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
 
 def editor_state(book: Book, manuscript_state: dict) -> dict:
     """The dashboard's `editor` state: `{edited, version, drift_pages}` (D41). Without a manuscript no
-    query is made; otherwise one (the drift is the manuscript's stale pages, already computed)."""
+    query is made; otherwise one (the drift is the manuscript's stale pages without the approval-only ones,
+    `drift_pages`, already computed: D70)."""
     if not manuscript_state.get("exists"):
         return {"edited": False, "version": 0, "drift_pages": []}
     row = Manuscript.objects.filter(book_id=book.pk).values("origin", "version").first()
@@ -1102,7 +1128,7 @@ def editor_state(book: Book, manuscript_state: dict) -> dict:
     return {
         "edited": edited,
         "version": row["version"],
-        "drift_pages": list(manuscript_state.get("stale_pages") or []) if edited else [],
+        "drift_pages": list(manuscript_state.get("drift_pages") or []) if edited else [],
     }
 
 
@@ -1125,6 +1151,7 @@ def editor_urls(book: Book) -> dict:
         "chapters": reverse("api:chapters", args=[book.pk]),
         "chapter": chapter,
         "reassemble": reassemble,
+        "drift": reverse("api:review_drift", args=[book.pk]),
         "findReplace": reverse("api:find_replace", args=[book.pk]),
         "convertDigits": reverse("api:convert_digits", args=[book.pk]),
         "snapshots": reverse("api:snapshots", args=[book.pk]),

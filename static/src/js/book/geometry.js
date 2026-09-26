@@ -371,51 +371,63 @@
     return { right: numbers[cursor - 1] === n - 1 ? n - 1 : 0, left: n };
   }
 
-  // ---------------------------------------------------------------- keyboard (PHASE5_SPEC §9.2)
+  // ---------------------------------------------------------------- keyboard (PHASE5_SPEC §9.2, PHASE7_SPEC §3.15)
+  // ⌘⌥ + a digit key sets a block style; by code, so the digit row counts whatever it types.
   const STYLE_KEYS = { Digit1: 'heading1', Digit2: 'heading2', Digit0: 'paragraph', Digit3: 'quote', Digit4: 'verse', Digit5: 'center', Digit6: 'separator' };
+  const FIT_ORDER = ['height', 'width', 'actual'];
+  // The fit a step leads to (D69): + from the height to the width, then 100 %; − back; 0 is the height.
+  function stepFit(fit, dir) {
+    const i = Math.max(0, FIT_ORDER.indexOf(fit));
+    return FIT_ORDER[Math.min(FIT_ORDER.length - 1, Math.max(0, i + dir))];
+  }
   // ctx: {mode: 'preview'|'edit', inField (an input, a select, the note editor), inBlock (the open paragraph)}.
-  // Returns the action; nothing fires inside a field except Esc (blur) and ⌘S / ⌘F.
+  // Returns the action; nothing fires inside a field except Esc (blur) and ⌘S / ⌘F. Keys go through
+  // `NassakhKeys` (keys.js, D69): letters by their place (the Arabic layout's «ث» on E is E), digits in any
+  // script, nothing while an IME composes. V is the spread, S the scan page marks («فواصل الصفحات الأصلية»),
+  // + − 0 the fits.
   function keyAction(e, ctx) {
+    const K = root.NassakhKeys;
+    if (K.composing(e)) return null;
     const k = e.key || '';
     const code = e.code || '';
-    const mod = Boolean(e.metaKey || e.ctrlKey);
     const c = ctx || {};
     if (k === 'Escape') return c.inField ? 'blur' : 'escape';
-    if (mod && e.altKey) return c.mode === 'edit' && !c.inField ? STYLE_KEYS[code] || null : null;
-    if (mod) {
-      const low = k.toLowerCase();
-      if (low === 's' || code === 'KeyS') return 'save';
-      if ((low === 'f' || code === 'KeyF') && e.shiftKey) return c.mode === 'edit' && !c.inField ? 'footnote' : null;
-      if (low === 'f' || code === 'KeyF') return 'find';
+    if (K.mod(e) && e.altKey) return c.mode === 'edit' && !c.inField ? STYLE_KEYS[code] || null : null;
+    if (K.mod(e)) {
+      const letter = K.letter(e, 'mod shift');
+      if (letter === 's') return 'save';
+      if (letter === 'f' && e.shiftKey) return c.mode === 'edit' && !c.inField ? 'footnote' : null;
+      if (letter === 'f') return 'find';
       if (c.inField) return null;
       if (c.mode !== 'edit') return null;
-      if (k === '[' || code === 'BracketLeft') return 'prevChapter';
-      if (k === ']' || code === 'BracketRight') return 'nextChapter';
-      if ((low === 'z' || code === 'KeyZ') && e.shiftKey) return 'redo';
-      if (low === 'z' || code === 'KeyZ' ) return 'undo';
-      if (low === 'y' || code === 'KeyY') return 'redo';
-      if (low === 'b' || code === 'KeyB') return 'bold';
-      if (low === 'i' || code === 'KeyI') return 'italic';
+      if (code === 'BracketLeft' || (!code && k === '[')) return 'prevChapter';
+      if (code === 'BracketRight' || (!code && k === ']')) return 'nextChapter';
+      if (letter === 'z' && e.shiftKey) return 'redo';
+      if (letter === 'z') return 'undo';
+      if (letter === 'y') return 'redo';
+      if (letter === 'b') return 'bold';
+      if (letter === 'i') return 'italic';
       return null;
     }
     if (c.inField || c.inBlock || e.altKey) return null;
-    if (k === '?' || k === '؟') return 'sheet';
-    if (code === 'KeyE' || k === 'e' || k === 'E' || k === 'ث') return 'mode';
+    if (K.is(e, '?')) return 'sheet';
+    const letter = K.letter(e);
+    if (letter === 'e') return 'mode';
     if (k === 'ArrowLeft' || k === 'PageDown') return 'next'; // RTL: the next page is on the left
     if (k === 'ArrowRight' || k === 'PageUp') return 'prev';
     if (k === 'Home') return 'first';
     if (k === 'End') return 'last';
+    if (letter === 's') return 'marks';
     if (c.mode === 'edit') {
-      if (code === 'KeyO' || k === 'o' || k === 'O') return 'source';
+      if (letter === 'o') return 'source';
       if (k === 'Delete' || k === 'Backspace') return 'deleteSelected';
       return null;
     }
-    if (code === 'KeyG' || k === 'g' || k === 'G') return 'jump';
-    if (code === 'KeyS' || k === 's' || k === 'S') return 'spread';
-    // the digit keys by their place too: an Arabic keyboard types «١ ٢ ٣» there
-    if (k === '1' || k === '١' || (code === 'Digit1' && !e.shiftKey)) return 'fitHeight';
-    if (k === '2' || k === '٢' || (code === 'Digit2' && !e.shiftKey)) return 'fitWidth';
-    if (k === '3' || k === '٣' || (code === 'Digit3' && !e.shiftKey)) return 'fitActual';
+    if (letter === 'g') return 'jump';
+    if (letter === 'v') return 'spread';
+    if (K.plus(e)) return 'fitIn';
+    if (K.minus(e)) return 'fitOut';
+    if (K.digit(e) === 0) return 'fitHeight';
     return null;
   }
 
@@ -466,7 +478,7 @@
 
   NS.geo = {
     esc, num, arCount, runMap, hitOffset, lineAt, caretLine, blocksOn, bodyBottom, measure, runPieces, pageHtml, pageStyle,
-    lineHtml, flowAround, flowAfter, shiftPage, applyRelayout, around, shown, keyAction, snippet, groupUncertain,
+    lineHtml, flowAround, flowAfter, shiftPage, applyRelayout, around, shown, keyAction, stepFit, snippet, groupUncertain,
     chapterRowsHtml, STYLE_KEYS,
   };
 })();

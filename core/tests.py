@@ -312,7 +312,7 @@ def test_percent_filter():
 @pytest.mark.django_db
 def test_ar_status_uses_the_display_label():
     book = Book(title="x", status=Book.Status.NEEDS_GUIDES)
-    assert ar_status(book) == "بانتظار ضبط الأدلة"
+    assert ar_status(book) == "تم التخطيط"
     page = Page(status=Page.Status.OCR_DONE)
     assert ar_status(page) == "تم التعرّف"
     assert ar_status(None) == ""
@@ -504,3 +504,40 @@ def test_base_layout_hides_admin_link_for_editors(users):
         clear_url_caches()
     assert "المستخدمون" not in html
     assert "محرّر" in html  # role label in the sidebar footer
+
+
+# ---------------------------------------------------------------- Phase 7a
+
+
+def test_needs_guides_keeps_the_warning_dot_your_turn():
+    # «تم التخطيط»: the owner acts next («بدء المعالجة»)
+    assert status_dot("needs_guides") == "dot-warning"
+    assert status_dot("processing") == "dot-accent" and status_dot("ocr") == "dot-accent"
+
+
+def test_the_labels_of_the_split_reach_the_templates():
+    from books.models import Book, Page
+
+    assert ar_status(Book(title="x", status=Book.Status.PROCESSING)) == "قيد التخطيط"
+    assert ar_status(Book(title="x", status=Book.Status.OCR)) == "قيد المعالجة"
+    assert ar_status(Page(status=Page.Status.PREPROCESSED)) == "مُجهَّزة"
+    assert ar_status(Page(status=Page.Status.LAYOUT_DONE)) == "بانتظار التعرّف"
+    from core.templatetags.nassakh import stage_label
+
+    assert stage_label("preprocess") == "تجهيز الصفحات" and stage_label("layout") == "تحديد المناطق"
+
+
+def test_undo_action_reads_the_undo_url_of_a_message():
+    from types import SimpleNamespace
+
+    from core.templatetags.nassakh import undo_action
+
+    assert (
+        undo_action(SimpleNamespace(extra_tags="undo:/books/3/pages/12/exclude/"))
+        == "/books/3/pages/12/exclude/"
+    )
+    assert undo_action(SimpleNamespace(extra_tags="toast undo:/books/3/")) == "/books/3/"
+    assert undo_action(SimpleNamespace(extra_tags="")) == ""
+    assert undo_action(SimpleNamespace(extra_tags="undo://evil.example/")) == ""  # same-site paths only
+    assert undo_action(SimpleNamespace(extra_tags="undo:javascript:alert(1)")) == ""
+    assert undo_action(None) == ""

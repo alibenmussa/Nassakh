@@ -27,7 +27,7 @@ import pytest
 from PIL import Image
 
 from books import services, tasks
-from books.models import Book, Page
+from books.models import ALL_PAGES_FAILED, ALL_PAGES_FAILED_LAYOUT, Book, Page
 from processing.models import LayoutGuides, Preprocess, Region
 
 pytestmark = pytest.mark.django_db
@@ -453,7 +453,7 @@ def test_book_progress_counts_percent_active_and_flags():
     assert progress["percent"] == round(100 * (3 + 2) / 12)  # ocr_done 3/3 + layout_done 2/3 over 4 pages
     assert progress["active"] is True
     assert progress["flags"] == 2  # one flagged page, one errored page
-    assert progress["status_label"] == "قيد التعرّف على النص"
+    assert progress["status_label"] == "قيد المعالجة"
 
     book.status = Book.Status.READY_FOR_REVIEW
     book.save()
@@ -563,7 +563,8 @@ def test_ingest_book_task_ingests_and_fans_out_preprocessing():
     group.assert_called_once()
     assert list(group.call_args.args[0]) == [f"pre:{pid}" for pid in page_ids]
     chord.assert_called_once_with(group.return_value)
-    chord.return_value.assert_called_once_with(tasks.after_preprocess.s(book.pk))
+    # D64: the book awaits «بدء المعالجة», so the callback is fixed at ingest to pause
+    chord.return_value.assert_called_once_with(tasks.after_preprocess.s(book.pk, continue_ocr=False))
     book.refresh_from_db()
     assert book.status == Book.Status.PROCESSING
 
@@ -789,7 +790,9 @@ def test_smoke_pipeline_command_runs_a_pdf_through_the_pipeline(tmp_path):
     with registry.override(engines()):
         call_command("smoke_pipeline", str(pdf), stdout=out)
     book = Book.objects.get()
-    assert book.pages.get().status in (Page.Status.OCR_DONE, Page.Status.PREPROCESSED)
+    assert book.pages.get().status == Page.Status.OCR_DONE
+    assert book.awaits_ocr_start is False  # paused at «تم التخطيط», then `start_ocr`
+    assert f"book {book.pk}: needs_guides after «التخطيط»" in out.getvalue()
     assert f"book {book.pk}: {book.status}" in out.getvalue()
 
 
@@ -866,22 +869,26 @@ def test_create_view_renders_the_form(editor_client):
 
 
 def test_create_view_creates_the_book_and_redirects_to_the_dashboard(editor_client, editor):
-    response = editor_client.post(
-        reverse("books:create"),
-        {
-            "title": "بعض الملامح التاريخية",
-            "author": "مؤلف",
-            "original_year": "1966",
-            "notes": "",
-            "skip_first": "0",
-            "skip_last": "0",
-            "pages_per_sheet": "2",
-            "split_ratio": "0.55",
-            "use_text_layer": "on",
-            "source_pdf": SimpleUploadedFile("book.pdf", make_text_pdf(3), content_type="application/pdf"),
-        },
-    )
+    with patch("books.tasks.ingest_book_task.delay") as delay:  # «استخراج الصفحات» starts at once (D66)
+        response = editor_client.post(
+            reverse("books:create"),
+            {
+                "title": "بعض الملامح التاريخية",
+                "author": "مؤلف",
+                "original_year": "1966",
+                "notes": "",
+                "skip_first": "0",
+                "skip_last": "0",
+                "pages_per_sheet": "2",
+                "split_ratio": "0.55",
+                "use_text_layer": "on",
+                "source_pdf": SimpleUploadedFile(
+                    "book.pdf", make_text_pdf(3), content_type="application/pdf"
+                ),
+            },
+        )
     book = Book.objects.get(title="بعض الملامح التاريخية")
+    delay.assert_called_once_with(book.pk)
     assert response.status_code == 302 and response["Location"] == reverse("books:detail", args=[book.pk])
     assert book.created_by == editor
     assert (book.pages_per_sheet, book.split_ratio, book.use_text_layer) == (2, 0.55, True)
@@ -937,12 +944,13 @@ def test_detail_shows_the_empty_state_before_ingest_and_the_dashboard_after(edit
     body = editor_client.get(url).content.decode()
     assert "لم تُستخرج الصفحات بعد" in body
     assert reverse("books:start", args=[book.pk]) in body
-    assert "إعادة التشغيل" not in body
+    assert services.book_dashboard(book)["rerun_stages"] == []  # «⋯» offers no re-run before extraction
 
     pages = services.ingest_book(book)
     Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.ERROR, error_message="فشل\nTraceback")
     Page.objects.filter(pk=pages[1].pk).update(attention_flags=["large_skew"])
     book.status = Book.Status.OCR
+    book.awaits_ocr_start = False  # «بدء المعالجة» clicked: today's dashboard
     book.save()
 
     response = editor_client.get(url)
@@ -950,7 +958,7 @@ def test_detail_shows_the_empty_state_before_ingest_and_the_dashboard_after(edit
     body = response.content.decode()
     assert "bookDashboard(" in body and 'id="dashboard-config"' in body
     assert reverse("api:book_progress", args=[book.pk]) in body
-    for label in ("مرفوعة", "مُعالَجة", "تم التخطيط", "تم التعرّف", "خطأ", "التقدّم", "الصفحات"):
+    for label in ("مرفوعة", "مُجهَّزة", "بانتظار التعرّف", "تم التعرّف", "خطأ", "التقدّم", "الصفحات"):
         assert label in body
     # two server-rendered tiles plus the inert <template id="tile-shell"> clone for later pages
     assert body.count('<div class="page-tile') == 3 and 'id="tile-shell"' in body
@@ -980,7 +988,7 @@ def test_detail_shows_error_banner_and_restart(editor_client):
     services.set_book_error(book, "تعذّر استخراج الصفحات.", RuntimeError("boom"))
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "banner banner-danger" in body and "تعذّر استخراج الصفحات." in body
-    assert "RuntimeError: boom" in body and "إعادة بدء المعالجة" in body
+    assert "RuntimeError: boom" in body and "إعادة استخراج الصفحات" in body  # the «التخطيط» mode's primary
     config = _json_config(body, "dashboard-config")  # the banner's Alpine bindings start from these
     assert (
         config["errorHeadline"] == "تعذّر استخراج الصفحات." and "RuntimeError: boom" in config["errorDetail"]
@@ -1004,7 +1012,7 @@ def test_page_detail_renders_neighbours_partials_and_viewer_config(editor_client
     next_url = reverse("books:page_detail", args=[book.pk, 3])
     assert f'href="{prev_url}"' in body and f'href="{next_url}"' in body
     assert "pageDetail(" in body and 'id="viewer-config"' in body
-    assert "الأصل" in body and "المعالَجة" in body and "أبيض وأسود" in body
+    assert "الأصل" in body and "المُجهَّزة" in body and "أبيض وأسود" in body
     assert page.original_image.url in body
     assert "أُزيل شريط من حافة الصفحة" in body  # flag label
     viewer = _json_config(body, "viewer-config")
@@ -1047,7 +1055,7 @@ def test_start_view_enqueues_and_reports(editor_client):
     with patch("books.tasks.ingest_book_task.delay") as delay:
         response = editor_client.post(reverse("books:start", args=[book.pk]), follow=True)
     delay.assert_called_once_with(book.pk)
-    assert "بدأت المعالجة" in response.content.decode()
+    assert "بدأ استخراج الصفحات" in response.content.decode()
     book.refresh_from_db()
     assert book.status == Book.Status.PROCESSING
     # Starting again while processing is refused with an Arabic message, not an exception.
@@ -1528,3 +1536,820 @@ def test_sheets_carry_the_books_typical_line_height(django_assert_max_num_querie
     assert data["book_line_h_px"] == 41 and data["total"] == 5
     empty, _ = _book_with_pages(2)
     assert services.book_sheets(empty, 1, 2)["book_line_h_px"] == 0
+
+
+# ====================================================================== Phase 7a: «التخطيط» then «المعالجة»
+
+GUIDES_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "guides")
+# The geometry of the §3.11 fixture books (prepared image 1000 × 3000 px): a narrow running head, body
+# lines, two footnote lines and the page number; rules on pages 1, 3–6, a smaller-type block on 7.
+G_W, G_H = 1000, 3000
+G_LINES = [
+    {"x0": 400, "y0": 120, "x1": 600, "y1": 160},
+    {"x0": 100, "y0": 250, "x1": 900, "y1": 290},
+    {"x0": 100, "y0": 330, "x1": 900, "y1": 370},
+    {"x0": 100, "y0": 2250, "x1": 900, "y1": 2290},
+    {"x0": 100, "y0": 2400, "x1": 900, "y1": 2430},
+    {"x0": 100, "y0": 2460, "x1": 900, "y1": 2490},
+    {"x0": 466, "y0": 2922, "x1": 524, "y1": 2964},
+]
+G_RULES = {1: 2343, 3: 2346, 4: 2340, 5: 2343, 6: 2349}
+G_BLOCKS = {7: 2380}
+G_OVERRIDE_7 = {"header_cut": 0.05, "footnote_line": 0.805}
+
+
+def guides_fixture(name: str) -> dict:
+    with open(os.path.join(GUIDES_FIXTURES, name), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _normalise(value, like=None):
+    """A live payload made comparable to its fixture: image versions and region ids take the fixture's."""
+    if isinstance(value, dict):
+        return {k: _normalise(v, like.get(k) if isinstance(like, dict) else None) for k, v in value.items()}
+    if isinstance(value, list):
+        likes = like if isinstance(like, list) else []
+        return [_normalise(v, likes[i] if i < len(likes) else None) for i, v in enumerate(value)]
+    if isinstance(value, str) and isinstance(like, str) and "?v=" in value and "?v=" in like:
+        return re.sub(r"\?v=\d+", like[like.index("?v=") :], value)
+    return value
+
+
+def _normalise_regions(payload: dict, fixture: dict) -> dict:
+    for got, want in zip(payload.get("regions") or [], fixture.get("regions") or [], strict=False):
+        got["id"] = want["id"]
+    return payload
+
+
+def _prepare(page: Page, number: int) -> Preprocess:
+    return Preprocess.objects.create(
+        page=page,
+        output_width=G_W,
+        output_height=G_H,
+        line_boxes=G_LINES,
+        n_lines=len(G_LINES),
+        median_line_height=40,
+        footnote_rule_y=G_RULES.get(number),
+        footnote_block_y=G_BLOCKS.get(number),
+        page_number_box={"bbox": [466, 2922, 524, 2964], "position": "bottom"},
+        display_image=f"books/25/pages/{number:04d}/display.webp",
+    )
+
+
+def guides_book(state: str) -> tuple[Book, list[Page]]:
+    """Book 25 of the fixtures: `uploaded`, `preparing`, `layout`, `error` (all awaiting «بدء المعالجة»)
+    or `started` («المعالجة» started, locked and overridden pages, regions derived)."""
+    from ocr.models import Line
+    from processing import services as proc
+
+    status = {
+        "uploaded": Book.Status.UPLOADED,
+        "preparing": Book.Status.PROCESSING,
+        "layout": Book.Status.NEEDS_GUIDES,
+        "error": Book.Status.ERROR,
+        "started": Book.Status.REVIEWING,
+    }[state]
+    book = Book.objects.create(
+        pk=25,
+        title="الحوليات الليبية",
+        source_page_count=555,
+        skip_first=186,
+        skip_last=362,
+        has_text_layer=False,
+        status=status,
+        awaits_ocr_start=state != "started",
+        error_message=ALL_PAGES_FAILED_LAYOUT if state == "error" else "",
+    )
+    pages: list[Page] = []
+    if state == "uploaded":
+        return book, pages
+    for n in range(1, 8):
+        page = Page.objects.create(
+            pk=811 + n, book=book, number=n, source_index=185 + n, width=G_W, height=G_H
+        )
+        pages.append(page)
+        if state == "error":
+            page.set_error("preprocess", "فشل تجهيز الصفحة.")
+            continue
+        if state == "preparing" and n > 3:
+            if n == 4:
+                page.set_error("preprocess", "فشل تجهيز الصفحة.")
+            elif n == 7:
+                Page.objects.filter(pk=page.pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
+            continue
+        _prepare(page, n)
+        Page.objects.filter(pk=page.pk).update(status=Page.Status.PREPROCESSED)
+    if state == "layout":
+        proc.propose_guides(book)
+    if state == "started":
+        LayoutGuides.objects.create(
+            book=book, header_cut=0.062, footnote_line=None, page_number_zone="none", source="manual"
+        )
+        Page.objects.filter(pk=pages[6].pk).update(guides_override=G_OVERRIDE_7)
+        for page in pages:
+            page.refresh_from_db()
+            proc.derive_regions(page)
+        Page.objects.filter(book=book).update(status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+        Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.REVIEWED, reviewed_at=timezone.now())
+        Line.objects.create(page=pages[1], order=0, text="سطر", is_reviewed=True)
+        Page.objects.filter(pk=pages[5].pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
+    for page in pages:
+        page.refresh_from_db()
+    book.refresh_from_db()
+    return book, pages
+
+
+# ---------------------------------------------------------------------- the §3.11 contract (fixtures)
+
+
+@pytest.mark.parametrize(
+    "state, book_state, view",
+    [
+        ("uploaded", "uploaded", None),
+        ("processing", "preparing", None),
+        ("needs_guides", "layout", None),
+        ("error", "error", None),
+        ("started_view_guides", "started", "guides"),
+        ("started", "started", None),
+    ],
+)
+def test_dashboard_config_equals_the_contract(state, book_state, view):
+    book, _pages = guides_book(book_state)
+    fixture = guides_fixture("dashboard_config.json")[state]
+    config = services.book_dashboard(book, view)["config"]
+    assert {key: config.get(key) for key in fixture} == fixture
+    if state == "started":  # outside the mode the config is today's plus the re-run estimates
+        assert not {"startAction", "guides", "guidesStats", "keptRange", "guidesUrls"} & set(config)
+
+
+@pytest.mark.parametrize(
+    "state, book_state", [("processing", "preparing"), ("needs_guides", "layout"), ("started", "started")]
+)
+def test_progress_payload_equals_the_contract(state, book_state):
+    book, _pages = guides_book(book_state)
+    fixture = guides_fixture("progress.json")[state]
+    progress = services.book_progress(book)
+    assert {key: progress[key] for key in fixture} == fixture
+    row = next(r for r in services.books_overview() if r["book"].pk == book.pk)
+    assert (row["layout_stage"], row["waiting"]) == (fixture["layout_stage"], fixture["waiting"])
+
+
+@pytest.mark.parametrize(
+    "case, book_state, number",
+    [
+        ("computed", "layout", 1),
+        ("no_footnote", "layout", 2),
+        ("footnote_from_type", "layout", 7),
+        ("uploaded", "preparing", 5),
+        ("derived", "started", 3),
+        ("approved", "started", 1),
+        ("review", "started", 2),
+        ("derived_override_cut", "started", 7),
+    ],
+)
+def test_sheet_guides_block_equals_the_contract(case, book_state, number):
+    book, _pages = guides_book(book_state)
+    fixture = guides_fixture("sheet_guides_blocks.json")[case]
+    item = services.book_sheets(book, number, number, guides=True)["pages"][0]
+    assert _normalise(item["guides"], fixture) == fixture
+
+
+def test_sheet_guides_block_of_a_page_override_equals_the_contract():
+    book, pages = guides_book("layout")
+    Page.objects.filter(pk=pages[1].pk).update(guides_override={"footnote_line": 0.8})
+    fixture = guides_fixture("sheet_guides_blocks.json")["override"]
+    item = services.book_sheets(book, 2, 2, guides=True)["pages"][0]
+    assert _normalise(item["guides"], fixture) == fixture
+
+
+def test_sheets_with_guides_equal_the_contract_in_five_queries(client, editor, django_assert_max_num_queries):
+    book, _pages = guides_book("layout")
+    fixture = guides_fixture("sheets_guides.json")
+    with django_assert_max_num_queries(5):
+        data = services.book_sheets(book, 1, 2, guides=True)
+    assert _normalise(data, fixture) == fixture
+    client.force_login(editor)
+    response = client.get(reverse("api:book_sheets", args=[book.pk]) + "?from=1&to=2&guides=1")
+    assert _normalise(response.json(), fixture) == fixture
+    started, _ = guides_book_replace("started")
+    with django_assert_max_num_queries(5):
+        services.book_sheets(started, 1, 7, guides=True)
+
+
+def guides_book_replace(state: str) -> tuple[Book, list[Page]]:
+    """`guides_book` after deleting the book 25 already built in the test."""
+    Book.objects.filter(pk=25).delete()
+    return guides_book(state)
+
+
+@pytest.mark.parametrize(
+    "name, book_state",
+    [
+        ("book_guides_layout.json", "layout"),
+        ("book_guides_preparing.json", "preparing"),
+        ("book_guides_started.json", "started"),
+    ],
+)
+def test_book_guides_state_equals_the_contract(client, editor, name, book_state):
+    book, _pages = guides_book(book_state)
+    fixture = guides_fixture(name)
+    from processing import services as proc
+
+    assert proc.book_guides_state(book) == fixture
+    client.force_login(editor)
+    assert client.get(reverse("api:book_guides", args=[book.pk])).json() == fixture
+    narrowed = client.get(reverse("api:book_guides", args=[book.pk]) + "?from=2&to=3").json()
+    assert [p["n"] for p in narrowed["pages"]] == [2, 3] and narrowed["counts"] == fixture["counts"]
+
+
+def test_book_guides_state_stays_at_four_queries_whatever_the_page_count(django_assert_max_num_queries):
+    from processing import services as proc
+
+    book, _pages = guides_book("started")
+    for n in range(8, 30):
+        page = Page.objects.create(book=book, number=n, source_index=185 + n, status=Page.Status.OCR_DONE)
+        _prepare(page, n)
+    with django_assert_max_num_queries(4):
+        state = proc.book_guides_state(book)
+    assert len(state["pages"]) == 29
+
+
+def _post_json(client, url: str, body: dict):
+    return client.post(url, json.dumps(body), content_type="application/json")
+
+
+def test_book_guides_apply_and_undo_equal_the_contract(client, editor):
+    book, _pages = guides_book("layout")
+    cases = guides_fixture("book_guides_apply.json")
+    client.force_login(editor)
+    url = reverse("api:book_guides", args=[book.pk])
+    with patch("books.services.run_stage") as run_stage:
+        response = _post_json(client, url, cases["layout"]["request"])
+        assert response.status_code == 200 and response.json() == cases["layout"]["response"]
+        undo = _post_json(client, url, cases["undo"]["request"])
+        assert undo.status_code == 200 and undo.json() == cases["undo"]["response"]
+    run_stage.assert_not_called()  # «التخطيط»: only values are saved
+    assert not Region.objects.filter(page__book=book).exists()
+    assert set(book.pages.values_list("status", flat=True)) == {Page.Status.PREPROCESSED}
+    guides = LayoutGuides.objects.get(book=book)
+    assert (guides.source, guides.footnote_line, guides.page_number_zone) == ("auto", 0.781, "bottom")
+
+
+def test_book_guides_apply_in_ocr_and_conflict_equal_the_contract(client, editor):
+    book, _pages = guides_book("started")
+    cases = guides_fixture("book_guides_apply.json")
+    client.force_login(editor)
+    url = reverse("api:book_guides", args=[book.pk])
+    conflict = _post_json(client, url, cases["conflict"]["request"])
+    assert conflict.status_code == 409 and conflict.json() == cases["conflict"]["response"]
+    with patch("processing.services._run_stage") as run_stage:
+        response = _post_json(client, url, cases["ocr"]["request"])
+    assert response.status_code == 200 and response.json() == cases["ocr"]["response"]
+    assert sorted(call.args[0].number for call in run_stage.call_args_list) == [3, 4, 5]
+    # the approved page and the page with review work keep their regions
+    for number in (1, 2):
+        header = Region.objects.get(page__book=book, page__number=number, kind="running_header")
+        assert header.bbox[3] == 186
+
+
+@pytest.mark.parametrize("case, book_state", [("layout", "layout"), ("ocr", "started")])
+def test_book_guides_preview_equals_the_contract(
+    client, editor, case, book_state, django_assert_max_num_queries
+):
+    book, _pages = guides_book(book_state)
+    fixture = guides_fixture("book_guides_preview.json")[case]
+    client.force_login(editor)
+    url = reverse("api:book_guides_preview", args=[book.pk])
+    before = LayoutGuides.objects.filter(book=book).values().first()
+    response = _post_json(client, url, fixture["request"])
+    assert response.status_code == 200 and response.json() == fixture["response"]
+    assert LayoutGuides.objects.filter(book=book).values().first() == before  # nothing written
+    from processing import services as proc
+
+    body = fixture["request"]
+    with django_assert_max_num_queries(6):
+        proc.preview_book_guides(book, body["set"], body["reset_overrides"], stage=body["stage"])
+
+
+@pytest.mark.parametrize("case", ["merge", "remove_page_number", "ocr_save"])
+def test_page_guides_equal_the_contract(client, editor, case):
+    fixture = guides_fixture("page_guides.json")[case]
+    book, _pages = guides_book("started" if case == "ocr_save" else "layout")
+    client.force_login(editor)
+    url = reverse("api:page_guides_override", args=[fixture["page"]])
+    with patch("processing.services._run_stage") as run_stage:
+        response = _post_json(client, url, fixture["request"])
+    assert response.status_code == fixture["status"], response.content
+    data = _normalise_regions(response.json(), fixture["response"])
+    assert _normalise(data, fixture["response"]) == fixture["response"]
+    assert run_stage.call_count == (1 if case == "ocr_save" else 0)
+
+
+def test_page_guides_undo_equals_the_contract(client, editor):
+    cases = guides_fixture("page_guides.json")
+    book, _pages = guides_book("layout")
+    client.force_login(editor)
+    url = reverse("api:page_guides_override", args=[813])
+    merged = _post_json(client, url, cases["merge"]["request"]).json()
+    response = _post_json(client, url, {**merged["undo"], "stage": "layout"})
+    assert cases["undo"]["request"] == {**merged["undo"], "stage": "layout"}
+    fixture = cases["undo"]["response"]
+    assert _normalise(response.json(), fixture) == fixture
+    assert Page.objects.get(pk=813).guides_override is None
+
+
+@pytest.mark.parametrize("case", ["invalid", "approved", "review", "started"])
+def test_guides_errors_equal_the_contract(client, editor, case):
+    fixture = guides_fixture("errors.json")[case]
+    guides_book("layout" if case == "invalid" else "started")
+    client.force_login(editor)
+    with patch("processing.services._run_stage") as run_stage:
+        response = _post_json(client, fixture["url"], fixture["request"])
+    assert response.status_code == fixture["status"] and response.json() == fixture["response"]
+    run_stage.assert_not_called()
+
+
+def test_guides_writes_need_an_editor_and_reads_a_login(client, proofreader):
+    book, _pages = guides_book("layout")
+    url = reverse("api:book_guides", args=[book.pk])
+    assert client.get(url).status_code == 403
+    client.force_login(proofreader)
+    assert client.get(url).status_code == 200
+    for target in (url, reverse("api:book_guides_preview", args=[book.pk])):
+        response = _post_json(client, target, {"set": {"header_cut": 0.06}, "stage": "layout"})
+        assert response.status_code == 403 and "محرّر" in response.json()["detail"]
+    assert LayoutGuides.objects.get(book=book).source == "auto"
+
+
+def test_book_guides_reset_returns_to_the_automatic_guides(client, editor):
+    book, _pages = guides_book("layout")
+    client.force_login(editor)
+    url = reverse("api:book_guides", args=[book.pk])
+    _post_json(client, url, {"set": {"header_cut": 0.062}, "stage": "layout"})
+    response = _post_json(client, url, {"reset": True, "stage": "layout"}).json()
+    assert response["book"] == {
+        "source": "auto",
+        "header_cut": None,
+        "footnote_line": None,
+        "awaits_ocr_start": True,
+    }
+    assert response["changed"] == [1, 2, 3, 4, 5, 6, 7] and response["undo"]["book"]["source"] == "manual"
+    guides = LayoutGuides.objects.get(book=book)
+    assert (guides.source, guides.footnote_line, guides.page_number_zone) == ("auto", 0.781, "bottom")
+
+
+def test_book_guides_reset_overrides_and_from_page_round_trip_through_undo():
+    from processing import services as proc
+
+    book, pages = guides_book("layout")
+    Page.objects.filter(pk=pages[1].pk).update(guides_override={"footnote_line": 0.79, "header_cut": 0.03})
+    Page.objects.filter(pk=pages[2].pk).update(guides_override={"header_cut": 0.04})
+    answer = proc.apply_book_guides(
+        book, {"header_cut": 0.05}, ["header_cut"], from_page=pages[1].pk, stage="layout"
+    )
+    assert Page.objects.get(pk=pages[1].pk).guides_override == {"footnote_line": 0.79}
+    assert Page.objects.get(pk=pages[2].pk).guides_override is None
+    assert answer["undo"]["overrides"] == {
+        str(pages[1].pk): {"footnote_line": 0.79, "header_cut": 0.03},
+        str(pages[2].pk): {"header_cut": 0.04},
+    }
+    proc.restore_book_guides(book, answer["undo"], stage="layout")
+    assert Page.objects.get(pk=pages[1].pk).guides_override == {"footnote_line": 0.79, "header_cut": 0.03}
+    assert Page.objects.get(pk=pages[2].pk).guides_override == {"header_cut": 0.04}
+    guides = LayoutGuides.objects.get(book=book)
+    assert (guides.source, guides.header_cut, guides.footnote_line) == ("auto", None, 0.781)
+
+
+# ---------------------------------------------------------------------- the pause (D64)
+
+
+def test_create_book_sets_the_flag_and_objects_create_does_not():
+    assert make_book(make_scan_pdf(1)).awaits_ocr_start is True
+    assert Book.objects.create(title="قديم").awaits_ocr_start is False
+
+
+def _paused_book(statuses: list[str], status=Book.Status.PROCESSING) -> Book:
+    book = Book.objects.create(title="ك", status=status, awaits_ocr_start=True)
+    for n, page_status in enumerate(statuses, start=1):
+        Page.objects.create(book=book, number=n, source_index=n - 1, status=page_status)
+    return book
+
+
+def test_refresh_status_in_the_layout_stage():
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.UPLOADED])
+    assert book.refresh_status() == Book.Status.PROCESSING
+    book = _paused_book([ps.PREPROCESSED, ps.ERROR])
+    assert book.refresh_status() == Book.Status.NEEDS_GUIDES and book.error_message == ""
+    book = _paused_book([ps.ERROR, ps.ERROR])
+    assert book.refresh_status() == Book.Status.ERROR and book.error_message == ALL_PAGES_FAILED_LAYOUT
+    # excluded pages are ignored; an error it owns is re-derived (both texts)
+    Page.objects.filter(book=book, number=1).update(status=ps.PREPROCESSED)
+    Page.objects.filter(book=book, number=2).update(is_excluded=True, status=ps.EXCLUDED)
+    assert book.refresh_status() == Book.Status.NEEDS_GUIDES and book.error_message == ""
+    old = _paused_book([ps.PREPROCESSED], status=Book.Status.ERROR)
+    Book.objects.filter(pk=old.pk).update(error_message=ALL_PAGES_FAILED)
+    old.refresh_from_db()
+    assert old.refresh_status() == Book.Status.NEEDS_GUIDES
+    ingest = _paused_book([ps.PREPROCESSED], status=Book.Status.ERROR)
+    Book.objects.filter(pk=ingest.pk).update(error_message="تعذّر استخراج الصفحات")
+    ingest.refresh_from_db()
+    assert ingest.refresh_status() == Book.Status.ERROR  # an ingest error is left alone
+    # with the flag False a prepared-only book is today's `processing`
+    today = Book.objects.create(title="ك", status=Book.Status.PROCESSING)
+    Page.objects.create(book=today, number=1, source_index=0, status=ps.PREPROCESSED)
+    assert today.refresh_status() == Book.Status.PROCESSING
+
+
+def test_ingest_passes_continue_ocr_true_for_books_that_do_not_wait():
+    book = make_book(make_scan_pdf(1))
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=False, status=Book.Status.PROCESSING)
+    with (
+        patch("books.tasks.group"),
+        patch("books.tasks.chord") as chord,
+        patch("processing.tasks.preprocess_page"),
+    ):
+        tasks.ingest_book_task(book.pk)
+    chord.return_value.assert_called_once_with(tasks.after_preprocess.s(book.pk, continue_ocr=True))
+
+
+def test_after_preprocess_pauses_continues_and_leaves_a_started_book_alone():
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.PREPROCESSED])
+    with patch("books.services.run_stage") as run_stage:
+        tasks.after_preprocess([], book.pk, continue_ocr=False)
+    run_stage.assert_not_called()
+    book.refresh_from_db()
+    assert book.status == Book.Status.NEEDS_GUIDES and LayoutGuides.objects.filter(book=book).exists()
+
+    # a chord queued before 7a (no kwarg) decides by the live flag
+    legacy = _paused_book([ps.PREPROCESSED])
+    with patch("books.services.run_stage") as run_stage:
+        tasks.after_preprocess([], legacy.pk)
+    run_stage.assert_not_called()
+    today = Book.objects.create(title="ك", status=Book.Status.PROCESSING)
+    Page.objects.create(book=today, number=1, source_index=0, status=ps.PREPROCESSED)
+    with patch("books.services.run_stage") as run_stage:
+        tasks.after_preprocess([], today.pk)
+    assert run_stage.call_count == 1 and run_stage.call_args.args[1] == "layout"
+
+    # continue_ocr=True: today's path
+    go = _paused_book([ps.PREPROCESSED])
+    with patch("books.services.run_stage") as run_stage:
+        tasks.after_preprocess([], go.pk, continue_ocr=True)
+    assert run_stage.call_count == 1
+
+    # the owner started while the chord ran: the callback leaves the status alone
+    started = _paused_book([ps.PREPROCESSED])
+    Book.objects.filter(pk=started.pk).update(awaits_ocr_start=False, status=Book.Status.OCR)
+    with patch("books.services.run_stage") as run_stage:
+        tasks.after_preprocess([], started.pk, continue_ocr=False)
+    run_stage.assert_not_called()
+    started.refresh_from_db()
+    assert started.status == Book.Status.OCR
+    # every page failed: the book is in error with the layout message
+    failed = _paused_book([ps.ERROR])
+    tasks.after_preprocess([], failed.pk, continue_ocr=False)
+    failed.refresh_from_db()
+    assert failed.status == Book.Status.ERROR and failed.error_message == ALL_PAGES_FAILED_LAYOUT
+    assert tasks.after_preprocess([], 999999, continue_ocr=False) == 999999  # deleted meanwhile
+
+
+def test_start_ocr_claims_once_and_enqueues_the_layout_task():
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    with patch("books.tasks.start_ocr_task.delay") as delay:
+        services.start_ocr(book)
+        delay.assert_called_once_with(book.pk)
+        assert (book.status, book.awaits_ocr_start) == (Book.Status.OCR, False)
+        with pytest.raises(ValueError, match="بدأت المعالجة بالفعل"):
+            services.start_ocr(Book.objects.get(pk=book.pk))
+        assert delay.call_count == 1
+
+    preparing = _paused_book([ps.PREPROCESSED, ps.UPLOADED])
+    with pytest.raises(ValueError, match="لم يكتمل التخطيط بعد"):
+        services.start_ocr(preparing)
+    nothing = _paused_book([ps.ERROR], status=Book.Status.NEEDS_GUIDES)
+    with pytest.raises(ValueError, match="لا صفحات جاهزة للمعالجة"):
+        services.start_ocr(nothing)
+    excluded = _paused_book([ps.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    Page.objects.filter(book=excluded).update(is_excluded=True)
+    with pytest.raises(ValueError, match="لا صفحات جاهزة للمعالجة"):
+        services.start_ocr(excluded)
+
+
+def test_start_ocr_reverts_the_claim_when_the_broker_refuses():
+    book = _paused_book([Page.Status.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    with (
+        patch("books.tasks.start_ocr_task.delay", side_effect=ConnectionError("redis down")),
+        pytest.raises(ValueError, match="تعذّر إرسال العمل إلى العامل الخلفي"),
+    ):
+        services.start_ocr(book)
+    book.refresh_from_db()
+    assert (book.status, book.awaits_ocr_start) == (Book.Status.NEEDS_GUIDES, True)
+
+
+def test_start_ocr_task_enqueues_layout_chains_for_the_prepared_pages():
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.ERROR, ps.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=False, status=Book.Status.OCR)
+    with patch("books.services.run_stage") as run_stage:
+        tasks.start_ocr_task(book.pk)
+    assert [(c.args[0].number, c.args[1]) for c in run_stage.call_args_list] == [(1, "layout"), (3, "layout")]
+    assert tasks.start_ocr_task(999999) == 999999
+
+
+def test_start_ocr_view_redirects_with_its_message(editor_client, proofreader):
+    from django.test import Client
+
+    book = _paused_book([Page.Status.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    url = reverse("books:start_ocr", args=[book.pk])
+    assert url == f"/books/{book.pk}/start-ocr/"
+    reader = Client()
+    reader.force_login(proofreader)
+    assert reader.post(url).status_code == 403
+    with patch("books.tasks.start_ocr_task.delay"):
+        response = editor_client.post(url)
+    assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/"
+    messages = [str(m) for m in response.wsgi_request._messages]
+    assert messages == ["بدأت المعالجة. تُحدَّث هذه الصفحة تلقائيًا أثناء العمل."]
+    again = editor_client.post(url)
+    assert [str(m) for m in again.wsgi_request._messages][-1] == "بدأت المعالجة بالفعل."
+    assert editor_client.get(url).status_code == 405
+
+
+def test_the_gate_refuses_every_stage_but_preprocess_while_the_book_waits():
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.PREPROCESSED], status=Book.Status.NEEDS_GUIDES)
+    page = book.pages.get(number=1)
+    for stage in ("layout", "ocr", "ocr_fast", "ocr_full"):
+        with pytest.raises(ValueError, match="لم تبدأ المعالجة بعد"):
+            services.run_stage(page, stage)
+        with pytest.raises(ValueError, match="لم تبدأ المعالجة بعد"):
+            services.validate_rerun(book, stage)
+    with patch("books.services.chain") as chain:
+        services.run_stage(page, "preprocess")
+    assert [sig.task for sig in chain.call_args.args] == ["processing.tasks.preprocess_page"]
+    with patch("books.services.chain") as chain:
+        assert services.rerun_book(book, "preprocess") == 2
+    assert all(len(call.args) == 1 for call in chain.call_args_list)
+    book.refresh_from_db()
+    assert book.status == Book.Status.PROCESSING and book.awaits_ocr_start
+    assert (
+        services._stage_signatures(1, "layout", layout_stage=True)[0].task
+        == "processing.tasks.preprocess_page"
+    )
+
+
+def test_toggle_exclude_in_the_layout_stage_queues_nothing_for_ocr(editor_client):
+    ps = Page.Status
+    book = _paused_book([ps.PREPROCESSED, ps.EXCLUDED, ps.EXCLUDED], status=Book.Status.NEEDS_GUIDES)
+    prepared, unprepared = book.pages.get(number=2), book.pages.get(number=3)
+    Page.objects.filter(pk__in=[prepared.pk, unprepared.pk]).update(is_excluded=True)
+    Preprocess.objects.create(page=prepared, output_width=10, output_height=10)
+    with (
+        patch("books.services.run_stage") as run_stage,
+        patch("processing.tasks.preprocess_page.delay") as preprocess,
+    ):
+        response = editor_client.post(reverse("books:toggle_exclude", args=[book.pk, 2]))
+        editor_client.post(reverse("books:toggle_exclude", args=[book.pk, 3]))
+    run_stage.assert_not_called()
+    preprocess.assert_called_once_with(unprepared.pk)
+    assert Page.objects.get(pk=prepared.pk).status == ps.PREPROCESSED
+    message = list(response.wsgi_request._messages)[0]
+    assert str(message) == "أُعيدت الصفحة 2 إلى الكتاب."
+    assert f"undo:{reverse('books:toggle_exclude', args=[book.pk, 2])}" in message.extra_tags
+    book.refresh_from_db()
+    assert book.status == Book.Status.PROCESSING  # page 3 is being prepared
+
+
+def test_start_processing_extracts_refuses_after_layout_and_reverts_on_a_broker_failure():
+    book = make_book(make_scan_pdf(1))
+    with patch("books.tasks.ingest_book_task.delay", side_effect=ConnectionError("down")):
+        with pytest.raises(ValueError, match="تعذّر إرسال العمل"):
+            services.start_processing(book)
+    book.refresh_from_db()
+    assert book.status == Book.Status.UPLOADED and book.error_message == ""
+    Book.objects.filter(pk=book.pk).update(status=Book.Status.ERROR, error_message="قديم")
+    book.refresh_from_db()
+    with patch("books.tasks.ingest_book_task.delay", side_effect=ConnectionError("down")):
+        with pytest.raises(ValueError):
+            services.start_processing(book)
+    book.refresh_from_db()
+    assert (book.status, book.error_message) == (Book.Status.ERROR, "قديم")
+    with patch("books.tasks.ingest_book_task.delay") as delay:
+        services.start_processing(book)
+    delay.assert_called_once_with(book.pk)
+    Book.objects.filter(pk=book.pk).update(status=Book.Status.NEEDS_GUIDES)
+    book.refresh_from_db()
+    with pytest.raises(ValueError) as exc:
+        services.start_processing(book)
+    assert str(exc.value) == "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو أعد تجهيز الصفحات من القائمة «⋯»."
+
+
+@pytest.mark.parametrize(
+    "options, pages, expected",
+    [
+        (
+            {"skip_first": "1", "skip_last": "1"},
+            4,
+            "أُنشئ الكتاب «كتاب الاختبار»، وتُستخرج الآن الصفحات 2–3 من 4 صفحات في الملف (صفحتان).",
+        ),
+        ({}, 3, "أُنشئ الكتاب «كتاب الاختبار»، وتُستخرج الآن صفحات الملف كلها (3 صفحات)."),
+        (
+            {"skip_first": "1", "pages_per_sheet": "2"},
+            3,
+            "أُنشئ الكتاب «كتاب الاختبار»، وتُستخرج الآن الصفحات 2–3 من 3 صفحات في الملف (4 صفحات في الكتاب).",
+        ),
+    ],
+)
+def test_book_create_extracts_at_once_and_names_the_range(editor_client, options, pages, expected):
+    upload = SimpleUploadedFile("scan.pdf", make_scan_pdf(pages), content_type="application/pdf")
+    data = {
+        "title": "كتاب الاختبار",
+        "source_pdf": upload,
+        "skip_first": "0",
+        "skip_last": "0",
+        "pages_per_sheet": "1",
+        "split_ratio": "0.5",
+        "use_text_layer": "on",
+        **options,
+    }
+    with patch("books.tasks.ingest_book_task.delay") as delay:
+        response = editor_client.post(reverse("books:create"), data)
+    book = Book.objects.get()
+    assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/", response.content
+    delay.assert_called_once_with(book.pk)
+    assert [str(m) for m in response.wsgi_request._messages] == [expected]
+    assert (book.status, book.awaits_ocr_start) == (Book.Status.PROCESSING, True)
+
+
+def test_book_create_keeps_the_book_uploaded_when_the_extraction_cannot_be_queued(editor_client):
+    upload = SimpleUploadedFile("scan.pdf", make_scan_pdf(1), content_type="application/pdf")
+    data = {"title": "ك", "source_pdf": upload, "skip_first": "0", "skip_last": "0", "pages_per_sheet": "1"}
+    with patch("books.tasks.ingest_book_task.delay", side_effect=ConnectionError("down")):
+        response = editor_client.post(reverse("books:create"), data)
+    book = Book.objects.get()
+    assert response.status_code == 302 and book.status == Book.Status.UPLOADED
+    assert [str(m) for m in response.wsgi_request._messages] == [services.BROKER_ERROR]
+
+
+def test_kept_range():
+    book = Book(title="ك", source_page_count=555, skip_first=186, skip_last=362)
+    assert services.kept_range(book) == {
+        "source_pages": 555,
+        "first": 187,
+        "last": 193,
+        "sheets": 7,
+        "pages": 7,
+        "text": "الصفحات 187–193 من 555",
+    }
+    two = Book(title="ك", source_page_count=52, skip_first=2, skip_last=2, pages_per_sheet=2)
+    assert services.kept_range(two)["text"] == "الصفحات 3–50 من 52، وفي كل منها صفحتان"
+    assert services.kept_range(two)["pages"] == 96
+    assert services.kept_range(book, source_pages=190)["last"] is None  # nothing left
+    single = Book(title="ك", source_page_count=5, skip_first=4)
+    assert services.kept_range(single)["text"] == "الصفحة 5 من 5"
+
+
+def test_rerun_estimate_uses_the_median_qari_time_and_falls_back():
+    from ocr.models import OcrRun
+    from ocr.services import engine_names
+
+    book, pages = _book_with_pages(4, status=Page.Status.OCR_DONE)
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.REVIEWED)
+    assert services.rerun_estimate(book, "ocr") == {"pages": 3, "kept": 1, "minutes": 1}  # 3 × 20 s fallback
+    assert services.rerun_estimate(book, "ocr_fast")["minutes"] is None
+    primary, secondary, fast = engine_names()
+    for page, seconds in zip(pages[1:], (30, 60, 90), strict=True):
+        OcrRun.objects.create(page=page, engine_name=primary, duration_ms=1000)  # older: ignored
+        OcrRun.objects.create(page=page, engine_name=primary, duration_ms=seconds * 500)
+        OcrRun.objects.create(page=page, engine_name=secondary, duration_ms=seconds * 500)
+        OcrRun.objects.create(page=page, engine_name=fast, duration_ms=10_000)  # Tesseract: not counted
+    assert services.qari_seconds(book) == 60
+    assert services.rerun_estimate(book, "layout") == {"pages": 3, "kept": 1, "minutes": 3}
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True)
+    book.refresh_from_db()
+    assert services.rerun_estimate(book, "preprocess")["minutes"] is None
+
+
+def test_delete_book_removes_rows_and_the_folder_after_commit(
+    editor_client, proofreader, django_capture_on_commit_callbacks
+):
+    from django.conf import settings
+    from django.test import Client
+
+    book, _pages = guides_book("started")
+    folder = os.path.join(settings.MEDIA_ROOT, "books", str(book.pk))
+    os.makedirs(os.path.join(folder, "pages", "0001"), exist_ok=True)
+    with open(os.path.join(folder, "pages", "0001", "display.webp"), "wb") as handle:
+        handle.write(b"x")
+    url = reverse("books:delete", args=[book.pk])
+    reader = Client()
+    reader.force_login(proofreader)
+    assert reader.post(url).status_code == 403
+    assert editor_client.get(url).status_code == 405
+    with django_capture_on_commit_callbacks(execute=True):
+        response = editor_client.post(url)
+    assert response.status_code == 302 and response["Location"] == reverse("books:list")
+    assert [str(m) for m in response.wsgi_request._messages] == ["حُذف الكتاب «الحوليات الليبية»."]
+    assert not Book.objects.filter(pk=book.pk).exists()
+    assert (
+        not Page.objects.filter(book_id=25).exists() and not Region.objects.filter(page__book_id=25).exists()
+    )
+    assert not os.path.exists(folder)
+
+
+def test_delete_book_keeps_the_folder_when_the_transaction_rolls_back(settings):
+    from django.db import transaction
+
+    book = Book.objects.create(title="ك")
+    book_id = book.pk
+    folder = os.path.join(settings.MEDIA_ROOT, "books", str(book_id))
+    os.makedirs(folder, exist_ok=True)
+    with pytest.raises(RuntimeError), transaction.atomic():
+        services.delete_book(book)
+        raise RuntimeError("rolled back")
+    assert os.path.exists(folder) and Book.objects.filter(pk=book_id).exists()
+
+
+def test_dashboard_offers_only_the_preprocess_rerun_while_the_book_waits():
+    book, _ = guides_book("layout")
+    context = services.book_dashboard(book)
+    assert context["rerun_stages"] == [{"value": "preprocess", "label": "تجهيز الصفحات"}]
+    assert context["guides_mode"] and context["start_action"] == "startOcr"
+    assert context["kept_range"]["text"] == "الصفحات 187–193 من 555"
+    started, _ = guides_book_replace("started")
+    context = services.book_dashboard(started)
+    assert [s["value"] for s in context["rerun_stages"]] == list(services.STAGES)
+    assert not context["guides_mode"] and context["start_action"] == ""
+    assert services.book_dashboard(started, "guides")["guides_mode"] is True
+    assert context["guides_url"] == f"/books/{started.pk}/?view=guides"
+
+
+def test_dashboard_view_param_opens_the_mode_on_a_started_book(editor_client):
+    book, _ = guides_book("started")
+    with patch("books.services.book_dashboard", wraps=services.book_dashboard) as dashboard:
+        editor_client.get(reverse("books:detail", args=[book.pk]) + "?view=guides")
+    assert dashboard.call_args.args[1] == "guides"
+
+
+def test_page_detail_draws_computed_bands_before_the_regions_exist():
+    book, pages = guides_book("layout")
+    context = services.page_detail_context(pages[0])
+    assert [r["kind"] for r in context["page_regions"]] == ["body", "footnote", "page_number"]
+    assert all(r["computed"] and r["id"] is None for r in context["page_regions"])
+    assert context["page_regions"][1]["bbox"] == [0, 2343, 1000, 2916]
+    assert [s["value"] for s in context["rerun_stages"]] == ["preprocess"] and context["layout_stage"]
+    started, spages = guides_book_replace("started")
+    regions = services.page_detail_context(Page.objects.get(pk=spages[2].pk))["page_regions"]
+    assert regions[0]["id"] is not None and "computed" not in regions[0]
+
+
+def test_labels_of_the_split():
+    assert Book.Status.PROCESSING.label == "قيد التخطيط"
+    assert Book.Status.NEEDS_GUIDES.label == "تم التخطيط"
+    assert Book.Status.OCR.label == "قيد المعالجة"
+    assert Page.Status.PREPROCESSED.label == "مُجهَّزة"
+    assert Page.Status.LAYOUT_DONE.label == "بانتظار التعرّف"
+    assert services.STAGE_LABELS["preprocess"] == "تجهيز الصفحات"
+    assert services.STAGE_LABELS["layout"] == "تحديد المناطق"
+    assert Region.Source.GUIDES.label == "من التخطيط"
+    assert LayoutGuides._meta.verbose_name == "التخطيط العام"
+    assert Page._meta.get_field("guides_override").verbose_name == "تخطيط خاص بالصفحة"
+    assert Book._meta.get_field("awaits_ocr_start").verbose_name == "بانتظار «بدء المعالجة»"
+    book = Book.objects.create(title="ك")
+    stages = {s["key"]: s["label"] for s in services.book_dashboard(book)["stages"]}
+    assert stages["preprocessed"] == "مُجهَّزة" and stages["layout_done"] == "بانتظار التعرّف"
+
+
+def test_smoke_pipeline_layout_only_stops_at_the_pause(tmp_path):
+    from django.core.management import call_command
+
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(make_scan_pdf(2))
+    out = io.StringIO()
+    with patch("books.tasks.start_ocr_task.delay") as start:
+        call_command("smoke_pipeline", str(pdf), "--layout-only", stdout=out)
+    start.assert_not_called()
+    book = Book.objects.get()
+    assert (book.status, book.awaits_ocr_start) == (Book.Status.NEEDS_GUIDES, True)
+    assert set(book.pages.values_list("status", flat=True)) == {Page.Status.PREPROCESSED}
+    text = out.getvalue()
+    assert f"book {book.pk}: needs_guides" in text and "   1  preprocessed" in text and " b " in text
+
+
+def test_the_mode_markup_shows_only_in_the_mode(editor_client):
+    # §3.12: the server chooses the mode; outside it the dashboard renders today's markup
+    book, _ = guides_book("layout")
+    url = reverse("books:detail", args=[book.pk])
+    body = editor_client.get(url).content.decode()
+    assert "bk-dashboard is-guides" in body and 'x-data="bookGuides()"' in body
+    assert 'id="sheet-guides"' in body and reverse("books:start_ocr", args=[book.pk]) in body
+    started, _ = guides_book_replace("started")
+    url = reverse("books:detail", args=[started.pk])
+    body = editor_client.get(url).content.decode()
+    assert "is-guides" not in body and "bookGuides(" not in body and 'id="sheet-guides"' not in body
+    assert f'href="{url}?view=guides"' in body  # «⋯» «التخطيط»
+    body = editor_client.get(url + "?view=guides").content.decode()
+    assert "bk-dashboard is-guides" in body and 'x-data="bookGuides()"' in body

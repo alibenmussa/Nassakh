@@ -48,6 +48,8 @@
   const PULSE_MS = 500;
   const TOOLS_CLOSE_MS = 180; // hover intent: the «⋯» survives the gap between the block and the button
   const TICK_MS = 30000; // «قبل 5 دقائق» refreshes
+  const LIVE_MS = 2000; // D70: the live state is fetched at most once every 2 s
+  const CHANNEL = 'nassakh'; // review.js announces its saved changes there
   const POP_EDGE = 8; // the overlay keeps 8 px from the edges of the visible column (= review POP_EDGE)
   const POP_GAP = 6;
   const POP_SIZE = { menu: [250, 262], seam: [260, 200], note: [360, 96] }; // [w, h] before the first measure
@@ -153,20 +155,24 @@
   // Keyboard map (§4.2), pure so the tests can exercise it. ctx: inField (typing in a field), inMenu (the
   // focus is inside the overlay, a menu or the drawer, which keep their own arrows), hasBlock (a block is
   // focused: ↓/↑ move between blocks only then, so the page still scrolls with the arrows before any block is chosen).
+  // Keys go through `NassakhKeys` (keys.js, D69): letters by their place, so the Arabic layout's «ش» on S is S;
+  // ? also as «؟»; [ and ] by code (the Arabic layout types «ج» and «د» there); nothing while an IME composes.
   function keyAction(ev, ctx) {
+    const K = window.NassakhKeys;
+    if (K.composing(ev)) return null;
     const k = ev.key;
-    const code = ev.code || '';
     if (k === 'Escape') return ctx.inField ? 'blur' : 'close';
     if (ctx.inField || ev.metaKey || ev.ctrlKey || ev.altKey) return null;
-    if (k === '?') return 'sheet';
-    if (code === 'KeyG' || k === 'g' || k === 'G') return 'jump';
-    if (code === 'KeyS' || k === 's' || k === 'S') return 'seams';
-    if (code === 'KeyO' || k === 'o' || k === 'O') return 'source';
-    if (k === ']') return 'nextWarning';
-    if (k === '[') return 'prevWarning';
+    if (K.is(ev, '?')) return 'sheet';
+    const letter = K.letter(ev);
+    if (letter === 'g') return 'jump';
+    if (letter === 's') return 'seams';
+    if (letter === 'o') return 'source';
+    if (K.is(ev, ']')) return 'nextWarning';
+    if (K.is(ev, '[')) return 'prevWarning';
     if (ctx.inMenu) return null;
-    if (code === 'KeyJ' || k === 'j' || k === 'J') return 'next';
-    if (code === 'KeyK' || k === 'k' || k === 'K') return 'prev';
+    if (letter === 'j') return 'next';
+    if (letter === 'k') return 'prev';
     if (k === 'ArrowDown') return ctx.hasBlock ? 'next' : null;
     if (k === 'ArrowUp') return ctx.hasBlock ? 'prev' : null;
     return null;
@@ -240,6 +246,9 @@
       let pulseTimer = null;
       let tickTimer = null;
       let bound = false;
+      let liveAt = 0; // the last live refresh (D70), at most one every LIVE_MS
+      let liveTimer = null;
+      let liveChannel = null;
       let justOpened = false; // the overlay opened in this event turn: the outside-click of the same click is not a close
       let returnTo = null; // block id the focus goes back to when the drawer closes
       let pendingAnchor = null; // block ids to anchor the scroll on after the swap that follows a post
@@ -294,9 +303,12 @@
           if (typeof Alpine.store === 'function' && Alpine.store('manuscript')) Alpine.store('manuscript').view = this;
           if (this.active) this.schedulePoll(POLL_MS);
           if (typeof setInterval === 'function') tickTimer = setInterval(() => { this.now = Date.now(); }, TICK_MS);
+          this.bindLive();
         },
         destroy() {
           this.stopPolling();
+          clearTimeout(liveTimer);
+          if (liveChannel) { try { liveChannel.close(); } catch (_) { /* closed */ } liveChannel = null; }
           [toolsTimer, flashTimer, revealTimer, pulseTimer].forEach((t) => clearTimeout(t));
           if (tickTimer && typeof clearInterval === 'function') clearInterval(tickTimer);
           if (spy) spy.disconnect();
@@ -415,6 +427,53 @@
           this.applyState(r.data);
           if (this.active) this.schedulePoll(POLL_MS);
           else this.stopPolling();
+        },
+
+        // ------------------------------------------------------------ live state (D70)
+        // A change in review (another tab) shows here without a reload: the state is fetched again when the tab
+        // comes back (focus, visibility, a return from the back-forward cache) and on the review screen's
+        // message on BroadcastChannel('nassakh'). When the changed pages differ, the document is swapped too, so
+        // the amber mark of a page approved meanwhile goes at once.
+        bindLive() {
+          const refresh = () => { this.refreshLive(); };
+          if (typeof window !== 'undefined') {
+            listen(window, 'focus', refresh);
+            listen(window, 'pageshow', (e) => { if (e && e.persisted) refresh(); });
+          }
+          if (typeof document !== 'undefined') listen(document, 'visibilitychange', () => { if (!document.hidden) refresh(); });
+          try {
+            if (typeof BroadcastChannel === 'function') {
+              liveChannel = new BroadcastChannel(CHANNEL);
+              if (typeof liveChannel.unref === 'function') liveChannel.unref(); // Node (the tests): never hold the process open
+              liveChannel.onmessage = (e) => {
+                const m = e && e.data;
+                if (m && m.type === 'review' && Number(m.book) === Number(this.bookId)) refresh();
+              };
+            }
+          } catch (_) { liveChannel = null; }
+        },
+        // At most one request every LIVE_MS; a trigger inside that window is kept for its end (a burst of
+        // review changes ends in one refresh that sees them all). Nothing while a run is polled anyway.
+        refreshLive() {
+          if (this.active || !this.state.exists) return false;
+          const wait = liveAt + LIVE_MS - Date.now();
+          if (wait > 0) {
+            if (!liveTimer) liveTimer = setTimeout(() => { liveTimer = null; this.refreshLive(); }, wait);
+            return false;
+          }
+          liveAt = Date.now();
+          return this.fetchLive();
+        },
+        async fetchLive() {
+          const r = await api(urls.state);
+          if (!r.ok || !r.data) return false;
+          const before = JSON.stringify(this.stalePages);
+          const version = this.loadedVersion;
+          this.applyState(r.data);
+          if (this.active) { this.schedulePoll(POLL_MS); return true; }
+          const same = Number(r.data.version) === version;
+          if (same && this.hasDocument && JSON.stringify(this.stalePages) !== before) await this.reload();
+          return true;
         },
 
         // ------------------------------------------------------------ starting runs

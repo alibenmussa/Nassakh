@@ -1,0 +1,174 @@
+{
+  "uploaded": {
+    "guidesMode": true,
+    "layoutStage": true,
+    "startAction": "extract",
+    "guides": {
+      "source": "auto",
+      "header_cut": null,
+      "footnote_line": null,
+      "page_number_zone": "none",
+      "page_number_height": 0.06
+    },
+    "guidesStats": {"pages": 0, "rule": 0, "block": 0, "number": 0, "median_rule": null, "text": ""},
+    "rerun": {},
+    "guidesUrls": {
+      "state": "/api/books/25/guides/",
+      "apply": "/api/books/25/guides/",
+      "preview": "/api/books/25/guides/preview/",
+      "page": "/api/pages/__id__/guides/",
+      "startOcr": "/books/25/start-ocr/",
+      "extract": "/books/25/start/",
+      "delete": "/books/25/delete/",
+      "back": "/books/25/"
+    },
+    "keptRange": {"source_pages": 555, "first": 187, "last": 193, "sheets": 7, "pages": 7, "text": "الصفحات 187–193 من 555"},
+    "textLayer": false
+  },
+  "processing": {
+    "guidesMode": true,
+    "layoutStage": true,
+    "startAction": "startOcrDisabled",
+    "guides": {
+      "source": "auto",
+      "header_cut": null,
+      "footnote_line": null,
+      "page_number_zone": "none",
+      "page_number_height": 0.06
+    },
+    "guidesStats": {
+      "pages": 3,
+      "rule": 2,
+      "block": 0,
+      "number": 3,
+      "median_rule": 0.7815,
+      "text": "اكتُشف خط حاشية في 2 من 3 صفحات، ورقم صفحة في 3."
+    },
+    "rerun": {},
+    "guidesUrls": {
+      "state": "/api/books/25/guides/",
+      "apply": "/api/books/25/guides/",
+      "preview": "/api/books/25/guides/preview/",
+      "page": "/api/pages/__id__/guides/",
+      "startOcr": "/books/25/start-ocr/",
+      "extract": "/books/25/start/",
+      "delete": "/books/25/delete/",
+      "back": "/books/25/"
+    },
+    "keptRange": {"source_pages": 555, "first": 187, "last": 193, "sheets": 7, "pages": 7, "text": "الصفحات 187–193 من 555"},
+    "textLayer": false
+  },
+  "needs_guides": {
+    "guidesMode": true,
+    "layoutStage": true,
+    "startAction": "startOcr",
+    "guides": {
+      "source": "auto",
+      "header_cut": null,
+      "footnote_line": null,
+      "page_number_zone": "none",
+      "page_number_height": 0.06
+    },
+    "guidesStats": {
+      "pages": 7,
+      "rule": 5,
+      "block": 1,
+      "number": 7,
+      "median_rule": 0.781,
+      "text": "اكتُشف خط حاشية في 5 من 7 صفحات، وحاشية بخط أصغر في 1، ورقم صفحة في 7."
+    },
+    "rerun": {
+      "preprocess": {"pages": 7, "kept": 0, "minutes": null}
+    },
+    "guidesUrls": {
+      "state": "/api/books/25/guides/",
+      "apply": "/api/books/25/guides/",
+      "preview": "/api/books/25/guides/preview/",
+      "page": "/api/pages/__id__/guides/",
+      "startOcr": "/books/25/start-ocr/",
+      "extract": "/books/25/start/",
+      "delete": "/books/25/delete/",
+      "back": "/books/25/"
+    },
+    "keptRange": {"source_pages": 555, "first": 187, "last": 193, "sheets": 7, "pages": 7, "text": "الصفحات 187–193 من 555"},
+    "textLayer": false
+  },
+  "error": {
+    "guidesMode": true,
+    "layoutStage": true,
+    "startAction": "reextract",
+    "guides": {
+      "source": "auto",
+      "header_cut": null,
+      "footnote_line": null,
+      "page_number_zone": "none",
+      "page_number_height": 0.06
+    },
+    "guidesStats": {"pages": 0, "rule": 0, "block": 0, "number": 0, "median_rule": null, "text": ""},
+    "rerun": {
+      "preprocess": {"pages": 7, "kept": 0, "minutes": null}
+    },
+    "guidesUrls": {
+      "state": "/api/books/25/guides/",
+      "apply": "/api/books/25/guides/",
+      "preview": "/api/books/25/guides/preview/",
+      "page": "/api/pages/__id__/guides/",
+      "startOcr": "/books/25/start-ocr/",
+      "extract": "/books/25/start/",
+      "delete": "/books/25/delete/",
+      "back": "/books/25/"
+    },
+    "keptRange": {"source_pages": 555, "first": 187, "last": 193, "sheets": 7, "pages": 7, "text": "الصفحات 187–193 من 555"},
+    "textLayer": false
+  },
+  "started_view_guides": {
+    "guidesMode": true,
+    "layoutStage": false,
+    "startAction": "back",
+    "guides": {
+      "source": "manual",
+      "header_cut": 0.062,
+      "footnote_line": null,
+      "page_number_zone": "none",
+      "page_number_height": 0.06
+    },
+    "guidesStats": {
+      "pages": 6,
+      "rule": 4,
+      "block": 1,
+      "number": 6,
+      "median_rule": 0.781,
+      "text": "اكتُشف خط حاشية في 4 من 6 صفحات، وحاشية بخط أصغر في 1، ورقم صفحة في 6."
+    },
+    "rerun": {
+      "preprocess": {"pages": 5, "kept": 1, "minutes": 2},
+      "layout": {"pages": 5, "kept": 1, "minutes": 2},
+      "ocr": {"pages": 5, "kept": 1, "minutes": 2},
+      "ocr_fast": {"pages": 5, "kept": 1, "minutes": null},
+      "ocr_full": {"pages": 5, "kept": 1, "minutes": 2}
+    },
+    "guidesUrls": {
+      "state": "/api/books/25/guides/",
+      "apply": "/api/books/25/guides/",
+      "preview": "/api/books/25/guides/preview/",
+      "page": "/api/pages/__id__/guides/",
+      "startOcr": "/books/25/start-ocr/",
+      "extract": "/books/25/start/",
+      "delete": "/books/25/delete/",
+      "back": "/books/25/"
+    },
+    "keptRange": {"source_pages": 555, "first": 187, "last": 193, "sheets": 7, "pages": 7, "text": "الصفحات 187–193 من 555"},
+    "textLayer": false
+  },
+  "started": {
+    "guidesMode": false,
+    "layoutStage": false,
+    "rerun": {
+      "preprocess": {"pages": 5, "kept": 1, "minutes": 2},
+      "layout": {"pages": 5, "kept": 1, "minutes": 2},
+      "ocr": {"pages": 5, "kept": 1, "minutes": 2},
+      "ocr_fast": {"pages": 5, "kept": 1, "minutes": null},
+      "ocr_full": {"pages": 5, "kept": 1, "minutes": 2}
+    }
+  }
+}

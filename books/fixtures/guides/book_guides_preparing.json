@@ -1,0 +1,84 @@
+{
+  "book": {"source": "auto", "header_cut": null, "footnote_line": null, "awaits_ocr_start": true},
+  "stats": {
+    "pages": 3,
+    "rule": 2,
+    "block": 0,
+    "number": 3,
+    "median_rule": 0.7815,
+    "text": "اكتُشف خط حاشية في 2 من 3 صفحات، ورقم صفحة في 3."
+  },
+  "counts": {"all": 6, "doubt": 1, "override": 0, "error": 1},
+  "pages": [
+    {
+      "id": 812,
+      "n": 1,
+      "b": [["b", 0.0, 0.781], ["f", 0.781, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "preprocessed",
+      "x": false
+    },
+    {
+      "id": 813,
+      "n": 2,
+      "b": [["b", 0.0, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "preprocessed",
+      "x": false
+    },
+    {
+      "id": 814,
+      "n": 3,
+      "b": [["b", 0.0, 0.782], ["f", 0.782, 0.972], ["p", 0.972, 0.99, 0.46, 0.53]],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "preprocessed",
+      "x": false
+    },
+    {
+      "id": 815,
+      "n": 4,
+      "b": [],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "error",
+      "x": false
+    },
+    {
+      "id": 816,
+      "n": 5,
+      "b": [],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "uploaded",
+      "x": false
+    },
+    {
+      "id": 817,
+      "n": 6,
+      "b": [],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "uploaded",
+      "x": false
+    },
+    {
+      "id": 818,
+      "n": 7,
+      "b": [],
+      "d": 0,
+      "o": false,
+      "l": "",
+      "s": "excluded",
+      "x": true
+    }
+  ]
+}

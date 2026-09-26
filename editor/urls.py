@@ -24,6 +24,7 @@ api_urlpatterns = [
         api.chapter_reassemble,
         name="chapter_reassemble",
     ),
+    path("books/<int:book_id>/drift/", api.review_drift, name="review_drift"),
     path("books/<int:book_id>/find-replace/", api.find_replace, name="find_replace"),
     path("books/<int:book_id>/convert-digits/", api.convert_digits, name="convert_digits"),
     path("books/<int:book_id>/snapshots/", api.snapshots, name="snapshots"),
