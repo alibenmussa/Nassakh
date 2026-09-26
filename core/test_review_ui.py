@@ -2371,14 +2371,24 @@ SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + r"""
   // ⇧ on a box extends the range of lines, as in the text
   const r = make(); r.onLineClick(r.lineById(51), {}); press(r, 53, 0); release(r); click(r, { shiftKey: true });
   out.range = r.range.ids;
+  // a second tap on the open word closes its menu; a tap on a confident word closes it too
+  const t = make(); press(t, 51, 1); release(t); click(t); press(t, 51, 1); release(t); click(t);
+  const again = { open: t.pop.open, focus: clone(t.focus) };
+  press(t, 51, 1); release(t); click(t); press(t, 52, 1); release(t); click(t);
+  out.dismiss = { again, bySure: t.pop.open };
+  // a resolved word, and any word of an approved page, opens no menu from the image
+  const v = make(); v.lineById(51).tokens[1].res = 'secondary'; press(v, 51, 1); release(v); click(v);
+  const ap = make(); ap.page.status = 'reviewed'; ap.page.is_reviewed = true; press(ap, 51, 1); release(ap); click(ap);
+  out.decided = { resolved: v.pop.open, approved: ap.pop.open, focus: clone(ap.focus) };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
 
 
 def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
-    """A tap on a box of the processed image goes to the word in the text: an uncertain word opens its menu
-    there (as a click in the text does), a confident word is focused without a menu, the image stays put; a
+    """A tap on a box of the processed image goes to the word in the text: a word still to decide opens its
+    menu there (as a click in the text does); a confident or resolved word, or any word of an approved page, is
+    focused without a menu; a second tap, or a tap on another word, closes the menu; the image stays put; a
     drag is no tap. The boxes carry their word's address, and «الأصل» hides them."""
     harness = tmp_path / "harness.js"
     harness.write_text(SCAN_HARNESS, encoding="utf-8")
@@ -2397,8 +2407,11 @@ def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
     assert out["drag"] == {"stopped": False, "focus": None}
     assert out["none"] == {"stopped": False, "focus": None}
     assert out["range"] == [51, 52, 53]
+    assert out["dismiss"] == {"again": {"open": False, "focus": {"lineId": 51, "index": 1}}, "bySure": False}
+    assert out["decided"] == {"resolved": False, "approved": False, "focus": {"lineId": 51, "index": 1}}
 
     body = _render()
     assert '@click="onScanClick($event)"' in body and ':data-line="line.id" :data-i="i"' in body
+    assert "onBoxClick(" not in body  # one path for every tap on the image: the scan's click
     src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
     assert ".rv-sheet.show-scan .rv-overlay { visibility: hidden; }" in src

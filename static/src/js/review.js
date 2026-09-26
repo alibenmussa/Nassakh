@@ -784,21 +784,27 @@
         return n > 1 ? `نوع الأسطر المحدَّدة (${n})` : 'نوع السطر';
       },
 
-      // A box on the image finds its word in the text: an uncertain word opens its menu there, exactly as a
-      // click in the text does; any other word is focused and scrolled into view, with no menu (a correction
-      // starts in the text). The image stays where it is (the reader is looking at it).
+      // A box on the image finds its word in the text: a word still to decide (unresolved, on a page open for
+      // review) opens its menu there, exactly as a click in the text does; any other word (a confident one, a
+      // resolved one, every word of an approved page) is focused and scrolled into view with no menu, and closes
+      // an open one. A second tap on the word whose menu is open closes it. The image stays where it is.
       onBoxClick(line, i, ev) {
         if (this.dragMoved) return;
         if (ev && ev.shiftKey) { this.extendRange(line); return; }
         this.range = { anchor: line.id, ids: [] };
         const tok = line.tokens[i];
         if (!tok) return;
-        this.focusWord({ lineId: line.id, index: i }, { open: tok.conf === 'low', fromClick: true, pan: false });
+        const ref = { lineId: line.id, index: i };
+        if (this.pop.open && this.same(this.focus, ref)) { this.closePop(); return; }
+        const open = this.editable && this.isUnresolved(tok);
+        this.focusWord(ref, { open, fromClick: true, pan: false });
       },
 
-      // The scan captures the pointer on pointerdown (to drag), so the browser may deliver the click to the scan
-      // rather than to the box under it: the box pressed is remembered on pointerdown and handled here. A drag's
-      // release is no tap. Stopping the click keeps the popover's click-outside from closing what it opened.
+      // Every tap on the image comes here (the boxes have no click handler of their own). The scan captures the
+      // pointer on pointerdown (to drag), so the browser may deliver the click to the scan rather than to the box
+      // under it: the box pressed is remembered on pointerdown. A drag's release is no tap. A tap on a box is
+      // stopped (the popover's click-outside would close what it just opened); a tap beside the boxes goes on
+      // and closes an open menu.
       onScanClick(ev) {
         const tap = this.tapBox;
         this.tapBox = null;

@@ -131,7 +131,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
               <div class="rv-line-boxes">
                 <template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i">
                   <div class="rv-box" x-show="tok.bbox" :class="boxClass(line, tok, i)" :style="tok.bbox ? boxStyle(tok.bbox) : ''" :data-line="line.id" :data-i="i"
-                       @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onBoxClick(line, i, $event)"></div>
+                       @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null"></div>
                 </template>
               </div>
             </template>
