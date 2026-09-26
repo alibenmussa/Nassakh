@@ -42,10 +42,15 @@ from publishing.pdf_export import (
     Reference,
     ScreenPdfExporter,
     audit_pdf,
+    book_face_names,
     display_name,
     foreign_font_rows,
+    is_book_face,
     layout_mismatch,
     pages_phrase,
+    reference_layout,
+    repair_name,
+    span_fonts,
 )
 from publishing.preview import job_hash
 from publishing.tests import document, heading, long_book, note, para, text
@@ -142,17 +147,20 @@ def test_the_preview_css_is_the_same_without_an_output():
 @pytest.mark.parametrize(
     ("bleed", "marks", "rule"),
     [
-        (3, True, "@page { bleed: 9mm; marks: crop; }"),
+        (3, True, "@page { bleed: 9mm; }"),
         (3, False, "@page { bleed: 3mm; }"),
-        (0, True, "@page { bleed: 6mm; marks: crop; }"),
+        (0, True, "@page { bleed: 6mm; }"),
         (5, False, "@page { bleed: 5mm; }"),
         (0, False, None),
     ],
 )
 def test_the_print_css_has_the_bleed_and_marks_asked_for(bleed, marks, rule):
+    """The page grows by the bleed and, for crop marks, a 6 mm slug; the marks themselves are the
+    finisher's (pure K), never WeasyPrint's `marks: crop` (an RGB drawing)."""
     css = stylesheet_css(amiri_setup(), output=print_output(bleed, marks))
+    assert "marks:" not in css
     if rule is None:
-        assert "bleed" not in css and "marks:" not in css
+        assert "bleed" not in css
     else:
         assert rule in css and css.count("bleed:") == 1
 
@@ -252,9 +260,44 @@ def test_the_print_pdf_is_pure_black(print_render):
     with pymupdf.open(stream=print_render.pdf, filetype="pdf") as pdf:
         for page in pdf:
             content = page.read_contents()
-            assert not re.search(rb"\brg\b", content)
+            assert not re.search(rb"\b(rg|RG)\b", content)  # no RGB fill nor stroke
+            assert not page.get_xobjects()  # nothing drawn apart (WeasyPrint's marks were an RGB image)
         body = pdf[3].read_contents()
         assert b"/DeviceCMYK cs" in body and b"0 0 0 1 scn" in body
+
+
+def _marks(page) -> list[tuple[float, ...]]:
+    """The page's line segments (the crop marks) in millimetres from the MediaBox's top-left corner."""
+    return sorted(
+        tuple(
+            round(value / MM, 2) + 0.0 for value in (d["rect"].x0, d["rect"].y0, d["rect"].x1, d["rect"].y1)
+        )
+        for d in page.get_drawings()
+        if not d["rect"].width or not d["rect"].height
+    )
+
+
+def test_the_crop_marks_are_pure_black_on_the_trim_lines(outline_doc, print_render):
+    """E4: 8 marks a page, stroked in pure K (`0 0 0 1 K`), each trim edge carried outwards from the
+    media's edge half-way to the trim (3 mm bleed + 6 mm slug: the trim is 9 mm in)."""
+    width, height = 170 + 18, 240 + 18
+    expected = sorted(
+        [
+            (0.0, 9.0, 4.5, 9.0), (9.0, 0.0, 9.0, 4.5),  # the top-left corner
+            (width - 4.5, 9.0, width, 9.0), (width - 9.0, 0.0, width - 9.0, 4.5),  # top-right
+            (0.0, height - 9.0, 4.5, height - 9.0), (9.0, height - 4.5, 9.0, height),  # bottom-left
+            (width - 4.5, height - 9.0, width, height - 9.0),  # bottom-right
+            (width - 9.0, height - 4.5, width - 9.0, height),
+        ]
+    )  # fmt: skip
+    with pymupdf.open(stream=print_render.pdf, filetype="pdf") as pdf:
+        for page in pdf:
+            assert b"0 0 0 1 K" in page.read_contents()
+            assert _marks(page) == expected
+    plain = render(outline_doc, amiri_setup(), print_output(3, False))
+    with pymupdf.open(stream=plain.pdf, filetype="pdf") as pdf:
+        assert all(not _marks(page) and b" K" not in page.read_contents() for page in pdf)
+        assert raw_box(pdf, 0, "MediaBox") == pytest.approx([-3 * MM, -3 * MM, 173 * MM, 243 * MM], abs=0.01)
 
 
 def test_the_print_pdf_has_the_preview_pages(outline_doc, preview_render, print_render):
@@ -304,6 +347,18 @@ def test_the_preview_outline_is_left_as_it_was(preview_render):
     with pymupdf.open(stream=preview_render.pdf, filetype="pdf") as pdf:
         toc = pdf.get_toc()
     assert toc[0][:2] == [1, "كتاب التصدير"]  # the preview's own outline is not the export's
+
+
+def test_the_screen_pdf_opens_its_outline_pane_only_when_there_is_one():
+    """E5: a book with no heading and no contents page has no outline: no `/PageMode /UseOutlines`."""
+    front = {"title_page": False, "contents": False, "copyright_page": False}
+    rendered = render(
+        document(para("p1", "نص بلا عناوين.")), amiri_setup(front_matter=front), screen_output()
+    )
+    with pymupdf.open(stream=rendered.pdf, filetype="pdf") as pdf:
+        assert pdf.get_toc() == [] and catalog_key(pdf, "Outlines") == ("null", "null")
+        assert catalog_key(pdf, "PageMode") == ("null", "null")
+        assert catalog_key(pdf, "ViewerPreferences") == ("dict", "<</Direction/R2L/DisplayDocTitle true>>")
 
 
 def test_the_screen_pdf_opens_right_to_left_with_its_outline(screen_render):
@@ -362,11 +417,16 @@ def test_the_export_fonts_are_subsets_and_never_type_3(screen_render):
     assert not audit.foreign
 
 
-@pytest.mark.parametrize(("body", "latin"), [("amiri", "amiri"), ("simplified_arabic", "simplified_arabic")])
+@pytest.mark.parametrize(
+    ("body", "latin"),
+    [("amiri", "amiri"), ("simplified_arabic", "simplified_arabic"), ("lotus", "times")],
+)
 def test_latin_words_stay_in_the_book_faces_in_the_export(body, latin):
+    """Lotus (E2): WeasyPrint names its embedded face after the file's Arabic name record, which the
+    audit reads back as UTF-8 seen as Latin-1 and cut in a span: still a book face."""
     resolved = fonts.resolve(body, latin, body)
-    if resolved.body.key != body:
-        pytest.skip(f"{body} is not installed")
+    if resolved.body.key != body or resolved.latin.key != latin:
+        pytest.skip(f"{body} / {latin} is not installed")
     setup = page_setup({"body_font": body, "latin_font": latin, "heading_font": body})
     doc = document(heading("h1", "الفصل"), para("p1", LATIN_TEXT))
     rendered = render(doc, setup, print_output())
@@ -395,6 +455,54 @@ def test_foreign_font_wording():
     assert pages_phrase(list(range(1, 12))).endswith("8 وغيرها")
     assert display_name("PMUTZQ+MS-Mincho") == "MS Mincho"
     assert display_name("ESSOFH+Times-New-Roman,") == "Times New Roman"
+
+
+# a Lotus book's own face as PyMuPDF reads it: UTF-8 bytes as Latin-1 (whole in the fonts, cut in a span)
+LOTUS_FONT = "POKJYZ+" + "خط-لوتس-الجديد".encode().decode("latin-1")
+LOTUS_SPAN = "خط-لوتس-الجديد".encode()[:24].decode("latin-1")  # 31 bytes with the prefix
+
+
+def test_font_names_are_repaired_and_compared_in_any_script():
+    """E2: a name read as Latin-1 from UTF-8 is decoded again (a cut last character dropped), a real
+    Latin-1 name is left; names compare Unicode-aware; a cut span name stands for the whole names."""
+    assert repair_name(LOTUS_FONT) == "POKJYZ+خط-لوتس-الجديد"
+    assert repair_name(LOTUS_SPAN) == "خط-لوتس-الجدي"
+    assert repair_name("Café") == "Café" and repair_name("nk-latin") == "nk-latin"
+    assert repair_name("خط-لوتس") == "خط-لوتس"  # already text
+    assert display_name(LOTUS_FONT + "-Bold") == "خط لوتس الجديد Bold"
+    allowed = ("nkbody", "خطلوتسالجديد")
+    assert is_book_face("خط-لوتس-الجديد-Bold", allowed) and is_book_face(LOTUS_FONT, allowed)
+    assert not is_book_face("Hiragino-Sans", allowed) and not is_book_face("", allowed)
+    whole = ["خط-لوتس-الجديد-Bold", "خط-لوتس-الجديد", "nk-latin"]
+    assert span_fonts(LOTUS_SPAN, whole) == ["خط-لوتس-الجديد-Bold", "خط-لوتس-الجديد"]
+    assert span_fonts("nk-latin", whole) == ["nk-latin"] and span_fonts("MS-Mincho", whole) == ["MS-Mincho"]
+
+
+def test_the_book_face_names_hold_every_name_record():
+    resolved = fonts.resolve("lotus", "times", "lotus")
+    if resolved.body.key != "lotus":
+        pytest.skip("Lotus is not installed")
+    allowed = book_face_names(resolved)
+    assert "خطلوتسالجديد" in allowed and "lotuslinotypeexnd" in allowed  # the Arabic records too
+
+
+def test_the_audit_lists_the_fonts_once_not_page_by_page(print_render, monkeypatch):
+    """E3: `get_page_fonts(full=True)` page by page grows with pages times resources (41 s for 764
+    pages with crop marks); the fonts are read once from the file's objects."""
+    with pymupdf.open(stream=print_render.pdf, filetype="pdf") as pdf:
+        listed = sorted(
+            {font[3] for index in range(pdf.page_count) for font in pdf.get_page_fonts(index, full=True)}
+        )
+    asked = []
+    real = pymupdf.Document.get_page_fonts
+    monkeypatch.setattr(
+        pymupdf.Document,
+        "get_page_fonts",
+        lambda self, *args, **kwargs: asked.append(args) or real(self, *args, **kwargs),
+    )
+    audit = audit_pdf(print_render.pdf, fonts.resolve("amiri", "amiri", "amiri"))
+    assert asked == [] and sorted(item["name"] for item in audit.fonts) == listed
+    assert all(item["type"] == "Type0" and item["subset"] for item in audit.fonts)
 
 
 # ====================================================================== passes and cancelling
@@ -557,6 +665,41 @@ def test_the_export_is_compared_with_a_finished_preview_of_the_same_job(pdf_book
             "message": f"عدد صفحات الملف {first.page_count} وصفحات الكتاب {first.page_count - 1}.",
         }
     ]
+
+
+def test_an_empty_chapter_never_makes_the_live_layout_look_old(db):
+    """E8: a chapter with nothing to print has no page in the live layout; the export's pages are still
+    compared with it."""
+    from publishing.models import LiveLayout
+    from publishing.preview import setup_hash
+
+    source = outline_book()
+    source["content"].insert(1, para("p0", " "))  # a front chapter left with an empty paragraph
+    book = Book.objects.create(title="كتاب التصدير", author="مؤلف الكتاب")
+    run = AssemblyRun.objects.create(book=book, status="done")
+    Manuscript.objects.create(book=book, document=source, version=1, run=run)
+    job, _inputs, _digest = exports.read_inputs(book, "screen_pdf", {})
+    assert set(job.chapter_versions) == {"p0", "h1", "h2"}
+    rendered = get_engine().render(
+        RenderJob(document=job.document, stylesheet=job.setup, title=job.title, author=job.author)
+    )
+    assert [item["id"] for item in rendered.chapters] == ["h1", "h2"]
+    LiveLayout.objects.create(
+        book=book,
+        revision=1,
+        path=f"books/{book.pk}/layout/live-00001.json",
+        page_count=rendered.page_count,
+        chapters=rendered.chapters,
+        manuscript_version=1,
+        setup_hash=setup_hash(job.setup),
+    )
+    reference = reference_layout(job)
+    assert (
+        reference is not None and reference.source == "live" and reference.page_count == rendered.page_count
+    )
+    result = ScreenPdfExporter().export(job, NullProgress())
+    assert result.stats["reference"] == "live"
+    assert not [item for item in result.warnings if item["code"] == "layout_mismatch"]
 
 
 def test_the_print_export_runs_through_the_pipeline(pdf_book):

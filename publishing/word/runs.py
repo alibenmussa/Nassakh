@@ -1,12 +1,15 @@
 """Runs, footnotes and comments (PHASE6_SPEC §5.6, §5.8, §5.11).
 
-`RunWriter` turns a block's inlines into `w:r` elements: each `Run.text` is cut by direction
-(`model.direction_runs`; right-to-left pieces get `w:rtl` so Word uses the complex-script font and size),
-then by face (`FacePlan.split`: what the role's Arabic face lacks goes to `rStyle NkLatin`, as the
-preview's `unicode-range` sends it to the Latin face). Bold and italic are written both ways (`b`+`bCs`,
-`i`+`iCs`). A `LineBreak` is `w:br`, a `NoteRef` three `FootnoteReference` runs «(», the reference, «)»,
-and a `SourceMark` nothing. Tabs and newlines in text become `w:tab` and `w:br`; what XML forbids is
-dropped.
+`RunWriter` turns a block's inlines into `w:r` elements: the text is cut by direction, decided once
+over the paragraph's whole text (`model.direction_flags`: a footnote call counts as right to left, a line
+break starts a new stretch), so a mark, a note call or an uncertain word's boundary never changes it;
+right-to-left pieces get `w:rtl` so Word uses the complex-script font and size, and `w:rtl` is left off
+wherever Word would read it as an override that reorders the text (ECMA-376 §17.3.2.30). The
+right-to-left pieces are then cut by face (`FacePlan.split`: what the role's Arabic face lacks goes to
+`rStyle NkLatin`, as the preview's `unicode-range` sends it to the Latin face). Bold and italic are
+written both ways (`b`+`bCs`, `i`+`iCs`). A `LineBreak` is `w:br`, a `NoteRef` three `FootnoteReference`
+runs «(», the reference, «)», and a `SourceMark` nothing. Tabs and newlines in text become `w:tab` and
+`w:br`; what XML forbids is dropped.
 
 With `editorial=True` the model keeps the `uncertain` mark; the writer rebuilds the words exactly as
 `editor.uncertain._spans` counts them (consecutive uncertain runs joined, cut at white space and at any
@@ -17,13 +20,23 @@ and anchors a comment by «نسّاخ» on each word whose text still matches.
 from __future__ import annotations
 
 import re
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from lxml import etree
 
-from publishing.model import Footnote, Inline, LineBreak, NoteRef, Run, SourceMark, direction_runs
+from publishing.model import (
+    Footnote,
+    Inline,
+    LineBreak,
+    NoteRef,
+    Run,
+    SourceMark,
+    bidi_classes,
+    direction_flags,
+    direction_pieces,
+)
 
 from .faces import FacePlan
 from .ooxml import root, run, text, twips_mm, w, xml_safe
@@ -106,12 +119,24 @@ class RunWriter:
     # ------------------------------------------------------------------ text
 
     def text_runs(
-        self, value: str, marks: tuple[str, ...] = (), role: str = "body", *, base: str = "rtl"
+        self,
+        value: str,
+        marks: tuple[str, ...] = (),
+        role: str = "body",
+        *,
+        base: str = "rtl",
+        flags: str | None = None,
     ) -> list[etree._Element]:
-        """The runs of one piece of text: direction pieces, then the face split of the right-to-left ones."""
+        """The runs of one piece of text: direction pieces, then the face split of the right-to-left ones.
+        `flags` are the piece's direction flags when the paragraph decided them (`inline`); a text on its
+        own (a title, a header, a comment line) is decided over itself."""
         out: list[etree._Element] = []
+        if not value:
+            return out
         marks = tuple(m for m in marks if m in ("bold", "italic"))
-        for piece, is_rtl in direction_runs(value, base):
+        if flags is None:
+            flags = direction_flags(bidi_classes(value), base)
+        for piece, is_rtl in direction_pieces(value, flags):
             if not is_rtl:
                 out.append(run(*text_content(piece), rpr=rpr(marks=marks)))
                 continue
@@ -163,6 +188,7 @@ class RunWriter:
         for note in footnotes or []:
             queues.setdefault(note.id, deque()).append(note)
         pieces, words = _pieces(runs)
+        directions = self._directions(pieces, footnotes)
         matched = self._match_words([text for _indexes, text in words], block_id, note_id)
         starts = {
             indexes[0]: index for index, (indexes, _t) in enumerate(words) if matched.get(index) is not None
@@ -175,7 +201,7 @@ class RunWriter:
             if index in starts:
                 out.append(w("commentRangeStart", id=matched[starts[index]]))
             if kind == "text":
-                out.extend(self.text_runs(item.text, item.marks, role))
+                out.extend(self.text_runs(item.text, item.marks, role, flags=directions.get(index)))
             elif isinstance(item, LineBreak):
                 out.append(self.line_break())
             elif isinstance(item, NoteRef):
@@ -187,6 +213,33 @@ class RunWriter:
                 out.append(w("commentRangeEnd", id=comment_id))
                 out.append(self.reference_run(comment_id))
         return out
+
+    def _directions(
+        self, pieces: list[tuple[str, object]], footnotes: list[Footnote] | None
+    ) -> dict[int, str]:
+        """The direction flags of each text piece (by index), decided over the paragraph's whole text: a
+        call that will be written counts as one right-to-left character (its «(» and «)» are `w:rtl`
+        runs), a line break ends a stretch, a scan page mark prints nothing (§5.6)."""
+        available = Counter(note.id for note in footnotes or [])
+        codes: list[str] = []
+        spans: dict[int, tuple[int, int]] = {}
+        position = 0
+        for index, (kind, item) in enumerate(pieces):
+            if kind == "text":
+                classes = bidi_classes(item.text)
+                spans[index] = (position, position + len(classes))
+                codes.append(classes)
+                position += len(classes)
+            elif isinstance(item, NoteRef):
+                if self.notes is not None and available[item.note] > 0:
+                    available[item.note] -= 1
+                    codes.append("R")
+                    position += 1
+            elif isinstance(item, LineBreak):
+                codes.append("|")
+                position += 1
+        flags = direction_flags("".join(codes))
+        return {index: flags[start:end] for index, (start, end) in spans.items()}
 
     def reference_run(self, comment_id: int) -> etree._Element:
         return run(w("commentReference", id=comment_id), rpr=rpr(rstyle="CommentReference"))

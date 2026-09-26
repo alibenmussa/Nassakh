@@ -7,10 +7,15 @@
 //     - each format has one state row (never exported, done, stale, queued, running, error); a cancelled
 //       export brings the previous file back
 //     - start → 202 the new row (409: the export already running, shown with «إلغاء»); the row is long-polled
-//       (`api:export?wait=4&since=<updated_at>`) until it is final, then the page payload is fetched once;
-//       failures back off 2 → 10 s; nothing is polled while the tab is hidden or when nothing runs; leaving the
-//       page never stops an export
-//     - cancel; the live region and the focus of §8.3; the menu's ↑/↓ and Esc
+//       (`api:export?wait=4&since=<updated_at>`, given up after 14 s: a hung connection is a failed poll) until
+//       it is final, then the page payload is fetched once (a refresh asked for while one is on the wire runs
+//       once more after it); failures back off 2 → 10 s and only a poll that succeeds clears the back-off and
+//       the pill; nothing is polled while the tab is hidden or when nothing runs; leaving the page never stops
+//       an export
+//     - answers can arrive out of order (a poll read before a cancel, a payload read before an export ended):
+//       the page keeps the newest version of every row it saw (`updated_at`), and a row it saw final never
+//       comes back as running
+//     - cancel; the live region and the focus of §8.3 (after a start, a 409 and a cancel); the menu's ↑/↓ and Esc
 //   exportBar          – the top bar (base.html header_actions, outside the root): the poll pills and the menu,
 //                        reading Alpine.store('exportPage').view
 // Pure helpers are on window.NassakhExport for the tests. Western digits everywhere; the relative times and the
@@ -22,6 +27,7 @@
   const hasDOM = typeof document !== 'undefined' && typeof document.querySelector === 'function';
   const ACTIVE = ['queued', 'running'];
   const WAIT_S = 4; // the long poll's wait (the API allows up to 5)
+  const POLL_TIMEOUT_MS = (WAIT_S + 10) * 1000; // a long poll with no answer by then is a failed poll
   const MIN_GAP_MS = 400; // between two polls of one row, whatever the server answered
   const RETRY_MS = 2000; // a failed poll waits 2, 4, 6, 8, then 10 s (= stage.js's back-off, capped at 10 s)
   const RETRY_MAX_MS = 10000;
@@ -174,6 +180,20 @@
     return items;
   }
 
+  // True when `row` is an older version of the export `had` is (a stale answer). An export only moves on
+  // (queued → running → done / error / cancelled): a row seen running never comes back as queued, one seen
+  // final never comes back as queued or running; within one stage an older `updated_at` never replaces a
+  // newer one.
+  const stamp = (row) => Date.parse((row && row.updated_at) || '');
+  const stage = (row) => (row.status === 'queued' ? 0 : row.status === 'running' ? 1 : 2);
+  function staler(row, had) {
+    if (!row || !had || had.id !== row.id) return false;
+    if (stage(row) !== stage(had)) return stage(row) < stage(had);
+    const a = stamp(row);
+    const b = stamp(had);
+    return Number.isFinite(a) && Number.isFinite(b) && a < b;
+  }
+
   // ↑/↓ inside a menu: the next enabled item (wrapping).
   function moveIn(menu, dir) {
     if (!menu || typeof menu.querySelectorAll !== 'function') return null;
@@ -193,7 +213,8 @@
   };
   const store = () => (typeof Alpine !== 'undefined' && typeof Alpine.store === 'function' ? Alpine.store('exportPage') : null);
 
-  // fetch wrapper: never throws; `{ ok, status, data, message }` with an Arabic message on failure.
+  // fetch wrapper: never throws; `{ ok, status, data, message }` with an Arabic message on failure. With
+  // `timeout` (ms) the request is given up after that long (a hung connection answers as a lost one).
   async function api(url, opts = {}) {
     const method = opts.method || 'GET';
     const init = { method, credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } };
@@ -202,14 +223,23 @@
       init.headers['X-CSRFToken'] = csrfToken();
       init.body = JSON.stringify(opts.body || {});
     }
+    let timer = null;
+    if (opts.timeout && typeof AbortController === 'function') {
+      const controller = new AbortController();
+      init.signal = controller.signal;
+      timer = setTimeout(() => controller.abort(), opts.timeout);
+    }
+    const settle = () => { if (timer !== null) { clearTimeout(timer); timer = null; } };
     let response;
     try {
       response = await fetch(url, init);
     } catch (_) {
+      settle();
       return { ok: false, status: 0, data: null, message: 'انقطع الاتصال بالخادم. تحقّق من الشبكة ثم أعد المحاولة.' };
     }
     let data = null;
     try { data = await response.json(); } catch (_) { data = null; }
+    settle();
     let message = data && typeof data === 'object' && (data.detail || data.message);
     if (!message) {
       if (response.status === 401) message = 'انتهت الجلسة. سجّل الدخول من جديد.';
@@ -228,6 +258,11 @@
     formats.forEach((f) => { values[f.key] = initialValues(f); errors[f.key] = null; busy[f.key] = ''; });
     const timers = {}; // format → the next poll of its active row
     const inflight = {}; // format → a poll on the wire
+    // export id → the newest version of its row this page has seen (answers may arrive out of order)
+    const seen = {};
+    const remember = (row) => { if (row && row.id != null && !staler(row, seen[row.id])) seen[row.id] = row; };
+    formats.forEach((f) => { remember(f.latest); remember(f.active); });
+    (cfg.items || []).forEach(remember);
     let tick = null;
     let hiddenAt = 0;
 
@@ -246,6 +281,7 @@
       pollState: 'ok', // ok | error | auth (the top bar's bk-poll pills)
       failures: 0,
       refreshing: false,
+      refreshAgain: false, // a refresh was asked for while one was on the wire: it runs once more
       stopped: false,
       now: Date.now(),
 
@@ -279,7 +315,7 @@
       get noteCount() { return this.readiness.filter((r) => r.level !== 'success').length; },
       get noteText() { return this.noteCount ? count(this.noteCount, NOTES) : ''; },
       get readyLevel() { return this.warnCount ? 'warn' : this.noteCount ? 'info' : 'success'; },
-      // a clear book: the all-clear row's message («لا ملاحظات؛ الكتاب جاهز للإخراج.») is the head's line, no rows
+      // a clear book: the all-clear row's message («كل الصفحات مُراجَعة ولا ملاحظات؛ …») is the head's line, no rows
       get clearText() {
         if (this.noteCount) return '';
         const clear = this.readiness.find((r) => r.level === 'success');
@@ -299,6 +335,8 @@
       fieldsOf,
       stateOf(f) { return stateOf(f, this.now); },
       stateKey(s) { return `${s.kind}:${s.row ? s.row.id : ''}`; },
+      // «إلغاء»'s key: the export it cancels, so queued → running keeps the same button (and its focus)
+      cancelKey(s) { return s.kind === 'queued' || s.kind === 'running' ? `active:${s.row.id}` : this.stateKey(s); },
       notesOf(f) { return notesOf(f, this.now); },
       fileWarnings(s) { return s && (s.kind === 'done' || s.kind === 'stale') ? fileWarnings(s.row) : []; },
       isFresh(f, s) { return Boolean(s && s.row && s.kind === 'done' && this.fresh[f.key] === s.row.id); },
@@ -372,15 +410,17 @@
           return true;
         }
         if (r.status === 409 && r.data && r.data.active) {
-          // already running (another tab, a double click): that export is shown, with «إلغاء»
+          // already running (another tab, a double click): that export is shown, with «إلغاء»; the focus goes
+          // to its status (the pressed «إخراج …» gives way to the running strip)
           this.errors[key] = { detail: r.message, fields: {} };
           this.applyRow(r.data.active);
+          this.focusIn(`[data-ex-status="${key}"]`);
           this.schedule(key, 0);
           return false;
         }
         if (r.status === 401) { this.pollState = 'auth'; this.stopped = true; }
+        // the card's alert (role="alert") reads the message out: not the live region too
         this.errors[key] = { detail: r.message, fields: (r.data && r.data.errors) || {} };
-        this.say(r.message);
         return false;
       },
       async cancel(key) {
@@ -390,11 +430,14 @@
         this.busy[key] = 'cancel';
         const r = await api(fill(this.urls.cancel, row.id), { method: 'POST', body: {} });
         this.busy[key] = '';
-        if (r.ok && r.data) { this.errors[key] = null; this.applyRow(r.data); return true; }
+        // the focused «إلغاء» goes with the running strip: the focus moves to «إخراج …» (else the status)
+        const refocus = () => this.focusIn(`[data-ex-go="${key}"]`, `[data-ex-status="${key}"]`);
+        if (r.ok && r.data) { this.errors[key] = null; this.applyRow(r.data); refocus(); return true; }
         if (r.status === 409 && r.data && r.data.row) {
           // it finished meanwhile: the finished row is shown, and why nothing was cancelled
           this.applyRow(r.data.row);
           this.errors[key] = { detail: r.message, fields: {} };
+          refocus();
           return false;
         }
         this.errors[key] = { detail: r.message, fields: {} };
@@ -402,19 +445,29 @@
       },
 
       // ------------------------------------------------------------ rows and the long poll
-      // A row from the server (POST, a poll, a cancel): the format's active or latest row, and the history.
+      // A row from the server (POST, a poll, a cancel): the format's active or latest row, and the history. An
+      // answer older than what the page already shows of that export is left out (false).
       applyRow(row) {
         const f = row && this.fmt(row.format);
-        if (!f) return;
+        if (!f || staler(row, seen[row.id])) return false;
+        seen[row.id] = row;
         const was = f.active;
         if (isActive(row)) {
-          f.active = row;
+          if (!isActive(was) || was.id <= row.id) f.active = row; // one export of a format runs at a time
         } else {
           if (was && was.id === row.id) f.active = null;
           if ((row.status === 'done' || row.status === 'error') && (!f.latest || f.latest.id <= row.id)) f.latest = row;
         }
         upsert(this.items, row);
         if (was && was.id === row.id && !isActive(row)) this.finished(f, row);
+        return true;
+      },
+      // the newest version of a row the page has: `row`, unless the page already saw a newer one
+      newest(row) {
+        if (!row || row.id == null) return row;
+        if (staler(row, seen[row.id])) return seen[row.id];
+        seen[row.id] = row;
+        return row;
       },
       finished(f, row) {
         clearTimeout(timers[f.key]);
@@ -446,11 +499,13 @@
         inflight[key] = true;
         const started = Date.now();
         const url = `${fill(this.urls.row, row.id)}?wait=${WAIT_S}&since=${encodeURIComponent(row.updated_at || '')}`;
-        const r = await api(url);
+        const r = await api(url, { timeout: POLL_TIMEOUT_MS });
         inflight[key] = false;
         if (r.status === 401 || r.status === 403) { this.stopped = true; this.pollState = 'auth'; return false; }
         if (r.status === 404) {
-          // the row is gone: the page is read again
+          // the row is gone: the page is read again; the server answered, so the trouble is over
+          this.failures = 0;
+          this.pollState = 'ok';
           if (f.active && f.active.id === row.id) f.active = null;
           this.refresh();
           return false;
@@ -463,33 +518,42 @@
         }
         this.failures = 0;
         this.pollState = 'ok';
-        this.applyRow(r.data);
+        this.applyRow(r.data); // (a stale answer changes nothing: the poll goes on from the newer row)
         const now = f.active;
         if (isActive(now)) this.schedule(key, now.id === row.id ? MIN_GAP_MS - (Date.now() - started) : 0);
         return true;
       },
-      // the bk-poll pill's click: every running export at once
+      // the bk-poll pill's click: every running export at once. The pill (and the back-off) stay until a poll
+      // succeeds.
       pollNow() {
-        this.failures = 0;
-        this.pollState = 'ok';
         return Promise.all(this.formats.filter((f) => isActive(f.active)).map((f) => this.poll(f.key)));
       },
       // The page payload once (after an export ended, back on the tab, a page restored from the cache): the
-      // book, the readiness, each format's form, notes and rows, the history. The options being chosen stay.
+      // book, the readiness, each format's form, notes and rows, the history. The options being chosen stay. A
+      // refresh asked for while one is on the wire is not dropped: it runs once more when that one answers (the
+      // first may have been read before the second export ended).
       async refresh() {
-        if (!this.urls.create || this.refreshing || this.stopped) return false;
+        if (!this.urls.create || this.stopped) return false;
+        if (this.refreshing) { this.refreshAgain = true; return false; }
         this.refreshing = true;
-        const r = await api(this.urls.create);
-        this.refreshing = false;
-        if (r.status === 401 || r.status === 403) { this.stopped = true; this.pollState = 'auth'; return false; }
-        if (!r.ok || !r.data) return false;
-        this.adopt(r.data);
-        return true;
+        let ok = false;
+        try {
+          do {
+            this.refreshAgain = false;
+            const r = await api(this.urls.create);
+            if (r.status === 401 || r.status === 403) { this.stopped = true; this.pollState = 'auth'; break; }
+            if (r.ok && r.data) { this.adopt(r.data); ok = true; }
+          } while (this.refreshAgain && !this.stopped);
+        } finally {
+          this.refreshing = false;
+        }
+        return ok;
       },
       adopt(data) {
         if (data.book) this.book = data.book;
         if (Array.isArray(data.readiness)) this.readiness = data.readiness;
-        const items = Array.isArray(data.items) ? data.items.slice() : this.items;
+        // the history as the server lists it, each row at its newest version this page has seen
+        const items = Array.isArray(data.items) ? data.items.map((item) => this.newest(item)) : this.items;
         (data.formats || []).forEach((next) => {
           const f = this.fmt(next.key);
           if (!f) return;
@@ -501,10 +565,14 @@
             const mine = this.values[f.key] || (this.values[f.key] = {});
             if (!(fd.key in mine) || (fd.kind === 'bool' && fd.disabled)) mine[fd.key] = values[fd.key];
           });
-          if (next.latest && (!f.latest || f.latest.id <= next.latest.id)) f.latest = next.latest;
+          const latest = this.newest(next.latest);
+          if (latest && !isActive(latest) && (!f.latest || f.latest.id <= latest.id)) f.latest = latest;
+          // an export this page saw end is never taken back as running (a payload read before it ended)
+          const active = next.active && !staler(next.active, seen[next.active.id]) ? next.active : null;
           const polling = isActive(f.active);
-          if (isActive(next.active) && (!polling || f.active.id <= next.active.id)) {
-            f.active = next.active;
+          if (isActive(active) && (!polling || f.active.id <= active.id)) {
+            seen[active.id] = active;
+            f.active = active;
             if (!polling) this.schedule(f.key, 0);
           }
           // an export started after this payload was read stays in the history
@@ -530,8 +598,15 @@
         const host = this.$root && typeof this.$root.querySelector === 'function' ? this.$root : (hasDOM ? document : null);
         return host ? host.querySelector(sel) : null;
       },
-      focusIn(sel) {
-        const run = () => { const el = this.q(sel); if (el && typeof el.focus === 'function') el.focus({ preventScroll: false }); };
+      // the focus to the first of `selectors` that can take it (there, enabled, shown), after Alpine's update
+      focusIn(...selectors) {
+        const run = () => {
+          for (const sel of selectors) {
+            const el = this.q(sel);
+            const shown = !el || typeof el.getClientRects !== 'function' || el.getClientRects().length > 0;
+            if (el && typeof el.focus === 'function' && !el.disabled && shown) { el.focus({ preventScroll: false }); return; }
+          }
+        };
         if (typeof this.$nextTick === 'function') this.$nextTick(run); else run();
       },
     };
@@ -539,7 +614,7 @@
 
   root.NassakhExport = Object.assign(root.NassakhExport || {}, {
     metaLine, fieldsOf, initialValues, stateOf, notesOf, fileWarnings, historyParts, historyTitle, historyRest, historyDot,
-    upsert, backoff, fill, absTime, moveIn, levelIcon, formatIcon, formatPurpose, exportPage,
+    upsert, staler, backoff, fill, absTime, moveIn, levelIcon, formatIcon, formatPurpose, exportPage,
   });
 
   document.addEventListener('alpine:init', () => {

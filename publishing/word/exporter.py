@@ -1,10 +1,11 @@
 """`DocxExporter` (PHASE6_SPEC §5.1, §6.3, §7): the Word format of the export pipeline.
 
 `export(job, progress)` runs prepare → (layout) → write → check: the book model of the exported text
-(with the editorial marks when comments are asked for), the page plan for the contents field (the live
-layout when it is current for the exported text, else one layout-only render), the uncertain words'
-readings (one query), the pure build, then the schema and integrity checks — an invalid file fails the
-export (`InvalidExport`, «الملف الناتج غير سليم»). `form` and `notes` feed the export page.
+(with the editorial marks when comments are asked for), the page plan for the contents field — only
+when the file prints one: the live layout when it is current for the exported text (the chapters that
+print, at their versions, with the same page setup), else one layout-only render —, the uncertain
+words' readings (one query), the pure build, then the schema and integrity checks — an invalid file
+fails the export (`InvalidExport`, «الملف الناتج غير سليم»). `form` and `notes` feed the export page.
 """
 
 from __future__ import annotations
@@ -38,11 +39,13 @@ from .options import (
     KASHIDA_LABEL,
     WORD_VERSION,
     WordOptions,
+    blank_verso_shows,
+    fallback_name,
     kashida_choices,
     note,
 )
 from .styles import widow_control
-from .writer import DocMeta, PagePlan, build_docx
+from .writer import DocMeta, PagePlan, build_docx, prints_contents
 
 log = logging.getLogger(__name__)
 
@@ -61,12 +64,23 @@ DOCX_OPTIONS: tuple[OptionSpec, ...] = (
 # ====================================================================== the page plan (§5.9)
 
 
-def live_plan(job: ExportJob) -> PagePlan | None:
-    """The live layout as a plan when it is current for the exported text: every chapter's laid-out
-    version equals the exported document's, the chapter set is the same, and the page setup's hash
-    matches (the manuscript version alone is not enough, §5.9)."""
+def printed_versions(job: ExportJob, book: Book | None = None) -> dict[str, str]:
+    """The exported document's chapter versions for the chapters that print: a chapter with no block
+    to print (an empty front chapter) gets no pages, so a layout's chapter list never has it. `book` is
+    the job's book model (built when not given)."""
+    if book is None:
+        book = book_model(job.document, job.setup, title=job.title, author=job.author)
+    printed = {chapter.id for chapter in book.chapters if chapter.blocks}
+    return {key: value for key, value in job.chapter_versions.items() if key in printed}
+
+
+def current_live(job: ExportJob, book: Book | None = None) -> tuple[object, list[dict]] | None:
+    """The live layout row and its pages when they are current for the exported text: every printed
+    chapter's laid-out version equals the exported document's, the chapter set is the same, and the
+    page setup's hash matches (the manuscript version alone is not enough, §5.9); None otherwise. The
+    row is read once."""
     from publishing.preview import setup_hash
-    from publishing.relayout import live_of, live_pages
+    from publishing.relayout import live_of, read_json
 
     live = live_of(job.book_id)
     if live is None or live.setup_hash != setup_hash(job.setup):
@@ -76,11 +90,20 @@ def live_plan(job: ExportJob) -> PagePlan | None:
         for item in live.chapters or []
         if isinstance(item, dict) and item.get("id")
     }
-    if laid_out != dict(job.chapter_versions):
+    if laid_out != printed_versions(job, book):
         return None
-    pages = live_pages(job.book_id)
+    pages = list((read_json(live.path) or {}).get("pages") or [])
     if not pages:
         return None
+    return live, pages
+
+
+def live_plan(job: ExportJob, book: Book | None = None) -> PagePlan | None:
+    """The live layout as a plan when it is current for the exported text (`current_live`)."""
+    found = current_live(job, book)
+    if found is None:
+        return None
+    live, pages = found
     return PagePlan.from_pages(pages, "live", live.chapters)
 
 
@@ -101,9 +124,9 @@ def render_plan(job: ExportJob, progress: Progress) -> PagePlan:
     return PagePlan.from_pages(rendered.layout or [], "render", rendered.chapters)
 
 
-def page_plan(job: ExportJob, progress: Progress) -> PagePlan:
+def page_plan(job: ExportJob, progress: Progress, book: Book | None = None) -> PagePlan:
     """The preview's pages for the contents numbers: the live layout when current, else a render."""
-    plan = live_plan(job)
+    plan = live_plan(job, book)
     return plan if plan is not None else render_plan(job, progress)
 
 
@@ -138,7 +161,9 @@ def static_notes(
     layout_current: bool,
     book_id: int | None = None,
 ) -> list[dict]:
-    """The known differences of a Word file that follow from the setup and the faces alone."""
+    """The known differences of a Word file that follow from the setup and the faces alone
+    (`has_contents`: the file prints the contents field; `layout_current`: its page numbers come from
+    the live layout, so no layout runs first)."""
     plan = FacePlan(fonts)
     rows: list[dict] = []
     if plan.embedded_faces():
@@ -146,16 +171,21 @@ def static_notes(
     for face in plan.not_embedded():
         rows.append(note("font_not_embedded", name=face.name))
     for missing in fonts.missing:
-        row = note("font_missing", name=missing.get("name") or missing.get("key") or "")
+        row = note(
+            "font_missing",
+            name=missing.get("name") or missing.get("key") or "",
+            fallback=fallback_name(missing.get("fallback")),
+        )
         if book_id is not None:
             row["action"] = {"label": "الخطوط", "url": f"/books/{book_id}/layout/?tab=format"}
         rows.append(row)
     if has_contents:
         rows.append(note("toc_update"))
-    if not layout_current:
-        rows.append(note("layout_first"))
-    if setup.chapter_opening == "recto" and setup.page_number != "none":
-        rows.append(note("blank_versos"))
+        if not layout_current:  # the layout runs only for the contents' page numbers
+            rows.append(note("layout_first"))
+    shown = blank_verso_shows(setup)
+    if shown:
+        rows.append(note("blank_versos", what=shown))
     if setup.print_source_pages:
         rows.append(note("source_pages"))
     _on, approximate = widow_control(setup)
@@ -164,13 +194,13 @@ def static_notes(
     return rows
 
 
-def _has_contents(setup: PageSetup, document: dict | None) -> bool:
-    """True when the book prints a contents page: the setup asks for one and there is a heading."""
-    from editor import document as doc
-
+def _prints_contents(row, setup: PageSetup, document: dict | None) -> bool:
+    """True when the book's Word file prints a contents field (`writer.prints_contents` on the book
+    model: the setup asks for one and there is a chapter or section title)."""
     if not setup.contents or not document:
         return False
-    return any(chapter.kind == "chapter" for chapter in doc.chapters_of(document))
+    model = book_model(document, setup, title=row.title, author=row.author)
+    return prints_contents(model)
 
 
 # ====================================================================== the exporter
@@ -225,7 +255,7 @@ class DocxExporter:
         return static_notes(
             setup,
             fonts,
-            has_contents=_has_contents(setup, document),
+            has_contents=_prints_contents(book, setup, document),
             layout_current=current,
             book_id=book.pk,
         )
@@ -242,7 +272,8 @@ class DocxExporter:
         readings = readings_of(job) if options.comments else None
         if progress.cancelled():
             raise ExportCancelled
-        plan = page_plan(job, progress)
+        contents = prints_contents(book)
+        plan = page_plan(job, progress, book) if contents else None  # only the contents need page numbers
         if progress.cancelled():
             raise ExportCancelled
         progress("write")
@@ -266,15 +297,18 @@ class DocxExporter:
         warnings = static_notes(
             setup,
             fonts,
-            has_contents=book.front.contents and bool(book.contents()),
-            layout_current=plan.source == "live",
+            has_contents=contents,
+            layout_current=plan is None or plan.source == "live",
             book_id=job.book_id,
         )
         warnings = [row for row in warnings if row["code"] != "font_embedded"] + list(result.warnings)
         stats = dict(result.stats)
         stats["validated"] = validate
         log_lines = list(result.log)
-        log_lines.append(f"plan {plan.source}: {plan.page_count} pages, {len(plan.headings)} headings")
+        if plan is not None:
+            log_lines.append(f"plan {plan.source}: {plan.page_count} pages, {len(plan.headings)} headings")
+        else:
+            log_lines.append("no contents field: no page plan")
         return ExportResult(data=result.data, page_count=None, warnings=warnings, stats=stats, log=log_lines)
 
 
@@ -297,4 +331,14 @@ def build_book(job: ExportJob, options: WordOptions, *, chapter_ids=None, readin
     return build_docx(book, fonts, options, meta=meta, readings=readings, **kwargs)
 
 
-__all__ = ["DOCX_OPTIONS", "Book", "DocxExporter", "build_book", "page_plan", "readings_of", "static_notes"]
+__all__ = [
+    "DOCX_OPTIONS",
+    "Book",
+    "DocxExporter",
+    "build_book",
+    "current_live",
+    "page_plan",
+    "printed_versions",
+    "readings_of",
+    "static_notes",
+]

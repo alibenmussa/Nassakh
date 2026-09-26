@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -163,6 +164,7 @@ class NullProgress:
 BAD_CHOICE = "قيمة غير معروفة لهذا الخيار."
 BAD_BOOL = "يُنتظر «نعم» أو «لا» لهذا الخيار."
 BAD_NUMBER = "يُنتظر رقم بين {low} و{high}."
+BAD_NUMBER_ANY = "يُنتظر رقم."  # a number option without bounds
 
 
 class OptionsError(ValueError):
@@ -192,7 +194,8 @@ class OptionSpec:
     text: Mapping[Any, str] = field(default_factory=dict)
 
     def parse(self, value: Any) -> Any:
-        """The value normalised (None: the default); raises `ValueError` with an Arabic message."""
+        """The value normalised (None: the default); raises `ValueError` with an Arabic message (a number
+        that is not finite — `inf`, `nan` — too: the API answers 400, never 500)."""
         if value is None:
             return self.default
         if self.kind == "bool":
@@ -215,8 +218,10 @@ class OptionSpec:
                 raise ValueError(self._range_message())
             try:
                 number = float(value.strip()) if isinstance(value, str) else float(value)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 raise ValueError(self._range_message()) from None
+            if not math.isfinite(number):  # «inf», «nan», 1e400: never a value (and not JSON)
+                raise ValueError(self._range_message())
             if self.kind == "int":
                 if number != int(number):
                     raise ValueError(self._range_message())
@@ -227,7 +232,9 @@ class OptionSpec:
         raise ValueError(BAD_CHOICE)
 
     def _range_message(self) -> str:
-        low, high = self.bounds if self.bounds is not None else (0, 0)
+        if self.bounds is None:
+            return BAD_NUMBER_ANY
+        low, high = self.bounds
         return BAD_NUMBER.format(low=_number_text(low), high=_number_text(high))
 
 
@@ -395,6 +402,7 @@ FAKE_KASHIDA: tuple[tuple[str, str, str, str], ...] = (
     ("medium", "متوسطة", "كشيدة متوسطة", "يغيّر Word فواصل الأسطر فيطول الكتاب عن المعاينة."),
     ("high", "قوية", "كشيدة قوية", "يغيّر Word فواصل الأسطر فيطول الكتاب كثيرًا عن المعاينة."),
 )
+FAKE_KASHIDA_LABEL = "الكشيدة"
 FAKE_COMMENTS_LABEL = "تعليقات على الكلمات غير المؤكَّدة"
 FAKE_COMMENTS_HINT = (
     "تعليق Word لكل كلمة بقراءاتها وصفحتها الأصلية، للمدقّق. نسخة للمراجعة لا للمطبعة: يطبع Word"
@@ -410,6 +418,12 @@ FAKE_DOCX_OPTIONS: tuple[OptionSpec, ...] = (
     ),
     OptionSpec("comments", "bool", False, text={True: "تعليقات"}),
 )
+FAKE_BLEEDS: tuple[tuple[int, str, str, str], ...] = (
+    (0, "بلا", "بلا نزف", "الصفحة بمقاس القطع تمامًا، كما في المعاينة."),
+    (3, "3 مم", "نزف 3 مم", "تتسع الصفحة 3 مم من كل جهة حول القطع، وهو ما تطلبه أغلب المطابع."),
+    (5, "5 مم", "نزف 5 مم", "تتسع الصفحة 5 مم من كل جهة حول القطع."),
+)
+FAKE_CROP_MARKS_HINT = "خطوط دقيقة خارج الصفحة تُري المطبعة حدود القطع."
 FAKE_PRINT_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec("bleed_mm", "choice", 0, choices=(0, 3, 5), text={3: "نزف 3 مم", 5: "نزف 5 مم"}),
     OptionSpec("crop_marks", "bool", False, text={True: "علامات القص"}),
@@ -420,7 +434,8 @@ class FakeExporter:
     """A test exporter: `data` as the file, `steps` reported in order (each followed by `on_step(step,
     job, progress)` when given: a test edits the book, cancels, …), `error` raised after the steps;
     `ExportCancelled` as soon as `progress.cancelled()` says so. `calls` keeps every job it was given.
-    The docx fake has the Word options (kashida, comments) and a form block of the §3.2 shape."""
+    The docx and print fakes have the real options (kashida, comments; bleed, crop marks) and form
+    blocks of the real exporters' shape (§3.2, the fixtures); screen and EPUB have none."""
 
     def __init__(
         self,
@@ -455,7 +470,23 @@ class FakeExporter:
         self.calls: list[ExportJob] = []
 
     def form(self, book, values: dict) -> dict:
-        if self.format != "docx":
+        if self.format == "print_pdf" and self.options == FAKE_PRINT_OPTIONS:
+            return {
+                "bleed_mm": {
+                    "value": values.get("bleed_mm", 0),
+                    "label": "النزف",
+                    "choices": [
+                        {"value": value, "label": short, "title": title, "hint": hint}
+                        for value, short, title, hint in FAKE_BLEEDS
+                    ],
+                },
+                "crop_marks": {
+                    "value": bool(values.get("crop_marks")),
+                    "label": "علامات القص",
+                    "hint": FAKE_CROP_MARKS_HINT,
+                },
+            }
+        if self.format != "docx" or self.options != FAKE_DOCX_OPTIONS:
             return {key: {"value": value} for key, value in values.items()}
         from .readiness import uncertain_counts
 
@@ -463,6 +494,7 @@ class FakeExporter:
         return {
             "kashida": {
                 "value": values.get("kashida", "low"),
+                "label": FAKE_KASHIDA_LABEL,
                 "choices": [
                     {"value": key, "label": short, "title": title, "hint": hint}
                     for key, short, title, hint in FAKE_KASHIDA

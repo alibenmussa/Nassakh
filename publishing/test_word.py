@@ -575,10 +575,18 @@ def test_top_outer_numbers_put_the_number_at_the_outer_edge_with_a_centre_tab():
     assert [ooxml.local(c) for c in odd.find(f".//{W}p")].count("r") >= 6
     even_text = "".join(t.text for t in even.iter(f"{W}t"))
     assert even_text.startswith("كتاب التجربة") and even_text.endswith("1")
-    assert "".join(t.text for t in first.iter(f"{W}t")) == "1"  # the opener keeps only the number
+    # the opener keeps only the number, on its own outer edge: an opener may be odd or even here
+    codes = "".join(t.text for t in first.iter(f"{W}instrText"))
+    assert codes.count("IF") == 2 and codes.count("=MOD(") == 2 and "كتاب" not in codes
     assert "word/footer1.xml" not in parts(result.data)
     sections = list(xml(result.data, "word/document.xml").iter(f"{W}sectPr"))
     assert sections[-1].find(f"{W}headerReference") is None  # same book title: inherited
+    recto = build(source, sheet(page_number="top_outer", running_header="book", chapter_opening="recto"))
+    first = xml(recto.data, "word/header3.xml")  # every opener is odd: the number at the left, no field
+    assert (
+        "".join(t.text for t in first.iter(f"{W}t")) == "1"
+        and first.find(f".//{W}jc").get(f"{W}val") == "left"
+    )
 
 
 def test_page_numbers_none_and_bottom_center():
@@ -1181,7 +1189,7 @@ def test_export_book_command_writes_a_word_file(word_book, tmp_path):
     out = io.StringIO()
     call_command("export_book", str(word_book.pk), "--format", "docx", "--out", str(tmp_path), stdout=out)
     files = list(tmp_path.glob("*.docx"))
-    assert len(files) == 1 and files[0].name == "كتاب الترتيب.docx"
+    assert len(files) == 1 and files[0].name == "كتاب التجربة.docx"  # the title the file prints
     check(files[0].read_bytes())
 
 

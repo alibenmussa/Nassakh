@@ -70,7 +70,9 @@ def fake(monkeypatch):
 def book(db):
     book = Book.objects.create(title="كتابي", author="المؤلف")
     run = AssemblyRun.objects.create(book=book, status="done")
-    Manuscript.objects.create(book=book, document=long_book(chapters=2, paragraphs=3), version=1, run=run)
+    source = long_book(chapters=2, paragraphs=3)
+    source["content"][0]["attrs"]["text"] = book.title  # the manuscript's title node, as assembly writes it
+    Manuscript.objects.create(book=book, document=source, version=1, run=run)
     return book
 
 
@@ -738,6 +740,8 @@ def test_the_fixtures_follow_the_contract():
 
 
 def test_the_real_payloads_match_the_fixtures(book, editor, fake, monkeypatch):
+    for key in ("print_pdf", "screen_pdf", "epub"):  # every format available, as with the real exporters
+        exporters.register(FakeExporter(key))
     AssemblyRun.objects.create(book=book, status="queued")
     model_row = fixture("row-done")
     finished = exports.request_export(book, "docx", {"comments": True}, editor)
@@ -768,7 +772,7 @@ def test_the_real_payloads_match_the_fixtures(book, editor, fake, monkeypatch):
     assert (
         page["formats"][0]["active"]["id"] == active.pk and page["formats"][0]["latest"]["id"] == finished.pk
     )
-    assert [item["available"] for item in page["formats"]] == [True, False, False, False]
+    assert [item["available"] for item in page["formats"]] == [True, True, True, True]
     cancelled = exports.cancel_export(active)
     same_shape(exports.export_payload(cancelled, editor), fixture("row-cancelled"))
     Export.objects.create(
@@ -793,3 +797,412 @@ def test_the_real_payloads_match_the_fixtures(book, editor, fake, monkeypatch):
     assert response.json() == fixture("response-no-manuscript")
     response = post(logged(editor), reverse("api:export_cancel", args=[book.pk, finished.pk]))
     same_shape(response.json(), fixture("response-finished"))
+
+
+# ====================================================================== the Phase 6 review (P1–P8)
+
+
+def paged(book, statuses: dict[int, str], *, included=(), excluded=()) -> dict[int, ScanPage]:
+    """Scan pages of `book` with these statuses; the manuscript's run includes the pages `included` (as
+    they are now: no review drift)."""
+    from assembly.services import EMPTY_SIGNATURE
+
+    pages = {
+        number: ScanPage.objects.create(
+            book=book,
+            number=number,
+            source_index=number - 1,
+            status=status,
+            is_excluded=number in excluded,
+        )
+        for number, status in statuses.items()
+    }
+    run = Manuscript.objects.get(book=book).run
+    run.included = {
+        str(pages[n].pk): {"number": n, "reviewed": pages[n].status != "ocr_done", "sig": EMPTY_SIGNATURE}
+        for n in included
+    }
+    run.save()
+    return pages
+
+
+def test_readiness_lists_the_unreviewed_and_the_missing_pages(book):
+    """P1: the book's pages still as the models read them, and the pages left out of it."""
+    statuses = {n: "reviewed" for n in range(1, 11)} | {3: "ocr_done", 4: "ocr_done", 7: "ocr_done"}
+    statuses |= {11: "ocr_done", 12: "layout_done", 13: "error", 14: "ocr_done"}
+    paged(book, statuses, included=range(1, 11), excluded=(14,))
+    found = rows_of(book)
+    codes = [item["code"] for item in readiness.book_readiness(Book.objects.get(pk=book.pk))]
+    assert codes[:2] == ["pages_unreviewed", "pages_missing"] and "clear" not in found
+    unreviewed = found["pages_unreviewed"][0]
+    assert unreviewed == {
+        "code": "pages_unreviewed",
+        "level": "warn",
+        "message": "3 صفحات في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 3، 4، 7.",
+        "action": {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"},
+    }
+    missing = found["pages_missing"][0]  # 11 left out unreviewed (reviewable now), 12 processing, 13 in error
+    assert missing["message"] == "3 صفحات لم تدخل الكتاب بعد: 11، 12، 13."
+    assert missing["action"] == {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"}
+    ScanPage.objects.filter(book=book, number=11).update(is_excluded=True)  # only the pipeline's pages left
+    missing = rows_of(book)["pages_missing"][0]
+    assert missing["message"] == "صفحتان لم تدخلا الكتاب بعد: 12، 13."
+    assert missing["action"] == {"label": "المعالجة", "url": f"/books/{book.pk}/"}
+
+
+def test_the_page_messages_agree_with_their_numbers():
+    assert (
+        readiness.unreviewed_message([3]) == "صفحة واحدة في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 3."
+    )
+    assert readiness.unreviewed_message([3, 4]) == (
+        "صفحتان في الكتاب لم تُراجَعا بعد؛ نصّهما كما قرأته النماذج: 3، 4."
+    )
+    assert readiness.unreviewed_message(list(range(3, 80))) == (
+        "77 صفحة في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 3، 4، 5، 6، 7، 8، 9، 10…"
+    )
+    assert readiness.missing_message([91]) == "صفحة واحدة لم تدخل الكتاب بعد: 91."
+    assert readiness.missing_message([91, 92]) == "صفحتان لم تدخلا الكتاب بعد: 91، 92."
+    assert readiness.missing_message(list(range(80, 91))) == (
+        "11 صفحة لم تدخل الكتاب بعد: 80، 81، 82، 83، 84، 85، 86، 87…"
+    )
+    assert readiness.stray_notes_message(3, "(1)", [5, 12, 30]) == (
+        "3 فقرات في أواخر صفحاتها تبدأ بعلامة حاشية مثل «(1)» ولم تُربَط حاشيةً: ص 5، 12، 30."
+    )
+    assert readiness.stray_notes_message(1, "*", [9]) == (
+        "فقرة واحدة في آخر صفحتها تبدأ بعلامة حاشية مثل «*» ولم تُربَط حاشيةً: ص 9."
+    )
+    assert readiness.stray_notes_message(2, "(1)", [5, 9]) == (
+        "فقرتان في أواخر صفحاتهما تبدآن بعلامة حاشية مثل «(1)» ولم تُربَطا حاشيةً: ص 5، 9."
+    )
+
+
+def test_a_book_built_from_raw_ocr_is_never_ready(book):
+    """P1 (the review's probe): every page included unreviewed, no uncertain mark left — not «جاهز»."""
+    paged(book, {1: "ocr_done", 2: "ocr_done", 3: "ocr_done"}, included=(1, 2, 3))
+    found = rows_of(book)
+    assert "clear" not in found
+    assert found["pages_unreviewed"][0]["message"] == (
+        "3 صفحات في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 1، 2، 3."
+    )
+
+
+def test_clear_only_when_every_page_of_the_book_is_reviewed(book):
+    paged(book, {1: "reviewed", 2: "assembled", 3: "reviewed"}, included=(1, 2, 3))
+    assert rows_of(book) == {"clear": [{"code": "clear", "level": "success", "message": readiness.CLEAR}]}
+    assert readiness.CLEAR == "كل الصفحات مُراجَعة ولا ملاحظات؛ الكتاب جاهز للإخراج."
+    ScanPage.objects.filter(book=book).delete()
+    paged(book, {1: "reviewed", 2: "assembled", 3: "ocr_done"}, included=(1, 2, 3))
+    assert set(rows_of(book)) == {"pages_unreviewed"}  # one raw page: no «جاهز»
+
+
+def notes_document() -> dict:
+    """Pages 5–12: page-end note paragraphs (flagged: 5, 9), and what must not be flagged."""
+    words = " ".join(["كلمة"] * 90)
+    return document(
+        heading("h1", "الفصل الأول", pages=(5,)),
+        para("p1", "نص الصفحة الخامسة وهو طويل بما يكفي.", pages=(5,)),
+        para("n1", "(١) قال مصححه: في الأصل «بياض».", pages=(5,)),  # page end, Arabic-Indic digit: flagged
+        para("p2", "نص الصفحة السادسة يسبق قائمة.", pages=(6,)),
+        para("l1", "(1) أولًا ما قيل في الباب.", pages=(6,)),  # a list in the middle of the page
+        para("l2", "(2) ثانيًا ما قيل بعده.", pages=(6,)),
+        para("p3", "ويكمل النص بعد القائمة.", pages=(6,)),
+        para("p4", "نص الصفحة السابعة.", pages=(7,)),
+        para("n2", "(22) رقم أكبر من أرقام الحواشي.", pages=(7,)),  # n > 15
+        para("l3", "(1) فقرة أولى في صفحة كلها مرقّمة.", pages=(8,)),  # the whole page is the run
+        para("l4", "(2) فقرة ثانية في الصفحة نفسها.", pages=(8,)),
+        para("p5", "نص الصفحة التاسعة.", pages=(9,)),
+        para("n3", "* تنبيه من الناشر على هذه الصفحة.", pages=(9,)),  # «*»: flagged
+        para("p6", "نص الصفحة العاشرة.", pages=(10,)),
+        para("n4", f"(3) {words}", pages=(10,)),  # more than 80 words
+        para("p7", "نص الصفحة الحادية عشرة.", pages=(11,)),
+        para("s1", "* * *", pages=(11,)),  # a separator typed as text
+        para("p8", "نص الصفحة الثانية عشرة.", pages=(12,)),
+        para("n5", "[2] حاشية تمتد إلى الصفحة التالية.", pages=(12, 13)),  # two source pages
+        para("q1", "(4) اقتباس في آخر الصفحة.", pages=(13,), style="quote"),  # not a body paragraph
+    )
+
+
+def test_stray_notes_are_page_end_paragraphs_that_start_with_a_note_marker(book):
+    Manuscript.objects.filter(book=book).update(document=notes_document())
+    found = readiness.stray_notes(notes_document())
+    assert [(note.block, note.page, note.marker) for note in found] == [("n1", 5, "(1)"), ("n3", 9, "*")]
+    row = rows_of(book)["stray_notes"][0]
+    assert row["level"] == "warn" and row["message"] == (
+        "فقرتان في أواخر صفحاتهما تبدآن بعلامة حاشية مثل «(1)» ولم تُربَطا حاشيةً: ص 5، 9."
+    )
+    # the book page cannot open a block yet: the link opens the first one's chapter
+    assert row["action"] == {"label": "عرض", "url": f"/books/{book.pk}/layout/?chapter=h1"}
+
+
+def test_note_markers():
+    marker = readiness.note_marker
+    assert (
+        marker("(١) قال مصححه") == "(1)" and marker(" [3] حاشية") == "[3]" and marker("( 15 ) نص") == "(15)"
+    )
+    assert marker("* تنبيه") == "*" and marker("\u200f(2) نص") == "(2)"
+    for plain in ("(22) نص", "(0) نص", "(1)", "* * *", "نص (1)", "[2) نص", "(٥)"):
+        assert marker(plain) is None, plain
+
+
+def test_a_running_export_is_judged_by_its_heartbeat_not_its_creation(book, editor, fake, monkeypatch):
+    """P2: an export that waited 31 minutes in the queue and runs now is not abandoned (it was, from
+    `created_at`), and the format stays busy."""
+    monkeypatch.setattr(exports, "_enqueue", lambda row: None)
+    row = exports.request_export(book, "docx", {}, editor)
+    now = timezone.now()
+    Export.objects.filter(pk=row.pk).update(
+        created_at=now - timedelta(minutes=36),
+        started_at=now - timedelta(minutes=5),
+        status="running",
+        task_id="t-1",
+        progress={"step": "layout", "done": 3, "total": 4},
+        updated_at=now - timedelta(seconds=1),
+    )
+    row.refresh_from_db()
+    assert not exports.abandoned(row, now)
+    assert exports.export_payload(row, editor)["status"] == "running"
+    with pytest.raises(exports.ExportConflict):
+        exports.request_export(book, "docx", {}, editor)
+    # still reporting, but past the soft limit plus 5 minutes since it started: the worker's limit has hit it
+    Export.objects.filter(pk=row.pk).update(started_at=now - timedelta(minutes=36))
+    row.refresh_from_db()
+    assert exports.abandoned(row, now)
+
+
+def test_a_dead_worker_frees_the_format_after_ten_silent_minutes(book, editor, fake, monkeypatch):
+    """P2: a worker killed right after the claim leaves a running row that never moves again."""
+    monkeypatch.setattr(exports, "_enqueue", lambda row: None)
+    row = exports.request_export(book, "docx", {}, editor)
+    now = timezone.now()
+    Export.objects.filter(pk=row.pk).update(
+        started_at=now - timedelta(minutes=9),
+        status="running",
+        task_id="t-dead",
+        updated_at=now - timedelta(minutes=9),
+    )
+    row.refresh_from_db()
+    assert not exports.abandoned(row, now)  # nine silent minutes: still running
+    Export.objects.filter(pk=row.pk).update(
+        started_at=now - timedelta(minutes=11), updated_at=now - timedelta(minutes=11)
+    )
+    row.refresh_from_db()
+    payload = exports.export_payload(row, editor)
+    assert payload["status"] == "error" and payload["error"] == exports.ABANDONED
+    second = exports.request_export(book, "docx", {}, editor)  # accepted: the dead one is closed
+    row.refresh_from_db()
+    assert row.status == "error" and row.error == exports.ABANDONED and second.status == "queued"
+
+
+def test_the_reporter_beats_while_a_long_step_runs(book, editor, fake, monkeypatch):
+    """P2: `cancelled()` moves `updated_at` once `heartbeat_s` passed without a report."""
+    row = queued(book, monkeypatch, editor)
+    before = timezone.now() - timedelta(minutes=5)
+    Export.objects.filter(pk=row.pk).update(status="running", updated_at=before)
+    reporter = exports.Reporter(row.pk, heartbeat_s=0.0)
+    assert not reporter.cancelled()
+    row.refresh_from_db()
+    assert row.updated_at > before + timedelta(minutes=4)
+    Export.objects.filter(pk=row.pk).update(status="cancelled")
+    assert reporter.cancelled()  # the beat touched no running row: cancelled
+
+
+def test_a_file_that_cannot_be_deleted_keeps_its_row_for_the_next_prune(book, monkeypatch):
+    """P3: retention never leaves a file without its row."""
+    rows = [done_row(book, data=f"file {i}".encode()) for i in range(6)]
+    oldest = rows[0]
+    path = oldest.file.name
+    real_delete = default_storage.delete
+
+    def refuse(name):
+        if name == path:
+            raise PermissionError(13, "Permission denied", name)
+        return real_delete(name)
+
+    monkeypatch.setattr(default_storage, "delete", refuse)
+    assert exports.prune(book.pk, "docx") == 0
+    assert Export.objects.filter(pk=oldest.pk).exists() and default_storage.exists(path)
+    monkeypatch.setattr(default_storage, "delete", real_delete)
+    assert exports.prune(book.pk, "docx") == 1  # the next prune tries again
+    assert not Export.objects.filter(pk=oldest.pk).exists() and not default_storage.exists(path)
+
+
+def test_an_interrupted_finish_takes_its_file_with_it(book, editor, fake, monkeypatch):
+    """P3: a timeout right after the file is written (before the row records it) leaves no file."""
+    real_save = default_storage.save
+    saved = []
+
+    def save_then_time_out(name, content, **kwargs):
+        saved.append(real_save(name, content, **kwargs))
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(exports.default_storage, "save", save_then_time_out)
+    row = exports.request_export(book, "docx", {}, editor)
+    assert row.status == "error" and row.error.startswith(exports.TIMEOUT) and not row.file
+    assert saved and not default_storage.exists(saved[0])
+
+
+def test_the_sweep_removes_only_the_files_no_row_records(book, editor, fake, monkeypatch):
+    """P3: a file left by a worker killed between the write and the update goes; a running export's file
+    and the recorded ones stay."""
+    kept = done_row(book)
+    running = queued(book, monkeypatch, editor)
+    Export.objects.filter(pk=running.pk).update(status="running")
+    folder = f"books/{book.pk}/exports"
+    orphan = default_storage.save(f"{folder}/9999.docx", ContentFile(b"lost"))
+    writing = default_storage.save(f"{folder}/{running.pk}.docx", ContentFile(b"being written"))
+    assert exports.sweep(book.pk) == 1
+    assert not default_storage.exists(orphan)
+    assert default_storage.exists(writing) and default_storage.exists(kept.file.name)
+    Export.objects.filter(pk=running.pk).update(status="error")  # it failed: its file is no one's now
+    exports.prune(book.pk, "docx")  # every prune sweeps
+    assert not default_storage.exists(writing) and default_storage.exists(kept.file.name)
+    assert exports.sweep(Book.objects.create(title="بلا ملفات").pk) == 0  # no folder: nothing to do
+
+
+def test_the_file_is_named_after_the_title_it_prints(book, editor, fake, monkeypatch):
+    """P4: «بيانات الكتاب» first, then the manuscript's title node, then the book's own title — the order
+    of the title page and the file's properties."""
+    from publishing.model import book_model, page_setup
+    from publishing.preview import stylesheet_for
+
+    Book.objects.filter(pk=book.pk).update(title="scan-0042")
+    StyleSheet.objects.create(book=book, front_matter={"fields": {"title": "الأمالي", "author": "القالي"}})
+    fresh = Book.objects.get(pk=book.pk)
+    monkeypatch.setattr(exports, "_enqueue", lambda row: None)
+    queued_row = exports.request_export(fresh, "docx", {"comments": True}, editor)
+    assert queued_row.filename == "الأمالي - مع التعليقات.docx"  # named so from the start
+    done = exports.run_export(queued_row.pk, "task-1")
+    assert done.status == "done" and done.filename == "الأمالي - مع التعليقات.docx"
+    response = logged(editor).get(reverse("publishing:export_download", args=[book.pk, done.pk]))
+    assert f"filename*=utf-8''{quote(done.filename)}" in response["Content-Disposition"]
+    # the same order as the book model, whatever is given
+    source = Manuscript.objects.get(book=book).document
+    untitled = document(para("p1", "نص"), title="")
+    for sheet, doc, fallback in (
+        ({"front_matter": {"fields": {"title": "الأمالي"}}}, source, "scan-0042"),
+        ({}, source, "scan-0042"),
+        ({}, untitled, "scan-0042"),
+    ):
+        setup = page_setup(sheet)
+        printed = book_model(doc, setup, title=fallback).front.title
+        assert exports.printed_title(doc, setup, fallback) == printed
+    assert exports.printed_title(untitled, page_setup(stylesheet_for(fresh)), "scan-0042") == "الأمالي"
+
+
+def test_export_book_names_the_file_after_the_printed_title(book, fake, tmp_path):
+    StyleSheet.objects.create(book=book, front_matter={"fields": {"title": "الأمالي"}})
+    call_command("export_book", str(book.pk), "--format", "docx", "--out", str(tmp_path))
+    assert (tmp_path / "الأمالي.docx").read_bytes() == fake.data
+
+
+def test_the_book_lock_does_not_conflict_with_a_foreign_key_check(book, editor, fake, monkeypatch):
+    """P5: FOR NO KEY UPDATE (a deferred foreign-key check takes FOR KEY SHARE on the book at commit:
+    with FOR UPDATE, the IntegrityError fallback deadlocks on PostgreSQL). SQLite takes no row lock."""
+    from django.db.models import QuerySet
+
+    asked: list[dict] = []
+    original = QuerySet.select_for_update
+
+    def record(self, *args, **kwargs):
+        if self.model is Book:
+            asked.append(kwargs)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(QuerySet, "select_for_update", record)
+    queued(book, monkeypatch, editor)
+    assert asked == [{"no_key": True}]
+
+
+def test_the_long_poll_reads_the_status_only_and_the_row_once(book, editor, fake, monkeypatch):
+    """P6: while waiting, only the status and the times are read (every 0.25 s); the row once, at the
+    end, when it moved."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    row = queued(book, monkeypatch, editor)
+    monkeypatch.setattr(exports, "MAX_WAIT_S", 1.0)
+    assert exports.WAIT_STEP_S >= 0.25
+    with CaptureQueriesContext(connection) as ctx:
+        same = exports.wait_for(row, 5, row.updated_at)
+    assert same is row and 3 <= len(ctx.captured_queries) <= 5
+    assert all('"inputs"' not in query["sql"] for query in ctx.captured_queries)  # never the whole row
+    Export.objects.filter(pk=row.pk).update(
+        status="running", progress={"step": "write"}, updated_at=timezone.now()
+    )
+    with CaptureQueriesContext(connection) as ctx:
+        moved = exports.wait_for(row, 5, row.updated_at)
+    assert moved.status == "running" and moved.progress == {"step": "write"}
+    assert len(ctx.captured_queries) == 2 and '"inputs"' in ctx.captured_queries[-1]["sql"]
+
+
+def _real_registry(monkeypatch):
+    monkeypatch.setattr(exporters, "_registry", {})
+    monkeypatch.setattr(exporters, "_broken", set())
+
+
+def test_the_real_exporters_answer_the_shape_of_the_fixtures(book, editor, monkeypatch):
+    """P7: the forms and notes of the real Word, PDF and EPUB exporters (not the fake) have the §3.2
+    fixtures' shape, and so have their finished rows."""
+    _real_registry(monkeypatch)
+    assert exporters.available_formats() == ["docx", "print_pdf", "screen_pdf", "epub"]
+    model = fixture("page")
+    payload = exports.page_payload(Book.objects.get(pk=book.pk), editor)
+    same_shape(payload, model)
+    for real, want in zip(payload["formats"], model["formats"], strict=True):
+        assert real["key"] == want["key"] and real["available"] is True
+        same_shape(real["form"], want["form"], f"formats[{real['key']}].form")
+        assert set(real["form"]) == set(want["form"]), real["key"]  # every field, none missing
+    assert (
+        payload["formats"][0]["form"]["kashida"]["label"] == model["formats"][0]["form"]["kashida"]["label"]
+    )
+    for format in ("docx", "epub"):  # the quick ones: a real file each
+        row = exports.request_export(book, format, {}, editor)
+        assert row.status == "done", row.error
+        want = fixture("row-done")  # a Word row: its options are Word's (an EPUB has none)
+        want["options"] = want["options"] if format == "docx" else {}
+        same_shape(exports.export_payload(row, editor), want)
+
+
+def test_a_number_that_is_not_finite_is_a_clean_400(book, editor, monkeypatch):
+    """P8: «inf» / «nan» for a number option is refused with the Arabic message (was an OverflowError:
+    500)."""
+    specs = (OptionSpec("count", "int", 2, bounds=(1, 9)), OptionSpec("size", "float", 1.0))
+    for value in ("inf", "-inf", "nan", float("inf"), float("nan"), "1e400"):
+        with pytest.raises(OptionsError) as caught:
+            parse_options(specs, {"count": value})
+        assert caught.value.errors == {"count": "يُنتظر رقم بين 1 و9."}
+        with pytest.raises(OptionsError) as caught:
+            parse_options(specs, {"size": value})
+        assert caught.value.errors == {"size": exporters.BAD_NUMBER_ANY}
+    assert parse_options(specs, {"size": "2.5"})["size"] == 2.5  # an unbounded number: any finite one
+    monkeypatch.setattr(exporters, "_registry", {})
+    monkeypatch.setattr(exporters, "_load", lambda format: None)
+    exporters.register(FakeExporter("docx", options=specs))
+    response = post(
+        logged(editor),
+        reverse("api:exports", args=[book.pk]),
+        {"format": "docx", "options": {"count": "inf"}},
+    )
+    assert response.status_code == 400
+    assert response.json() == {"detail": exports.BAD_OPTIONS, "errors": {"count": "يُنتظر رقم بين 1 و9."}}
+
+
+def test_the_page_rows_come_after_the_uncertain_words(book, monkeypatch):
+    """P1: the three new warnings sit after `uncertain_words`, before the review drift."""
+    monkeypatch.setattr(
+        readiness, "uncertain_counts", lambda book, document=None: readiness.UncertainCounts(2, 0)
+    )
+    monkeypatch.setattr(
+        "editor.services.review_drift",
+        lambda book, manuscript=None: {"edited": True, "pages": [9], "chapters": {}},
+    )
+    Manuscript.objects.filter(book=book).update(document=notes_document())
+    paged(book, {5: "ocr_done", 6: "reviewed", 7: "error"}, included=(5, 6))
+    codes = [item["code"] for item in readiness.book_readiness(Book.objects.get(pk=book.pk))]
+    assert codes[:5] == [
+        "uncertain_words",
+        "pages_unreviewed",
+        "pages_missing",
+        "stray_notes",
+        "review_drift",
+    ]

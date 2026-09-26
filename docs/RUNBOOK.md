@@ -444,8 +444,10 @@ engine is `nk-print-5` (D60: Latin words in a book whose Latin face is the body 
 Book 19's new reference counts are in `playground/word/REFERENCE.md` (85 pages).
 
 **The page.** The book page's «الإخراج» (top bar, and «⋯») opens `/books/<id>/export/`:
-- «قبل الإخراج»: what is left (uncertain words and numbers, review drift, a running assembly, book details, no headings),
-  each with a link to the tab that fixes it (`/books/<id>/layout/?tab=uncertain|format|chapters`). It never blocks.
+- «قبل الإخراج»: what is left (uncertain words and numbers, pages of the book still unreviewed, pages left out of it,
+  paragraphs that look like footnotes left in the text, review drift, a running assembly, book details, no headings),
+  each with a link to what fixes it (review, the dashboard, `/books/<id>/layout/?tab=uncertain|format|chapters`). It
+  never blocks; «كل الصفحات مُراجَعة ولا ملاحظات؛ الكتاب جاهز للإخراج.» only when nothing is left.
 - one block per format. Word: «الكشيدة» (بلا · خفيفة · متوسطة · قوية; default خفيفة — medium and high make the book longer
   than the preview) and «تعليقات على الكلمات غير المؤكَّدة» (a Word comment by «نسّاخ» on every uncertain word, with its
   readings and scan page; the file name ends «- مع التعليقات»). The notes under the options are the known differences
@@ -454,8 +456,11 @@ Book 19's new reference counts are in `playground/word/REFERENCE.md` (85 pages).
 
 Every click builds a new file from the text as it is when the export starts (an edit made meanwhile stays out, and the row
 then reads «تغيّر النص بعد هذا الإخراج»). One export per book and format runs at a time (a second one is refused and
-offers «إلغاء»). Files live in `media/books/<id>/exports/<export id>.<ext>`; the newest 5 finished files and 3 failed or
-cancelled rows are kept per book and format, older ones are deleted with their files. There is no delete in v1.
+offers «إلغاء»); an export whose worker died reads «توقّف الإخراج قبل أن يكتمل؛ أعد المحاولة.» once it has not moved for
+10 minutes, and the format is free again. The file is named after the title it prints («بيانات الكتاب», else the
+manuscript's title). Files live in `media/books/<id>/exports/<export id>.<ext>`; the newest 5 finished files and 3 failed or
+cancelled rows are kept per book and format, older ones are deleted with their files (a file no row records, left by a
+worker killed while it wrote, is swept away). There is no delete in v1.
 
 **Settings** (`.env`): `EXPORT_SOFT_LIMIT_S` (1800: an export stopped after that reads «استغرق الإخراج أطول من
 المسموح.»; the hard limit is 120 s more), `EXPORTS_KEPT` (5), `EXPORT_VALIDATE` (true: Word files are validated against

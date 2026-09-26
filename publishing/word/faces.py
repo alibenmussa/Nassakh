@@ -10,6 +10,7 @@ so the same file gives the same bytes.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
@@ -25,6 +26,7 @@ EMBEDDABLE: frozenset[str] = frozenset({"amiri"})
 ROLES: tuple[str, ...] = ("body", "latin", "heading", "number")
 _RESTRICTED_LICENSE = 0x0002  # OS/2 fsType bit 1: restricted licence embedding
 _KEY_NAMESPACE = uuid.NAMESPACE_URL
+_RUNS = re.compile(r"1+|0+")
 
 
 def font_key(family: str, style: str) -> str:
@@ -99,6 +101,20 @@ class EmbeddedFont:
     rel_id: str = ""
 
 
+class _CoverageTable(dict):
+    """`str.translate` table of a role: code point → `1` (its Arabic face sets it) or `0`, filled on use."""
+
+    def __init__(self, plan: FacePlan, role: str):
+        super().__init__()
+        self.plan = plan
+        self.role = role
+
+    def __missing__(self, code: int) -> str:
+        value = "1" if self.plan.covers(chr(code), self.role) else "0"
+        self[code] = value
+        return value
+
+
 class FacePlan:
     """The family of each role, which characters an Arabic face covers, and the font table."""
 
@@ -120,6 +136,7 @@ class FacePlan:
                 continue
             ranges = F.parse_ranges(F._ARABIC_RANGES if face.latin else F._ARABIC_RANGES_NO_DIGITS)
             self._coverage[role] = (ranges, F.coverage(face.files.regular))
+        self._tables = {role: _CoverageTable(self, role) for role in self._coverage}
 
     def covers(self, char: str, role: str = "body") -> bool:
         """True when the role's Arabic face sets `char` in the preview (else the Latin face does)."""
@@ -135,14 +152,15 @@ class FacePlan:
     def split(self, text: str, role: str = "body") -> list[tuple[str, bool]]:
         """A right-to-left piece cut into `(text, covered)` runs: what the role's face covers and what
         goes to the Latin face (`rStyle NkLatin`)."""
-        out: list[tuple[str, bool]] = []
-        for char in text:
-            covered = self.covers(char, role)
-            if out and out[-1][1] == covered:
-                out[-1] = (out[-1][0] + char, covered)
-            else:
-                out.append((char, covered))
-        return out
+        if not text:
+            return []
+        key = role if role in self._coverage else "body"
+        if self._coverage.get(key) is None:
+            return [(text, True)]
+        marks = text.translate(self._tables[key])
+        if "0" not in marks:
+            return [(text, True)]
+        return [(text[m.start() : m.end()], m.group()[0] == "1") for m in _RUNS.finditer(marks)]
 
     def families(self) -> list[str]:
         """The distinct families, in role order."""

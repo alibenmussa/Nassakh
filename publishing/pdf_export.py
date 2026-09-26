@@ -19,10 +19,14 @@ markup, CSS and footnote passes, with only rules that never move a line added.
 
 **The check** reads the file back with PyMuPDF (`audit_pdf`): its page count and boxes (a file that does
 not match is an `InvalidExport`), and the font of every span — a character set in a face that is not a
-book face (`nk-body`, `nk-heading`, `nk-latin`, or a resolved face's own name: fontconfig's fallback for
-characters no book face has) becomes the `foreign_fonts` warning. The page count and chapter ranges are
-compared with the book page (`reference_layout`: a finished preview render of the same job, else the live
-layout when it shows the exported text with the same setup); a difference is `layout_mismatch`.
+book face (`nk-body`, `nk-heading`, `nk-latin`, or any name record of a resolved face's files: fontconfig's
+fallback for characters no book face has) becomes the `foreign_fonts` warning. The fonts are listed once
+from the file's objects (never page by page). Font names are compared Unicode-aware: WeasyPrint may name
+an embedded face after an Arabic name record (Lotus: «خط-لوتس-الجديد»), which PyMuPDF hands back as UTF-8
+read as Latin-1 and cut at 31 bytes in a span (`repair_name`, `span_fonts`). The page count and chapter
+ranges are compared with the book page (`reference_layout`: a finished preview render of the same job,
+else the live layout when it shows the exported text — every chapter the file prints, at its version —
+with the same setup); a difference is `layout_mismatch`.
 
 **Notes** (`notes`, before exporting): the live layout's page checks (`page_checks`, → «الفصول») and each
 face that is not installed (`missing_font`, Amiri stands in as in the preview).
@@ -30,9 +34,13 @@ face that is not installed (`missing_font`, Amiri stands in as in the preview).
 
 from __future__ import annotations
 
+import codecs
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 
 from assembly.render import ar_count
 
@@ -86,25 +94,82 @@ CHAPTER_MISSING = "لا يظهر «{title}» في الملف كما يظهر ف�
 # ====================================================================== the font audit
 
 
+def repair_name(name: str) -> str:
+    """A font name as the face calls itself: PyMuPDF hands names that are UTF-8 bytes back as Latin-1
+    (`Ø®Ø·-Ù\\x84Ù\\x88ØªØ³` → `خط-لوتس`); when the Latin-1 bytes decode as UTF-8 (an incomplete last
+    character dropped: a span's font name is cut at 31 bytes) the decoded name, else the name unchanged
+    (a real Latin-1 name such as `Café`, or one already decoded)."""
+    try:
+        raw = name.encode("latin-1")
+    except UnicodeEncodeError:
+        return name
+    if raw.isascii():
+        return name
+    try:
+        text = codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
+    except UnicodeDecodeError:
+        return name
+    return text if any(ord(char) > 0x7F for char in text) else name
+
+
 def _norm(name: str) -> str:
-    """A font name for comparing: lower case, letters and digits (`Times-New-Roman,` → `timesnewroman`)."""
-    return re.sub(r"[^0-9a-z]", "", name.lower())
+    """A font name for comparing, in any script: NFKC, case folded, letters and digits only
+    (`Times-New-Roman,` → `timesnewroman`, `خط-لوتس-الجديد` → `خطلوتسالجديد`)."""
+    folded = unicodedata.normalize("NFKC", repair_name(name)).casefold()
+    return "".join(char for char in folded if char.isalnum())
 
 
 def base_name(name: str) -> str:
     """A PDF font name without its subset prefix (`ABCDEF+nk-body` → `nk-body`)."""
     head, plus, rest = name.partition("+")
-    return rest if plus and len(head) == 6 and head.isupper() else name
+    return rest if plus and len(head) == 6 and head.isascii() and head.isupper() else name
 
 
 def display_name(name: str) -> str:
     """A font name as the warning shows it (`PMUTZQ+MS-Mincho` → `MS Mincho`)."""
-    return re.sub(r"\s+", " ", base_name(name).replace("-", " ").replace("_", " ")).strip(" ,")
+    text = base_name(repair_name(name)).replace("-", " ").replace("_", " ")
+    return re.sub(r"\s+", " ", text).strip(" ,")
+
+
+FACE_NAME_IDS = (1, 4, 6, 16)  # family, full, PostScript, typographic family
+
+
+@lru_cache(maxsize=64)
+def _file_names(path: str, size: int, mtime: int) -> tuple[str, ...]:
+    """Every name record of `FACE_NAME_IDS` in a font file, on every platform and in every language
+    (Lotus's Windows names are Arabic only: «خط لوتس الجديد»)."""
+    from fontTools.ttLib import TTFont
+
+    names: list[str] = []
+    try:
+        with TTFont(path, lazy=True, fontNumber=0) as font:
+            for record in font["name"].names:
+                if record.nameID not in FACE_NAME_IDS:
+                    continue
+                try:
+                    value = record.toUnicode()
+                except (UnicodeDecodeError, LookupError):
+                    continue
+                if value.strip() and value not in names:
+                    names.append(value)
+    except Exception:  # noqa: BLE001 - an unreadable table: the registry's names stand in
+        return ()
+    return tuple(names)
+
+
+def face_file_names(path: Path) -> tuple[str, ...]:
+    """`_file_names` of a face file (cached by path, size and mtime)."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return ()
+    return _file_names(str(path), stat.st_size, int(stat.st_mtime))
 
 
 def book_face_names(fonts: F.ResolvedFonts) -> tuple[str, ...]:
-    """The normalised names a book face may carry in the PDF: the roles' families and each resolved
-    face's name, family and file names."""
+    """The normalised names a book face may carry in the PDF: the roles' families, each resolved face's
+    name and family, and every name record (family, full, PostScript, typographic family; all platforms
+    and languages) of its files."""
     names = {_norm(family) for family in BOOK_FAMILIES}
     for face in (fonts.body, fonts.latin, fonts.heading):
         names.add(_norm(face.name))
@@ -112,13 +177,50 @@ def book_face_names(fonts: F.ResolvedFonts) -> tuple[str, ...]:
         for path in (face.files.regular, face.files.bold, face.files.italic, face.files.bold_italic):
             if path is not None:
                 names.update(_norm(local) for local in F.local_names(path))
+                names.update(_norm(record) for record in face_file_names(path))
     return tuple(sorted(name for name in names if name))
 
 
 def is_book_face(name: str, allowed: tuple[str, ...]) -> bool:
     """True when a PDF font (a span's font name) is one of the book's faces (`nk-heading-Bold` too)."""
-    normal = _norm(base_name(name))
-    return any(normal.startswith(prefix) for prefix in allowed)
+    normal = _norm(base_name(repair_name(name)))
+    return bool(normal) and any(normal.startswith(prefix) for prefix in allowed)
+
+
+def document_fonts(document) -> list[dict]:
+    """The fonts of a PDF, listed once from its objects (`/Type /Font`; a composite font's descendant
+    left out): `[{name, type, subset}]` with the name repaired (`repair_name`), in object order. Page by
+    page (`get_page_fonts(full=True)`) the listing grows with the pages times their resources."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for xref in range(1, document.xref_length()):
+        try:
+            if document.xref_get_key(xref, "Type") != ("name", "/Font"):
+                continue
+            _kind, subtype = document.xref_get_key(xref, "Subtype")
+            kind, base = document.xref_get_key(xref, "BaseFont")
+            if kind != "name":
+                kind, base = document.xref_get_key(xref, "Name")  # a Type 3 font has no BaseFont
+        except Exception:  # noqa: BLE001 - a broken object is not a font of the pages
+            continue
+        subtype = subtype.lstrip("/")
+        if subtype in ("CIDFontType0", "CIDFontType2"):
+            continue  # the descendant of a Type 0 font listed on its own
+        name = repair_name(base.lstrip("/")) if kind == "name" else f"{subtype}-{xref}"
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({"name": name, "type": subtype, "subset": base_name(name) != name})
+    return out
+
+
+def span_fonts(name: str, fonts: list[str]) -> list[str]:
+    """The document's fonts (whole names, no subset prefix) a span's font name stands for: itself, or —
+    a span name is cut at 31 bytes, the subset prefix counted — every longer name it begins."""
+    name = base_name(repair_name(name))
+    if not name or name in fonts:
+        return [name]
+    return [font for font in fonts if font.startswith(name)] or [name]
 
 
 @dataclass
@@ -157,18 +259,14 @@ def audit_pdf(data: bytes, fonts: F.ResolvedFonts, first_page: int = 1) -> PdfAu
         if document.page_count:
             xref = document[0].xref
             audit.boxes = {key: _box(document, xref, key) for key in ("MediaBox", "TrimBox", "BleedBox")}
-        seen: set[str] = set()
-        for index in range(document.page_count):
-            for _xref, _ext, kind, name, *_rest in document.get_page_fonts(index, full=True):
-                if name in seen:
-                    continue
-                seen.add(name)
-                subset = base_name(name) != name
-                audit.fonts.append({"name": name, "type": kind, "subset": subset})
-                if kind == "Type3":
-                    audit.type3.append(name)
-                if not subset:
-                    audit.not_subset.append(name)
+        audit.fonts = document_fonts(document)
+        for item in audit.fonts:
+            if item["type"] == "Type3":
+                audit.type3.append(item["name"])
+            if not item["subset"]:
+                audit.not_subset.append(item["name"])
+        whole = [base_name(item["name"]) for item in audit.fonts]
+        verdicts: dict[str, str | None] = {}  # a span's font name → None (a book face) or the foreign name
         for index, page in enumerate(document):
             number = index + first_page
             for block in page.get_text("dict", flags=0)["blocks"]:
@@ -179,9 +277,14 @@ def audit_pdf(data: bytes, fonts: F.ResolvedFonts, first_page: int = 1) -> PdfAu
                             continue
                         audit.characters += len(text)
                         name = str(span.get("font") or "")
-                        if is_book_face(name, allowed):
+                        if name not in verdicts:
+                            candidates = span_fonts(name, whole)
+                            book = any(is_book_face(candidate, allowed) for candidate in candidates)
+                            verdicts[name] = None if book else display_name(candidates[0])
+                        foreign = verdicts[name]
+                        if foreign is None:
                             continue
-                        found = audit.foreign.setdefault(display_name(name), {"pages": [], "chars": ""})
+                        found = audit.foreign.setdefault(foreign, {"pages": [], "chars": ""})
                         if number not in found["pages"]:
                             found["pages"].append(number)
                         found["chars"] += "".join(char for char in text if char not in found["chars"])
@@ -238,10 +341,27 @@ class Reference:
     checks: list = field(default_factory=list)
 
 
-def reference_layout(job: ExportJob) -> Reference | None:
+def printed_chapters(job: ExportJob) -> dict[str, str]:
+    """`{chapter id: version}` of the chapters the job prints: those with blocks (a chapter left with
+    nothing to print has no page, in the file as in the book page), versioned as the engine does."""
+    from editor import document as doc
+
+    from .model import book_model
+
+    model = book_model(job.document, job.setup, title=job.title, author=job.author)
+    printable = {chapter.id for chapter in model.chapters if chapter.blocks}
+    return {
+        chapter.id: doc.chapter_version(chapter.nodes(job.document))
+        for chapter in doc.chapters_of(job.document)
+        if chapter.id in printable
+    }
+
+
+def reference_layout(job: ExportJob, printed: dict[str, str] | None = None) -> Reference | None:
     """The book page's pages for this job: a finished preview render of the same job hash, else the live
-    layout when it shows the exported text (every chapter's version) with the same page setup; None when
-    neither exists."""
+    layout when it shows the exported text — the chapters the file prints (`printed`, `{id: version}`:
+    the export's own chapter ranges; `printed_chapters` when not given), each at its version — with the
+    same page setup; None when neither exists. An empty chapter never makes the live layout look old."""
     from .engine import RenderJob
     from .models import PreviewRender
     from .preview import job_hash, setup_hash
@@ -272,7 +392,7 @@ def reference_layout(job: ExportJob) -> Reference | None:
         for item in live.chapters or []
         if isinstance(item, dict) and item.get("id")
     }
-    if versions != dict(job.chapter_versions):
+    if versions != dict(printed if printed is not None else printed_chapters(job)):
         return None
     return Reference("live", live.page_count, list(live.chapters or []), layout_checks(job.book_id))
 
@@ -376,7 +496,8 @@ class PdfExporter:
             errors.append(f"the file has {audit.page_count} pages, the render {rendered.page_count}")
         if errors:
             raise InvalidExport("\n".join(errors))
-        reference = reference_layout(job)
+        printed = {str(item["id"]): item.get("version") for item in rendered.chapters}
+        reference = reference_layout(job, printed)
         warnings: list[dict] = []
         checks = checks_row(job.book_id, reference.checks) if reference is not None else None
         if checks is not None:  # the book page's checks, when its pages are the file's

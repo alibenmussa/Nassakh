@@ -27,12 +27,15 @@ Phase 5 styles, see `editor.document`) into plain dataclasses that know nothing 
   `editor.document.object_kinds`), so the layout export can give each laid-out line its character range;
   `break_before` / `keep_with_next` come from the block's `breakBefore` / `keepWithNext` attrs.
 
-Empty paragraphs are left out (spacing comes from the styles). `direction_runs` splits a run's text into
-right-to-left and left-to-right pieces for renderers that need explicit direction (Word's `w:rtl`).
+Empty paragraphs are left out (spacing comes from the styles). `direction_flags` (over a paragraph's
+whole text) and `direction_runs` (over one text) cut text into right-to-left and left-to-right pieces for
+renderers that need explicit direction (Word's `w:rtl`), so that they order it as the preview does.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -276,16 +279,22 @@ class Book:
         for block in self.blocks():
             yield from block.footnotes
 
+    def headings(self) -> list[tuple[Chapter, Block]]:
+        """The heading blocks `contents()` lists, with their chapters, in the same order (the Word
+        writer bookmarks each occurrence: two headings may share a block id)."""
+        return [
+            (chapter, block)
+            for chapter in self.chapters
+            for block in chapter.blocks
+            if block.style in ("chapter-title", "section-title") and block.text().strip()
+        ]
+
     def contents(self) -> list[ContentsEntry]:
         """Chapter and section titles in order (only headings the owner wrote, never «القسم n»)."""
-        out: list[ContentsEntry] = []
-        for chapter in self.chapters:
-            for block in chapter.blocks:
-                if block.style in ("chapter-title", "section-title") and block.text().strip():
-                    out.append(
-                        ContentsEntry(block.level or 1, " ".join(block.text().split()), block.id, chapter.id)
-                    )
-        return out
+        return [
+            ContentsEntry(block.level or 1, " ".join(block.text().split()), block.id, chapter.id)
+            for chapter, block in self.headings()
+        ]
 
 
 # ====================================================================== building
@@ -594,42 +603,218 @@ def book_model(
 
 
 # ====================================================================== direction
+#
+# Word's `w:rtl` is more than a font switch: ECMA-376 Part 1 §17.3.2.30 makes it a right-to-left override
+# for the weak types other than EN, ET, CS and AN (so ES, NSM and BN) and for every neutral (B, S, WS, ON).
+# A space or a hyphen inside a `w:rtl` run is a strong R in Word whatever its neighbours, so «Windows 10»
+# or «COVID-19» written with the space or the hyphen right to left come out reordered, while the preview
+# applies the Unicode Bidi Algorithm (UAX #9) to the paragraph's plain text. The direction is therefore
+# decided once for a whole paragraph: resolve UAX #9 on its joined text, mark right to left what resolves
+# right to left (and the numbers of a right-to-left context, which `w:rtl` never overrides: the
+# complex-script face sets them, as the preview's Arabic face does), then read the result the way Word
+# does and take the override off wherever it would change the order.
 
-_RTL_RANGES = ((0x0590, 0x08FF), (0xFB1D, 0xFDFF), (0xFE70, 0xFEFF))
+# one code per character: L, R, A (AL), E (EN), S (ES), T (ET), N (AN), C (CS), M (NSM), B (BN),
+# W (white space and the separators B / S, which the preview collapses), O (ON), X (an explicit
+# embedding, override or isolate). Callers add R for a footnote call (Word writes «(» and «)» as
+# right-to-left runs) and «|» where a line break starts a new stretch of text.
+_BIDI_CODES: dict[str, str] = {
+    "L": "L",
+    "R": "R",
+    "AL": "A",
+    "EN": "E",
+    "ES": "S",
+    "ET": "T",
+    "AN": "N",
+    "CS": "C",
+    "NSM": "M",
+    "BN": "B",
+    "B": "W",
+    "S": "W",
+    "WS": "W",
+    "ON": "O",
+}
+_RTL_BLOCKS = ((0x0590, 0x08FF), (0xFB1D, 0xFDFF), (0xFE70, 0xFEFF), (0x10800, 0x10FFF), (0x1E800, 0x1EFFF))
 
 
-def _strong(char: str) -> str | None:
-    """`rtl` for Hebrew / Arabic letters and marks, `ltr` for other letters, None for neutrals and digits."""
-    code = ord(char)
-    if any(lo <= code <= hi for lo, hi in _RTL_RANGES):
-        return None if char.isdigit() else "rtl"
-    return "ltr" if char.isalpha() else None
+class _BidiTable(dict):
+    """`str.translate` table: code point → bidi class code, filled on first use."""
+
+    def __missing__(self, code: int) -> str:
+        value = unicodedata.bidirectional(chr(code))
+        if value:
+            found = _BIDI_CODES.get(value, "X")
+        else:  # unassigned: right to left inside the right-to-left blocks, else left to right
+            found = "R" if any(lo <= code <= hi for lo, hi in _RTL_BLOCKS) else "L"
+        self[code] = found
+        return found
+
+
+_BIDI_TABLE = _BidiTable()
+_W1 = re.compile(r"([^M])(M+)")
+_W1_START = re.compile(r"^M+")
+_W2 = re.compile(r"A[^LRAE]*E[^LRA]*")  # from an Arabic letter to the next strong type, with a digit
+_W4_EN = re.compile(r"(?<=E)[SC](?=E)")
+_W4_AN = re.compile(r"(?<=N)C(?=N)")
+_W5 = re.compile(r"T+(?=E)|(?<=E)T+")
+_W6 = str.maketrans("STC", "OOO")
+_W7 = re.compile(r"L[^LRE]*E[^LR]*")  # from a left-to-right letter to the next strong type, with a digit
+_W7_START = re.compile(r"^[^LR]+")
+_N_RTL = re.compile(r"(?<=L)[WO]+(?=L)")
+_N_LTR = re.compile(r"(?<=[REN])[WO]+(?=[REN])")
+_NEUTRAL_R = str.maketrans("WO", "RR")
+_NEUTRAL_L = str.maketrans("WO", "LL")
+_LEVELS_RTL = str.maketrans("RLEN", "1222")
+_LEVELS_LTR = str.maketrans("RLEN", "1022")
+_FLAG_OF_TYPE = str.maketrans("RLEN", "10nn")  # n: a number, `w:rtl` unless Word would override it
+_TO_WORD = str.maketrans("SMBWO", "RRRRR")
+_RUNS = re.compile(r"1+|0+")
+_ONES = re.compile(r"1+")
+_NUMBERS = re.compile(r"n+")
+_OVERRIDDEN = frozenset("SMBWO")  # the codes `w:rtl` turns into R
+_NEEDS_RESOLVING = re.compile(r"[LSTNBX]|[EC]M")  # without these a right-to-left text is all `w:rtl`
+MAX_FIXES = 64
+
+
+def bidi_classes(text: str) -> str:
+    """One bidi class code per character of `text` (see `_BIDI_CODES`)."""
+    return text.translate(_BIDI_TABLE)
+
+
+def _resolve(classes: str, rtl: bool) -> str:
+    """The resolved type (L, R, E or N) of each class code of one paragraph: UAX #9 rules W1–W7 and
+    N1–N2 at paragraph level 1 (`rtl`) or 0, without explicit embeddings; BN is set aside (X9) and takes
+    the type before it."""
+    sos = "R" if rtl else "L"
+    if "B" in classes:
+        kept = classes.replace("B", "")
+        types = iter(_resolve(kept, rtl))
+        out: list[str] = []
+        previous = sos
+        for code in classes:
+            if code != "B":
+                previous = next(types)
+            out.append(previous)
+        return "".join(out)
+    s = classes
+    if "M" in s:  # W1: a mark takes the type of the character before it
+        while "AM" in s:  # the common case, the marks of an Arabic letter
+            s = s.replace("AM", "AA")
+        if "M" in s:
+            s = _W1.sub(lambda m: m.group(1) * (1 + len(m.group(2))), s)
+            s = _W1_START.sub(lambda m: sos * len(m.group()), s)
+    if "E" in s and "A" in s:  # W2: European digits after Arabic letters are Arabic numbers
+        s = _W2.sub(lambda m: m.group().replace("E", "N"), s)
+    s = s.replace("A", "R")  # W3
+    if "E" in s:  # W4: one separator between two numbers of a kind joins them
+        s = _W4_EN.sub("E", s)
+    if "N" in s:
+        s = _W4_AN.sub("N", s)
+    if "T" in s and "E" in s:  # W5: terminators next to European digits
+        s = _W5.sub(lambda m: "E" * len(m.group()), s)
+    s = s.translate(_W6)  # W6
+    if "E" in s:  # W7: European digits after a left-to-right letter are left to right
+        if not rtl:
+            s = _W7_START.sub(lambda m: m.group().replace("E", "L"), s)
+        if "L" in s:
+            s = _W7.sub(lambda m: m.group().replace("E", "L"), s)
+    if rtl:  # N1, N2: neutrals between two left-to-right letters, else the paragraph's direction
+        if "L" in s:
+            s = _N_RTL.sub(lambda m: "L" * len(m.group()), s)
+        return s.translate(_NEUTRAL_R)
+    s = _N_LTR.sub(lambda m: "R" * len(m.group()), s)
+    return s.translate(_NEUTRAL_L)
+
+
+def _levels(types: str, rtl: bool) -> str:
+    return types.translate(_LEVELS_RTL if rtl else _LEVELS_LTR)
+
+
+def _first_flags(classes: str, types: str) -> str:
+    """`w:rtl` where the text resolves right to left, and on the numbers of a right-to-left context that
+    Word never overrides (digits, their terminators and separators); a hyphen joined into such a number,
+    and anything left to right, stays without it."""
+    flags = types.translate(_FLAG_OF_TYPE)
+    if "n" not in flags:
+        return flags
+    out = list(flags)
+    for match in _NUMBERS.finditer(flags):
+        for i in range(match.start(), match.end()):
+            out[i] = "0" if classes[i] in _OVERRIDDEN else "1"
+    return "".join(out)
+
+
+def _as_word(classes: str, flags: str) -> str:
+    """The class codes as Word reads them: what `w:rtl` overrides becomes R."""
+    parts: list[str] = []
+    last = 0
+    for match in _ONES.finditer(flags):
+        parts.append(classes[last : match.start()])
+        parts.append(classes[match.start() : match.end()].translate(_TO_WORD))
+        last = match.end()
+    parts.append(classes[last:])
+    return "".join(parts)
+
+
+def _stretch_flags(classes: str, rtl: bool) -> str:
+    if not classes:
+        return ""
+    if rtl and not _NEEDS_RESOLVING.search(classes):
+        return "1" * len(classes)
+    if "X" in classes:  # explicit embeddings: no override at all, so Word and the preview read the same
+        return "".join("1" if code in "RAN" else "0" for code in classes)
+    types = _resolve(classes, rtl)
+    want = _levels(types, rtl)
+    flags = _first_flags(classes, types)
+    for _attempt in range(MAX_FIXES):
+        got = _levels(_resolve(_as_word(classes, flags), rtl), rtl)
+        if got == want:
+            return flags
+        # an override that changes the order shields a number from the letter before it (W2): before
+        # each stretch of differences, take the override off the nearest overridden characters
+        chars = list(flags)
+        changed = False
+        previous_differs = False
+        for index, (a, b) in enumerate(zip(got, want, strict=True)):
+            differs = a != b
+            if differs and not previous_differs:
+                at = index - 1
+                while at >= 0 and not (chars[at] == "1" and classes[at] in _OVERRIDDEN):
+                    at -= 1
+                while at >= 0 and chars[at] == "1" and classes[at] in _OVERRIDDEN:
+                    chars[at] = "0"
+                    changed = True
+                    at -= 1
+            previous_differs = differs
+        if not changed:
+            break
+        flags = "".join(chars)
+    return "".join("0" if code in _OVERRIDDEN else flag for code, flag in zip(classes, flags, strict=True))
+
+
+def direction_flags(classes: str, base: str = "rtl") -> str:
+    """For each code of `classes` (`bidi_classes`, plus R for a footnote call and «|» for a line break),
+    `1` when Word should write it in a `w:rtl` run and `0` when not, so that Word orders the paragraph as
+    the preview does (UAX #9 on its text) with the paragraph direction `base`."""
+    rtl = base != "ltr"
+    if "|" in classes:
+        return "0".join(_stretch_flags(part, rtl) for part in classes.split("|"))
+    return _stretch_flags(classes, rtl)
+
+
+def direction_pieces(text: str, flags: str) -> list[tuple[str, bool]]:
+    """`text` cut where its flags change: `(piece, is_rtl)`."""
+    out: list[tuple[str, bool]] = []
+    start = 0
+    for match in _RUNS.finditer(flags):
+        end = match.end()
+        out.append((text[start:end], match.group()[0] == "1"))
+        start = end
+    return out
 
 
 def direction_runs(text: str, base: str = "rtl") -> list[tuple[str, bool]]:
-    """`text` cut into `(piece, is_rtl)` runs: letters give the direction; neutrals and digits between two
-    left-to-right letters stay left-to-right, elsewhere they take the paragraph's `base` direction
-    (a simplified Unicode bidi resolution, enough for Word's run-level `w:rtl`)."""
+    """`text` cut into `(piece, is_rtl)` runs, decided over the whole text (see `direction_flags`)."""
     if not text:
         return []
-    strong = [_strong(char) for char in text]
-    after: list[str | None] = [None] * len(text)
-    following: str | None = None
-    for i in range(len(text) - 1, -1, -1):
-        after[i] = following
-        following = strong[i] if strong[i] is not None else following
-    resolved: list[str] = []
-    before: str | None = None
-    for i, value in enumerate(strong):
-        if value is not None:
-            resolved.append(value)
-            before = value
-            continue
-        resolved.append("ltr" if before == "ltr" and after[i] == "ltr" else base)
-    out: list[tuple[str, bool]] = []
-    start = 0
-    for i in range(1, len(text) + 1):
-        if i == len(text) or resolved[i] != resolved[start]:
-            out.append((text[start:i], resolved[start] == "rtl"))
-            start = i
-    return out
+    return direction_pieces(text, direction_flags(bidi_classes(text), base))

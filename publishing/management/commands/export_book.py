@@ -70,7 +70,8 @@ class Command(BaseCommand):
         if out.suffix.lower() == FORMATS[format].extension:
             path = out
         else:
-            path = out / exports.file_name(book.title, format, job.options, book.pk)
+            title = exports.printed_title(job.document, job.setup, job.title)  # as the download is named
+            path = out / exports.file_name(title, format, job.options, book.pk)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(result.data)
         seconds = time.monotonic() - started

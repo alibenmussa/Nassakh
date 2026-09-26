@@ -1,7 +1,8 @@
 {% comment %}The foot of one format's card (PHASE6_SPEC §8.3), shared by the formats, inside the format's `x-for` (`f`):
 the state, then the actions. One state at a time (`stateOf(f)`: never exported, done, stale, queued, running,
 error; a cancelled export brings the previous file back), re-keyed on every change so it cross-fades inside elements
-that stay (the status line keeps the focus it was given after a start). The state: a dot and the file's name over its
+that stay (the status line keeps the focus it was given after a start or a 409; «إلغاء» is keyed by its export, so it
+stays from queued to running). The state: a dot and the file's name over its
 size, time and staleness; a running export instead is a tinted strip with the step, «إلغاء» (editors), the 4 px bar
 when the progress is counted and the waiting hint; under a file its warnings, under a failure the technical line
 (editors). The actions: the wide primary «إخراج …» (editors; the strip stands in for it while an export runs) beside
@@ -20,7 +21,8 @@ when the progress is counted and the waiting hint; under a file its warnings, un
           </span>
         </template>
       </div>
-      <template x-for="s in [stateOf(f)]" :key="stateKey(s)">
+      {# keyed by the export it cancels: queued → running keeps the same «إلغاء» (and the focus on it) #}
+      <template x-for="s in [stateOf(f)]" :key="cancelKey(s)">
         <span class="ex-extra">
           <template x-if="(s.kind === 'queued' || s.kind === 'running') && canEdit">
             <button type="button" class="btn btn-sm ex-cancel" :disabled="busy[f.key] === 'cancel'" @click="cancel(f.key)" :data-ex-cancel="f.key">إلغاء</button>

@@ -32,7 +32,7 @@ from publishing import exports
 from publishing.exporters import parse_options
 from publishing.word import schema
 from publishing.word.calibration import CHECKLIST, c12_docx, c12_expected, calibration_docx
-from publishing.word.exporter import DOCX_OPTIONS, build_book, live_plan
+from publishing.word.exporter import DOCX_OPTIONS, build_book, current_live
 from publishing.word.options import WordOptions
 from publishing.word.writer import PagePlan
 
@@ -109,11 +109,11 @@ class Command(BaseCommand):
     def preview_pages(self, job) -> tuple[list[dict], list[dict], str]:
         """The preview's pages: the live layout when current for the exported text, else a render."""
         from publishing.engine import RenderJob, get_engine
-        from publishing.relayout import live_of, live_pages
 
-        if live_plan(job) is not None:
-            live = live_of(job.book_id)
-            return live_pages(job.book_id), list(live.chapters or []), "live"
+        found = current_live(job)
+        if found is not None:
+            live, pages = found
+            return pages, list(live.chapters or []), "live"
         self.stdout.write("the live layout is not current: rendering the preview in memory (no writes)…")
         rendered = get_engine().render(
             RenderJob(

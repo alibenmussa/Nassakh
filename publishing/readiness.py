@@ -9,13 +9,24 @@ Western digits (`assembly.render.ar_count`).
 
 - `uncertain_words` (warn): the uncertain words left in the text, and how many of them are numbers Kraken
   read (`editor.uncertain.counts`) → «غير المؤكَّدة» (`?tab=uncertain`);
+- `pages_unreviewed` (warn): the book's pages (those the manuscript's assembly run included,
+  `run.included`) that are still `ocr_done` now: their text is the models' reading → «المراجعة»
+  (`review:next`);
+- `pages_missing` (warn): pages of the book (not excluded) that are not in it — still processing, in
+  error, or left out as unreviewed → «المراجعة», or «المعالجة» (the dashboard) when none of them can be
+  reviewed yet;
+- `stray_notes` (warn): body paragraphs that look like footnotes left in the text: a paragraph of one
+  source page whose text starts with a note marker («(n)», «[n]» with n from 1 to 15, or «*») followed
+  by text, at most 80 words, in the run of such paragraphs that ends its page (a run that is not the
+  whole page) → «عرض» (the book page on the first one's chapter, `?chapter=`: the book page does not
+  take a block yet);
 - `review_drift` (warn): pages whose text changed in review after the manuscript was built
   (`editor.services.review_drift`) → «الكتاب»;
 - `assembly_running` (warn): an assembly of the book is queued or running;
 - `book_details` (info): no author for the title page and the file's properties; a copyright page with
   neither publisher nor year → «بيانات الكتاب» (`?tab=format`);
 - `no_headings` (info): a contents page but no chapter headings;
-- `clear` (success): none of the above.
+- `clear` (success): none of the above — every page of the book reviewed and nothing to note.
 
 **Helpers the exporters use for their notes** (`Exporter.notes`): `missing_font_rows` (a face of the
 stylesheet not installed: Amiri stands in), `page_checks_row` (the live layout's page checks, 6b),
@@ -26,7 +37,9 @@ come from them), `uncertain_counts` (cached on the book instance, so the page pa
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from django.urls import reverse
 from django.utils import timezone
@@ -40,20 +53,32 @@ SUCCESS = "success"
 
 WORDS = ("كلمة واحدة", "كلمتان", "كلمات", "كلمة")
 NUMBERS = ("رقم واحد", "رقمان", "أرقام", "رقمًا")
+PAGES = ("صفحة واحدة", "صفحتان", "صفحات", "صفحة")
 PAGES_OF = ("صفحة واحدة", "صفحتين", "صفحات", "صفحة")  # after «نص»: the genitive
+PARAGRAPHS = ("فقرة واحدة", "فقرتان", "فقرات", "فقرة")
 CHECKS = ("ملاحظة واحدة", "ملاحظتان", "ملاحظات", "ملاحظة")
 
 ASSEMBLY_RUNNING = "يجري تجميع الكتاب الآن؛ يُخرَج النص كما هو عند بدء الإخراج."
 NO_AUTHOR = "بيانات الكتاب بلا مؤلف؛ يُكتب في صفحة العنوان وخصائص الملف."
 NO_IMPRINT = "صفحة الحقوق بلا ناشر ولا سنة."
 NO_HEADINGS = "لا عناوين فصول في الكتاب؛ ستخلو المحتويات."
-CLEAR = "لا ملاحظات؛ الكتاب جاهز للإخراج."
+CLEAR = "كل الصفحات مُراجَعة ولا ملاحظات؛ الكتاب جاهز للإخراج."
 MISSING_FONT = "الخط «{name}» غير مثبّت على هذا الجهاز؛ يُستعمل {fallback} بدلًا منه، كما في المعاينة."
 
 UNCERTAIN_LABEL = "غير المؤكَّدة"
+REVIEW_LABEL = "المراجعة"
+PROCESSING_LABEL = "المعالجة"
+SHOW_LABEL = "عرض"
 BOOK_LABEL = "الكتاب"
 DETAILS_LABEL = "بيانات الكتاب"
 FONTS_LABEL = "الخطوط"
+
+NUMBERS_LISTED = 8  # page numbers a message lists before «…»
+NOTE_MARKER_MAX = 15  # «(n)» / «[n]» up to this n reads as a note marker
+NOTE_WORDS_MAX = 80  # a stray note is at most this long
+# a note marker at a paragraph's start: «(n)», «[n]» (Western or Arabic-Indic digits) or «*»
+_RE_NOTE_MARKER = re.compile(r"(?:\(\s*(\d{1,2})\s*\)|\[\s*(\d{1,2})\s*\]|(\*))")
+_LEADING = " \t\n\u200e\u200f\u061c\ufeff"  # spaces and direction marks before the marker
 
 
 def row(code: str, level: str, message: str, action: dict | None = None) -> dict:
@@ -113,6 +138,165 @@ def uncertain_message(counts: UncertainCounts) -> str:
     return f"بقيت {words} {adjective} في النص{numbers}."
 
 
+# ====================================================================== the pages of the book
+
+
+def numbers_text(numbers: list[int]) -> str:
+    """«3، 4، 7.»: the first `NUMBERS_LISTED` numbers, ending «…» when there are more."""
+    shown = "، ".join(str(number) for number in numbers[:NUMBERS_LISTED])
+    return shown + ("…" if len(numbers) > NUMBERS_LISTED else ".")
+
+
+def unreviewed_message(pages: list[int]) -> str:
+    """«77 صفحة في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 3، 4، 7…»"""
+    if len(pages) == 2:
+        return f"صفحتان في الكتاب لم تُراجَعا بعد؛ نصّهما كما قرأته النماذج: {numbers_text(pages)}"
+    return (
+        f"{ar_count(len(pages), PAGES)} في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: {numbers_text(pages)}"
+    )
+
+
+def missing_message(pages: list[int]) -> str:
+    """«صفحتان لم تدخلا الكتاب بعد: 91، 92.»"""
+    if len(pages) == 2:
+        return f"صفحتان لم تدخلا الكتاب بعد: {numbers_text(pages)}"
+    return f"{ar_count(len(pages), PAGES)} لم تدخل الكتاب بعد: {numbers_text(pages)}"
+
+
+def stray_notes_message(count: int, marker: str, pages: list[int]) -> str:
+    """«3 فقرات في أواخر صفحاتها تبدأ بعلامة حاشية مثل «(1)» ولم تُربَط حاشيةً: ص 5، 12، 30.»"""
+    listed = numbers_text(pages)
+    if count == 1:
+        return f"فقرة واحدة في آخر صفحتها تبدأ بعلامة حاشية مثل «{marker}» ولم تُربَط حاشيةً: ص {listed}"
+    if count == 2:
+        return f"فقرتان في أواخر صفحاتهما تبدآن بعلامة حاشية مثل «{marker}» ولم تُربَطا حاشيةً: ص {listed}"
+    return (
+        f"{ar_count(count, PARAGRAPHS)} في أواخر صفحاتها تبدأ بعلامة حاشية مثل «{marker}» ولم تُربَط"
+        f" حاشيةً: ص {listed}"
+    )
+
+
+@dataclass(frozen=True)
+class BookPages:
+    """Where the pages stand against the book: the numbers of the pages in it (the manuscript's run
+    included them) that are still unreviewed (`ocr_done`), of the pages not in it, and whether none of
+    those can be reviewed now (they are still in the pipeline or in error)."""
+
+    unreviewed: list[int]
+    missing: list[int]
+    missing_in_pipeline: bool
+
+
+def book_pages(book: Book, manuscript) -> BookPages | None:
+    """`BookPages` of the book (one query); None when the manuscript has no assembly run to tell which
+    pages it holds."""
+    from assembly.pipeline import UNREVIEWED_STATUS
+    from books.models import Page
+
+    run = getattr(manuscript, "run", None)
+    if run is None:
+        return None
+    included = {int(key) for key in (run.included or {}) if str(key).isdigit()}
+    rows = (
+        Page.objects.filter(book_id=book.pk, is_excluded=False)
+        .exclude(status=Page.Status.EXCLUDED)
+        .order_by("number")
+        .values_list("id", "number", "status")
+    )
+    unreviewed: list[int] = []
+    missing: list[tuple[int, str]] = []
+    for pk, number, status in rows:
+        if pk not in included:
+            missing.append((number, status))
+        elif status == UNREVIEWED_STATUS:
+            unreviewed.append(number)
+    reviewable = {UNREVIEWED_STATUS, Page.Status.REVIEWED, Page.Status.ASSEMBLED}
+    return BookPages(
+        unreviewed=unreviewed,
+        missing=[number for number, _status in missing],
+        missing_in_pipeline=bool(missing) and not any(status in reviewable for _n, status in missing),
+    )
+
+
+def note_marker(text: str) -> str | None:
+    """The note marker a paragraph's text starts with, as shown (Western digits): «(1)», «[2]» (n from
+    1 to `NOTE_MARKER_MAX`) or «*», when some text follows it; None otherwise («(22) …», «* * *», a lone
+    «(5)» — a page number — are not notes)."""
+    text = str(text or "").lstrip(_LEADING)
+    found = _RE_NOTE_MARKER.match(text)
+    if found is None or not any(char.isalpha() for char in text[found.end() :]):
+        return None
+    if found.group(3):
+        return "*"
+    digits = found.group(1) or found.group(2)
+    number = int(digits)  # int() reads Arabic-Indic digits too
+    if not 1 <= number <= NOTE_MARKER_MAX:
+        return None
+    return f"({number})" if found.group(1) else f"[{number}]"
+
+
+@dataclass(frozen=True)
+class StrayNote:
+    """A body paragraph that looks like a footnote left in the text: its block id, source page, marker
+    and index among the document's top-level nodes."""
+
+    block: str
+    page: int
+    marker: str
+    index: int
+
+
+def _note_paragraph(node, page: int) -> str | None:
+    """The marker of a body paragraph of `page` alone that starts with a note marker (else None)."""
+    from editor import document as doc
+
+    if not isinstance(node, dict) or node.get("type") != doc.PARAGRAPH:
+        return None
+    if doc.attrs_of(node).get("style") in doc.PARAGRAPH_STYLES:
+        return None
+    if set(doc.source_pages(node)) != {page}:
+        return None
+    return note_marker(doc.plain_text(node))
+
+
+def stray_notes(document) -> list[StrayNote]:
+    """The body paragraphs that look like footnotes left in the text (see the module docstring), in the
+    document's order: for every source page, the run of note-marked paragraphs that ends it (when the
+    run is not the whole page), those of at most `NOTE_WORDS_MAX` words."""
+    from editor import document as doc
+
+    content = doc.content_of(document)
+    by_page: dict[int, list[int]] = {}
+    for index in range(doc.preamble_end(content), len(content)):
+        for page in sorted(set(doc.source_pages(content[index]))):
+            by_page.setdefault(page, []).append(index)
+    found: list[StrayNote] = []
+    for page, indexes in by_page.items():
+        run: list[tuple[int, str]] = []
+        for index in reversed(indexes):
+            marker = _note_paragraph(content[index], page)
+            if marker is None:
+                break
+            run.append((index, marker))
+        if not run or len(run) == len(indexes):
+            continue
+        for index, marker in run:
+            node = content[index]
+            if len(doc.plain_text(node).split()) <= NOTE_WORDS_MAX:
+                found.append(StrayNote(doc.node_id(node), page, marker, index))
+    return sorted(found, key=lambda note: note.index)
+
+
+def chapter_url(book_id: int, document, index: int) -> str:
+    """The book page on the chapter holding the document's top-level node `index` (`?chapter=`)."""
+    from editor import document as doc
+
+    for chapter in doc.chapters_of(document):
+        if chapter.start <= index < chapter.end:
+            return f"{layout_url(book_id)}?{urlencode({'chapter': chapter.id})}"
+    return layout_url(book_id)
+
+
 # ====================================================================== the book
 
 
@@ -146,6 +330,21 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
             )
         )
 
+    state = book_pages(book, manuscript)
+    review = {"label": REVIEW_LABEL, "url": reverse("review:next", args=[book.pk])}
+    if state is not None and state.unreviewed:
+        rows.append(row("pages_unreviewed", WARN, unreviewed_message(state.unreviewed), review))
+    if state is not None and state.missing:
+        fix = review
+        if state.missing_in_pipeline:
+            fix = {"label": PROCESSING_LABEL, "url": reverse("books:detail", args=[book.pk])}
+        rows.append(row("pages_missing", WARN, missing_message(state.missing), fix))
+    strays = stray_notes(document)
+    if strays:
+        message = stray_notes_message(len(strays), strays[0].marker, sorted({note.page for note in strays}))
+        show = {"label": SHOW_LABEL, "url": chapter_url(book.pk, document, strays[0].index)}
+        rows.append(row("stray_notes", WARN, message, show))
+
     drift = review_drift(book, manuscript)
     if drift["pages"]:
         pages = ar_count(len(drift["pages"]), PAGES_OF)
@@ -171,7 +370,7 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
     if setup.contents and not model.contents():
         rows.append(row("no_headings", INFO, NO_HEADINGS))
 
-    if not rows:
+    if not rows:  # never beside a warning (nor a note: «ولا ملاحظات»)
         rows.append(row("clear", SUCCESS, CLEAR))
     return rows
 

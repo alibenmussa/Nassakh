@@ -27,10 +27,11 @@ number); a window's first page shows the running header unless the window opens 
 **The PDF exports (D61, `output`: `publishing.engine.PdfOutput`)** add rules that never move a line, so
 their pages are the preview's: a clean outline (chapter titles at level 1 and section titles at level 2,
 labelled from `data-label` so a note call never leaks in; «المحتويات» at level 1; nothing for the title
-page), the note links' plain look (`.nk-note-link`, the screen PDF), and for print the bleed and crop
-marks asked for (`@page { bleed: <bleed + 6 mm slug>; marks: crop }`, so the marks sit outside the
-bleed) and pure black (every literal `#000`, and the scan marks' gray, as `device-cmyk`). The preview
-(`output=None`) is unchanged.
+page), the note links' plain look (`.nk-note-link`, the screen PDF), and for print the bleed asked for,
+with a 6 mm slug for the crop marks when they are asked (`@page { bleed: <bleed + 6 mm slug> }`: the page
+grows, the marks sit outside the bleed; the marks themselves are drawn in pure K by the PDF's finisher,
+`publishing.pdf.finisher_for`, since WeasyPrint's `marks: crop` is an RGB drawing) and pure black (every
+literal `#000`, and the scan marks' gray, as `device-cmyk`). The preview (`output=None`) is unchanged.
 """
 
 from __future__ import annotations
@@ -235,12 +236,12 @@ def stylesheet_css(
 
 def export_rules(output) -> list[str]:
     """The rules a PDF export adds (`output`: a `publishing.engine.PdfOutput`): the clean outline, and
-    for print the page's bleed and crop marks."""
+    for print the page's bleed (with the crop marks' slug when they are asked; the finisher draws the
+    marks in pure K, never `marks: crop`)."""
     rules = list(OUTLINE_CSS)
     bleed = output.page_bleed_mm
-    if output.is_print and (bleed > 0 or output.crop_marks):
-        marks = " marks: crop;" if output.crop_marks else ""
-        rules.append(f"@page {{ bleed: {_mm(bleed)};{marks} }}")
+    if output.is_print and bleed > 0:
+        rules.append(f"@page {{ bleed: {_mm(bleed)}; }}")
     return rules
 
 

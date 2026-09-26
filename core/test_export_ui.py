@@ -111,8 +111,8 @@ def test_export_page_shell_top_bar_and_config():
     # the meta line and the pre-Alpine skeleton
     assert 'class="meta ex-meta" x-show="metaText" x-cloak x-text="metaText"' in body
     assert 'class="ex-boot" x-show="false" aria-hidden="true"' in body
-    # the words: «إخراج», never «تصدير»; the page is a grid of cards: the readiness across the top, one card per
-    # format (two columns on wide screens), the history across the bottom
+    # the words: «إخراج», never «تصدير»; the page is a grid of cards: the readiness across the top, one card
+    # per format (two columns on wide screens), the history across the bottom
     assert "تصدير" not in _sources()
     assert '<div class="ex-grid" data-formats>' in body
     assert body.index("data-readiness") < body.index("data-formats") < body.index("data-history")
@@ -123,20 +123,22 @@ def test_readiness_rows_with_their_links():
     block = _between(body, "data-readiness", "</section>")
     assert '<h2 class="ex-title" id="ex-ready-title">قبل الإخراج</h2>' in block
     assert 'x-show="readiness.length"' in body  # no rows (no manuscript): no block
-    # the head: the tone's icon (the alert while a warning is left, a check when the book is clear) and what the
-    # count counts: «3 ملاحظات» (every row but the all-clear one), amber while any of them warns
+    # the head: the tone's icon (the alert while a warning is left, a check when the book is clear) and what
+    # the count counts: «3 ملاحظات» (every row but the all-clear one), amber while any of them warns
     assert (
         '<section class="ex-card ex-ready" :class="\'is-\' + readyLevel" aria-labelledby="ex-ready-title" '
         'x-show="readiness.length" x-cloak data-readiness>' in body
     )
-    assert ':href="\'#\' + levelIcon(readyLevel)"' in block
+    assert ":href=\"'#' + levelIcon(readyLevel)\"" in block
     assert (
         '<span class="badge ex-ready-count" :class="{ \'badge-warning\': warnCount }" x-show="noteCount" '
         'x-text="noteText"></span>' in block
     )
     # a row: its level's icon (never a dot alone), the message
-    assert 'x-for="(r, i) in readiness"' in block and '<li class="ex-check" :class="\'is-\' + r.level">' in block
-    assert ':href="\'#\' + levelIcon(r.level)"' in block and 'x-text="r.message"' in block
+    assert (
+        'x-for="(r, i) in readiness"' in block and '<li class="ex-check" :class="\'is-\' + r.level">' in block
+    )
+    assert ":href=\"'#' + levelIcon(r.level)\"" in block and 'x-text="r.message"' in block
     # the link to the fix on the end side, with a mirrored chevron
     assert '<template x-if="r.action && r.action.url">' in block
     assert '<a class="link ex-fix" :href="r.action.url"><span x-text="r.action.label"></span>' in block
@@ -152,9 +154,9 @@ def test_every_format_is_drawn_from_its_form_never_hardcoded():
         ':data-ex-format="f.key" :disabled="!canEdit"' in block
         and 'class="sr-only" x-text="f.label"' in block
     )
-    # the head: the format's icon and purpose from its key (with the state's dot at the icon's corner), the label,
-    # the extension in its own LTR <bdi>, «لم يُخرَج بعد» / «غير متاحة بعد»
-    assert ':href="\'#\' + formatIcon(f.key)"' in block and 'x-text="formatPurpose(f.key)"' in block
+    # the head: the format's icon and purpose from its key (with the state's dot at the icon's corner), the
+    # label, the extension in its own LTR <bdi>, «لم يُخرَج بعد» / «غير متاحة بعد»
+    assert ":href=\"'#' + formatIcon(f.key)\"" in block and 'x-text="formatPurpose(f.key)"' in block
     assert '<span class="dot ex-head-dot" :class="stateOf(f).dot" x-show="stateOf(f).dot"></span>' in block
     assert '<bdi dir="ltr" x-text="f.extension"></bdi><span x-text="headNote(f)"></span>' in block
     assert '<template x-if="f.available">' in block
@@ -182,10 +184,14 @@ def test_every_format_is_drawn_from_its_form_never_hardcoded():
     # the choices, their hints and the option labels live in the payload only (§3.1)
     sources = _sources()
     config = _fixture("page")
-    for choice in config["formats"][0]["form"]["kashida"]["choices"]:
-        for text in (choice["title"], choice["hint"], f">{choice['label']}<"):
-            assert text not in sources, text
-    assert config["formats"][0]["form"]["comments"]["label"] not in sources
+    for fmt in config["formats"]:  # Word's kashida and comments, the print PDF's bleed and crop marks…
+        for field in fmt["form"].values():
+            for choice in field.get("choices") or []:
+                for text in (choice["title"], choice["hint"], f">{choice['label']}<"):
+                    assert text not in sources, text
+            for text in (field.get("label"), field.get("hint")):
+                assert not text or text not in sources, text
+    assert config["formats"][1]["form"]["bleed_mm"]["choices"]  # the real payload: the print form is there
     for fmt in config["formats"]:
         assert f">{fmt['label']}<" not in sources  # Word, «PDF للطباعة»… come from the payload
 
@@ -197,9 +203,13 @@ def test_the_state_row_has_every_state():
     # over to the running strip while an export runs; editors only
     assert 'class="btn btn-primary ex-go" x-show="canEdit && !isRunning(f)"' in state
     assert ':disabled="!canStart(f)" @click="start(f.key)"' in state and 'x-text="goLabel(f)"' in state
-    # one state at a time, re-keyed so it cross-fades (the status line, «إلغاء» beside it, the details under it,
-    # «تنزيل» in the actions row); the status line takes the focus after a start
-    assert state.count('x-for="s in [stateOf(f)]" :key="stateKey(s)"') == 4
+    # one state at a time, re-keyed so it cross-fades (the status line, the details under it, «تنزيل» in the
+    # actions row); «إلغاء» is keyed by its export, so queued → running keeps the button (and its focus); the
+    # status line takes the focus after a start
+    assert state.count('x-for="s in [stateOf(f)]" :key="stateKey(s)"') == 3
+    assert state.count('x-for="s in [stateOf(f)]" :key="cancelKey(s)"') == 1
+    extra = _between(state, ':key="cancelKey(s)"', "</template>\n      </span>")
+    assert "ex-cancel" in extra
     assert 'class="ex-status" tabindex="-1" :data-ex-status="f.key"' in state  # stays: it keeps its focus
     assert state.index("data-ex-status") < state.index('x-for="s in [stateOf(f)]"')
     assert "isFresh(f, s) ? 'is-fresh' : ''" in state  # the success dot blooms in once
@@ -229,7 +239,7 @@ def test_the_history_rows_and_their_empty_and_loading_states():
     assert '<h2 class="ex-title" id="ex-history-title">السجل</h2>' in history
     assert 'x-show="items.length" x-cloak x-text="itemsText"' in history  # «4 ملفات»
     # a row: the format's icon with the status dot at its corner
-    assert ':href="\'#\' + formatIcon(row.format)"' in history
+    assert ":href=\"'#' + formatIcon(row.format)\"" in history
     assert 'class="ed-snap-skeleton" x-show="false" aria-hidden="true"><span></span><span></span>' in history
     assert (
         'x-for="row in items" :key="row.id"' in history
@@ -281,6 +291,11 @@ def test_the_download_symbol_and_the_compiled_css():
         r"@media \(max-width:760px\)\{[^@]*\.ex-grid[^{]*\{[^}]*grid-template-columns:minmax\(0,1fr\)", css
     )  # one column on phones
     assert re.search(r"prefers-reduced-motion:reduce\)\{[^@]*\.ex-dot\.is-fresh[^{]*\{animation:none", css)
+    # the history's hairline between two rows: the x-for <template> is the list's first child, so a
+    # `:first-child` rule never matched and the first row carried a line above it
+    assert ".ex-row+.ex-row{border-top:1px solid var(--color-border)}" in css
+    assert re.search(r"\.ex-row\{border-top:0;", css) and ".ex-row:first-child" not in css
+    assert ".ex-row:first-of-type{padding-top:0}" in css
 
 
 # ---------------------------------------------------------------- the page view and the entry points
@@ -411,8 +426,10 @@ globalThis.document = { hidden: false, activeElement: null, documentElement: { d
   addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); },
   createElement: () => ({}), querySelector: (sel) => (sel === 'meta[name="csrf-token"]' ? { content: 'tok' } : node(sel)), querySelectorAll: () => [] };
 globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
-globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
-globalThis.clearTimeout = () => {}; globalThis.setInterval = () => 1; globalThis.clearInterval = () => {};
+let tid = 0;
+globalThis.setTimeout = (fn, ms) => { tid += 1; timers.push({ fn, ms, id: tid }); return tid; };
+globalThis.clearTimeout = (id) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); };
+globalThis.setInterval = () => 1; globalThis.clearInterval = () => {};
 const NOW = Date.parse('2026-09-26T12:02:13+02:00'); Date.now = () => NOW;
 const fs = require('fs'); const path = require('path');
 const [js, fixtures] = [process.argv[2], process.argv[3]];
@@ -491,7 +508,7 @@ const X = NassakhExport;
   queue.push([200, rows.running]);
   await runTimer();
   out.poll1 = { url: calls[calls.length - 1][1], state: c.stateOf(f).kind, text: c.stateOf(f).text, next: timers[timers.length - 1].ms, history: c.historyTitle(c.items[0]) };
-  const doneRow = Object.assign(clone(rows.done), { id: 14, filename: 'كتابي - مع التعليقات.docx', options: { kashida: 'low', comments: true }, options_text: 'كشيدة خفيفة · تعليقات' });
+  const doneRow = Object.assign(clone(rows.done), { id: 14, filename: 'كتابي - مع التعليقات.docx', options: { kashida: 'low', comments: true }, options_text: 'كشيدة خفيفة · تعليقات', updated_at: '2026-09-26T10:05:03.200000+02:00' });
   const after = clone(page); after.formats[0].latest = doneRow; after.items = [doneRow].concat(page.items); after.readiness = page.readiness.slice(1);
   queue.push([200, doneRow], [200, after]);
   document.activeElement = 'inside';
@@ -507,7 +524,7 @@ const X = NassakhExport;
   timers.length = 0; calls.length = 0;
   queue.push([409, load('response-conflict')]);
   const r409 = await c2.start('docx');
-  out.conflict = { ok: r409, error: c2.errorOf(f2), active: f2.active.id, state: c2.stateOf(f2).kind, text: c2.stateOf(f2).text, canStart: c2.canStart(f2), next: timers[timers.length - 1].ms };
+  out.conflict = { ok: r409, error: c2.errorOf(f2), active: f2.active.id, state: c2.stateOf(f2).kind, text: c2.stateOf(f2).text, canStart: c2.canStart(f2), next: timers[timers.length - 1].ms, focus: focused.pop() };
   const c3 = make(page); const f3 = c3.fmt('docx'); const [kash3] = c3.fieldsOf(f3);
   queue.push([400, load('response-bad-options')]);
   await c3.start('docx');
@@ -546,7 +563,7 @@ const X = NassakhExport;
   const c5 = make(running); const f5 = c5.fmt('docx');
   queue.push([200, Object.assign(clone(rows.cancelled), { id: 14 })], [200, page]);
   await c5.cancel('docx'); await flush();
-  out.cancel = { call: calls[0].slice(0, 2).concat([calls[0][3]]), active: f5.active, state: c5.stateOf(f5).kind, name: c5.stateOf(f5).name, live: c5.live,
+  out.cancel = { call: calls[0].slice(0, 2).concat([calls[0][3]]), active: f5.active, state: c5.stateOf(f5).kind, name: c5.stateOf(f5).name, live: c5.live, focus: focused.pop(),
     refreshed: calls.length > 1 ? calls[1].slice(0, 2) : null, history: c5.items.map((r) => [r.id, r.status]) };
   const c6 = make(running); const f6 = c6.fmt('docx');
   queue.push([409, Object.assign(load('response-finished'), { row: Object.assign(clone(rows.done), { id: 14 }) })], [200, page]);
@@ -667,14 +684,14 @@ def test_export_component_start_poll_done_conflict_backoff_cancel_and_keys(tmp_p
     assert out["backoff"] == [2000, 4000, 6000, 8000, 10000, 10000]
     assert out["fill"] == "/api/books/19/exports/14/cancel/"
 
-    # the page: the store, the primary (Word is the only format), the heads, the kashida hint following the
-    # choice
+    # the page: the store, the heads (all four formats available, as the real exporters answer: no single
+    # primary format), the kashida hint following the choice
     init = out["init"]
     assert init["view"] is True and init["bar"] is True and init["polls"] == 0  # nothing runs: no poll
-    assert init["meta"] == out["meta"][0] and init["warn"] == 2 and init["go"] == "إخراج Word"
-    assert init["primary"] == [True, False, False, False]
-    assert init["headNote"] == ["", " · غير متاحة بعد", " · غير متاحة بعد", " · غير متاحة بعد"]
-    assert init["canStart"] == [True, False, False, False] and init["state"] == "done"
+    assert init["meta"] == out["meta"][0] and init["warn"] == 3 and init["go"] == "إخراج Word"
+    assert init["primary"] == [False, False, False, False]
+    assert init["headNote"] == ["", " · لم يُخرَج بعد", " · لم يُخرَج بعد", " · لم يُخرَج بعد"]
+    assert init["canStart"] == [True, True, True, True] and init["state"] == "done"
     assert out["hints"] == [word_hint, medium_hint, "يغيّر Word فواصل الأسطر فيطول الكتاب كثيرًا عن المعاينة."]
     assert out["picked"] == [False, False, True, False] and out["tabs"] == [-1, -1, 0, -1]
     # RTL: ← is the next choice (wrapping), → the previous, Home / End; other keys are left alone
@@ -718,7 +735,7 @@ def test_export_component_start_poll_done_conflict_backoff_cancel_and_keys(tmp_p
         ["GET", "/api/books/19/exports/"],
     ]
     assert done["items"] == [14, 12, 11, 10] and done["focus"] == '[data-ex-download="docx"]'
-    assert done["polls"] == 0 and done["readiness"] == 2 and done["active"] is None
+    assert done["polls"] == 0 and done["readiness"] == 3 and done["active"] is None
     assert done["values"] == {"kashida": "low", "comments": True}  # the choices being made stay
     assert done["download"] == "/books/19/exports/12/download/"
 
@@ -727,10 +744,12 @@ def test_export_component_start_poll_done_conflict_backoff_cancel_and_keys(tmp_p
     assert conflict["ok"] is False and conflict["error"] == "هذا الملف يُخرَج الآن؛ انتظر انتهاءه أو ألغِه."
     assert conflict["active"] == 14 and conflict["state"] == "running" and conflict["text"] == "كتابة الملف…"
     assert conflict["canStart"] is False and conflict["next"] == 0
+    assert conflict["focus"] == '[data-ex-status="docx"]'  # the pressed button gave way to the running strip
+    # the card's alert reads a refused start out: the live region stays quiet (not said twice)
     assert out["badOptions"] == {
         "error": "خيارات الإخراج غير صالحة.",
         "field": "قيمة غير معروفة لهذا الخيار.",
-        "live": "خيارات الإخراج غير صالحة.",
+        "live": "",
     }
     assert out["badOptionsCleared"] == ["", ""]
     assert out["noManuscript"] == "لا توجد مخطوطة بعد."
@@ -761,6 +780,7 @@ def test_export_component_start_poll_done_conflict_backoff_cancel_and_keys(tmp_p
     assert cancel["call"] == ["POST", "/api/books/19/exports/14/cancel/", "tok"]
     assert cancel["active"] is None and cancel["state"] == "done" and cancel["name"] == "كتابي.docx"
     assert cancel["live"] == "أُلغي إخراج Word" and cancel["refreshed"] == ["GET", "/api/books/19/exports/"]
+    assert cancel["focus"] == '[data-ex-go="docx"]'  # «إلغاء» is gone: the focus goes to «إخراج Word»
     assert cancel["history"] == [[12, "done"], [11, "done"], [10, "error"]]
     finished = out["cancelFinished"]
     assert (
@@ -789,3 +809,212 @@ def test_export_component_start_poll_done_conflict_backoff_cancel_and_keys(tmp_p
     assert out["readonly"] == {"canStart": False, "started": False, "requests": 0}
     # the menu: ↓ skips a disabled item and wraps, ↑ goes back
     assert out["menu"] == ["item2", "item0", "item2"]
+
+
+# ---------------------------------------------------------------- answers out of order, the pill, a hung poll
+
+RACES = r"""
+const reg = {}; const inits = []; const stores = {}; const focused = [];
+globalThis.window = globalThis;
+const node = (sel) => ({ sel, focus: () => focused.push(sel), contains: () => globalThis.document.activeElement === 'inside' });
+globalThis.document = { hidden: false, activeElement: null, documentElement: { dir: 'rtl' },
+  addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); },
+  createElement: () => ({}), querySelector: (sel) => (sel === 'meta[name="csrf-token"]' ? { content: 'tok' } : node(sel)), querySelectorAll: () => [] };
+globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
+// timers with real clear semantics, run by hand; a long poll's time limit (14 s) is told apart from the polls
+let tid = 0; const timers = new Map();
+globalThis.setTimeout = (fn, ms) => { tid += 1; timers.set(tid, { fn, ms: ms || 0 }); return tid; };
+globalThis.clearTimeout = (id) => { timers.delete(id); };
+globalThis.setInterval = () => 0; globalThis.clearInterval = () => {};
+const NOW = Date.parse('2026-09-26T12:02:13+02:00'); Date.now = () => NOW;
+const fs = require('fs'); const path = require('path');
+const [js, fixtures] = [process.argv[2], process.argv[3]];
+eval(fs.readFileSync(path.join(js, 'manuscript.js'), 'utf8'));
+eval(fs.readFileSync(path.join(js, 'export.js'), 'utf8'));
+inits.forEach((fn) => fn());
+const load = (name) => JSON.parse(fs.readFileSync(path.join(fixtures, name + '.json'), 'utf8'));
+const clone = (v) => JSON.parse(JSON.stringify(v));
+// a fetch whose answers are given by hand, in any order; an aborted request rejects as the browser's does
+const calls = [];
+globalThis.fetch = (url, init) => new Promise((resolve, reject) => {
+  const call = { method: (init && init.method) || 'GET', url, resolve, settled: false, signal: (init && init.signal) || null };
+  calls.push(call);
+  if (call.signal) call.signal.addEventListener('abort', () => {
+    if (!call.settled) { call.settled = true; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); }
+  });
+});
+const flush = async () => { for (let k = 0; k < 10; k += 1) await new Promise((r) => setImmediate(r)); };
+const answer = async (call, status, data) => { call.settled = true; call.resolve({ ok: status < 400, status, json: async () => clone(data) }); await flush(); };
+const open = (pred) => calls.find((c) => !c.settled && pred(c));
+const LIMIT = 14000;
+const polls = () => [...timers.values()].filter((t) => t.ms < LIMIT).map((t) => t.ms);
+const fire = async (which) => {
+  const due = [...timers.entries()].filter(([, t]) => which(t.ms));
+  due.forEach(([id]) => timers.delete(id)); due.forEach(([, t]) => t.fn()); await flush();
+};
+const runPolls = () => fire((ms) => ms < LIMIT);
+const make = (config) => { const c = reg.exportPage(clone(config)); c.init(); return c; };
+const spy = (c) => { const said = []; const say = c.say.bind(c); c.say = (m) => { said.push(m); say(m); }; return said; };
+const poll14 = (x) => x.url.startsWith('/api/books/19/exports/14/?');
+const page = (x) => x.url === '/api/books/19/exports/';
+const X = NassakhExport;
+const LATER = '2026-09-26T10:05:04.100000+02:00';
+(async () => {
+  const out = {};
+  // ------------------------------------------------ staleness: an export only moves on
+  const r = (status, at, id = 1) => ({ id, status, updated_at: `2026-09-26T10:05:0${at}.000000+02:00` });
+  out.staler = [X.staler(r('running', 5), r('done', 1)), X.staler(r('done', 1), r('running', 5)), X.staler(r('queued', 5), r('running', 1)),
+    X.staler(r('running', 1), r('running', 2)), X.staler(r('running', 3), r('running', 2)), X.staler(r('running', 1), null),
+    X.staler(r('running', 1, 2), r('done', 5))];
+
+  // ------------------------------------------------ two exports ending close together (Word, then EPUB)
+  {
+    const cfg = load('page-running');
+    const epubRun = Object.assign(clone(cfg.formats[0].active), { id: 20, format: 'epub', format_label: 'EPUB', filename: 'كتابي.epub', options: {}, options_text: '' });
+    cfg.formats[3].active = epubRun; cfg.items.unshift(epubRun);
+    const c = make(cfg); const fw = c.fmt('docx'); const fe = c.fmt('epub'); const said = spy(c);
+    await runPolls();                                                    // both long polls on the wire
+    const wordDone = Object.assign(clone(load('row-done')), { id: 14, updated_at: LATER, finished_at: LATER });
+    await answer(open(poll14), 200, wordDone);                           // Word ends: the page is read (R1)
+    const r1 = open(page);
+    const r1Payload = clone(cfg);                                        // R1 is read before EPUB ends
+    r1Payload.formats[0].active = null; r1Payload.formats[0].latest = wordDone;
+    r1Payload.items = r1Payload.items.map((row) => (row.id === 14 ? wordDone : row));
+    const epubDone = Object.assign(clone(epubRun), { status: 'done', status_label: 'اكتمل', size_text: '210 KB', size_bytes: 215040,
+      download_url: '/books/19/exports/20/download/', finished_at: LATER, updated_at: LATER });
+    document.activeElement = 'inside';
+    await answer(open((x) => x.url.startsWith('/api/books/19/exports/20/?')), 200, epubDone); // EPUB ends while R1 is on the wire
+    out.whileR1 = { refreshes: calls.filter(page).length, again: c.refreshAgain };
+    await answer(r1, 200, r1Payload);                                    // R1: EPUB still running there
+    const r2 = open(page);
+    out.afterR1 = { epubActive: fe.active, epubState: c.stateOf(fe).kind, top: c.items.slice(0, 2).map((row) => [row.id, row.status]),
+      polls: polls().length, second: Boolean(r2) };
+    const r2Payload = clone(r1Payload); r2Payload.formats[3].active = null; r2Payload.formats[3].latest = epubDone;
+    r2Payload.items = r2Payload.items.map((row) => (row.id === 20 ? epubDone : row));
+    await answer(r2, 200, r2Payload);
+    document.activeElement = null;
+    out.ended = { word: c.stateOf(fw).kind, epub: c.stateOf(fe).kind, refreshes: calls.filter(page).length, said,
+      focus: focused.filter((sel) => sel.includes('epub')), polls: polls().length };
+  }
+
+  // ------------------------------------------------ a cancel answered before the long poll that was on the wire
+  {
+    calls.length = 0; timers.clear(); focused.length = 0;
+    const c = make(load('page-running')); const f = c.fmt('docx'); const said = spy(c);
+    await runPolls();
+    const p1 = open(poll14);
+    const cancelled = Object.assign(clone(load('row-cancelled')), { id: 14, updated_at: '2026-09-26T10:05:03.000000+02:00' });
+    const pending = c.cancel('docx'); await flush();
+    await answer(open((x) => x.method === 'POST'), 200, cancelled); await pending;
+    const now = clone(load('page-running')); now.formats[0].active = null; now.items = now.items.map((row) => (row.id === 14 ? cancelled : row));
+    await answer(open(page), 200, now);
+    const before = Object.assign(clone(load('row-running')), { updated_at: '2026-09-26T10:05:02.500000+02:00' });
+    await answer(p1, 200, before);                                       // P1: the row as read before the cancel
+    out.race = { active: f.active, state: c.stateOf(f).kind, polls: polls().length, history: c.items.find((row) => row.id === 14).status,
+      said, focus: focused.slice(), requests: calls.length };
+  }
+
+  // ------------------------------------------------ the «تعذّر التحديث» pill: only a poll that succeeds clears it
+  {
+    calls.length = 0; timers.clear();
+    const c = make(load('page-running'));
+    for (let i = 0; i < 3; i += 1) { await runPolls(); await answer(open(poll14), 500, null); }
+    out.pill = { afterThree: [c.pollState, c.failures] };
+    const retry = c.pollNow(); await flush();
+    out.pill.whileRetrying = c.pollState;
+    await answer(open(poll14), 500, null); await retry;
+    out.pill.failedRetry = [c.pollState, c.failures, polls()];
+    await runPolls(); await answer(open(poll14), 200, load('row-running'));
+    out.pill.recovered = [c.pollState, c.failures];
+  }
+
+  // ------------------------------------------------ a 404 after failed polls: the server answered, the pill goes
+  {
+    calls.length = 0; timers.clear();
+    const c = make(load('page-running'));
+    for (let i = 0; i < 3; i += 1) { await runPolls(); await answer(open(poll14), 500, null); }
+    await runPolls(); await answer(open(poll14), 404, { detail: 'الإخراج غير موجود.' });
+    await answer(open(page), 200, load('page'));
+    out.gone = [c.pollState, c.failures, polls().length, c.fmt('docx').active];
+  }
+
+  // ------------------------------------------------ a long poll that never answers is given up and retried
+  {
+    calls.length = 0; timers.clear();
+    const c = make(load('page-running'));
+    await runPolls();
+    const hung = open(poll14);
+    out.hung = { signal: Boolean(hung.signal), limits: [...timers.values()].map((t) => t.ms) };
+    await fire((ms) => ms === LIMIT);                                    // 14 s pass
+    out.hung.after = [hung.settled, c.failures, polls()];
+    await runPolls();
+    out.hung.polls = calls.filter(poll14).length;
+  }
+
+  // ------------------------------------------------ queued → running keeps «إلغاء» (its key is the export)
+  {
+    calls.length = 0; timers.clear();
+    const c = make(load('page')); const f = c.fmt('docx');
+    const started = c.start('docx'); await flush();
+    await answer(open((x) => x.method === 'POST'), 202, load('row-queued')); await started;
+    const queued = [c.cancelKey(c.stateOf(f)), c.stateKey(c.stateOf(f))];
+    await runPolls(); await answer(open(poll14), 200, load('row-running'));
+    out.keys = [queued, [c.cancelKey(c.stateOf(f)), c.stateKey(c.stateOf(f))]];
+  }
+  process.stdout.write(JSON.stringify(out) + '\n');
+  process.exit(0);
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_export_component_answers_out_of_order_the_pill_and_a_hung_poll(tmp_path):
+    """F1–F3, F6, F7 of the Phase 6 review: an export seen final never comes back as running (two exports
+    ending close together, a cancel racing a long poll), a refresh asked for while one is on the wire runs
+    once more, the pill stays until a poll succeeds, a 404 clears it, a hung long poll is given up."""
+    harness = tmp_path / "races.js"
+    harness.write_text(RACES, encoding="utf-8")
+    run = subprocess.run(
+        ["node", str(harness), str(JS), str(FIXTURES)], capture_output=True, text=True, timeout=30
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+
+    # a row only moves on: final never back to running, running never back to queued, older never over newer
+    assert out["staler"] == [True, False, True, True, False, False, False]
+
+    # EPUB ends while the payload read after Word's end is on the wire: that refresh is not dropped but runs
+    # again, the stale payload never brings EPUB back as running, and each export is announced once
+    assert out["whileR1"] == {"refreshes": 1, "again": True}
+    assert out["afterR1"] == {
+        "epubActive": None,
+        "epubState": "done",
+        "top": [[20, "done"], [14, "done"]],
+        "polls": 0,
+        "second": True,
+    }
+    ended = out["ended"]
+    assert ended["word"] == "done" and ended["epub"] == "done" and ended["refreshes"] == 2
+    assert ended["said"] == ["اكتمل ملف Word · 318 KB", "اكتمل ملف EPUB · 210 KB"]
+    assert ended["focus"] == ['[data-ex-download="epub"]'] and ended["polls"] == 0
+
+    # a long poll read before the cancel answers after it: nothing comes back, nothing is polled again
+    race = out["race"]
+    assert race["active"] is None and race["state"] == "done" and race["polls"] == 0
+    assert race["history"] == "cancelled" and race["said"] == ["أُلغي إخراج Word"]
+    assert race["focus"] == ['[data-ex-go="docx"]'] and race["requests"] == 3  # poll, cancel, the page
+
+    # the pill: shown after three failures, kept while the retry is on the wire and after it fails (the
+    # back-off goes on: 8 s), gone once a poll succeeds
+    assert out["pill"] == {
+        "afterThree": ["error", 3],
+        "whileRetrying": "error",
+        "failedRetry": ["error", 4, [8000]],
+        "recovered": ["ok", 0],
+    }
+    # the row gone (404) after failures: the server answered, so no pill and no poll left
+    assert out["gone"] == ["ok", 0, 0, None]
+    # a hung long poll: sent with a time limit (wait + 10 s), given up then (a failure), retried after 2 s
+    assert out["hung"] == {"signal": True, "limits": [14000], "after": [True, 1, [2000]], "polls": 2}
+    # «إلغاء» keeps its key from queued to running (the status line's key moves on)
+    assert out["keys"] == [["active:14", "queued:14"], ["active:14", "running:14"]]

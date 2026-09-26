@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from lxml import etree
 
 from publishing.html import CONTENTS_TITLE, CREDIT_LABELS, EDITION_LABEL, ISBN_LABEL
-from publishing.model import Book, PageSetup
+from publishing.model import Block, Book, PageSetup
 
 from .ooxml import field_runs, fld_char, mm_to_pt, pt_to_mm, root, run, text, twips, twips_mm, w
 from .options import BIDI_LEFT_IS_START, MIRROR_PGMAR_LEFT
@@ -116,17 +116,22 @@ def resolve_flow(paras: list[Para], table: dict[str, ParaStyle]) -> None:
 
 
 class Bookmarks:
-    """Unique bookmark names (`_Toc_<id>`, `_nk_ch_<id>`, at most 40 characters) and their integer ids."""
+    """Unique bookmark names (`_Toc_<id>`, `_nk_ch_<id>`, at most 40 characters) and their integer ids.
+
+    `heading(block)` names a heading once per occurrence, so its contents entry and the heading share
+    the name while two headings with the same block id (or none) each get their own; `new` gives a
+    fresh name on every call; `name` one per `(prefix, value)`, for callers whose values are unique
+    (the calibration file's item codes)."""
 
     def __init__(self) -> None:
         self.names: dict[tuple[str, str], str] = {}
+        self.headings: dict[int, str] = {}
         self.taken: set[str] = set()
         self.next_id = 0
 
-    def name(self, prefix: str, value: str) -> str:
-        key = (prefix, value)
-        if key in self.names:
-            return self.names[key]
+    def new(self, prefix: str, value: str) -> str:
+        """A name not given before: the prefix and `value` made safe, cut to 40 characters, then `_2`,
+        `_3`… while it is taken."""
         base = _BOOKMARK_SAFE.sub("_", value or "") or "x"
         candidate = (prefix + base)[:BOOKMARK_MAX]
         k = 2
@@ -135,8 +140,21 @@ class Bookmarks:
             candidate = (prefix + base)[: BOOKMARK_MAX - len(suffix)] + suffix
             k += 1
         self.taken.add(candidate)
-        self.names[key] = candidate
         return candidate
+
+    def name(self, prefix: str, value: str) -> str:
+        """The name of `(prefix, value)`, the same on every call."""
+        key = (prefix, value)
+        if key not in self.names:
+            self.names[key] = self.new(prefix, value)
+        return self.names[key]
+
+    def heading(self, block: Block) -> str:
+        """The `_Toc_<id>` bookmark of this heading block (the same object, the same name)."""
+        key = id(block)
+        if key not in self.headings:
+            self.headings[key] = self.new("_Toc_", block.id)
+        return self.headings[key]
 
     def wrap(self, name: str, content: list[etree._Element]) -> list[etree._Element]:
         """`content` between a `bookmarkStart` and its `bookmarkEnd`."""
@@ -228,12 +246,54 @@ def page_field(rpr_factory=None) -> list[etree._Element]:
     return field_runs("PAGE", [run(text("1"), rpr=rpr_factory() if rpr_factory else None)], rpr_factory)
 
 
+def _instruction(value: str, rpr_factory) -> etree._Element:
+    """An `instrText` run holding `value` exactly (a piece of a field code around a nested field)."""
+    return run(w("instrText", value, xml_space="preserve"), rpr=rpr_factory())
+
+
+def parity_page_field(odd: bool, rpr_factory) -> list[etree._Element]:
+    """The page number on odd pages only (`odd`) or on even pages only:
+    `IF { =MOD({ PAGE },2) } = 1 "{ PAGE }" ""` (`= 0` for even), which Word evaluates on every page
+    of a header or footer. The cached results are page 1's."""
+
+    def begin():
+        return fld_char("begin", rpr_factory())
+
+    def separate():
+        return fld_char("separate", rpr_factory())
+
+    def end():
+        return fld_char("end", rpr_factory())
+
+    def one():
+        return run(text("1"), rpr=rpr_factory())
+
+    remainder = [begin(), _instruction(" =MOD(", rpr_factory), *page_field(rpr_factory)]
+    remainder += [_instruction(",2) ", rpr_factory), separate(), one(), end()]
+    return [
+        begin(),
+        _instruction(" IF ", rpr_factory),
+        *remainder,
+        _instruction(f' = {1 if odd else 0} "', rpr_factory),
+        *page_field(rpr_factory),
+        _instruction('" "" ', rpr_factory),
+        separate(),
+        *([one()] if odd else []),
+        end(),
+    ]
+
+
 def _number_rpr() -> etree._Element:
     return rpr(rstyle="PageNumber")
 
 
 class HeaderFooterPlan:
-    """The header and footer parts of the body sections (§5.7's table)."""
+    """The header and footer parts of the body sections (§5.7's table).
+
+    A part's signature is `(kind, side, running text)`. `side` is where the page number sits (`left`,
+    `right`, `center`), `empty` for an opener's header without a number, or `parity` for the part of a
+    chapter opener with outer numbers when an opener may fall on either side (`chapter_opening` any):
+    the number at the left on odd pages and at the right on even ones, by a field."""
 
     def __init__(self, setup: PageSetup, writer: RunWriter):
         self.setup = setup
@@ -254,10 +314,16 @@ class HeaderFooterPlan:
             else "none"
         )
 
-    def needed(self, running_text: str) -> tuple[dict[tuple[str, str], tuple], bool]:
-        """`(kind, type) → signature` of the parts a section wants, and whether it sets `titlePg`."""
+    def needed(
+        self, running_text: str, *, continuous: bool = False
+    ) -> tuple[dict[tuple[str, str], tuple], bool]:
+        """`(kind, type) → signature` of the parts a section wants, and whether it sets `titlePg`: a
+        chapter opener (a section that starts a page) with a running header; never a continuous
+        section, whose first page is not an opener."""
         numbers = self.numbers
-        has_header = bool(running_text) or numbers == "top_outer"
+        title_pg = bool(running_text) and not continuous
+        # with recto openings every opener is an odd page; else an opener's number follows its page
+        opener_side = "left" if self.setup.chapter_opening == "recto" else "parity"
         wanted: dict[tuple[str, str], tuple] = {}
         if numbers == "bottom_center":
             wanted[("ftr", "default")] = ("ftr", "center", "")
@@ -267,21 +333,22 @@ class HeaderFooterPlan:
         if numbers == "top_outer":
             wanted[("hdr", "default")] = ("hdr", "left", running_text)
             wanted[("hdr", "even")] = ("hdr", "right", running_text)
-            if running_text:
-                wanted[("hdr", "first")] = ("hdr", "left", "")
+            if title_pg:
+                wanted[("hdr", "first")] = ("hdr", opener_side, "")
         elif running_text:
             wanted[("hdr", "default")] = ("hdr", "center", running_text)
             if self.even_and_odd:
                 wanted[("hdr", "even")] = ("hdr", "center", running_text)
-            wanted[("hdr", "first")] = ("hdr", "empty", "")
-        title_pg = has_header and bool(running_text)
+            if title_pg:
+                wanted[("hdr", "first")] = ("hdr", "empty", "")
         if title_pg and ("ftr", "default") in wanted:  # the opener keeps its page number (the preview does)
-            wanted[("ftr", "first")] = wanted[("ftr", "default")]
+            footer = wanted[("ftr", "default")]
+            wanted[("ftr", "first")] = ("ftr", opener_side, "") if numbers == "bottom_outer" else footer
         return wanted, title_pg
 
-    def references(self, running_text: str) -> tuple[list[HdrFtrPart], bool]:
+    def references(self, running_text: str, *, continuous: bool = False) -> tuple[list[HdrFtrPart], bool]:
         """The parts a section declares (new parts, to register) and its `titlePg`."""
-        wanted, title_pg = self.needed(running_text)
+        wanted, title_pg = self.needed(running_text, continuous=continuous)
         declared: list[HdrFtrPart] = []
         for key, signature in wanted.items():
             if self.effective.get(key) == signature:
@@ -295,6 +362,24 @@ class HeaderFooterPlan:
 
     def build(self, signature: tuple) -> etree._Element:
         kind, side, running_text = signature
+        style = "Header" if kind == "hdr" else "Footer"
+        width = mm_to_pt(text_width_mm(self.setup))
+        if side == "parity":
+            # an LTR paragraph (left and right are physical) with a right tab at the text's end: the odd
+            # pages' number before the tab, the even pages' after it
+            ppr = w(
+                "pPr",
+                w("pStyle", val=style),
+                w("tabs", w("tab", val="right", pos=twips(width))),
+                w("bidi", val=0),
+                w("jc", val="left"),
+            )
+            content = [
+                *parity_page_field(True, _number_rpr),
+                run(w("tab")),
+                *parity_page_field(False, _number_rpr),
+            ]
+            return root(kind, w("p", ppr, *content))
         if kind == "ftr":
             jc = None if side == "center" else side
             paragraph = w(
@@ -309,22 +394,20 @@ class HeaderFooterPlan:
             return root(
                 "hdr", w("p", w("pPr", w("pStyle", val="Header")), *self.writer.text_runs(running_text))
             )
-        # top_outer: the number at the outer edge; the running text at a centre tab (an LTR paragraph)
-        width = mm_to_pt(text_width_mm(self.setup))
+        # top_outer: an LTR paragraph (left and right are physical) with the number at the outer edge
+        text_runs = self.writer.text_runs(running_text) if running_text else []
+        if not text_runs:  # the number alone: aligned to its edge, no tab stops to land on
+            ppr = w("pPr", w("pStyle", val="Header"), w("bidi", val=0), w("jc", val=side))
+            return root("hdr", w("p", ppr, *page_field(_number_rpr)))
+        # with the running text at a centre tab
         tabs = w(
             "tabs", w("tab", val="center", pos=twips(width / 2)), w("tab", val="right", pos=twips(width))
         )
         ppr = w("pPr", w("pStyle", val="Header"), tabs, w("bidi", val=0), w("jc", val="left"))
-        text_runs = self.writer.text_runs(running_text) if running_text else []
         if side == "left":
-            content = [*page_field(_number_rpr)]
-            if text_runs:
-                content += [run(w("tab")), *text_runs]
+            content = [*page_field(_number_rpr), run(w("tab")), *text_runs]
         else:
-            content = []
-            if text_runs:
-                content += [run(w("tab")), *text_runs]
-            content += [run(w("tab")), *page_field(_number_rpr)]
+            content = [run(w("tab")), *text_runs, run(w("tab")), *page_field(_number_rpr)]
         return root("hdr", w("p", ppr, *content))
 
 
@@ -416,14 +499,15 @@ def contents_page(
     book: Book, writer: RunWriter, bookmarks: Bookmarks, pages: dict[str, int] | None
 ) -> list[Para]:
     """«المحتويات» and the TOC field with its result written in advance: one `TOC1` / `TOC2` paragraph
-    per entry, each a hyperlink to the heading's bookmark, the end tab and a PAGEREF with the page the
-    preview printed (no number when the plan has none)."""
+    per entry, each a hyperlink to its own heading's bookmark (`Bookmarks.heading`, the one the heading
+    gets), the end tab and a PAGEREF with the page the preview printed (no number when the plan has
+    none)."""
     entries = book.contents()
     if not entries:
         return []
     paras = [Para("TOCHeading", writer.text_runs(CONTENTS_TITLE, role="heading"))]
-    for index, entry in enumerate(entries):
-        name = bookmarks.name("_Toc_", entry.target)
+    for index, (entry, (_chapter, block)) in enumerate(zip(entries, book.headings(), strict=True)):
+        name = bookmarks.heading(block)
         page = (pages or {}).get(entry.target)
         result = [run(text(str(page)))] if page is not None else []
         link = w(

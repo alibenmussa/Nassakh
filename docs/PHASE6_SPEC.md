@@ -746,8 +746,12 @@ values as plain justify, which is acceptable.
   once a second (the engine asks it between passes).
 - **`cancel_export(row)`.** A queued or running row becomes `cancelled` and its task is revoked (`preview.revoke`).
   Cancelling an already cancelled row is a no-op; a done or failed row gives 409 `FINISHED`.
-- **Abandoned exports**, detected as `preview._abandoned` does, from `created_at`:
-  - a queued or running row older than the soft limit plus 5 minutes shows as `error ABANDONED`;
+- **Abandoned exports** (amended after the review, 2026-09-26):
+  - a queued row created longer than the soft limit plus 5 minutes ago shows as `error ABANDONED`;
+  - a running row is judged by its heartbeat: `updated_at` (every progress report, and at least one write a minute
+    from `Reporter.cancelled`) older than 10 minutes — a dead worker: `acks_late` without `reject_on_worker_lost` never
+    runs it again — or a start longer than the soft limit plus 5 minutes ago; a healthy export that waited in the
+    queue is never shown abandoned while it runs;
   - a row queued for more than 60 s carries `waiting_hint` «لم يبدأ الإخراج بعد؛ تأكّد من تشغيل عامل المهام بعد آخر تحديث (make worker).»
 - **Stale exports.** `stale_reasons(row, current)` returns `text` (a different manuscript version), `format` (a
   different stylesheet hash) or `renderer` (a different renderer).
@@ -847,11 +851,14 @@ server-side Arabic count helper (the `layout._lines_phrase` pattern), with Weste
 | Code | Source | Level | Message | Action |
 |---|---|---|---|---|
 | `uncertain_words` | `uncertain.count` + the Kraken numbers (`Word.number`, added in `attach_readings` when the token's `src` is `kraken`) | warn | «بقيت 12 كلمة غير مؤكَّدة في النص، منها 3 أرقام.» | «غير المؤكَّدة» → `?tab=uncertain` |
+| `pages_unreviewed` | the book's pages (those the manuscript's assembly run included, `run.included`) that are still `ocr_done` now | warn | «77 صفحة في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 3، 4، 7…» (at most 8 numbers, then «…»; the dual «صفحتان … لم تُراجَعا بعد؛ نصّهما …») | «المراجعة» → `review:next` |
+| `pages_missing` | pages of the book, not excluded, that are not in it: still processing, in error, or left out as unreviewed | warn | «صفحتان لم تدخلا الكتاب بعد: 91، 92.» | «المراجعة» → `review:next`; «المعالجة» → the dashboard when none of them can be reviewed yet (all still in the pipeline or in error) |
+| `stray_notes` | a body paragraph of one source page whose text starts with a note marker («(n)», «[n]», n from 1 to 15, Western or Arabic-Indic digits, or «*») followed by text, at most 80 words, in the run of such paragraphs that ends its page (a run that is not the whole page) | warn | «3 فقرات في أواخر صفحاتها تبدأ بعلامة حاشية مثل «(1)» ولم تُربَط حاشيةً: ص 5، 12، 30.» (the first one's marker) | «عرض» → the book page on the first one's chapter (`?chapter=`; the book page cannot open a block yet) |
 | `review_drift` | `editor.services.review_drift` | warn | «تغيّر نص 4 صفحات في المراجعة بعد التحرير.» | «الكتاب» → the book page |
 | `assembly_running` | an `AssemblyRun` queued or running | warn | «يجري تجميع الكتاب الآن؛ يُخرَج النص كما هو عند بدء الإخراج.» | |
 | `book_details` | `setup.details` and the front flags | info | «بيانات الكتاب بلا مؤلف؛ يُكتب في صفحة العنوان وخصائص الملف.» / «صفحة الحقوق بلا ناشر ولا سنة.» | «بيانات الكتاب» → `?tab=format` |
 | `no_headings` | `book_model(...).contents() == []` | info | «لا عناوين فصول في الكتاب؛ ستخلو المحتويات.» | |
-| `clear` | none of the above | success | «لا ملاحظات؛ الكتاب جاهز للإخراج.» | |
+| `clear` | none of the above (never beside a warn or info row) | success | «كل الصفحات مُراجَعة ولا ملاحظات؛ الكتاب جاهز للإخراج.» | |
 
 **The Word differences** (`formats[docx].notes`, from `DocxExporter.notes`):
 
@@ -992,13 +999,21 @@ While it runs, the state row reads `[ إلغاء ]  كتابة الملف…  �
 - **Polling.** After a POST, or on load with `formats[].active`, the page long-polls
   `api:export?wait=4&since=<updated_at>` until the status is final, then fetches the list once. On errors it backs off
   from 2 s to 10 s, as `stage.js` does. It pauses while the tab is hidden and does not poll when idle. Leaving the page
-  never stops an export.
+  never stops an export. (After the review, 2026-09-26:) a long poll with no answer after 14 s is given up and counts as
+  a failed poll; the pill «تعذّر التحديث» and the back-off clear only when a poll succeeds (or the server answers 404);
+  a refresh asked for while one is on the wire runs once more after it; answers may arrive out of order, so the page
+  keeps the newest version of every row it saw: an export only moves on (queued → running → final) and an older
+  `updated_at` never replaces a newer one.
 - **Keyboard and focus.**
   - No single-key shortcuts. `Esc` closes a menu.
   - The segmented control uses `aria-pressed`, ←/→ and Space/Enter.
   - Each section is a `fieldset` with an sr-only `legend`.
   - **Start:** the button disables, focus moves to the status line (`tabindex=-1`), and the live region says «بدأ
     إخراج Word».
+  - **409:** focus moves to the status line (the running export), and the card's `role="alert"` line reads the
+    message (a refused start is not said again in the live region).
+  - **Cancel:** focus moves to «إخراج Word» (else the status line); «إلغاء» is keyed by its export, so it stays (with
+    its focus) from queued to running.
   - **Done:** if focus is inside the section, it moves to «تنزيل»; the live region says «اكتمل ملف Word · 1.2 MB».
   - **Failure:** the live region says «تعذّر إخراج Word».
 - **Motion** (muted):
@@ -1036,9 +1051,9 @@ While it runs, the state row reads `[ إلغاء ]  كتابة الملف…  �
 | | Print (`print_pdf`) | Screen (`screen_pdf`) |
 |---|---|---|
 | Boxes | TrimBox = the trim (170×240 mm → 481.89×680.31 pt); the MediaBox grows with bleed and marks; **the BleedBox is rewritten to trim ± `bleed_mm` exactly** (WeasyPrint caps it at 10 pt) | MediaBox = TrimBox |
-| Bleed, marks | options; with crop marks, `@page { bleed: bleed + 6 mm slug; marks: crop }`, so the marks sit outside the bleed (WeasyPrint alone draws 1.5 mm marks inside a 3 mm bleed) | none |
+| Bleed, marks | options; with crop marks, `@page { bleed: bleed + 6 mm slug }` (the page grows so the marks sit outside the bleed; WeasyPrint alone draws 1.5 mm marks inside a 3 mm bleed), and the finisher draws the 8 marks of every page in pure K (`0 0 0 1 K`, 0.75 pt): each trim edge carried outwards from the media's edge half-way to the trim. WeasyPrint's `marks: crop` is not used: it draws an RGB image | none |
 | Black | pure K: every literal `#000` in the print CSS becomes `device-cmyk(0 0 0 1)`, including the page numbers, the header and the footnote rule | RGB |
-| Outline | kept | chapters at level 1 and sections at level 2 (`bookmark-level`, `bookmark-label: attr(data-label)`, where `data-label` is the heading's text without calls); the title page has none; «المحتويات» at level 1; `PageMode /UseOutlines` |
+| Outline | kept | chapters at level 1 and sections at level 2 (`bookmark-level`, `bookmark-label: attr(data-label)`, where `data-label` is the heading's text without calls); the title page has none; «المحتويات» at level 1; `PageMode /UseOutlines` when there is an outline |
 | Viewer | `ViewerPreferences {Direction /R2L, DisplayDocTitle true}`, `Trapped /False` | `Direction /R2L`, `DisplayDocTitle` |
 | Links | the contents links (they exist already) | the same; footnote call → note links are not needed (a note is always on its call's page) and cannot be built |
 | Fonts | subsets embedded, then audited | the same |

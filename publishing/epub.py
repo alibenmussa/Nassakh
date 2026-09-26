@@ -30,7 +30,11 @@ Mac is Amiri, as in the preview. `ibooks:specified-fonts` lets Apple Books use t
 
 **The check** reads the file back with ebooklib and lxml: `mimetype` first and stored, every XHTML
 document well formed and right to left, every noteref's target and every back link present, the spine
-right to left, the nav and the fonts in the manifest. A file that fails is an `InvalidExport`.
+right to left and never empty (a book with nothing to read has its nav as the one document), the nav and
+the fonts in the manifest. A file that fails is an `InvalidExport`.
+
+**Text** goes in without the characters XML 1.0 forbids (`xml_safe`: C0 controls such as an OCR'd
+vertical tab or form feed, lone surrogates, U+FFFE / U+FFFF), in the documents, the metadata and the NCX.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ import io
 import re
 import uuid
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -76,14 +80,22 @@ SOURCE_PAGES = "أرقام الصفحات الأصلية في الهامش لا 
 
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_-]")
 _ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
+# what XML 1.0 forbids in a document (C0 controls but tab, line feed and carriage return; lone surrogates;
+# U+FFFE, U+FFFF): an OCR'd vertical tab or form feed would make a chapter unreadable
+_NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def xml_safe(value) -> str:
+    """`value` as text without the characters XML 1.0 forbids."""
+    return _NOT_XML.sub("", str(value))
 
 
 def _text(value: str) -> str:
-    return escape(value, quote=False)
+    return escape(xml_safe(value), quote=False)
 
 
 def _attr(value) -> str:
-    return escape(str(value), quote=True)
+    return escape(xml_safe(value), quote=True)
 
 
 # ====================================================================== identifiers and metadata
@@ -106,6 +118,16 @@ def publication_year(value: str) -> str:
 def _utc(value: datetime | None) -> datetime:
     value = value or datetime.now(UTC)
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _safe_front(front):
+    """A copy of the front matter with every text `xml_safe`."""
+    values = {
+        item.name: xml_safe(getattr(front, item.name))
+        for item in fields(front)
+        if isinstance(getattr(front, item.name), str)
+    }
+    return replace(front, **values)
 
 
 # ====================================================================== the CSS
@@ -386,9 +408,9 @@ def contents_entries(book: Book, docs: dict[str, ChapterDoc]) -> list[NavEntry]:
         element = doc.headings.get(entry.target) if doc is not None else None
         if doc is None or element is None:
             continue
-        out.append(NavEntry(min(entry.level, 2), entry.text, f"{doc.file_name}#{element}"))
+        out.append(NavEntry(min(entry.level, 2), xml_safe(entry.text), f"{doc.file_name}#{element}"))
     if not out:
-        out = [NavEntry(1, doc.title or book.front.title, doc.file_name) for doc in docs.values()]
+        out = [NavEntry(1, xml_safe(doc.title or book.front.title), doc.file_name) for doc in docs.values()]
     return out
 
 
@@ -461,7 +483,7 @@ def build_epub(
     from ebooklib import epub
 
     when = _utc(created)
-    front = book.front
+    front = _safe_front(book.front)  # the metadata and the NCX go through lxml, which refuses them
     package = epub.EpubBook()
     package.set_identifier(identifier)
     package.title = front.title
@@ -528,6 +550,8 @@ def build_epub(
         spine.append(nav)
     for index, doc in enumerate(docs.values(), start=1):
         spine.append(item(f"chapter-{index:02d}", doc.file_name, XHTML, doc.content))
+    if not spine:  # a book with nothing to read: the nav is its one document (a spine is never empty)
+        spine.append(nav)
     package.add_item(epub.EpubNcx())
     package.spine = spine
     package.toc = _ncx_toc(entries)
@@ -589,6 +613,8 @@ def check_epub(data: bytes) -> list[str]:
         return [*errors, f"ebooklib cannot read the package: {exc}"]
     if package.direction != "rtl":
         errors.append(f"the spine's page-progression-direction is {package.direction!r}")
+    if not package.spine:
+        errors.append("the spine is empty: a reader has no document to open")
     fonts = [item.file_name for item in package.get_items() if item.media_type == FONT_TYPE]
     if len(fonts) != len(AMIRI_FILES):
         errors.append(f"the fonts in the manifest are {fonts}")

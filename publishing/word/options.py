@@ -125,7 +125,7 @@ NOTES: dict[str, tuple[str, str]] = {
     ),
     "font_missing": (
         "warn",
-        "الخط «{name}» غير مثبّت على هذا الجهاز؛ يُستعمل أميري بدلًا منه، كما في المعاينة.",
+        "الخط «{name}» غير مثبّت على هذا الجهاز؛ يُستعمل {fallback} بدلًا منه، كما في المعاينة.",
     ),
     "toc_update": (
         "warn",
@@ -136,7 +136,7 @@ NOTES: dict[str, tuple[str, str]] = {
         "info",
         "الصفحات أقدم من النص؛ تُرتَّب أولًا لأرقام المحتويات، فيطول الإخراج قليلًا.",
     ),
-    "blank_versos": ("info", "الصفحة البيضاء قبل الفصل تحمل رقمها في Word."),
+    "blank_versos": ("info", "الصفحة البيضاء قبل الفصل تحمل {what} في Word."),
     "source_pages": ("info", "أرقام الصفحات الأصلية في الهامش لا تُطبع في ملف Word."),
     "widows_approx": (
         "info",
@@ -150,6 +150,26 @@ WARNINGS: dict[str, tuple[str, str]] = {
     "comments": ("info", "{phrase} للمدقّق."),
 }
 FONTS_ACTION = {"label": "الخطوط", "url": "/books/{id}/layout/?tab=format"}
+
+
+def fallback_name(used: str | None) -> str:
+    """The face that stands in for a missing one, as the notes name it: «أميري», or «Times New Roman»
+    (a missing Latin face falls back to Times first, `publishing.fonts.resolve`)."""
+    used = used or "Amiri"
+    return "أميري" if used == "Amiri" else f"«{used}»"
+
+
+def blank_verso_shows(setup) -> str:
+    """What Word prints on the blank page before a recto opening (it belongs to the previous section,
+    whose header and footer it shows; the preview's is empty): «رقمها», «الترويسة», both, or '' when
+    it prints nothing (§5.7)."""
+    if setup.chapter_opening != "recto":
+        return ""
+    number = setup.page_number in ("bottom_center", "bottom_outer", "top_outer")
+    header = setup.running_header in ("book", "chapter")
+    if number and header:
+        return "رقمها والترويسة"
+    return "رقمها" if number else "الترويسة" if header else ""
 
 
 def note(code: str, **values) -> dict:

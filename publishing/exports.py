@@ -9,8 +9,8 @@ row) and queues a new row; after the transaction the task `publishing.tasks.run_
 **Running.** `run_export(export_id, task_id)` is the task's job and never raises for an export failure:
 
 1. *claim* the row (a missing or final row is left as it is; a row running under another task id is
-   left to it; the same task id — an `acks_late` redelivery — restarts; a row older than the soft limit
-   plus 5 minutes is closed as `ABANDONED`);
+   left to it; the same task id — an `acks_late` redelivery — restarts; an abandoned row, see
+   `abandoned`, is closed as `ABANDONED`);
 2. *read the inputs once* (`read_inputs`): the manuscript and its version, the stylesheet, the chapter
    versions, the title, author and digit style, recorded in `inputs` (an edit made during the export
    never gets into the file, and the row then reads stale «تغيّر النص بعد هذا الإخراج»);
@@ -19,17 +19,27 @@ row) and queues a new row; after the transaction the task `publishing.tasks.run_
    is `TIMEOUT`; `InvalidExport` is `INVALID_FILE`; any other exception is logged and the row gets
    `EXPORT_ERROR` plus the technical `Type: message` line;
 4. *write the file* at `books/<id>/exports/<pk>.<ext>`, then mark the row done only if it still runs
-   (a cancel during the write deletes the file);
+   (a cancel during the write deletes the file, and so does any failure between the write and the
+   row's update: a file is never left without its row);
 5. *prune*: the newest `EXPORTS_KEPT` (5) done rows and `FAILED_KEPT` (3) failed or cancelled rows per
-   book and format are kept; older rows go together with their files.
+   book and format are kept; older rows go together with their files (a row whose file cannot be
+   deleted stays, and the next prune tries again); a file of `books/<id>/exports/` that no row records
+   (a worker killed between the write and the update) is swept away.
+
+**Abandoned exports** (`abandoned`): a queued row older than the soft limit plus 5 minutes (its task was
+lost before it started); a running row whose heartbeat stopped — `updated_at`, which every progress
+report and at least one write a minute (`Reporter.cancelled`) move, older than 10 minutes: a dead worker
+— or that started longer than the soft limit plus 5 minutes ago.
 
 **Progress.** `Reporter(export_id)` writes `progress` at most every 0.5 s (always when the step changes)
 on a row that still runs; an update that touches no row means the export was cancelled, and
-`cancelled()` also re-reads the status at most once a second.
+`cancelled()` also re-reads the status at most once a second (and moves `updated_at` once a minute).
 
 **Reading.** `export_payload(row, user)` is a row of the API (§3.2), `page_payload(book, user)` the export
 page's object (a bounded number of queries), `stale_reasons(row, current)` why a finished file is older
-than the book (`text`, `format`, `renderer`), `wait_for(row, seconds, since)` the long poll.
+than the book (`text`, `format`, `renderer`), `wait_for(row, seconds, since)` the long poll. The file is
+named after the title it prints (`printed_title`: «بيانات الكتاب», else the manuscript's title, else the
+book's).
 """
 
 from __future__ import annotations
@@ -98,10 +108,12 @@ FAILED_KEPT = 3
 ITEMS_LISTED = 30
 WAITING_AFTER = timedelta(seconds=60)
 ABANDONED_MARGIN = timedelta(minutes=5)
+HEARTBEAT_LOST = timedelta(minutes=10)  # a running row not updated for this long has lost its worker
+HEARTBEAT_EVERY_S = 60.0  # `Reporter.cancelled` moves `updated_at` at least this often
 REPORT_EVERY_S = 0.5
 CHECK_EVERY_S = 1.0
 MAX_WAIT_S = 5.0
-WAIT_STEP_S = 0.1
+WAIT_STEP_S = 0.25  # the long poll reads the status and `updated_at` this often (the row once, at the end)
 ERROR_MAX = 4000
 
 ACTIVE = (Export.Status.QUEUED, Export.Status.RUNNING)
@@ -186,8 +198,27 @@ def file_name(title: str, format: str, options: dict | None, book_id: int) -> st
     return f"{clean_title(title, book_id)}{suffix}{info.extension}"
 
 
+def printed_title(document, setup, fallback: str) -> str:
+    """The title the file prints, in the book model's order (`publishing.model.book_model`): the book
+    details' title («بيانات الكتاب»), else the manuscript's title node (its text, else its `text` attr),
+    else `fallback` (the book's own title). Of `document` only the leading title node is read."""
+    from editor import document as doc
+
+    detail = setup.detail("title") if setup is not None else ""
+    if detail:
+        return detail
+    content = doc.content_of(document)
+    for node in content[: doc.preamble_end(content)]:
+        text = doc.plain_text(node) or str(doc.attrs_of(node).get("text") or "").strip()
+        return text or fallback
+    return fallback
+
+
 def export_filename(row: Export) -> str:
-    """The download name of an export (from the title it was made with, else the book's)."""
+    """The download name of an export: the one recorded when it ran (the printed title's), else one
+    from the book's title."""
+    if row.filename:
+        return row.filename
     title = (row.inputs or {}).get("title") or row.book.title
     return file_name(title, row.format, row.options, row.book_id)
 
@@ -204,11 +235,22 @@ def stylesheet_hash(setup) -> str:
 
 
 def abandoned(row: Export, now: datetime | None = None) -> bool:
-    """True for a queued or running row older than the soft limit plus 5 minutes (a lost task)."""
-    if row.status not in ACTIVE or row.created_at is None:
+    """True for an export whose task is lost (see the module docstring): a queued row created longer
+    than the soft limit plus 5 minutes ago; a running row whose heartbeat (`updated_at`) is older than
+    `HEARTBEAT_LOST` (a dead worker: `acks_late` without `reject_on_worker_lost` never runs it again),
+    or that started longer than the soft limit plus 5 minutes ago. A healthy export that waited in the
+    queue is judged from its start, not from its creation."""
+    if row.status not in ACTIVE:
         return False
     now = now or timezone.now()
-    return now - row.created_at > timedelta(seconds=soft_limit_s()) + ABANDONED_MARGIN
+    limit = timedelta(seconds=soft_limit_s()) + ABANDONED_MARGIN
+    if row.status == Export.Status.QUEUED:
+        return row.created_at is not None and now - row.created_at > limit
+    beat = row.updated_at or row.started_at or row.created_at
+    if beat is not None and now - beat > HEARTBEAT_LOST:
+        return True
+    started = row.started_at or row.created_at
+    return started is not None and now - started > limit
 
 
 def _headline(error: str) -> tuple[str, str]:
@@ -293,6 +335,9 @@ def request_export(book: Book, format: str, options: dict | None, user=None) -> 
     `ExportNotFound` (404) or `ExportConflict` (409, with the active row)."""
     from editor.models import Manuscript
 
+    from .model import page_setup
+    from .preview import stylesheet_for
+
     if format not in FORMATS:
         raise ExportInvalid(UNKNOWN_FORMAT)
     exporter = get_exporter(format)
@@ -300,8 +345,13 @@ def request_export(book: Book, format: str, options: dict | None, user=None) -> 
         raise ExportInvalid(NOT_AVAILABLE)
     try:
         with transaction.atomic():
-            Book.objects.select_for_update().filter(pk=book.pk).first()  # one request per book at a time
-            if not Manuscript.objects.filter(book_id=book.pk).exists():
+            # one request per book at a time; FOR NO KEY UPDATE, so the deferred foreign-key check of a
+            # concurrent insert (FOR KEY SHARE on the book) never deadlocks with this lock (PostgreSQL)
+            Book.objects.select_for_update(no_key=True).filter(pk=book.pk).first()
+            head = (
+                Manuscript.objects.filter(book_id=book.pk).values_list("id", "document__content__0").first()
+            )  # the manuscript's first node only (its title node names the file), not the whole document
+            if head is None:
                 raise ExportNotFound(NO_MANUSCRIPT)
             try:
                 values = parse_options(exporter.options, options)
@@ -315,13 +365,16 @@ def request_export(book: Book, format: str, options: dict | None, user=None) -> 
                     _close_abandoned(active, now)
                 else:
                     raise ExportConflict(BUSY, row=active)
+            first = head[1] if isinstance(head[1], dict) else None
+            setup = page_setup(stylesheet_for(book))
+            title = printed_title({"content": [first] if first else []}, setup, book.title)
             row = Export.objects.create(
                 book=book,
                 format=format,
                 status=Export.Status.QUEUED,
                 options=values,
                 renderer=exporter.version[:64],
-                filename=file_name(book.title, format, values, book.pk),
+                filename=file_name(title, format, values, book.pk),
                 progress={"step": "queued", "done": None, "total": None},
                 created_by=_user(user),
             )
@@ -364,13 +417,19 @@ class Reporter:
     """The `Progress` of a running export (see the module docstring)."""
 
     def __init__(
-        self, export_id: int, *, every_s: float = REPORT_EVERY_S, check_every_s: float = CHECK_EVERY_S
+        self,
+        export_id: int,
+        *,
+        every_s: float = REPORT_EVERY_S,
+        check_every_s: float = CHECK_EVERY_S,
+        heartbeat_s: float = HEARTBEAT_EVERY_S,
     ):
         self.export_id = export_id
         self.every_s = every_s
         self.check_every_s = check_every_s
+        self.heartbeat_s = heartbeat_s
         self._step: str | None = None
-        self._written = 0.0
+        self._written = time.monotonic()  # the claim has just written the row
         self._checked = 0.0
         self._cancelled = False
 
@@ -388,11 +447,19 @@ class Reporter:
             self._cancelled = True
 
     def cancelled(self) -> bool:
-        """True once the row no longer runs (cancelled); re-reads the status at most once a second."""
+        """True once the row no longer runs (cancelled); re-reads the status at most once a second, and
+        once `heartbeat_s` passed without a write moves `updated_at` instead (the heartbeat `abandoned`
+        reads: a long step between two reports never looks like a dead worker)."""
         if self._cancelled:
             return True
         now = time.monotonic()
-        if now - self._checked >= self.check_every_s:
+        if now - self._written >= self.heartbeat_s:
+            self._written = self._checked = now
+            beat = Export.objects.filter(pk=self.export_id, status=Export.Status.RUNNING).update(
+                updated_at=timezone.now()
+            )
+            self._cancelled = not beat
+        elif now - self._checked >= self.check_every_s:
             self._checked = now
             status = Export.objects.filter(pk=self.export_id).values_list("status", flat=True).first()
             self._cancelled = status != Export.Status.RUNNING
@@ -509,29 +576,57 @@ def _warnings(items) -> list[dict]:
 
 
 def _finish(row: Export, result: ExportResult, started: float) -> None:
-    """Write the file, then mark the row done if it still runs (else the file goes)."""
+    """Write the file, then mark the row done if it still runs (else the file goes). Whatever interrupts
+    the two (a timeout, the database) takes the written file with it, unless the row already records it:
+    a file never stays behind without its row."""
     data = bytes(result.data or b"")
     path = export_path(row, row.filename or f"export{FORMATS[row.format].extension}")
     if default_storage.exists(path):  # a redelivered task writes again
         default_storage.delete(path)
-    saved = default_storage.save(path, ContentFile(data))
-    now = timezone.now()
-    finished = Export.objects.filter(pk=row.pk, status=Export.Status.RUNNING).update(
-        status=Export.Status.DONE,
-        file=saved,
-        size_bytes=len(data),
-        page_count=result.page_count,
-        warnings=_warnings(result.warnings),
-        stats=dict(result.stats or {}),
-        log="\n".join(str(line) for line in result.log or []),
-        progress={"step": "done", "done": None, "total": None},
-        error="",
-        duration_ms=int((time.monotonic() - started) * 1000),
-        finished_at=now,
-        updated_at=now,
-    )
+    saved = None
+    try:
+        saved = default_storage.save(path, ContentFile(data))
+        now = timezone.now()
+        finished = Export.objects.filter(pk=row.pk, status=Export.Status.RUNNING).update(
+            status=Export.Status.DONE,
+            file=saved,
+            size_bytes=len(data),
+            page_count=result.page_count,
+            warnings=_warnings(result.warnings),
+            stats=dict(result.stats or {}),
+            log="\n".join(str(line) for line in result.log or []),
+            progress={"step": "done", "done": None, "total": None},
+            error="",
+            duration_ms=int((time.monotonic() - started) * 1000),
+            finished_at=now,
+            updated_at=now,
+        )
+    except BaseException:
+        _discard_unrecorded(row.pk, saved or path)
+        raise
     if not finished:  # cancelled during the write
-        default_storage.delete(saved)
+        _discard(saved)
+
+
+def _discard(name: str) -> bool:
+    """Delete a file of the storage; False (logged) when it could not be deleted."""
+    try:
+        default_storage.delete(name)
+    except Exception:  # noqa: BLE001 - reported; the sweep of the next prune tries again
+        log.warning("could not delete the export file %s", name, exc_info=True)
+        return False
+    return True
+
+
+def _discard_unrecorded(export_id: int, name: str) -> None:
+    """Delete the file an interrupted `_finish` wrote, unless the row records it as done (the update
+    went through before the interruption). With the database away the file stays for the sweep."""
+    try:
+        recorded = Export.objects.filter(pk=export_id, status=Export.Status.DONE, file=name).exists()
+        if not recorded and default_storage.exists(name):
+            _discard(name)
+    except Exception:  # noqa: BLE001 - never hides the interruption; `sweep` removes the file later
+        log.warning("could not tell whether export %s recorded %s", export_id, name, exc_info=True)
 
 
 def run_export(export_id: int, task_id: str = "") -> Export | None:
@@ -556,7 +651,8 @@ def run_export(export_id: int, task_id: str = "") -> Export | None:
             export_id=row.pk,
             created=row.created_at,
         )
-        row.inputs, row.filename = inputs, file_name(inputs["title"], row.format, row.options, row.book_id)
+        title = printed_title(job.document, job.setup, job.title)  # the name of the title the file prints
+        row.inputs, row.filename = inputs, file_name(title, row.format, row.options, row.book_id)
         Export.objects.filter(pk=row.pk).update(
             inputs=inputs,
             manuscript_version=job.manuscript_version,
@@ -635,17 +731,15 @@ def cancel_export(row: Export) -> Export:
     return row
 
 
-def _delete_file(row: Export) -> None:
-    if row.file:
-        try:
-            default_storage.delete(row.file.name)
-        except OSError:
-            log.warning("could not delete the file of export %s", row.pk, exc_info=True)
+def _delete_file(row: Export) -> bool:
+    """Delete an export's file; False when it could not be deleted (its row is kept for the next prune)."""
+    return _discard(row.file.name) if row.file else True
 
 
 def prune(book_id: int, format: str) -> int:
     """Keep the newest `EXPORTS_KEPT` done rows and `FAILED_KEPT` failed or cancelled rows of a book and
-    format; delete the older ones with their files. Returns the rows deleted."""
+    format; delete the older ones with their files — a row whose file cannot be deleted stays (the next
+    prune tries again) — then `sweep` the book's export folder. Returns the rows deleted."""
     rows = list(
         Export.objects.filter(book_id=book_id, format=format)
         .exclude(status__in=ACTIVE)
@@ -655,12 +749,47 @@ def prune(book_id: int, format: str) -> int:
     done = [row for row in rows if row.status == Export.Status.DONE]
     failed = [row for row in rows if row.status != Export.Status.DONE]
     drop = done[exports_kept() :] + failed[FAILED_KEPT:]
-    if not drop:
+    gone = [row.pk for row in drop if _delete_file(row)]
+    if gone:
+        Export.objects.filter(pk__in=gone).delete()
+    sweep(book_id)
+    return len(gone)
+
+
+_RE_EXPORT_ID = re.compile(r"(\d+)")
+
+
+def sweep(book_id: int) -> int:
+    """Delete the files of `books/<id>/exports/` that no row records (a worker killed between the write and
+    the row's update). The folder is listed before the rows are read, and a file of a queued or running
+    row (`<pk>.<ext>`, being written) is left alone. Returns the files deleted."""
+    folder = f"books/{book_id}/exports"
+    try:
+        _dirs, names = default_storage.listdir(folder)
+    except (FileNotFoundError, NotImplementedError):
         return 0
-    for row in drop:
-        _delete_file(row)
-    Export.objects.filter(pk__in=[row.pk for row in drop]).delete()
-    return len(drop)
+    except OSError:
+        log.warning("could not list %s", folder, exc_info=True)
+        return 0
+    if not names:
+        return 0
+    recorded: set[str] = set()
+    active: set[int] = set()
+    for pk, status, name in Export.objects.filter(book_id=book_id).values_list("pk", "status", "file"):
+        if name:
+            recorded.add(str(name))
+        if status in ACTIVE:
+            active.add(pk)
+    deleted = 0
+    for name in names:
+        path = f"{folder}/{name}"
+        found = _RE_EXPORT_ID.match(name)
+        if path in recorded or (found and int(found.group(1)) in active):
+            continue
+        if _discard(path):
+            deleted += 1
+            log.info("swept the unrecorded export file %s", path)
+    return deleted
 
 
 # ====================================================================== payloads (§3.2)
@@ -854,7 +983,9 @@ def _format_block(book, key: str, rows: list[Export], setup, payload) -> dict:
 
 def page_payload(book: Book, user=None) -> dict:
     """The export page's object (§3.2; `api:exports` GET and the page's `config`), in a bounded number of
-    queries whatever the history's length."""
+    queries whatever the history's length. The export rows are read last, after the readiness (the slow
+    part): a payload's rows are as fresh as the page can have them (the page never takes a row back to an
+    older state it already saw either, `export.js`)."""
     from core.decorators import ROLE_EDITOR, has_role
     from editor.models import Manuscript
 
@@ -869,9 +1000,6 @@ def page_payload(book: Book, user=None) -> dict:
         "row": _slot(reverse("api:export", args=[book.pk, 0])),
         "cancel": _slot(reverse("api:export_cancel", args=[book.pk, 0])),
     }
-    rows = list(
-        Export.objects.filter(book_id=book.pk).select_related("created_by").order_by("-created_at", "-id")
-    )
     if manuscript is None:
         current = Current(None, "", {}, None)
         layout = None
@@ -891,6 +1019,9 @@ def page_payload(book: Book, user=None) -> dict:
             pages_hint=layout["page_count"],
         )
         readiness = book_readiness(book, manuscript=manuscript, setup=setup)
+    rows = list(
+        Export.objects.filter(book_id=book.pk).select_related("created_by").order_by("-created_at", "-id")
+    )
     now = timezone.now()
 
     def payload(row: Export) -> dict:
@@ -914,12 +1045,24 @@ def page_payload(book: Book, user=None) -> dict:
 
 def wait_for(row: Export, seconds: float, since: datetime | None = None) -> Export:
     """The row once it changed after `since` (its `updated_at`) or reached a final status, or after
-    `seconds` (at most 5: the API's long poll)."""
+    `seconds` (at most 5: the API's long poll). Every `WAIT_STEP_S` only the status and the times are
+    read; the whole row (with its book and author) is read once at the end, and only when it moved."""
     deadline = time.monotonic() + max(0.0, min(float(seconds), MAX_WAIT_S))
+    moved = False
     while True:
         final = row.status not in ACTIVE or abandoned(row)
         changed = since is not None and row.updated_at is not None and row.updated_at > since
-        if final or changed or time.monotonic() >= deadline:
-            return row
-        time.sleep(WAIT_STEP_S)
-        row.refresh_from_db()
+        left = deadline - time.monotonic()
+        if final or changed or left <= 0:
+            break
+        time.sleep(min(WAIT_STEP_S, left))
+        found = Export.objects.filter(pk=row.pk).values_list("status", "updated_at", "started_at").first()
+        if found is None:  # deleted meanwhile: the next poll answers 404
+            break
+        if found != (row.status, row.updated_at, row.started_at):
+            row.status, row.updated_at, row.started_at = found
+            moved = True
+    if not moved:
+        return row
+    fresh = Export.objects.filter(pk=row.pk).select_related("book", "created_by").first()
+    return fresh if fresh is not None else row

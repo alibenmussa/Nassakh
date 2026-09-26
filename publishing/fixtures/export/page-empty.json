@@ -16,6 +16,7 @@
       "form": {
         "kashida": {
           "value": "low",
+          "label": "الكشيدة",
           "choices": [
             {
               "value": "none",
@@ -58,8 +59,38 @@
       "key": "print_pdf",
       "label": "PDF للطباعة",
       "extension": ".pdf",
-      "available": false,
-      "form": {},
+      "available": true,
+      "form": {
+        "bleed_mm": {
+          "value": 0,
+          "label": "النزف",
+          "choices": [
+            {
+              "value": 0,
+              "label": "بلا",
+              "title": "بلا نزف",
+              "hint": "الصفحة بمقاس القطع تمامًا، كما في المعاينة."
+            },
+            {
+              "value": 3,
+              "label": "3 مم",
+              "title": "نزف 3 مم",
+              "hint": "تتسع الصفحة 3 مم من كل جهة حول القطع، وهو ما تطلبه أغلب المطابع."
+            },
+            {
+              "value": 5,
+              "label": "5 مم",
+              "title": "نزف 5 مم",
+              "hint": "تتسع الصفحة 5 مم من كل جهة حول القطع."
+            }
+          ]
+        },
+        "crop_marks": {
+          "value": false,
+          "label": "علامات القص",
+          "hint": "خطوط دقيقة خارج الصفحة تُري المطبعة حدود القطع."
+        }
+      },
       "notes": [],
       "active": null,
       "latest": null
@@ -68,7 +99,7 @@
       "key": "screen_pdf",
       "label": "PDF للشاشة",
       "extension": ".pdf",
-      "available": false,
+      "available": true,
       "form": {},
       "notes": [],
       "active": null,
@@ -78,9 +109,25 @@
       "key": "epub",
       "label": "EPUB",
       "extension": ".epub",
-      "available": false,
+      "available": true,
       "form": {},
-      "notes": [],
+      "notes": [
+        {
+          "code": "font_embedded",
+          "level": "info",
+          "message": "خط أميري مضمَّن في الملف."
+        },
+        {
+          "code": "font_fallback",
+          "level": "info",
+          "message": "خط «Times New Roman» لا يُضمَّن في EPUB (ترخيصه لا يسمح)؛ يظهر به النص على جهاز مثبّت عليه، وإلا فبخط أميري."
+        },
+        {
+          "code": "epub_notes",
+          "level": "info",
+          "message": "لا صفحات ثابتة في EPUB: تُرقَّم الحواشي في كل فصل وتأتي في آخره."
+        }
+      ],
       "active": null,
       "latest": null
     }

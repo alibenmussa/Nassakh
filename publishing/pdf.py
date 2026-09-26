@@ -26,8 +26,9 @@ number) starts pass 1 with the numbers of the last layout: when no note changed 
 `write` before the PDF is written — the export's progress, asked where `cancelled()` is asked, so no
 WeasyPrint internals are needed. `finisher` and `write_options` go to `Document.write_pdf`;
 `finisher_for(output)` is the export's: the BleedBox exactly the trim plus the bleed (WeasyPrint caps it
-at 10 pt from the trim), right-to-left reading and the document title in the viewer, the outline pane open
-for the screen PDF, `Trapped /False` for print, and the subject, creator and dates.
+at 10 pt from the trim), the crop marks drawn in pure K (`crop_mark_segments`: WeasyPrint's own marks are
+an RGB drawing), right-to-left reading and the document title in the viewer, the outline pane open for
+the screen PDF when it has an outline, `Trapped /False` for print, and the subject, creator and dates.
 """
 
 from __future__ import annotations
@@ -335,6 +336,52 @@ def page_objects(pdf) -> list:
     return [pdf.objects[number] for number in pdf.pages["Kids"][::3]]
 
 
+CROP_MARK_WIDTH_PT = 0.75  # as WeasyPrint drew them (1 CSS px)
+
+
+def crop_mark_segments(trim: tuple[float, float, float, float], slug: float) -> list[tuple[float, ...]]:
+    """The 8 crop marks of a page as `(x1, y1, x2, y2)` segments in PDF points (`trim` is the TrimBox
+    `(left, bottom, right, top)`, `slug` the page's bleed beyond the trim: the bleed plus the 6 mm the
+    marks are drawn in). Where WeasyPrint's `marks: crop` drew them: each trim edge carried outwards, from
+    the media's edge half-way to the trim — so a mark ends half the slug away from the trim, outside the
+    bleed."""
+    left, bottom, right, top = trim
+    half = slug / 2
+    segments = []
+    for x, out_x in ((left, -1), (right, 1)):
+        for y, out_y in ((bottom, -1), (top, 1)):
+            segments.append((x + out_x * slug, y, x + out_x * half, y))  # the horizontal mark on the edge y
+            segments.append((x, y + out_y * slug, x, y + out_y * half))  # the vertical mark on the edge x
+    return segments
+
+
+def _number(value: float) -> str:
+    return f"{round(float(value), 4):g}"
+
+
+def crop_marks_ops(segments: list[tuple[float, ...]]) -> list[bytes]:
+    """PDF content operators drawing `segments` in pure K (`0 0 0 1 K`), as an artifact, in the default
+    user space."""
+    ops = [b"/Artifact BMC", b"q", b"0 0 0 1 K", f"{_number(CROP_MARK_WIDTH_PT)} w".encode(), b"0 J"]
+    for x1, y1, x2, y2 in segments:
+        ops.append(f"{_number(x1)} {_number(y1)} m {_number(x2)} {_number(y2)} l S".encode())
+    ops += [b"Q", b"EMC"]
+    return ops
+
+
+def _draw_crop_marks(pdf, page, slug: float) -> None:
+    """Add a page's crop marks to its content stream, after the page (whose own drawing is wrapped in
+    `q … Q`, so the marks are drawn in the default user space: WeasyPrint's stream begins with an
+    unbalanced flip of the y axis)."""
+    reference = page["Contents"]
+    reference = reference.decode() if isinstance(reference, bytes) else str(reference)
+    stream = pdf.objects[int(reference.split()[0])]
+    trim = tuple(float(value) for value in page["TrimBox"])
+    stream.stream.insert(0, b"q")
+    stream.stream.append(b"Q")
+    stream.stream.extend(crop_marks_ops(crop_mark_segments(trim, slug)))
+
+
 def finisher_for(output) -> Callable:
     """The `write_pdf` finisher of a PDF export (`output`: `publishing.engine.PdfOutput`): see the module
     docstring."""
@@ -342,18 +389,22 @@ def finisher_for(output) -> Callable:
 
     metadata = output.metadata
     bleed = float(output.bleed_mm) * MM_PT if output.is_print else 0.0
+    marks = output.is_print and bool(output.crop_marks)
+    slug = float(output.page_bleed_mm) * MM_PT
 
     def finish(document, pdf) -> None:
         for page in page_objects(pdf):
             left, top, right, bottom = (float(value) for value in page["TrimBox"])
             page["BleedBox"] = pydyf.Array([left - bleed, top - bleed, right + bleed, bottom + bleed])
+            if marks:
+                _draw_crop_marks(pdf, page, slug)
         preferences = {"Direction": "/R2L", "DisplayDocTitle": "true"}
         pdf.catalog["ViewerPreferences"] = pydyf.Dictionary(preferences)
         if metadata.lang:
             pdf.catalog["Lang"] = pydyf.String(metadata.lang)
         if output.is_print:
             pdf.info["Trapped"] = "/False"
-        else:
+        elif "Outlines" in pdf.catalog:  # the outline pane, when there is an outline to show
             pdf.catalog["PageMode"] = "/UseOutlines"
         if metadata.subject:
             pdf.info["Subject"] = pydyf.String(metadata.subject)

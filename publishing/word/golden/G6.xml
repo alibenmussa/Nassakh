@@ -241,13 +241,13 @@
         <w:pStyle w:val="CommentText"/>
       </w:pPr>
       <w:r>
-        <w:t xml:space="preserve">Qari v</w:t>
+        <w:t xml:space="preserve">Qari v0.3</w:t>
       </w:r>
       <w:r>
         <w:rPr>
           <w:rtl/>
         </w:rPr>
-        <w:t xml:space="preserve">0.3: مشكوكة (في النص)</w:t>
+        <w:t xml:space="preserve">: مشكوكة (في النص)</w:t>
       </w:r>
     </w:p>
     <w:p>
@@ -351,13 +351,13 @@
         <w:pStyle w:val="CommentText"/>
       </w:pPr>
       <w:r>
-        <w:t xml:space="preserve">Qari v</w:t>
+        <w:t xml:space="preserve">Qari v0.3</w:t>
       </w:r>
       <w:r>
         <w:rPr>
           <w:rtl/>
         </w:rPr>
-        <w:t xml:space="preserve">0.3: شك (في النص)</w:t>
+        <w:t xml:space="preserve">: شك (في النص)</w:t>
       </w:r>
     </w:p>
     <w:p>

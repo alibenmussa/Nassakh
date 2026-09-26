@@ -457,3 +457,71 @@ def test_check_epub_catches_a_broken_file(built):
     assert any("#fn-9 has no target" in error for error in errors)
     assert check_epub(b"not a zip")[0].startswith("not a zip file")
     assert re.match(r"^urn:", book_identifier(1))
+
+
+# ====================================================================== the Phase 6 review (E6, E7)
+
+
+def _bare_setup(**front):
+    return page_setup(
+        {
+            "body_font": "amiri",
+            "latin_font": "amiri",
+            "heading_font": "amiri",
+            "front_matter": {"title_page": False, "contents": False, "copyright_page": False, **front},
+        }
+    )
+
+
+def _opf(data: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return archive.read("EPUB/content.opf").decode()
+
+
+def test_a_book_with_nothing_to_read_has_its_nav_as_the_one_document():
+    """E6: an empty book (no text, no front matter) never gives an EPUB whose spine is empty."""
+    _book, result = build(document(title="كتاب"), _bare_setup())
+    assert result.documents == ["nav.xhtml"]
+    assert '<itemref idref="nav"' in _opf(result.data)
+    assert check_epub(result.data) == []
+
+
+def test_check_epub_refuses_an_empty_spine(built):
+    """E6: a package whose spine lists no document is not a readable book."""
+    _book, result = built
+    source = zipfile.ZipFile(io.BytesIO(result.data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as target:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename == "EPUB/content.opf":
+                data = re.sub(rb"<itemref [^>]*/>", b"", data)
+            method = zipfile.ZIP_STORED if info.filename == "mimetype" else zipfile.ZIP_DEFLATED
+            target.writestr(zipfile.ZipInfo(info.filename, date_time=info.date_time), data, method)
+    errors = check_epub(out.getvalue())
+    assert any("spine is empty" in error for error in errors)
+
+
+def test_characters_xml_forbids_are_left_out(tmp_path):
+    """E7: an OCR'd vertical tab, a form feed, a lone surrogate, U+FFFE / U+FFFF in the text, the notes,
+    the headings and the book details give a valid file without them (was an unreadable chapter)."""
+    bad = "\x0b\x0c\ud83d\ufffe\uffff\x01"
+    details = {"title": f"كتاب{bad} الرحلة", "author": f"المسعودي{bad}", "publisher": f"هنداوي{bad}",
+               "rights": f"الحقوق{bad} محفوظة."}  # fmt: skip
+    doc = document(
+        heading("h1", f"الفصل{bad} الأول"),
+        para("p1", f"نص{bad} فيه محارف تحكّم", note("n1", f"حاشية{bad} فيها مثلها")),
+        title=f"كتاب{bad}",
+    )
+    setup = _bare_setup(title_page=True, contents=True, copyright_page=True, fields=details)
+    _book, result = build(doc, setup)
+    assert check_epub(result.data) == []
+    with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
+        for name in archive.namelist():
+            if name.endswith((".xhtml", ".opf", ".ncx")):
+                text = archive.read(name).decode("utf-8")
+                assert not any(char in text for char in bad), name
+        chapter = etree.fromstring(archive.read("EPUB/chapter-01.xhtml"))
+    assert "".join(chapter.find(f".//{X}h1").itertext()) == "الفصل الأول"
+    opf = _opf(result.data)  # the metadata go through lxml, which refuses such characters
+    assert '<dc:title id="title">كتاب' in opf and "الرحلة</dc:title>" in opf and "المسعودي" in opf

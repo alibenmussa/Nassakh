@@ -219,6 +219,12 @@ class WordResult:
     log: list[str] = field(default_factory=list)
 
 
+def prints_contents(book: Book, front_matter: bool = True) -> bool:
+    """True when the file prints the contents field: the front matter is written (the book has a
+    title), the setup asks for contents and the book has a heading with text."""
+    return bool(front_matter and book.front.title and book.front.contents and book.headings())
+
+
 def duplicate_containers(book: Book) -> frozenset[tuple[str, str | None]]:
     """`(block id, note id)` keys that occur more than once (their words get no comment, §5.11)."""
     counts: Counter[tuple[str, str | None]] = Counter()
@@ -307,7 +313,7 @@ class BookWriter:
                 paras[0].page_break = False
         if paras:
             self._open(paras)
-        if front.contents:
+        if prints_contents(self.book, self.front_matter):
             pages = self.plan.headings if self.plan is not None else None
             contents = contents_page(self.book, self.writer, self.bookmarks, pages)
             if contents:
@@ -324,9 +330,9 @@ class BookWriter:
         role = _ROLE.get(block.style, "body")
         content = self.writer.inline(block.runs, role, block_id=block.id, footnotes=block.footnotes)
         if block.style in ("chapter-title", "section-title") and block.text().strip():
-            content = self.bookmarks.wrap(self.bookmarks.name("_Toc_", block.id), content)
+            content = self.bookmarks.wrap(self.bookmarks.heading(block), content)
         elif block is chapter.blocks[0] and chapter.kind != "chapter":
-            content = self.bookmarks.wrap(self.bookmarks.name("_nk_ch_", chapter.id), content)
+            content = self.bookmarks.wrap(self.bookmarks.new("_nk_ch_", chapter.id), content)
         return Para(
             style, content, page_break=block.break_before and not opens_page, keep_next=block.keep_with_next
         )
@@ -362,7 +368,9 @@ class BookWriter:
             references: list[tuple[str, str, str]] = []
             title_pg = False
             if section.body:
-                parts, title_pg = self.headers.references(section.running)
+                parts, title_pg = self.headers.references(
+                    section.running, continuous=section.break_type == "continuous"
+                )
                 references = [(part.kind, part.type, part.rel_id) for part in parts]
             props = sect_pr(
                 self.setup,
