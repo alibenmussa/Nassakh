@@ -2301,6 +2301,10 @@ contrast), designed after 7c's test. Decisions D80+.
 
 ## 12. Questions for the owner, and what was decided without asking
 
+**Answered 2026-09-26:** "start with Phase 7. skip 8-bit test. do the full plan." All five as recommended; 7a, 7b
+and 7c are built in one run (gates between sub-phases, the owner's hand test at the end); 7d follows.
+
+
 1. **Copy direction of the PDF text (asked by the Phase 6 review).** WeasyPrint writes one ToUnicode entry per
    ligature, in logical order.
    - As the PDFs are now, Apple's engine (Preview and Safari, probably iPhone and iPad) copies right, while Chrome,

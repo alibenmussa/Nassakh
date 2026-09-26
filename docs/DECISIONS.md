@@ -382,3 +382,19 @@ Tesseract pass for low-resolution scans (measured worse alone).
   right; a number its gap left unread is read in its own weak box. On all 229 pages: no page-number leak, no checked
   page worse than before D63, D63's geometry kept (book 22: 1,171 right word boxes of 1,298); of the 253 numbers whose
   reading changed on books 19 and 20, 124 are now right against 42 before D63.
+
+## D64–D79 — Phase 7: «التخطيط» first, then «المعالجة»; a safe round trip; trust (2026-09-26; details in docs/PHASE7_SPEC.md §0)
+Approved by the owner on 2026-09-26 ("start with Phase 7 … do the full plan"), with all five questions of §12 answered
+as recommended: the PDF text layer reversed for Chrome/Firefox (one rule, both PDFs, Arabic entries only); flag policy
+v2; unreviewed pages stay in «تجميع المخطوطة» with their count on the button (D35 kept); the moved keys; the names.
+- **7a:** D64 two stages with a pause (`Book.awaits_ocr_start`, default False: today's path for every existing book);
+  D65 the names («التخطيط»/«استخراج الصفحات», «بدء المعالجة»/«المعالجة»; «ضبط الأدلة» dropped); D66 the upload extracts
+  at once and shows the kept page range, «حذف الكتاب»; D67 the «التخطيط» mode of the dashboard; D68 thick footnote rules
+  accepted at detection, strict first; D69 one keymap by physical key; D70 no silent chapter replacement, approval is
+  not drift, live drift, merges keep both source marks.
+- **7b:** D71 flag policy v2 (reasons, three readers, punctuation never flagged); D72 words only the second model read
+  kept as groups or suggestions; D73 honest page state; D74 footnote and verse line roles; D75 readiness rows for
+  doubtful text.
+- **7c:** D76 the stage bar and navigation; D77 one term per concept; D78 the page-by-page merge of review changes into
+  an edited book; D79 «تصحيح في كل الكتاب».
+- 7d (D80+) is designed after 7c.
