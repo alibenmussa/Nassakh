@@ -8,6 +8,7 @@ inputs (`PageIn` / `LineIn`, boxes as ratios of the page) and `assemble` runs th
 2. `split_paragraphs`    body lines of one page → paragraphs and headings (geometry first)   §2.3
 3. `join_pages`          seams: the last paragraph of a page joined with the next page's first §2.4
 4. `page_notes`, `link_footnotes`, `attach_orphans`, `number_footnotes`                     §2.5
+   `stray_notes`         marker-initial paragraphs a page's open call may own (D74)
 5. `suggest_headings`    heading suggestions, `no_headings`                                  §2.6
 6. `normalize_rich`, `move_leading_marks`   typography in the derived text (D37)            §2.2
 7. `build_document`, `compute_stats`                                                          §2.8–§2.10
@@ -35,7 +36,12 @@ from core.arabic import to_western_digits
 BODY = "body"
 FOOTNOTE = "footnote"
 ROLE_BODY = "body"
+ROLE_VERSE = "verse"  # D74: a verse line is never joined with another line
 HEADING_LEVELS: dict[str, int] = {"heading": 1, "subheading": 2}
+# The roles a `LineIn` carries (the loader folds `main` and `footnote` into `body`: the line's kind says
+# whether it is a note, `ocr.services.line_kind`).
+LINE_ROLES: frozenset[str] = frozenset({ROLE_BODY, ROLE_VERSE, *HEADING_LEVELS})
+VERSE_STYLE = "verse"  # the paragraph style of a verse line (`editor.document.PARAGRAPH_STYLES`)
 
 REVIEWED_STATUSES: frozenset[str] = frozenset({"reviewed", "assembled"})
 UNREVIEWED_STATUS = "ocr_done"
@@ -103,6 +109,8 @@ CODE_ORDER: tuple[str, ...] = (
     "running_head",
     "marker_unmatched",
     "note_orphan",
+    "note_marker_missing",
+    "stray_note",
     "uncertain_words",
 )
 STAGES: tuple[str, ...] = ("collect", "paragraphs", "seams", "footnotes", "headings", "typography", "save")
@@ -115,10 +123,13 @@ STAGES: tuple[str, ...] = ("collect", "paragraphs", "seams", "footnotes", "headi
 class LineIn:
     """One OCR'd line of a page, as the loader reads it.
 
-    `kind` is `body` or `footnote` (running headers and page numbers never reach the pipeline);
-    `role` the reviewer's line role (D32); `box` `[x0, y0, x1, y1]` as ratios of the page (None when
-    the line has no box, e.g. a line inserted by a reviewer); `uncertain` the indexes, in
-    `text.split()`, of the words still unresolved (`conf == "low"` and no `res`).
+    `kind` is `body` or `footnote` (running headers and page numbers never reach the pipeline; the
+    loader gives the line's effective kind, `ocr.services.line_kind`: a `footnote` role makes a body
+    line a note, a `main` role pulls a footnote-region line into the body); `role` the reviewer's line
+    role as the pipeline reads it (`LINE_ROLES`: `body`, `heading`, `subheading`, `verse`; D32, D74);
+    `box` `[x0, y0, x1, y1]` as ratios of the page (None when the line has no box, e.g. a line inserted
+    by a reviewer); `uncertain` the indexes, in `text.split()`, of the words still unresolved
+    (`conf == "low"` and no `res`).
     """
 
     id: int
@@ -610,7 +621,12 @@ def word_count(text: str) -> int:
 
 @dataclass
 class AssemblyWarning:
-    """One assembly warning (§2.9); `page` is the page number (None for book-level warnings)."""
+    """One assembly warning (§2.9); `page` is the page number (None for book-level warnings).
+
+    `marker` (the note number a footnote warning is about, Western digits or `*`) and `actions` (what
+    the manuscript offers on the warning, `stray_note`: «جعلها حاشية» · «انتقال») are written only when
+    set, so the older warnings keep their shape.
+    """
 
     code: str
     severity: str
@@ -618,9 +634,11 @@ class AssemblyWarning:
     message: str
     block_id: str | None = None
     line_ids: list[int] = field(default_factory=list)
+    marker: str | None = None
+    actions: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "code": self.code,
             "severity": self.severity,
             "page": self.page,
@@ -628,6 +646,11 @@ class AssemblyWarning:
             "lineIds": list(self.line_ids),
             "message": self.message,
         }
+        if self.marker is not None:
+            out["marker"] = self.marker
+        if self.actions:
+            out["actions"] = [dict(item) for item in self.actions]
+        return out
 
 
 def sort_warnings(warnings: Iterable[AssemblyWarning]) -> list[AssemblyWarning]:
@@ -783,7 +806,7 @@ def drop_running_heads(pages: Sequence[PageIn]) -> tuple[list[PageIn], list[Asse
     """
     found = [(page, line, head_key(line.text)) for page in pages if (line := _head_candidate(page))]
     lines = [line for page in pages for line in page.lines if line.kind == BODY]
-    titles = [head_key(line.text) for line in lines if line.role != ROLE_BODY]
+    titles = [head_key(line.text) for line in lines if line.role in HEADING_LEVELS]
     parent = list(range(len(found)))
 
     def root(i: int) -> int:
@@ -902,15 +925,16 @@ def breaks_between(
 ) -> bool:
     """True when a paragraph break falls between consecutive body lines `a` and `b` (§2.3).
 
-    Roles differ → break; lines of one heading role never break (they form one heading). With both
-    boxes: `a` short, `b` indented, or either centred. Without a box on either line: `a` ends with
-    terminal punctuation.
+    A verse line on either side → break (D74: each verse line is a paragraph of its own; pairing
+    hemistichs into bayts is 7d). Roles differ → break; lines of one heading role never break (they
+    form one heading). With both boxes: `a` short, `b` indented, or either centred. Without a box on
+    either line: `a` ends with terminal punctuation.
 
     With the page's `measure`, `b` only counts as indented when it also starts left of `a`
     (`x1_a − x1_b > 0.02 · M`): consecutive lines with the same indent are one indented block (an
     inset list item, a quotation set narrower, a page whose right edge drifts), not a paragraph each.
     """
-    if a.role != b.role:
+    if a.role == ROLE_VERSE or b.role == ROLE_VERSE or a.role != b.role:
         return True
     if a.role in HEADING_LEVELS:
         return False
@@ -940,6 +964,8 @@ class Block:
     reviewed: bool = True
     suggested: str | None = None
     parts: list[Rich] | None = None  # pending joins, concatenated once by `join_pages`
+    style: str | None = None  # `verse` for a verse line's paragraph (D74)
+    note_for: str | None = None  # the open call a marker-initial paragraph may become the note of (D74)
 
     @property
     def line_ids(self) -> list[int]:
@@ -968,6 +994,7 @@ def _new_block(lines: list[LineIn], shapes: list[Shape | None], page: PageIn) ->
         shapes=list(shapes),
         rich=Rich.join([Rich.from_line(line) for line in lines]),
         reviewed=page.reviewed,
+        style=VERSE_STYLE if lines[0].role == ROLE_VERSE else None,
     )
 
 
@@ -975,7 +1002,8 @@ def split_paragraphs(page: PageIn) -> list[Block]:
     """The body lines of one page as paragraphs and headings, in reading order (§2.3).
 
     Consecutive `heading` lines form one level-1 heading, consecutive `subheading` lines one level-2
-    heading. Lines without text are left out.
+    heading, and every `verse` line a paragraph of its own with the style `verse` (D74). Lines without
+    text are left out.
     """
     lines = [line for line in page.lines if line.kind != FOOTNOTE and (line.text or "").strip()]
     if not lines:
@@ -1010,11 +1038,15 @@ def decide_seam(
     Join when both blocks are paragraphs, the last line of the first is not short and the first line
     of the second is not indented; without boxes, join when the first does not end with terminal
     punctuation. An override (`join` / `split`) wins when both sides are paragraphs. `reason` is the
-    automatic rule that applied: `geometry`, `punctuation`, or `heading` (a side is not a paragraph:
-    a heading, or a page without body text).
+    automatic rule that applied: `geometry`, `punctuation`, `heading` (a side is not a paragraph: a
+    heading, or a page without body text) or `verse` (a side is a verse line, never joined, D74: no
+    override joins it).
     """
     record = {"page": page, "from_page": from_page, "mode": "split", "decision": "auto", "reason": "heading"}
     if prev is None or nxt is None or prev.kind != "paragraph" or nxt.kind != "paragraph":
+        return record
+    if prev.style == VERSE_STYLE or nxt.style == VERSE_STYLE:
+        record["reason"] = "verse"
         return record
     last, first = prev.shapes[-1], nxt.shapes[0]
     if last is None or first is None:
@@ -1120,6 +1152,10 @@ _RE_STANDALONE = re.compile(rf"(?<=\s)({_DIGIT_RUN}{{1,2}}){_AFTER_MARKER}")
 _RE_ALEF = re.compile(rf"(?:(?<=\s)|(?<=[»”])){ALEF}(?=\s|$|[.،؛:{PLACEHOLDERS}])")
 # A standalone number right after a closing quote or bracket («دينار » ١ ،») is printed as a marker.
 STRONG_STYLES: frozenset[str] = frozenset({"bracket", "superscript", "glued", "quoted"})
+# A note without a marker takes a call by its place only when the call is bracketed or superscript and
+# its number is small (`positional_call`, D74).
+POSITIONAL_STYLES: frozenset[str] = frozenset({"bracket", "superscript"})
+POSITIONAL_MAX = 15  # as `publishing.readiness.NOTE_MARKER_MAX`
 _QUOTED_AFTER = frozenset("»”)]")
 # Standalone numbers that are text, not markers: a list number («3 ـ كتاب»), a year («سنة 21 ه»).
 _RE_LIST_DASH = re.compile(r"\s*[ـ–—-](?:\s|$)")
@@ -1177,16 +1213,41 @@ def split_note_marker(text: str) -> tuple[str | None, int]:
     return match.group(1), match.end()
 
 
-def page_notes(page: PageIn, carry: Note | None) -> tuple[list[Note], Note | None]:
+def footnote_lines(page: PageIn) -> list[LineIn]:
+    """The page's note lines with text, in reading order."""
+    return [line for line in page.lines if line.kind == FOOTNOTE and (line.text or "").strip()]
+
+
+def note_keys(page: PageIn) -> list[str]:
+    """The keys of the markers that start the page's note lines, in order (`marker_key`)."""
+    out: list[str] = []
+    for line in footnote_lines(page):
+        marker, _length = split_note_marker(Rich.from_line(line).text)
+        if marker is not None:
+            out.append(marker_key(marker))
+    return out
+
+
+def continues(carry: Note | None, open_calls: int) -> bool:
+    """The continuation guard (D74): a marker-less line at the top of a page's notes continues the
+    previous page's note only when that note does not end with terminal punctuation and the page's
+    body has no open call that the line could be the note of (`open_calls`: `open_calls_before`, the
+    calls `link_footnotes` would give it, `positional_call`)."""
+    return carry is not None and not open_calls and not ends_terminal(carry.rich.plain())
+
+
+def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[list[Note], Note | None]:
     """The notes of one page, and the note the next page may continue (§2.5).
 
     A footnote line that starts with a marker starts a note; a line without one continues the
     current note. The page's first footnote line without a marker continues `carry` (the previous
-    page's last note) when there is one, else it starts a note without marker.
+    page's last note) when the continuation guard lets it (`continues`: `carry` does not end a
+    sentence and the page has no `open_calls`), else it starts a note without marker — the page's
+    open call may take it (`link_footnotes`, `note_marker_missing`).
     """
     notes: list[Note] = []
     current: Note | None = None
-    lines = [line for line in page.lines if line.kind == FOOTNOTE and (line.text or "").strip()]
+    lines = footnote_lines(page)
     for line in lines:
         rich = Rich.from_line(line)
         marker, length = split_note_marker(rich.text)
@@ -1201,7 +1262,7 @@ def page_notes(page: PageIn, carry: Note | None) -> tuple[list[Note], Note | Non
                 reviewed=page.reviewed,
             )
             notes.append(current)
-        elif current is None and carry is not None:
+        elif current is None and continues(carry, open_calls):
             current = carry
             current.lines.append(line)
             current.rich = Rich.join([current.rich, rich]) if len(current.rich) else rich
@@ -1298,21 +1359,78 @@ def _before_mark(text: str, end: int) -> bool:
     return not rest or rest[0] in MARKS or rest[0] in CLOSE_BRACKETS or rest[0] in "»”" + PLACEHOLDERS
 
 
+def page_candidates(blocks: Sequence[Block], line_page: dict[int, int]) -> dict[int, list[Candidate]]:
+    """Every block's reference candidates (`find_candidates`), by the page they sit on, in reading order."""
+    by_page: dict[int, list[Candidate]] = {}
+    for index, block in enumerate(blocks):
+        for cand in find_candidates(index, block.rich, line_page):
+            by_page.setdefault(cand.page, []).append(cand)
+    return by_page
+
+
+def is_leading(cand: Candidate, blocks: Sequence[Block]) -> bool:
+    """True for a candidate that starts its block: the marker of a note left in the body («(1) انظر …»),
+    never the call of another note."""
+    return not blocks[cand.block].rich.text[: cand.start].strip()
+
+
+def is_call(cand: Candidate, blocks: Sequence[Block]) -> bool:
+    """A candidate that reads as a call on its own: a strong style (bracket, superscript, glued, quoted)
+    not at a block's start (`stray_notes` pairs such a call with a paragraph's leading marker)."""
+    return cand.style in STRONG_STYLES and not is_leading(cand, blocks)
+
+
+def positional_call(cand: Candidate, blocks: Sequence[Block], keys: Iterable[str] = ()) -> bool:
+    """A call a note without a marker may take by its place alone (D74), with nothing on the note to
+    confirm the number: a bracketed or superscript call (`is_call`, `POSITIONAL_STYLES`) of `*` or of
+    1–`POSITIONAL_MAX`, below the smallest number of the page's marker notes (`keys`, `note_keys`: a
+    marker-less note heads its page's notes). Glued and quoted digits, a bracketed price «(450)» or page
+    «(241)» stay text: on the dev books they were OCR noise («ص٩») or not calls (books 1, 4, 16, 19)."""
+    if cand.style not in POSITIONAL_STYLES or not is_call(cand, blocks):
+        return False
+    if cand.key.startswith("*"):
+        return True
+    if not cand.key.isdigit() or not 1 <= int(cand.key) <= POSITIONAL_MAX:
+        return False
+    numbers = [int(key) for key in keys if key.isdigit()]
+    return not numbers or int(cand.key) < min(numbers)
+
+
+def open_calls_before(
+    cands: Sequence[Candidate], keys: Iterable[str], blocks: Sequence[Block]
+) -> list[Candidate]:
+    """The calls of a page that a note without a marker could take (`positional_call`) and that none of
+    its marker notes takes, before linking: each key of `keys` (the page's note markers, `note_keys`)
+    takes the first strong call with that key. What the continuation guard counts (`continues`)."""
+    keys = list(keys)
+    pool = [cand for cand in cands if is_call(cand, blocks)]
+    for key in keys:
+        hit = next((cand for cand in pool if cand.key == key), None)
+        if hit is not None:
+            pool.remove(hit)
+    return [cand for cand in pool if positional_call(cand, blocks, keys)]
+
+
 def link_footnotes(
-    blocks: list[Block], notes_by_page: dict[int, list[Note]], line_page: dict[int, int]
+    blocks: list[Block],
+    notes_by_page: dict[int, list[Note]],
+    line_page: dict[int, int],
+    by_page: dict[int, list[Candidate]] | None = None,
 ) -> tuple[list[Note], list[AssemblyWarning]]:
     """Replace the markers of linked notes by footnote nodes; returns the orphan notes and warnings.
 
     A candidate is linked only when a note of the same page carries that number (or `*`); each note
     takes the first unused matching candidate of the page, bracketed / superscript / glued / quoted
     ones first, then standalone digits and alefs before a mark or the end, then those before a
-    word. A strong candidate left over on a page that has notes → `marker_unmatched` (the text
-    stays as printed).
+    word. Then the k-th note without a marker takes the k-th call still open on its page that it may
+    take by place (`positional_call`, in reading order) with the warning `note_marker_missing` (D74;
+    only a page's first note lines lack a marker, so k is 1 in practice); a note left without either is an
+    orphan (in the order of the page's notes). A strong candidate left over on a page that has notes →
+    `marker_unmatched` (the text stays as printed). `by_page` is `page_candidates` when the caller has
+    it.
     """
-    by_page: dict[int, list[Candidate]] = {}
-    for index, block in enumerate(blocks):
-        for cand in find_candidates(index, block.rich, line_page):
-            by_page.setdefault(cand.page, []).append(cand)
+    if by_page is None:
+        by_page = page_candidates(blocks, line_page)
     chosen: dict[int, list[tuple[Candidate, Note]]] = {}
     orphans: list[Note] = []
     warnings: list[AssemblyWarning] = []
@@ -1320,6 +1438,7 @@ def link_footnotes(
         notes = notes_by_page[page_number]
         cands = by_page.get(page_number, [])
         used: set[int] = set()
+        unlinked: list[Note] = []
         for note in notes:
             pick = None
             if note.key is not None:
@@ -1335,12 +1454,35 @@ def link_footnotes(
                     if pick is not None:
                         break
             if pick is None:
-                orphans.append(note)
+                unlinked.append(note)
                 continue
             used.add(pick)
             cand = cands[pick]
             note.ref = cand.marker
             chosen.setdefault(cand.block, []).append((cand, note))
+        keys = [note.key for note in notes if note.key is not None]
+        free = [i for i, cand in enumerate(cands) if i not in used and positional_call(cand, blocks, keys)]
+        for note in unlinked:
+            if note.key is not None or not free:
+                orphans.append(note)
+                continue
+            pick = free.pop(0)
+            used.add(pick)
+            cand = cands[pick]
+            note.ref = cand.marker
+            chosen.setdefault(cand.block, []).append((cand, note))
+            shown = digits_in(cand.marker.translate(_SUPERSCRIPT_DIGITS))
+            warnings.append(
+                AssemblyWarning(
+                    "note_marker_missing",
+                    "warning",
+                    page_number,
+                    f"حاشية بلا علامة رُبطت بالعلامة ({shown})؛ تحقّق منها.",
+                    blocks[cand.block].id,
+                    note.line_ids,
+                    marker=cand.key,
+                )
+            )
         if notes:
             for i, cand in enumerate(cands):
                 if i not in used and cand.style in STRONG_STYLES:
@@ -1430,6 +1572,84 @@ def attach_orphans(
     return warnings
 
 
+STRAY_NOTE_ACTIONS: tuple[tuple[str, str], ...] = (("footnote", "جعلها حاشية"), ("go", "انتقال"))
+# A paragraph's leading note marker: bracketed or starred only (playground/phase7/probe_stray2.py; a bare
+# «١ –» starts a list item, book 26).
+_RE_LEADING_MARKER = re.compile(rf"^\s*[\(\[]\s*([{_DIGITS}]{{1,3}}|\*{{1,3}})\s*[\)\]]\s*[-–.:،]?\s*")
+
+
+def leading_marker(text: str) -> str | None:
+    """The key (`marker_key`) of the bracketed note marker a paragraph's text starts with when words
+    follow it («(1) انظر …» → `1`); None otherwise."""
+    match = _RE_LEADING_MARKER.match(text or "")
+    if match is None or not any(char.isalpha() for char in text[match.end() :]):
+        return None
+    return marker_key(match.group(1))
+
+
+def stray_notes(blocks: Sequence[Block], line_page: dict[int, int]) -> list[AssemblyWarning]:
+    """Paragraphs that may be a note left in the body (D74), after linking; sets `Block.note_for`.
+
+    A body paragraph (not a verse line) that starts with a bracketed note marker (`leading_marker`), on
+    a page whose body still has an open call with that number (`is_call`, what `link_footnotes` left),
+    gets `note_for` = that number: the manuscript's paragraph menu then reads «حاشية للعلامة (n)». When
+    the paragraph also lies at the end of its page's text (one source page, in the run of such
+    paragraphs that ends the page, not the whole page: probe_stray2's page-end rule) it gets the warning
+    `stray_note` with the actions «جعلها حاشية» (the footnote role on its lines) and «انتقال». The
+    readiness row `stray_notes` keeps its own measured rule (critic 1.6).
+    """
+    calls: dict[int, set[str]] = {}
+    for page, cands in page_candidates(blocks, line_page).items():
+        calls[page] = {cand.key for cand in cands if is_call(cand, blocks)}
+    markers: dict[int, str] = {}  # block index → the key of its leading marker (body paragraphs)
+    for index, block in enumerate(blocks):
+        if block.kind == "paragraph" and not block.style and block.pages:
+            key = leading_marker(block.rich.plain())
+            if key is not None:
+                markers[index] = key
+                if key in calls.get(block.pages[0], set()):
+                    block.note_for = key
+    by_page: dict[int, list[int]] = {}  # page → indexes of its blocks, in order
+    for index, block in enumerate(blocks):
+        for number in block.pages:
+            by_page.setdefault(number, []).append(index)
+    warnings: list[AssemblyWarning] = []
+    for page, indexes in sorted(by_page.items()):
+        tail: list[int] = []  # the run of one-page marker-initial paragraphs that ends the page
+        for index in reversed(indexes):
+            if index not in markers or blocks[index].pages != [page]:
+                break
+            tail.append(index)
+        if len(tail) == len(indexes):  # the whole page (a numbered list), not a run that ends it
+            continue
+        for index in reversed(tail):
+            block = blocks[index]
+            key = markers[index]
+            if block.note_for is None:
+                continue
+            warnings.append(
+                AssemblyWarning(
+                    "stray_note",
+                    "warning",
+                    page,
+                    f"فقرة في الصفحة {page} تبدأ بعلامة حاشية «({key})» ولم تُربط.",
+                    block.id,
+                    block.line_ids,
+                    marker=key,
+                    actions=[
+                        {
+                            "key": "footnote",
+                            "label": STRAY_NOTE_ACTIONS[0][1],
+                            "role": FOOTNOTE,
+                            "lineIds": block.line_ids,
+                        },
+                        {"key": "go", "label": STRAY_NOTE_ACTIONS[1][1], "blockId": block.id},
+                    ],
+                )
+            )
+    return warnings
+
+
 def number_footnotes(blocks: Sequence[Block], mode: str) -> None:
     """Number the footnote nodes in document order: per chapter (restart at each level-1 heading),
     through the book, or per source page (§2.5)."""
@@ -1452,10 +1672,11 @@ def number_footnotes(blocks: Sequence[Block], mode: str) -> None:
 
 def suggest_headings(blocks: Sequence[Block], dismissed: frozenset[str] | set[str]) -> None:
     """Mark heading suggestions (never applied): a paragraph of 1–2 centred lines, not ending a
-    sentence, at most 8 words, followed by a paragraph, and not dismissed."""
+    sentence, at most 8 words, followed by a paragraph, and not dismissed. A verse line (centred, short)
+    is never one."""
     for index, block in enumerate(blocks):
         block.suggested = None
-        if block.kind != "paragraph" or not 1 <= len(block.lines) <= MAX_SUGGESTION_LINES:
+        if block.kind != "paragraph" or block.style or not 1 <= len(block.lines) <= MAX_SUGGESTION_LINES:
             continue
         if block.id in dismissed or not all(shape is not None and shape.centred for shape in block.shapes):
             continue
@@ -1602,7 +1823,9 @@ def _inline_node(node) -> dict:
 
 
 def block_node(block: Block) -> dict:
-    """The ProseMirror node of a paragraph or heading, with its source mapping."""
+    """The ProseMirror node of a paragraph or heading, with its source mapping. A verse line's paragraph
+    carries `style: "verse"` (the editor's paragraph style), and a marker-initial paragraph whose page
+    has an open call with its number `noteFor` (that number: the manuscript's «حاشية للعلامة (n)»)."""
     attrs: dict = {
         "id": block.id,
         "sourcePages": list(block.pages),
@@ -1616,6 +1839,10 @@ def block_node(block: Block) -> dict:
             "content": inline_content(block.rich),
         }
     attrs["suggestedRole"] = block.suggested
+    if block.style:
+        attrs["style"] = block.style
+    if block.note_for is not None:
+        attrs["noteFor"] = block.note_for
     return {"type": "paragraph", "attrs": attrs, "content": inline_content(block.rich)}
 
 
@@ -1722,14 +1949,17 @@ def assemble(
     stage("footnotes")
     notes_by_page: dict[int, list[Note]] = {}
     carry: Note | None = None
+    by_page = page_candidates(blocks, line_page)
     for page in selection.included:
         if page.number in selection.gaps:
             carry = None
-        notes, carry = page_notes(page, carry)
+        open_calls = open_calls_before(by_page.get(page.number, []), note_keys(page), blocks)
+        notes, carry = page_notes(page, carry, len(open_calls))
         if notes:
             notes_by_page[page.number] = notes
-    orphans, footnote_warnings = link_footnotes(blocks, notes_by_page, line_page)
+    orphans, footnote_warnings = link_footnotes(blocks, notes_by_page, line_page, by_page)
     footnote_warnings += attach_orphans(blocks, orphans, line_page)
+    footnote_warnings += stray_notes(blocks, line_page)
 
     stage("headings")
     suggest_headings(blocks, options.dismissed_suggestions)

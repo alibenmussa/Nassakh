@@ -3,7 +3,8 @@ once more with `t` = None inside <template id="tile-shell"> for pages ingested a
 (`patchTile`) from the poll; its effects (sweep while cleaning, reading line while OCR runs) are CSS animations that
 run only while the grid is active and the tile is near the viewport. Muted palette: the stage bar is dark gray and
 turns accent only as it reaches 100 %; marks are the review filmstrip's. Footer: number + status dot, the label in
-the link's title. In the «التخطيط» mode (PHASE7 §3.12) the thumbnail carries the page's bands (`.gd-bands`, patched by
+the link's title; a half-disc before the dot marks a page one model read (D73, `t.readers`, patched by
+`patchReader`). In the «التخطيط» mode (PHASE7 §3.12) the thumbnail carries the page's bands (`.gd-bands`, patched by
 `patchTileGuides`) and an amber mark on the pages worth a look. Context: t (tile dict or None), book, role, request,
 guides_mode.{% endcomment %}
 <div class="page-tile{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"{% if t %} data-page-id="{{ t.id }}" data-number="{{ t.number }}" data-status="{{ t.status }}"{% else %} data-page-id="" data-number="" data-status=""{% endif %}>
@@ -21,12 +22,12 @@ guides_mode.{% endcomment %}
       </span>
       <span class="page-tile-excluded badge badge-dark"{% if not t.is_excluded %} hidden{% endif %}>مستثناة</span>
       <span class="bk-mark-check tile-mark-check"{% if not t.is_reviewed %} hidden{% endif %} title="صفحة مُراجَعة"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span class="sr-only">مُراجَعة</span></span>
-      <span class="bk-mark-count tile-mark-count"{% if t.is_reviewed or not t.n_unresolved %} hidden{% endif %} title="{{ t.n_unresolved|default:0 }} كلمة غير مؤكَّدة">{{ t.n_unresolved|default:0 }}</span>
+      <span class="bk-mark-count tile-mark-count"{% if t.is_reviewed or not t.n_unresolved %} hidden{% endif %} title="علامات لم تُحسم: {{ t.n_unresolved|default:0 }}">{{ t.n_unresolved|default:0 }}</span>
       <span class="tile-stage{% if t.error %} is-error{% endif %}{% if t.is_excluded or t.status == 'ocr_done' or t.status == 'reviewed' or t.status == 'assembled' %} is-done{% endif %}" aria-hidden="true"><span class="tile-stage-fill" style="width: {% if t.error or t.status == 'ocr_done' or t.status == 'reviewed' or t.status == 'assembled' %}100{% elif t.status == 'layout_done' %}72{% elif t.status == 'preprocessed' %}46{% elif t.status == 'uploaded' %}12{% else %}0{% endif %}%"></span></span>
     </span>
     <span class="page-tile-footer">
       <span class="tile-number num">{{ t.number }}</span>
-      <span class="dot {{ t.dot|default:'dot-neutral' }}" aria-hidden="true"></span>
+      <span class="page-tile-marks">{% if t.readers == 'one' %}<span class="mark-reader" title="قراءة واحدة"><span class="sr-only">قراءة واحدة</span></span>{% elif t.readers == 'tesseract' %}<span class="mark-reader is-tesseract" title="نص Tesseract وحده"><span class="sr-only">نص Tesseract وحده</span></span>{% else %}<span class="mark-reader" hidden><span class="sr-only">قراءة واحدة</span></span>{% endif %}<span class="dot {{ t.dot|default:'dot-neutral' }}" aria-hidden="true"></span></span>
     </span>
   </a>
   {% if role == 'admin' or role == 'editor' %}

@@ -67,12 +67,23 @@
     { key: 'save', label: () => 'حفظ المخطوطة' },
   ];
   const STAGE_KEYS = STAGES.map((s) => s.key);
+  // «نوع الفقرة» (D32, D74; = assembly.services.BLOCK_ROLES): the choice goes to every line of the block through
+  // the review service, which stores it per line (on a footnote-region line «حاشية» is `body`, «محتوى» `main`).
   const ROLES = [
     { value: 'body', label: 'محتوى' },
     { value: 'heading', label: 'عنوان رئيسي' },
     { value: 'subheading', label: 'عنوان فرعي' },
+    { value: 'verse', label: 'شعر' },
+    { value: 'footnote', label: 'حاشية' },
   ];
   const ROLE_OF_TAG = { H2: 'heading', H3: 'subheading', P: 'body' };
+  const ROLE_MESSAGES = {
+    body: 'تصير الفقرة محتوى',
+    heading: 'تصير الفقرة عنوانًا رئيسيًا',
+    subheading: 'تصير الفقرة عنوانًا فرعيًا',
+    verse: 'تصير الفقرة شعرًا',
+    footnote: 'تصير الفقرة حاشية',
+  };
   const PAGES = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
   const MINUTES = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
   const HOURS = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
@@ -122,6 +133,9 @@
   const toast = (message) => { if (window.Nassakh && window.Nassakh.toast) window.Nassakh.toast(message); };
   const pagesOf = (el) => attr(el, 'data-pages').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
   const linesOf = (el) => attr(el, 'data-lines').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
+  // What a block is now: a heading by its tag, a verse line's paragraph by its style (`data-style="verse"`,
+  // D74), else body text.
+  const blockRole = (el) => (el && el.tagName === 'P' && attr(el, 'data-style') === 'verse' ? 'verse' : ROLE_OF_TAG[el && el.tagName] || 'body');
   const kids = (el) => Array.from(el && el.children ? el.children : []); // HTMLCollection has no forEach / find
   const later = (fn) => { if (typeof queueMicrotask === 'function') queueMicrotask(fn); else Promise.resolve().then(fn); };
 
@@ -214,7 +228,7 @@
   }
 
   window.NassakhManuscript = Object.assign(window.NassakhManuscript || {}, {
-    keyAction, arCount, relativeTime, parseFragment, parsePageNumber, placeAgainst, STAGE_KEYS,
+    keyAction, arCount, relativeTime, parseFragment, parsePageNumber, placeAgainst, STAGE_KEYS, blockRole,
   });
 
   document.addEventListener('alpine:init', () => {
@@ -281,7 +295,7 @@
         tools: { blockId: null, style: '' },
         // the one overlay: kind 'menu' (block menu, anchored at the «⋯»), 'seam' (seam menu) or 'note' (footnote)
         pop: { kind: null, anchorId: '', style: '', above: false },
-        menu: { blockId: null, src: '', reviewed: true, role: 'body', reviewUrl: '', lines: [] },
+        menu: { blockId: null, src: '', reviewed: true, role: 'body', reviewUrl: '', lines: [], noteFor: '' },
         seam: { page: 0, from: 0, mode: '', decision: 'auto', text: '', state: '' },
         note: { id: '', number: '', html: '', orphan: false, found: false },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
@@ -1010,9 +1024,11 @@
             blockId: id,
             src: attr(block, 'data-src'),
             reviewed: attr(block, 'data-reviewed') !== 'false',
-            role: ROLE_OF_TAG[block.tagName] || 'body',
+            role: blockRole(block),
             reviewUrl: this.reviewUrl(pages[0]),
             lines: linesOf(block),
+            // D74: the paragraph starts with a marker whose call is open on its page (`noteFor`)
+            noteFor: attr(block, 'data-note-for'),
           };
           return this.openPop('menu', id, opts);
         },
@@ -1021,18 +1037,34 @@
           if (this.pop.kind === 'menu' && this.pop.anchorId === target) this.closePop(true); else if (target) this.openMenu(target, { focus: true });
         },
         closeMenu(refocus) { return this.pop.kind === 'menu' ? this.closePop(refocus) : null; },
+        // The menu's label of a role: «حاشية» reads «حاشية للعلامة (1)» on a paragraph that starts with the marker
+        // of a call still open on its page (D74).
+        roleLabel(r) {
+          if (r && r.value === 'footnote' && this.menu.noteFor) return `حاشية للعلامة (${this.menu.noteFor})`;
+          return r ? r.label : '';
+        },
         // The block's lines take the role (through the review service, D38), then the document re-runs.
         setRole(id, role) {
           const block = this.blockById(id);
           if (!block || !this.canReview) return Promise.resolve(false);
-          const current = ROLE_OF_TAG[block.tagName] || 'body';
+          const current = blockRole(block);
           this.closeMenu(true);
           if (role === current) return Promise.resolve(false);
-          this.liveMessage = role === 'body' ? 'تصير الفقرة محتوى' : role === 'heading' ? 'تصير الفقرة عنوانًا رئيسيًا' : 'تصير الفقرة عنوانًا فرعيًا';
-          // the block comes back under its other id (a paragraph `p…` becomes a heading `h…`): anchored first
-          const renamed = `${role === 'body' ? 'p' : 'h'}${String(id).slice(1)}`;
-          const anchor = renamed === id ? this.neighbours(id) : [renamed, ...this.neighbours(id)];
+          this.liveMessage = ROLE_MESSAGES[role] || '';
+          // the block comes back under its other id (a paragraph `p…` becomes a heading `h…`): anchored first; a
+          // paragraph made a note leaves the text, and its neighbours hold the place
+          const renamed = `${role === 'heading' || role === 'subheading' ? 'h' : 'p'}${String(id).slice(1)}`;
+          const anchor = renamed === id || role === 'footnote' ? this.neighbours(id) : [renamed, ...this.neighbours(id)];
           return this.postRun(urls.roles, { line_ids: linesOf(block), role }, anchor, id);
+        },
+        // The `stray_note` warning's «جعلها حاشية» (D74): the paragraph's lines take the footnote role.
+        warnRole(el) {
+          const id = attr(el, 'data-block');
+          const role = attr(el, 'data-warn-role') || 'footnote';
+          const lines = linesOf(el).length ? linesOf(el) : linesOf(this.blockById(id));
+          if (!lines.length || !this.canReview) return Promise.resolve(false);
+          this.liveMessage = ROLE_MESSAGES[role] || '';
+          return this.postRun(urls.roles, { line_ids: lines, role }, id ? this.neighbours(id) : null, id || null);
         },
         acceptSuggestion(id) { return this.setRole(id, 'heading'); },
         dismissSuggestion(id) {
@@ -1149,6 +1181,8 @@
         // ------------------------------------------------------------ side panel: contents, warnings, scroll spy
         onSideClick(e) {
           const t = e.target;
+          const action = closest(t, '[data-warn-role]');
+          if (action) { e.preventDefault(); this.warnRole(action); return; }
           const goto = closest(t, '[data-goto]');
           if (!goto) return;
           e.preventDefault();

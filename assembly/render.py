@@ -34,6 +34,8 @@ NOTES = ("ملاحظة واحدة", "ملاحظتان", "ملاحظات", "مل�
 WARNING_LABELS: dict[str, str] = {
     "marker_unmatched": "علامات بلا حاشية",
     "note_orphan": "حواشٍ بلا علامة في المتن",
+    "note_marker_missing": "حواشٍ بلا علامة رُبطت بموضعها",
+    "stray_note": "فقرات تبدأ بعلامة حاشية",
     "page_pending": "صفحات قيد المعالجة لم تُضمَّن",
     "page_error": "صفحات متعطّلة لم تُضمَّن",
     "page_unreviewed": "صفحات لم تُراجَع بعد",
@@ -299,6 +301,11 @@ def _block_html(node: dict, ctx: _Ctx) -> str:
         tag, cls = "p", "ms-p"
     suggested = attrs.get("suggestedRole") if node.get("type") == "paragraph" else None
     extra = f' data-suggested="{_attr(suggested)}"' if suggested else ""
+    if node.get("type") == "paragraph":
+        if attrs.get("style") == "verse":
+            extra += ' data-style="verse"'  # D74: the paragraph menu's «شعر» is checked
+        if attrs.get("noteFor"):
+            extra += f' data-note-for="{_attr(attrs["noteFor"])}"'  # D74: «حاشية للعلامة (n)»
     if ctx.unmatched.get(block_id):
         extra += f' data-unmatched="{_attr(",".join(ctx.unmatched[block_id]))}"'
     title = f' title="{UNREVIEWED_TITLE}"' if not reviewed else ""
@@ -451,23 +458,45 @@ def outline(doc: dict | None) -> list[dict]:
 
 def flat_warnings(warnings) -> list[dict]:
     """The run's warnings in their stored order (book-level first, then by page), each with its
-    `index` (the `]` / `[` order of the view) and the page's review URL left to the template."""
+    `index` (the `]` / `[` order of the view) and the page's review URL left to the template. A footnote
+    warning's `marker` and `actions` pass through when it has them (D74: `note_marker_missing`,
+    `stray_note` with «جعلها حاشية» `{key, label, role, lineIds}` and «انتقال» `{key: "go", label,
+    blockId}`)."""
     out: list[dict] = []
     for index, warning in enumerate(warnings or []):
         if not isinstance(warning, dict):
             continue
         page = warning.get("page")
-        out.append(
-            {
-                "index": index,
-                "code": str(warning.get("code") or ""),
-                "severity": str(warning.get("severity") or "warning"),
-                "page": page if isinstance(page, int) else None,
-                "blockId": warning.get("blockId") or "",
-                "lineIds": _ints(warning.get("lineIds")),
-                "message": str(warning.get("message") or ""),
-            }
-        )
+        item = {
+            "index": index,
+            "code": str(warning.get("code") or ""),
+            "severity": str(warning.get("severity") or "warning"),
+            "page": page if isinstance(page, int) else None,
+            "blockId": warning.get("blockId") or "",
+            "lineIds": _ints(warning.get("lineIds")),
+            "message": str(warning.get("message") or ""),
+        }
+        if warning.get("marker") is not None:
+            item["marker"] = str(warning["marker"])
+        actions = [
+            _warning_action(action) for action in warning.get("actions") or [] if isinstance(action, dict)
+        ]
+        if actions:
+            item["actions"] = actions
+        out.append(item)
+    return out
+
+
+def _warning_action(action: dict) -> dict:
+    """One action of a warning as the view reads it: `key` and `label`, with `role` and `lineIds` («جعلها
+    حاشية», the roles endpoint's body) or `blockId` («انتقال») when it has them."""
+    out = {"key": str(action.get("key") or ""), "label": str(action.get("label") or "")}
+    if action.get("role"):
+        out["role"] = str(action["role"])
+    if "lineIds" in action:
+        out["lineIds"] = _ints(action.get("lineIds"))
+    if action.get("blockId"):
+        out["blockId"] = str(action["blockId"])
     return out
 
 

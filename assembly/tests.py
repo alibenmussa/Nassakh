@@ -9,6 +9,7 @@ the API, the placeholder views, the management command and the review / dashboar
 from __future__ import annotations
 
 import json
+import os
 import re
 from io import StringIO
 
@@ -1035,6 +1036,338 @@ def test_rich_keeps_one_meta_per_character():
     assert block.line_ids == []
 
 
+# ---------------------------------------------------------------- D74: verse lines, the guard, stray notes
+
+ENDING = (0.5, 0.85)  # indented and short: a one-line paragraph
+
+
+def test_a_verse_line_is_never_joined_with_another_line():
+    """Book 23 page 5: staggered hemistichs glued into the wrong paragraphs; each verse line now stands
+    alone (a `paragraph` with `style: "verse"`), whatever its geometry. Pairing into bayts is 7d."""
+    lines = [
+        ln("قال الشاعر في ذلك", FULL, id=1),
+        ln("لله دري اذا اعدو على فرسي", (0.45, 0.95), role="verse", id=2),
+        ln("الى الهياج ونار الحرب تستعر", (0.07, 0.58), role="verse", id=3),
+        ln("وفي يدي صارم افري الرؤوس به", (0.45, 0.95), role="verse", id=4),
+        ln("في حده الموت لا يبقي ولا يذر", (0.07, 0.58), role="verse", id=5),
+        ln("ثم انصرف", FULL, id=6),
+        ln("الى بلده", SHORT, id=7),
+    ]
+    result = run([pg(1, lines)])
+    nodes = blocks_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in nodes] == [[1], [2], [3], [4], [5], [6, 7]]
+    assert [n["attrs"].get("style") for n in nodes] == [None, "verse", "verse", "verse", "verse", None]
+    assert [n["type"] for n in nodes] == ["paragraph"] * 6
+    assert text_of(nodes[2]) == "الى الهياج ونار الحرب تستعر"
+    assert "style" not in nodes[0]["attrs"]  # other paragraphs keep today's attrs
+
+
+def test_verse_lines_break_without_boxes_and_are_never_heading_suggestions():
+    a, b = ln("بيت اول", role="verse", boxed=False), ln("بيت ثان", role="verse", boxed=False)
+    assert breaks_between(a, b, None, None) is True
+    assert breaks_between(ln("نص", boxed=False), a, None, None) is True
+    lines = [
+        ln("لله دري اذا اعدو", CENTRED, y=0.1, role="verse", id=21),
+        ln("نص يتبعه", INDENT, y=0.12, id=22),
+    ]
+    (verse, _following) = blocks_of(run([pg(1, lines)]))
+    assert verse["attrs"]["suggestedRole"] is None and verse["attrs"]["style"] == "verse"
+
+
+def test_a_verse_line_never_joins_across_a_page_even_with_an_override():
+    pages = [
+        pg(
+            1,
+            [
+                ln("متن الصفحة", INDENT, id=31),
+                ln("وتمامه", FULL, id=32),
+                ln("بيت في آخر الصفحة", FULL, role="verse", id=33),
+            ],
+        ),
+        pg(2, [ln("بيت في أول الصفحة", FULL, role="verse", id=41), ln("ثم نثر", FULL, id=42)]),
+    ]
+    for overrides in ({}, {"2": "join"}):
+        result = run(pages, seams=overrides)
+        (seam,) = result.seams
+        assert seam["mode"] == "split" and seam["reason"] == "verse" and seam["decision"] == "auto"
+        assert [n["attrs"]["sourceLineIds"] for n in blocks_of(result)] == [[31, 32], [33], [41], [42]]
+
+
+def _guard_pages(first_note: str, second_body: str) -> list[PageIn]:
+    """Page 1 has a note (1) that may run on; page 2 starts its notes with a line without a marker."""
+    return [
+        pg(
+            1,
+            [
+                ln("متن الصفحة الأولى (1) انتهى", INDENT, id=51),
+                ln("هنا.", SHORT, id=52),
+                ln(first_note, kind="footnote", id=53),
+            ],
+        ),
+        pg(
+            2,
+            [
+                ln(second_body, INDENT, id=61),
+                ln("وتمت.", SHORT, id=62),
+                ln("سطر حاشية بلا علامة", kind="footnote", id=63),
+            ],
+        ),
+    ]
+
+
+def test_the_guard_lets_a_note_run_on_when_it_does_not_end_and_the_page_has_no_open_call():
+    result = run(_guard_pages("(1) حاشية تبدأ ولا تنتهي", "متن الصفحة الثانية بلا علامة"))
+    (note,) = notes_of(result)
+    assert note["attrs"]["sourceLineIds"] == [53, 63] and note["content"][0]["text"].endswith("بلا علامة")
+    assert not {"note_orphan", "note_marker_missing"} & set(codes(result))
+
+
+def test_the_guard_stops_after_a_note_that_ends_a_sentence():
+    result = run(_guard_pages("(1) حاشية تامة.", "متن الصفحة الثانية بلا علامة"))
+    first, second = notes_of(result)
+    assert first["attrs"]["sourceLineIds"] == [53] and second["attrs"]["sourceLineIds"] == [63]
+    assert second["attrs"]["orphan"] is True and "note_marker_missing" not in codes(result)
+
+
+def test_the_guard_gives_a_marker_less_note_to_the_open_call_of_its_page():
+    """Book 25 page 6: its note (no marker) had joined page 5's note, which ended in «… 259 */»."""
+    result = run(_guard_pages("(1) حاشية تبدأ ولا تنتهي", "وكان تحت إمرة ديستري (1) فتوقف"))
+    first, second = notes_of(result)
+    assert first["attrs"]["sourceLineIds"] == [53]
+    assert second["attrs"] == {
+        "id": "n63",
+        "number": 1,
+        "marker": "1",
+        "sourcePage": 2,
+        "sourceLineIds": [63],
+        "orphan": False,
+    }
+    assert text_of(blocks_of(result)[1]) == "وكان تحت إمرة ديستري[1] فتوقف وتمت."
+    (warning,) = [w for w in result.warnings if w["code"] == "note_marker_missing"]
+    assert warning == {
+        "code": "note_marker_missing",
+        "severity": "warning",
+        "page": 2,
+        "blockId": "p61",
+        "lineIds": [63],
+        "message": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.",
+        "marker": "1",
+    }
+    assert "note_orphan" not in codes(result) and "marker_unmatched" not in codes(result)
+
+
+def test_the_first_open_call_takes_the_note_without_marker():
+    """Only a page's first note lines can lack a marker (a later line continues the note before it):
+    that note takes the first call its page's marker notes leave open, in reading order."""
+    page = pg(
+        1,
+        [
+            ln("الأول (1) والثاني (2) والثالث (3) والرابع (4) والخامس", id=71),
+            ln("حاشية بلا علامة", kind="footnote", id=72),
+            ln("(2) حاشية معلَّمة", kind="footnote", id=73),
+        ],
+    )
+    result = run([page])
+    body = text_of(blocks_of(result)[0])
+    assert body == "الأول[1] والثاني[2] والثالث (3) والرابع (4) والخامس"
+    notes = {n["attrs"]["id"]: n["attrs"]["marker"] for n in notes_of(result)}
+    assert notes == {"n72": "1", "n73": "2"}
+    assert [w["message"] for w in result.warnings if w["code"] == "marker_unmatched"] == [
+        "علامة الحاشية «3» في الصفحة 1 بلا حاشية مقابلة.",
+        "علامة الحاشية «4» في الصفحة 1 بلا حاشية مقابلة.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "سار التجار الى السوق1 ثم عادوا",  # glued digits: OCR noise as often as a call («ص٩»)
+        "قال «هذا كلامه» 1 ثم سكت",  # quoted
+        "التثمين (450)، والقيمة بعد التشطيب",  # a price in brackets (book 16)
+        "كما في الصفحة (22) من الكتاب",  # above POSITIONAL_MAX
+    ],
+)
+def test_a_note_without_a_marker_takes_only_a_small_bracketed_or_superscript_call(body):
+    """On the dev books the positional link took «(814)», «(450)» and glued digits: only a bracketed or
+    superscript call of 1–15 (or `*`) is taken by place. The guard then lets the line run on."""
+    pages = _guard_pages("(1) حاشية تبدأ ولا تنتهي", body)
+    result = run(pages)
+    (note,) = notes_of(result)
+    assert note["attrs"]["sourceLineIds"] == [53, 63]
+    assert "note_marker_missing" not in codes(result)
+    stopped = run(_guard_pages("(1) حاشية تامة.", body))
+    assert [n["attrs"]["orphan"] for n in notes_of(stopped)] == [False, True]
+    assert "note_marker_missing" not in codes(stopped)
+
+
+def test_positional_calls():
+    page = pg(
+        1,
+        [
+            ln("الأول¹ والثاني (*) والثالث (3) والرابع (16) والخامس (0)", id=91),
+        ],
+    )
+    blocks = split_paragraphs(page)
+    by_key = {cand.key: cand for cand in pipeline.page_candidates(blocks, {91: 1})[1]}
+    assert set(by_key) == {"1", "*", "3", "16", "0"}
+    assert pipeline.positional_call(by_key["1"], blocks, ())  # superscript
+    assert pipeline.positional_call(by_key["*"], blocks, ["2"])
+    assert pipeline.positional_call(by_key["3"], blocks, ["4"])
+    assert not pipeline.positional_call(by_key["3"], blocks, ["2", "3"])  # heads the page's notes
+    assert not pipeline.positional_call(by_key["16"], blocks, ())
+    assert not pipeline.positional_call(by_key["0"], blocks, ())
+
+
+def test_a_note_without_a_marker_takes_a_call_below_the_pages_marker_notes():
+    page = pg(
+        1,
+        [
+            ln("الأول (1) والثاني (2) والرابع (4) والخامس", id=71),
+            ln("حاشية بلا علامة", kind="footnote", id=72),
+            ln("(2) حاشية معلَّمة", kind="footnote", id=73),
+            ln("(3) حاشية ثالثة", kind="footnote", id=74),
+        ],
+    )
+    result = run([page])
+    assert {n["attrs"]["id"]: n["attrs"]["marker"] for n in notes_of(result)} == {
+        "n72": "1",
+        "n73": "2",
+        "n74": "3",
+    }
+    lone = pg(
+        1,
+        [
+            ln("الأول (4) والخامس", id=71),
+            ln("حاشية بلا علامة", kind="footnote", id=72),
+            ln("(2) حاشية معلَّمة", kind="footnote", id=73),
+        ],
+    )
+    result = run([lone])
+    assert [n["attrs"]["orphan"] for n in notes_of(result)] == [True, True]
+    assert "note_marker_missing" not in codes(result)
+
+
+def test_weak_candidates_and_block_initial_markers_are_never_open_calls():
+    """A standalone number is text more often than a call, and a paragraph's own leading «(1)» is the
+    marker of a note left in the body: neither takes a marker-less note."""
+    page = pg(
+        1,
+        [
+            ln("سار 3 أميال ثم وقف", INDENT, id=81),
+            ln("وانتهى.", SHORT, id=82),
+            ln("(1) فقرة تبدأ بعلامة", INDENT, id=83),
+            ln("حاشية بلا علامة", kind="footnote", id=84),
+        ],
+    )
+    result = run([page])
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is True and "note_marker_missing" not in codes(result)
+
+
+def _stray_page(*lines: LineIn, number: int = 3) -> PageIn:
+    """A page whose first paragraph (three lines: the page's measure) holds `lines[0]`'s text, then
+    `lines[1:]`, each a one-line paragraph (indented and short)."""
+    first, *rest = lines
+    opening = [
+        ln(first.text, INDENT, id=first.id, role=first.role),
+        ln("ويمتد السطر الثاني من الفقرة الى آخره", FULL, id=first.id + 500),
+        ln("وتم.", SHORT, id=first.id + 501),
+    ]
+    for line in rest:
+        line.box = box(line.box[1], ENDING) if line.box is not None else None
+    return pg(number, [*opening, *rest])
+
+
+def test_a_note_left_at_the_end_of_its_page_warns_with_its_actions():
+    page = _stray_page(
+        ln("وفي تلك السنة (1) وصل الأسطول الى", id=91),
+        ln("(1) الأسطول الفرنسي بقيادة دوكين.", id=93),
+    )
+    result = run([page])
+    body, stray = blocks_of(result)
+    assert body["attrs"]["sourceLineIds"] == [91, 591, 592]
+    assert stray["attrs"]["noteFor"] == "1" and "noteFor" not in body["attrs"]
+    (warning,) = [w for w in result.warnings if w["code"] == "stray_note"]
+    assert warning == {
+        "code": "stray_note",
+        "severity": "warning",
+        "page": 3,
+        "blockId": "p93",
+        "lineIds": [93],
+        "message": "فقرة في الصفحة 3 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
+        "marker": "1",
+        "actions": [
+            {"key": "footnote", "label": "جعلها حاشية", "role": "footnote", "lineIds": [93]},
+            {"key": "go", "label": "انتقال", "blockId": "p93"},
+        ],
+    }
+    assert "(1) الأسطول" in text_of(stray)  # the text stays as printed
+
+
+def test_a_marker_initial_paragraph_inside_its_page_gets_the_label_only():
+    page = _stray_page(
+        ln("وفي تلك السنة (٢) وصل الأسطول.", INDENT, id=101),
+        ln("(٢) بلاد فارس", INDENT, id=102),
+        ln("ثم عاد الى بلده.", INDENT, id=103),
+    )
+    result = run([page])
+    assert [n["attrs"].get("noteFor") for n in blocks_of(result)] == [None, "2", None]
+    assert "stray_note" not in codes(result)
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # no open call with that number on the page (book 19's numbered sub-heading «(١) بلاد فارس»)
+        [ln("متن بلا علامة.", INDENT, id=111), ln("(1) بلاد فارس", INDENT, id=112)],
+        [ln("متن (2) بعلامة أخرى.", INDENT, id=111), ln("(1) بلاد فارس", INDENT, id=112)],
+        # the call is linked already: its note was found
+        [
+            ln("متن (1) بعلامة.", INDENT, id=111),
+            ln("(1) بلاد فارس", INDENT, id=112),
+            ln("(1) الحاشية", kind="footnote", id=113),
+        ],
+        # a marker with nothing after it, a verse line, a list number without brackets (book 26)
+        [ln("متن (1) بعلامة.", INDENT, id=111), ln("(1)", INDENT, id=112)],
+        [ln("متن (1) بعلامة.", INDENT, id=111), ln("(1) شطر بيت", INDENT, role="verse", id=112)],
+        [ln("متن (1) بعلامة.", INDENT, id=111), ln("1 – كتاب الأوسط", INDENT, id=112)],
+    ],
+)
+def test_no_stray_note_without_an_open_call_or_a_marker_with_text(lines):
+    result = run([_stray_page(*lines)])
+    assert "stray_note" not in codes(result)
+    assert not any(n["attrs"].get("noteFor") for n in blocks_of(result))
+
+
+def test_a_page_made_only_of_marker_initial_paragraphs_gets_the_label_but_no_warning():
+    page = pg(
+        4,
+        [
+            ln("(1) أولها وفيه (2) علامة.", boxed=False, id=131),
+            ln("(2) ثانيها ولا شيء بعده.", boxed=False, id=132),
+        ],
+    )
+    result = run([page])
+    assert [n["attrs"].get("noteFor") for n in blocks_of(result)] == [None, "2"]
+    assert "stray_note" not in codes(result)
+
+
+def test_the_trailing_run_of_marker_initial_paragraphs_ends_the_page():
+    page = _stray_page(
+        ln("الأول (1) والثاني (2) وتم.", INDENT, id=121),
+        ln("(1) حاشية أولى تُركت في المتن", INDENT, id=122),
+        ln("(2) حاشية ثانية تُركت في المتن", INDENT, id=123),
+    )
+    result = run([page])
+    strays = [w for w in result.warnings if w["code"] == "stray_note"]
+    assert [(w["blockId"], w["marker"]) for w in strays] == [("p122", "1"), ("p123", "2")]
+
+
+def test_the_new_warning_codes_sort_after_the_orphans():
+    assert pipeline.CODE_ORDER.index("note_marker_missing") == pipeline.CODE_ORDER.index("note_orphan") + 1
+    assert pipeline.CODE_ORDER.index("stray_note") < pipeline.CODE_ORDER.index("uncertain_words")
+
+
 # ====================================================================== part 2: services, API, views
 
 W, H = 1000, 1600  # preprocess output size: line boxes are gray-image pixels of this size
@@ -1182,6 +1515,314 @@ def test_load_book_uses_a_fixed_number_of_queries(db, django_assert_num_queries)
     with django_assert_num_queries(2):
         loaded = services.load_book(big.book)
     assert len(loaded.pages) == 6 and all(len(p.lines) == 6 for p in loaded.pages)
+
+
+def test_load_book_gives_each_line_its_effective_kind_and_the_pipelines_role(db):
+    """D74: `ocr.services.line_kind` — a `footnote` role makes a body line a note, `main` pulls a
+    footnote-region line into the body, a heading or verse role on a footnote-region line is body too."""
+    f = Factory()
+    page = f.page(1)
+    f.line(page, "متن")
+    f.line(page, "سطر جعله المراجع حاشية", role="footnote")
+    f.line(page, "بيت من الشعر", role="verse")
+    f.line(page, "حاشية الصفحة", kind="footnote")
+    f.line(page, "سطر أعيد الى المتن", kind="footnote", role="main")
+    f.line(page, "عنوان في منطقة الحواشي", kind="footnote", role="heading")
+    f.line(page, "بيت في منطقة الحواشي", kind="footnote", role="verse")
+    (loaded,) = services.load_book(f.book).pages
+    assert [(line.kind, line.role) for line in loaded.lines] == [
+        ("body", "body"),
+        ("footnote", "body"),
+        ("body", "verse"),
+        ("footnote", "body"),
+        ("body", "body"),
+        ("body", "heading"),
+        ("body", "verse"),
+    ]
+    assert {services.pipeline_role(role) for role in Line.Role.values} == pipeline.LINE_ROLES
+
+
+def test_footnote_role_lines_become_notes_and_main_lines_body_text(editor):
+    f = Factory()
+    page = f.page(1)
+    f.line(page, "قال المؤرخ (1) كلامًا", INDENT_PX)
+    f.line(page, "وتم.", SHORT_PX)
+    f.line(page, "(1) سطر جعله المراجع حاشية", INDENT_PX, role="footnote")
+    f.line(page, "وهذا سطر أعاده المراجع الى المتن.", (500, 850), kind="footnote", role="main")
+    services.start_assembly(f.book, editor)
+    doc = Manuscript.objects.get(book=f.book).document
+    body = doc["content"][1:]
+    assert [text_of(node) for node in body] == [
+        "قال المؤرخ[1] كلامًا وتم.",
+        "وهذا سطر أعاده المراجع الى المتن.",
+    ]
+    (note,) = [item for node in body for item in node["content"] if item["type"] == "footnote"]
+    assert note["content"] == [{"type": "text", "text": "سطر جعله المراجع حاشية"}]
+    assert note["attrs"]["orphan"] is False
+
+
+# ---------------------------------------------------------------- D74: the manuscript fixtures for the UI
+
+TRUST_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "trust")
+ENDING_PX = (500, 850)  # indented and short: a one-line paragraph
+
+
+def trust_book() -> Factory:
+    """The book of `assembly/fixtures/trust/manuscript.json` (see `index.json` there): a heading and four
+    verse lines (page 1), a note that runs on without ending (2), a marker-less note on a page with an
+    open call (3: the guard and the positional link), a note left at the end of the body (4), and a
+    reviewer's «حاشية» on a body line and «محتوى» on a footnote-region line (5)."""
+    f = Factory("كتاب الحواشي والشعر")
+    one = f.page(1)
+    f.line(one, "الفصل الأول", (300, 700), role="heading")
+    f.line(one, "قال الشاعر في وصف الحرب ما يرويه الناس", INDENT_PX)
+    f.line(one, "في مجالسهم الى اليوم وهو من", FULL_PX)
+    f.line(one, "البسيط:", SHORT_PX)
+    for text, edges in (
+        ("لله دري اذا اعدو على فرسي", (450, 950)),
+        ("الى الهياج ونار الحرب تستعر", (70, 580)),
+        ("وفي يدي صارم افري الرؤوس به", (450, 950)),
+        ("في حده الموت لا يبقي ولا يذر", (70, 580)),
+    ):
+        f.line(one, text, edges, role="verse")
+    f.line(one, "ثم انصرف الى بلده.", ENDING_PX)
+    two = f.page(2)
+    f.line(two, "وذكر ذلك ابن غلبون (1) في تاريخه وأطال", INDENT_PX)
+    f.line(two, "في وصف الحملة وما جرى فيها من", FULL_PX)
+    f.line(two, "الوقائع.", SHORT_PX)
+    f.line(two, "(1) انظر كتاب التذكار صفحة 186 وكتاب المنهل العذب صفحة 259", kind="footnote")
+    three = f.page(3)
+    f.line(three, "وكان الأسطول كله تحت إمرة المارشال", INDENT_PX)
+    f.line(three, "ديستري (1) فتوقف أولًا على سواحل", FULL_PX)
+    f.line(three, "طرابلس.", SHORT_PX)
+    f.line(three, "انظر تاريخ البحرية الفرنسية لليون غيران.", kind="footnote")
+    four = f.page(4)
+    f.line(four, "وفي تلك السنة (1) وصل الأسطول الى", INDENT_PX)
+    f.line(four, "طرابلس وضرب المدينة بالمدافع حتى", FULL_PX)
+    f.line(four, "طلب أهلها الصلح.", SHORT_PX)
+    f.line(four, "(1) الأسطول الفرنسي بقيادة دوكين.", ENDING_PX)
+    five = f.page(5)
+    f.line(five, "وقال في موضع آخر (1) كلامًا طويلًا", INDENT_PX)
+    f.line(five, "في هذا المعنى لا نطيل", FULL_PX)
+    f.line(five, "بذكره.", SHORT_PX)
+    f.line(five, "(1) هذا سطر جعله المراجع حاشية.", INDENT_PX, role="footnote")
+    f.line(five, "وهذا سطر أعاده المراجع الى المتن.", ENDING_PX, kind="footnote", role="main")
+    return f
+
+
+def fixture_ids(book: Book) -> dict[int, int]:
+    """Line pk → its fixture id: 1000 × page number + order + 1 (page 3's first line is 3001)."""
+    rows = Line.objects.filter(page__book=book).values_list("pk", "page__number", "order")
+    return {pk: 1000 * number + order + 1 for pk, number, order in rows}
+
+
+def with_fixture_ids(value, ids: dict[int, int]):
+    """A payload with its line ids (and the block and note ids made of them) as fixture ids."""
+    if isinstance(value, list):
+        return [with_fixture_ids(item, ids) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for key, item in value.items():
+        if key in ("sourceLineIds", "lineIds") and isinstance(item, list):
+            out[key] = [ids.get(i, i) for i in item]
+        elif key in ("id", "blockId") and isinstance(item, str) and re.fullmatch(r"[phn][0-9]+", item):
+            out[key] = f"{item[0]}{ids.get(int(item[1:]), item[1:])}"
+        else:
+            out[key] = with_fixture_ids(item, ids)
+    return out
+
+
+def trust_payload(editor) -> dict:
+    """`services.manuscript_payload` of `trust_book` after a run, with fixture ids and the run's own
+    values (book, run, time) blanked, as JSON."""
+    f = trust_book()
+    services.start_assembly(f.book, editor)
+    payload = json.loads(json.dumps(services.manuscript_payload(f.book)))
+    payload = with_fixture_ids(payload, fixture_ids(f.book))
+    payload["document"]["attrs"].update(bookId=0, runId=0, assembledAt=None)
+    return payload
+
+
+def load_trust(name: str):
+    with open(os.path.join(TRUST_FIXTURES, name), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def check_trust(name: str, value) -> None:
+    """`value` equals the fixture `name`; `NASSAKH_WRITE_TRUST_FIXTURES=1` rewrites the file first."""
+    if os.environ.get("NASSAKH_WRITE_TRUST_FIXTURES") == "1":
+        with open(os.path.join(TRUST_FIXTURES, name), "w", encoding="utf-8") as fh:
+            json.dump(value, fh, ensure_ascii=False, indent=1)
+            fh.write("\n")
+    assert value == load_trust(name)
+
+
+D74_CODES = ("note_marker_missing", "stray_note")
+RENDERED_ABOUT = (
+    "`assembly.render.fragment_context` of `manuscript.json` (the manuscript view's markup and meta, "
+    'D74): `blocks` the rendered verse paragraph (`data-style="verse"`: the paragraph menu\'s «شعر» is '
+    "checked) and "
+    "the paragraph whose leading marker has an open call on its page (`data-note-for`: the menu reads "
+    "«حاشية للعلامة (n)»); `warnings` the D74 warnings as `meta.warnings` gives them (`flat_warnings`: "
+    "`marker`, and `actions` for `stray_note`); `groups` their side-panel groups (`group_warnings`)."
+)
+
+
+def rendered_block(html: str, block_id: str) -> str:
+    """The rendered element of block `block_id` in the document's HTML."""
+    match = re.search(rf'<(p|h2|h3) [^>]*id="b-{block_id}".*?</\1>', html, re.S)
+    assert match, block_id
+    return match.group(0)
+
+
+def test_the_manuscript_payload_equals_its_fixture(editor):
+    """The UI's contract (agent E): the real payload of `trust_book` is `manuscript.json`, verse lines,
+    the positional link and the stray note included; its rendering is `rendered.json`.
+    `NASSAKH_WRITE_TRUST_FIXTURES=1` rewrites the files."""
+    payload = trust_payload(editor)
+    check_trust("manuscript.json", payload)
+    fragment = render.fragment_context(payload)
+    html = fragment["document_html"]
+    check_trust(
+        "rendered.json",
+        {
+            "about": RENDERED_ABOUT,
+            "blocks": {"verse": rendered_block(html, "p1005"), "noteFor": rendered_block(html, "p4004")},
+            "warnings": [w for w in fragment["meta"]["warnings"] if w["code"] in D74_CODES],
+            "groups": [g for g in fragment["warning_groups"] if g["code"] in D74_CODES],
+        },
+    )
+
+
+def test_the_rendered_fixture_carries_the_menus_attributes():
+    rendered = load_trust("rendered.json")
+    assert 'data-style="verse"' in rendered["blocks"]["verse"]
+    assert "data-note-for" not in rendered["blocks"]["verse"]
+    assert 'data-note-for="1"' in rendered["blocks"]["noteFor"]
+    assert 'data-block="p4004"' in rendered["blocks"]["noteFor"]
+    stray = next(w for w in rendered["warnings"] if w["code"] == "stray_note")
+    assert stray["marker"] == "1" and stray["blockId"] == "p4004" and stray["page"] == 4
+    assert stray["actions"] == [
+        {"key": "footnote", "label": "جعلها حاشية", "role": "footnote", "lineIds": [4004]},
+        {"key": "go", "label": "انتقال", "blockId": "p4004"},
+    ]
+    missing = next(w for w in rendered["warnings"] if w["code"] == "note_marker_missing")
+    assert missing["marker"] == "1" and "actions" not in missing
+    assert [(g["code"], g["label"], g["count"]) for g in rendered["groups"]] == [
+        ("note_marker_missing", "حواشٍ بلا علامة رُبطت بموضعها", 1),
+        ("stray_note", "فقرات تبدأ بعلامة حاشية", 1),
+    ]
+
+
+def test_flat_warnings_keeps_only_well_formed_actions():
+    flat = render.flat_warnings(
+        [
+            {"code": "note_orphan", "page": 2, "message": "م"},
+            {
+                "code": "stray_note",
+                "page": 3,
+                "marker": 2,
+                "actions": [
+                    {"key": "footnote", "label": "جعلها حاشية", "role": "footnote", "lineIds": ["7", "x"]},
+                    "go",
+                ],
+            },
+        ]
+    )
+    assert "marker" not in flat[0] and "actions" not in flat[0]
+    assert flat[1]["marker"] == "2"
+    assert flat[1]["actions"] == [
+        {"key": "footnote", "label": "جعلها حاشية", "role": "footnote", "lineIds": [7]}
+    ]
+
+
+def test_the_fixture_shows_each_d74_case():
+    payload = load_trust("manuscript.json")
+    blocks = {node["attrs"]["id"]: node for node in payload["document"]["content"][1:]}
+    assert [i for i, node in blocks.items() if node["attrs"].get("style") == "verse"] == [
+        "p1005",
+        "p1006",
+        "p1007",
+        "p1008",
+    ]
+    assert blocks["p4004"]["attrs"]["noteFor"] == "1"
+    by_code = {w["code"]: w for w in payload["warnings"]}
+    assert by_code["note_marker_missing"]["page"] == 3 and by_code["note_marker_missing"]["lineIds"] == [3004]
+    stray = by_code["stray_note"]
+    assert stray["blockId"] == "p4004" and [a["key"] for a in stray["actions"]] == ["footnote", "go"]
+    assert stray["actions"][0] == {
+        "key": "footnote",
+        "label": "جعلها حاشية",
+        "role": "footnote",
+        "lineIds": [4004],
+    }
+    notes = [item for node in blocks.values() for item in node["content"] if item["type"] == "footnote"]
+    assert [(n["attrs"]["id"], n["attrs"]["sourcePage"]) for n in notes] == [
+        ("n2004", 2),
+        ("n3004", 3),
+        ("n5004", 5),
+    ]
+    assert "no_headings" not in by_code and "note_orphan" not in by_code and "marker_unmatched" not in by_code
+
+
+def test_the_block_roles_fixture_is_the_menu_the_service_takes():
+    roles = load_trust("block_roles.json")
+    assert [(item["value"], item["label"]) for item in roles["roles"]] == list(services.BLOCK_ROLES)
+    assert roles["footnoteFor"] == services.FOOTNOTE_FOR_LABEL
+    assert roles["footnoteFor"].format(n="1") == "حاشية للعلامة (1)"
+    stray = next(w for w in load_trust("manuscript.json")["warnings"] if w["code"] == "stray_note")
+    assert roles["request"]["body"] == {"line_ids": stray["actions"][0]["lineIds"], "role": "footnote"}
+
+
+def test_the_stray_note_action_makes_the_paragraph_the_note_of_its_call(editor):
+    """«جعلها حاشية» posts the roles endpoint with the warning's lines: the next run links the note."""
+    f = trust_book()
+    services.start_assembly(f.book, editor)
+    run = AssemblyRun.objects.filter(book=f.book).latest("id")
+    stray = next(w for w in run.warnings if w["code"] == "stray_note")
+    action = stray["actions"][0]
+    response = post(
+        logged(editor), "manuscript_roles", f.book.pk, {"line_ids": action["lineIds"], "role": action["role"]}
+    )
+    assert response.status_code == 202
+    run = AssemblyRun.objects.filter(book=f.book).latest("id")
+    assert "stray_note" not in {w["code"] for w in run.warnings}
+    doc = Manuscript.objects.get(book=f.book).document
+    page_four = [n for n in doc["content"][1:] if n["attrs"].get("sourcePages") == [4]]
+    assert [text_of(n) for n in page_four] == [
+        "وفي تلك السنة[1] وصل الأسطول الى طرابلس وضرب المدينة بالمدافع حتى طلب أهلها الصلح."
+    ]
+    assert Line.objects.get(pk=action["lineIds"][0]).role == "footnote"
+
+
+def test_set_block_roles_takes_the_menus_choices(proofreader):
+    f = trust_book()
+    one = f.book.pages.get(number=1)
+    ending = one.lines.get(text="ثم انصرف الى بلده.")
+    services.set_block_roles(f.book, proofreader, [ending.pk], "verse")
+    ending.refresh_from_db()
+    assert ending.role == "verse" and LineRevision.objects.filter(action="role").count() == 1
+    services.set_block_roles(f.book, proofreader, [ending.pk], "body")
+    ending.refresh_from_db()
+    assert ending.role == "body"
+    # a footnote-region line: «محتوى» pulls it into the body (`main`), «حاشية» gives it back (`body`), a
+    # heading is allowed (the Phase 3 refusal is gone); a block over two pages is one call per page
+    two = f.book.pages.get(number=2)
+    note = two.lines.get(region__kind="footnote")
+    body = two.lines.filter(region__kind="body").order_by("order").first()
+    for choice, stored in (("body", "main"), ("footnote", "body"), ("heading", "heading")):
+        services.set_block_roles(f.book, proofreader, [note.pk], choice)
+        note.refresh_from_db()
+        assert note.role == stored
+    services.set_block_roles(f.book, proofreader, [ending.pk, body.pk], "footnote")
+    assert [Line.objects.get(pk=pk).role for pk in (ending.pk, body.pk)] == ["footnote", "footnote"]
+    batches = LineRevision.objects.filter(line_id__in=[ending.pk, body.pk]).order_by("-pk")[:2]
+    assert len({revision.page_id for revision in batches}) == 2
+    for bad in ("main", "chapter", ""):
+        with pytest.raises(services.AssemblyError) as exc:
+            services.set_block_roles(f.book, proofreader, [ending.pk], bad)
+        assert str(exc.value) == "نوع السطر غير معروف."
 
 
 # ---------------------------------------------------------------- the run end to end
@@ -1640,13 +2281,14 @@ def test_block_roles_are_all_or_nothing(proofreader):
     f, (one, _) = two_page_book()
     other, _ = two_page_book()
     body = one.lines.get(text="ويستمر حتى آخر")
-    note = one.lines.get(region__kind="footnote")
+    waiting = f.page(3, Page.Status.LAYOUT_DONE)  # its text is not there yet: review refuses it
+    unread = f.line(waiting, "سطر لم يُقرأ بعد")
     foreign = other.book.pages.get(number=1).lines.filter(region__kind="body").first()
     with pytest.raises(services.AssemblyNotFound):
         services.set_block_roles(f.book, proofreader, [body.pk, foreign.pk], "heading")
     with pytest.raises(services.AssemblyError) as exc:
-        services.set_block_roles(f.book, proofreader, [body.pk, note.pk], "heading")
-    assert str(exc.value) == "سطر الحاشية لا يكون عنوانًا."
+        services.set_block_roles(f.book, proofreader, [body.pk, unread.pk], "heading")
+    assert str(exc.value) == "الصفحة ليست جاهزة للمراجعة بعد؛ انتظر حتى ينتهي التعرّف على نصها."
     body.refresh_from_db()
     assert body.role == "body" and not LineRevision.objects.exists()
     for bad in ([], "12", ["x"], [True]):
@@ -1728,9 +2370,12 @@ def test_api_errors_are_arabic_with_the_right_status(editor):
     foreign = other.book.pages.get(number=1).lines.filter(region__kind="body").first()
     roles = post(client, "manuscript_roles", f.book.pk, {"line_ids": [foreign.pk], "role": "heading"})
     assert roles.status_code == 404 and roles.json()["detail"] == "السطر غير موجود في هذا الكتاب."
-    note = one.lines.get(region__kind="footnote")
-    roles = post(client, "manuscript_roles", f.book.pk, {"line_ids": [note.pk], "role": "heading"})
-    assert roles.status_code == 400 and roles.json()["detail"] == "سطر الحاشية لا يكون عنوانًا."
+    unread = f.line(f.page(3, Page.Status.LAYOUT_DONE), "سطر لم يُقرأ بعد")
+    roles = post(client, "manuscript_roles", f.book.pk, {"line_ids": [unread.pk], "role": "heading"})
+    assert roles.status_code == 400
+    assert roles.json()["detail"] == "الصفحة ليست جاهزة للمراجعة بعد؛ انتظر حتى ينتهي التعرّف على نصها."
+    roles = post(client, "manuscript_roles", f.book.pk, {"line_ids": [unread.pk], "role": "main"})
+    assert roles.status_code == 400 and roles.json()["detail"] == "نوع السطر غير معروف."
     assert (
         post(client, "manuscript_suggestion", f.book.pk, {"block_id": "x", "action": "dismiss"}).status_code
         == 400

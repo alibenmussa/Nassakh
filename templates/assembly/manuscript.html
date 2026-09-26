@@ -88,7 +88,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
 {% block content %}
 {{ config|json_script:"manuscript-config" }}
 <div class="ms-screen" data-manuscript x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
-     :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy, 'is-edited': edited }"
+     :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy, 'is-edited': edited, 'is-reader': !canReview }"
      @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()" @scroll.window.passive="onScroll()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
@@ -221,11 +221,12 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
                 <kbd class="kbd ms-auto">O</kbd>
               </button>
               <div class="menu-sep" role="separator"></div>
+              {# D74: «شعر» keeps the line on its own; «حاشية» (للعلامة (n) when its call is open on the page) moves it to the notes #}
               <div class="menu-label">نوع الفقرة</div>
               <template x-for="r in roles" :key="r.value">
                 <button type="button" class="menu-item" role="menuitemradio" x-show="!edited" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
                   <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
-                  <span x-text="r.label"></span>
+                  <span x-text="roleLabel(r)"></span>
                 </button>
               </template>
               <p class="ms-pop-hint" x-show="edited">حُرِّر النص؛ يُغيَّر نوع الفقرة في صفحة الكتاب (نمط الفقرة).</p>
@@ -360,7 +361,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة</dd>
         <dt><kbd class="kbd">S</kbd></dt><dd>إظهار فواصل الصفحات أو إخفاؤها</dd>
         <dt><kbd class="kbd">J</kbd> / <kbd class="kbd">K</kbd> أو <kbd class="kbd">↓</kbd> / <kbd class="kbd">↑</kbd></dt><dd>الفقرة التالية / السابقة</dd>
-        <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة، فتح في المراجعة</dd>
+        <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة (محتوى، عنوان، شعر، حاشية)، فتح في المراجعة</dd>
         <dt><kbd class="kbd">O</kbd></dt><dd>عرض أصل الفقرة المحدَّدة</dd>
         <dt><kbd class="kbd">]</kbd> / <kbd class="kbd">[</kbd></dt><dd>الملاحظة التالية / السابقة</dd>
         <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>قائمة الفاصل: فصل هنا، وصل بما قبلها، تلقائي</dd>

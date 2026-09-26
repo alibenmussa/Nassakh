@@ -187,7 +187,9 @@ document.addEventListener('alpine:init', () => {
   const DONE_STATUSES = ['ocr_done', 'reviewed', 'assembled'];
   const REVIEWED_STATUSES = ['reviewed', 'assembled'];
   const PROCESSING_STATUSES = ['uploaded', 'preprocessed', 'layout_done'];
-  const CHANGE_KEYS = ['status', 'text_state', 'n_unresolved', 'is_reviewed', 'n_flags', 'sequence_issue', 'error', 'is_excluded', 'printed_number'];
+  const CHANGE_KEYS = ['status', 'text_state', 'n_unresolved', 'is_reviewed', 'n_flags', 'sequence_issue', 'error', 'is_excluded', 'printed_number', 'readers'];
+  // D73: the half-disc of a page one model read (`readers`: 'two' | 'one' | 'tesseract' | ''), on the tile and the thumb
+  const READER_TITLES = { one: 'قراءة واحدة', tesseract: 'نص Tesseract وحده' };
   // Fallbacks until the backend config carries statusLabels / statusDots / urls (§12.2).
   const STATUS_LABELS = { uploaded: 'مرفوعة', preprocessed: 'مُجهَّزة', layout_done: 'بانتظار التعرّف', ocr_done: 'تم التعرّف', reviewed: 'مُراجَعة', assembled: 'مُجمَّعة', error: 'خطأ', excluded: 'مستثناة' };
   const STATUS_DOTS = { uploaded: 'dot-neutral', preprocessed: 'dot-accent', layout_done: 'dot-accent', ocr_done: 'dot-success', reviewed: 'dot-success', assembled: 'dot-success', error: 'dot-danger', excluded: 'dot-neutral' };
@@ -470,6 +472,9 @@ document.addEventListener('alpine:init', () => {
       p.sequence_issue = p.sequence_issue || '';
       p.n_unresolved = Number(p.n_unresolved) || 0;
       p.n_flags = Number(p.n_flags) || 0;
+      // the full tile always names its readers; the compact poll only 'one' / 'tesseract', so a page it leaves
+      // them out of was read by both models (or not read yet)
+      p.readers = READER_TITLES[raw.readers] ? raw.readers : '';
       return p;
     },
     page(pid) {
@@ -1352,7 +1357,8 @@ document.addEventListener('alpine:init', () => {
     patchThumb(el, p) {
       if (!el || typeof el.querySelector !== 'function') return;
       el.dataset.number = String(p.number);
-      el.setAttribute('title', `صفحة ${p.number} — ${p.status_label || ''}`);
+      const reader = READER_TITLES[p.readers];
+      el.setAttribute('title', `صفحة ${p.number} — ${p.status_label || ''}${reader ? ` · ${reader}` : ''}`);
       const s = sheets.get(id(p));
       const w = (s && s.width) || p.width;
       const h = (s && s.height) || p.height;
@@ -1371,6 +1377,7 @@ document.addEventListener('alpine:init', () => {
       const count = q(el, '.bk-thumb-mark.is-count');
       if (count) { setHidden(count, !(unresolved > 0)); setText(count, unresolved); }
       setHidden(q(el, '.bk-thumb-mark.is-live'), !(this.active && PROCESSING_STATUSES.includes(p.status) && !p.error && !p.is_excluded));
+      this.patchReader(q(el, '.mark-reader'), p);
       if (guidesMode) this.patchThumbGuides(el, p);
       setHidden(el, !this.matches(p));
     },
@@ -1655,6 +1662,15 @@ document.addEventListener('alpine:init', () => {
         if (mounted.has(id(p))) this.patchGuidesBody(el, p);
       } else if (mounted.has(id(p))) this.wireBody(el, p);
     },
+    // The half-disc (D73) of a tile or a thumb: shown for one reader, in the danger tint for Tesseract alone.
+    patchReader(mark, p) {
+      if (!mark) return;
+      const title = READER_TITLES[p.readers] || '';
+      setHidden(mark, !title);
+      mark.classList.toggle('is-tesseract', p.readers === 'tesseract');
+      if (title) mark.setAttribute('title', title); else mark.removeAttribute('title');
+      if (title) setText(q(mark, '.sr-only'), title); // the tile's words for a screen reader (the thumb's is aria-hidden)
+    },
     patchTile(el, p) {
       if (!el || typeof el.querySelector !== 'function') return;
       el.dataset.pageId = id(p);
@@ -1689,7 +1705,8 @@ document.addEventListener('alpine:init', () => {
       setHidden(q(el, '.page-tile-excluded'), !p.is_excluded);
       setHidden(q(el, '.tile-mark-check'), !p.is_reviewed);
       const count = q(el, '.tile-mark-count');
-      if (count) { setHidden(count, p.is_reviewed || !(p.n_unresolved > 0)); setText(count, p.n_unresolved || 0); count.setAttribute('title', `${p.n_unresolved || 0} كلمة غير مؤكَّدة`); }
+      if (count) { setHidden(count, p.is_reviewed || !(p.n_unresolved > 0)); setText(count, p.n_unresolved || 0); count.setAttribute('title', `علامات لم تُحسم: ${p.n_unresolved || 0}`); }
+      this.patchReader(q(el, '.mark-reader'), p);
       const stage = q(el, '.tile-stage');
       if (stage) {
         stage.classList.toggle('is-done', DONE_STATUSES.includes(p.status) || Boolean(p.is_excluded));

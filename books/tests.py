@@ -1283,9 +1283,10 @@ def test_sheets_api_shape(editor_client):
     assert sheet["width"] == 200 and sheet["height"] == 400
     assert sheet["line_boxes"] == [[0.1, 0.1, 0.9, 0.15], [0.05, 0.25, 1.0, 0.3]]
     assert sheet["lines"] == [
-        {"id": first_line.pk, "order": 0, "region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.15], "tokens": [
+        {"id": first_line.pk, "order": 0, "region_kind": "body", "kind": "body",
+         "bbox": [0.1, 0.1, 0.9, 0.15], "tokens": [
             {"t": "قال", "conf": "high", "res": None}, {"t": "الكتب", "conf": "low", "res": None}]},
-        {"id": foot_line.pk, "order": 1, "region_kind": "footnote", "bbox": None,
+        {"id": foot_line.pk, "order": 1, "region_kind": "footnote", "kind": "footnote", "bbox": None,
          "tokens": [{"t": "(١)", "conf": "low", "res": "primary"}]},
     ]  # fmt: skip
     assert sheet["display_url"].endswith("display.webp") and sheet["thumb_url"].endswith("thumb.webp")
@@ -2353,3 +2354,40 @@ def test_the_mode_markup_shows_only_in_the_mode(editor_client):
     assert f'href="{url}?view=guides"' in body  # «⋯» «التخطيط»
     body = editor_client.get(url + "?view=guides").content.decode()
     assert "bk-dashboard is-guides" in body and 'x-data="bookGuides()"' in body
+
+
+# ---------------------------------------------------------------- 7b: honest page state (D73)
+
+
+def test_approved_pages_leave_the_attention_list_unless_their_numbering_is_off():
+    book, pages = _numbered(["40", "41", "43", "44", "45"])
+    for page, flags in zip(
+        pages, (["single_reader"], ["missing_text"], [], ["ocr_fallback"], []), strict=True
+    ):
+        page.attention_flags = flags
+        page.save()
+    Page.objects.filter(pk__in=[pages[0].pk, pages[2].pk]).update(status=Page.Status.REVIEWED)
+    Page.objects.filter(pk=pages[3].pk).update(status=Page.Status.ASSEMBLED)
+    items = services.attention_pages(book)
+    # page 1 approved (gone), page 2 open (stays), page 3 approved but out of sequence (stays), page 4 gone
+    assert [item["page"].number for item in items] == [2, 3]
+    assert [flag["label"] for flag in items[0]["flags"]] == ["نص قد يكون ناقصًا"]
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.ERROR)
+    assert [item["page"].number for item in services.attention_pages(book)] == [1, 2, 3]
+
+
+def test_the_tile_says_how_the_page_was_read():
+    book, pages = _book_with_pages(4, status=Page.Status.OCR_DONE)
+    for page, reading in zip(
+        pages, ({"readers": "two"}, {"readers": "one"}, {"readers": "tesseract"}, {}), strict=True
+    ):
+        page.reading = reading
+        page.save()
+    full = [tile["readers"] for tile in services.page_tiles(book)]
+    assert full == ["two", "one", "tesseract", ""]
+    compact = [tile.get("readers") for tile in services.page_tiles(book, compact=True)]
+    assert compact == [None, "one", "tesseract", None]  # the compact tile carries only a weak reading
+    labels = services.page_tile(pages[1])["flag_labels"]
+    assert labels == []
+    pages[1].attention_flags = ["single_reader"]
+    assert services.page_tile(pages[1])["flag_labels"] == ["قراءة واحدة"]

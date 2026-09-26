@@ -1,0 +1,99 @@
+[
+ {
+  "name": "an unknown group",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/insertions/7/",
+   "body": {
+    "keep": true
+   }
+  },
+  "status": 400,
+  "response": {
+   "message": "لم تعد هذه الكلمات المقترحة في الصفحة."
+  }
+ },
+ {
+  "name": "a decided gap",
+  "request": {
+   "method": "POST",
+   "url": "/api/gaps/9501/accept/"
+  },
+  "status": 400,
+  "response": {
+   "message": "حُسم هذا النص المقترح من قبل."
+  }
+ },
+ {
+  "name": "an unknown gap",
+  "request": {
+   "method": "POST",
+   "url": "/api/gaps/99999/dismiss/"
+  },
+  "status": 404,
+  "response": {
+   "detail": "No TextGap matches the given query."
+  }
+ },
+ {
+  "name": "typed words that are blank",
+  "request": {
+   "method": "POST",
+   "url": "/api/gaps/9500/accept/",
+   "body": {
+    "text": "  "
+   }
+  },
+  "status": 400,
+  "response": {
+   "message": "اكتب النص المُدرَج أولًا."
+  }
+ },
+ {
+  "name": "an unknown role",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9100/role/",
+   "body": {
+    "role": "main"
+   }
+  },
+  "status": 400,
+  "response": {
+   "message": "نوع السطر غير معروف."
+  }
+ },
+ {
+  "name": "a range without lines",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/roles/",
+   "body": {
+    "line_ids": [],
+    "role": "verse"
+   }
+  },
+  "status": 400,
+  "response": {
+   "message": "حدّد الأسطر أولًا."
+  }
+ },
+ {
+  "name": "a range with another page's line",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/roles/",
+   "body": {
+    "line_ids": [
+     9100,
+     9110
+    ],
+    "role": "verse"
+   }
+  },
+  "status": 400,
+  "response": {
+   "message": "بعض الأسطر المحدّدة ليست في هذه الصفحة."
+  }
+ }
+]

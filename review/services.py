@@ -10,13 +10,24 @@ the text. Tokens and texts keep their diacritics exactly as stored or typed.
 
 Token keys: `t` (current reading), `alt` (secondary model; for a number Kraken read, Qari's own
 letter where it wrote one, D51), `tess` (Tesseract), `conf`, `digit`,
-`bbox` (gray-image pixels), `res` (`None | primary | secondary | tess | typed | chooser`) and,
-once a resolution changed `t`, `orig` (the primary model's reading, so «النموذج الأول» can be
-chosen again after another reading).
+`bbox` (gray-image pixels), `res` (`None | primary | secondary | tess | typed | sug | chooser | words`)
+and, once a resolution or the vote changed `t`, `orig` (the primary model's reading, so «النموذج الأول»
+can be chosen again after another reading). Phase 7b (D71–D72) adds `why` (the flag's reasons), `pick`
+(`"vote"`: Tesseract backed the second model, whose reading is in the text; the word stays open), `tc`
+(Tesseract's confidence), `ins` (the insertion group of words only the second model read) and `sug`
+(§4.8: a year read from the number in words). The contract of these payloads is
+`review/fixtures/trust/` (index.json).
+
+Suggestions (`ocr.TextGap`, D72) belong to a line and sit after its token `index`; the services that
+change a line's tokens move its gaps with them (`_shift_gaps`), and each revision of such a line keeps
+the gaps' places and statuses (`"gaps"` in its snapshots) so undo puts them back. One action over
+several lines (a group kept or dropped, a range of roles) shares a `LineRevision.batch`: `undo_last`
+reverts the batch at once.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from django.contrib.auth import get_user_model
@@ -27,17 +38,41 @@ from django.db.models import F, Q, Sum
 from django.urls import reverse
 from django.utils import timezone
 
+from assembly.render import ar_count
 from books.models import Book, Page
 from core.arabic import is_digit_token, to_western_digits
 from core.decorators import ROLE_EDITOR, ROLE_PROOFREADER, has_role
 from ocr.alignment import WEAK, align_tokens
-from ocr.models import Line
-from ocr.services import ENGINE_LABELS, count_unresolved, engine_names, join_region_texts
+from ocr.models import Line, TextGap
+from ocr.services import (
+    ENGINE_LABELS,
+    FOOTNOTE_KINDS,
+    OpenItems,
+    count_unresolved,
+    engine_names,
+    group_of,
+    join_region_texts,
+    line_kind,
+    page_open_items,
+    readers_of,
+)
 from processing.models import Region
 
 from .models import LineRevision
 
-CHOICES: tuple[str, ...] = ("primary", "secondary", "tess", "typed")
+CHOICES: tuple[str, ...] = ("primary", "secondary", "tess", "typed", "sug")
+# «نوع السطر» (D32, D74): the effective choices the review menu offers; `stored_role` maps each onto
+# the stored `Line.Role` by the line's region (`main` is stored only, shown as «محتوى»).
+ROLE_CHOICES: tuple[str, ...] = (
+    Line.Role.BODY,
+    Line.Role.HEADING,
+    Line.Role.SUBHEADING,
+    Line.Role.VERSE,
+    Line.Role.FOOTNOTE,
+)
+MAX_RANGE_LINES = 200  # lines of one «نوع الأسطر المحدَّدة» request
+MARKS = ("علامة واحدة", "علامتان", "علامات", "علامة")
+OPEN_WORDS = ("كلمة غير محسومة", "كلمتان غير محسومتين", "كلمات غير محسومة", "كلمة غير محسومة")
 # `assembled` pages stay editable (D36): any change puts them back to `reviewed` (`_touch_page`).
 REVIEWABLE_STATUSES: frozenset[str] = frozenset(
     {Page.Status.OCR_DONE, Page.Status.REVIEWED, Page.Status.ASSEMBLED}
@@ -49,8 +84,25 @@ MAX_TYPED_CHARS = 120
 MAX_LINE_CHARS = 2000
 # `src`: "kraken" for a number the numbers pass read (D50): its one reading, confirmed or typed; where
 # Qari wrote a letter for it (D51) Qari's letter is its `alt`. `bq`: "weak" on a box the alignment is
-# unsure of (`ocr.alignment.weak_boxes`; drawn dashed). `normalize_token` keeps every stored key.
-TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "bq", "res", "src")
+# unsure of (`ocr.alignment.weak_boxes`; drawn dashed). 7b's keys (D71, D72, §4.8) are in the module
+# docstring. `normalize_token` keeps every stored key.
+TOKEN_KEYS: tuple[str, ...] = (
+    "t",
+    "alt",
+    "tess",
+    "conf",
+    "digit",
+    "bbox",
+    "bq",
+    "res",
+    "src",
+    "orig",
+    "why",
+    "pick",
+    "tc",
+    "ins",
+    "sug",
+)
 
 
 class ReviewError(Exception):
@@ -58,11 +110,28 @@ class ReviewError(Exception):
 
 
 class ReviewBlocked(ReviewError):
-    """Approval refused because uncertain words remain (the API answers 409)."""
+    """Approval refused because open items remain (the API answers 409).
 
-    def __init__(self, unresolved: int):
-        self.unresolved = unresolved
-        super().__init__(f"بقيت {unresolved} كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟")
+    `unresolved` is their total; `items` splits it into words, groups and gaps (D72–D73). With open
+    words only, the message is the one review always gave; with suggested words it names both
+    («بقيت 3 علامات: كلمتان غير محسومتين وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟»).
+    """
+
+    def __init__(self, unresolved: int | OpenItems):
+        items = unresolved if isinstance(unresolved, OpenItems) else OpenItems(words=int(unresolved))
+        self.items = items
+        self.unresolved = items.total
+        super().__init__(blocked_message(items))
+
+
+def blocked_message(items: OpenItems) -> str:
+    """The approve dialog's question for `items` (Arabic counts, Western digits)."""
+    suggested = items.groups + items.gaps
+    if not suggested:
+        return f"بقيت {items.words} كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟"
+    parts = [ar_count(items.words, OPEN_WORDS)] if items.words else []
+    parts.append("كلمات مقترحة لم تُحسم")
+    return f"بقيت {ar_count(items.total, MARKS)}: {' و'.join(parts)}. اعتماد الصفحة رغم ذلك؟"
 
 
 class ReviewConflict(ReviewError):
@@ -154,8 +223,9 @@ def _line_of(page: Page, line_id: int | None) -> Line | None:
 
 
 def line_snapshot(line: Line) -> dict:
-    """JSON snapshot of a line, as stored in `LineRevision.before` / `after`."""
-    return {
+    """JSON snapshot of a line, as stored in `LineRevision.before` / `after`; with `"gaps"`
+    (`gap_state`) when the line has suggestions, so undo puts them back in place."""
+    snapshot = {
         "id": line.pk,
         "order": line.order,
         "region_id": line.region_id,
@@ -169,6 +239,10 @@ def line_snapshot(line: Line) -> dict:
         "n_low": line.n_low,
         "role": line.role,
     }
+    gaps = gap_state(line) if line.pk else {}
+    if gaps:
+        snapshot["gaps"] = gaps
+    return snapshot
 
 
 def line_version(line: Line) -> str:
@@ -197,12 +271,74 @@ def _touch_page(page: Page) -> None:
         _refresh_book(page)
 
 
-def _record(page: Page, action: str, line: Line | None, before, after, user) -> LineRevision:
-    """Store one revision of the page (and take an assembled page back to `reviewed`, D36)."""
+def _record(
+    page: Page, action: str, line: Line | None, before, after, user, batch: uuid.UUID | None = None
+) -> LineRevision:
+    """Store one revision of the page (and take an assembled page back to `reviewed`, D36). Revisions
+    of one action over several lines share `batch` (undone together)."""
     _touch_page(page)
     return LineRevision.objects.create(
-        page=page, line=line, action=action, before=before, after=after, user=_user_or_none(user)
+        page=page,
+        line=line,
+        action=action,
+        before=before,
+        after=after,
+        user=_user_or_none(user),
+        batch=batch,
     )
+
+
+# ---------------------------------------------------------------- suggestions (TextGap, D72) on a line
+
+
+def gap_state(line: Line) -> dict:
+    """The places and statuses of a line's suggestions, kept in revision snapshots (`"gaps"`) so
+    undo puts them back: `{gap id: {index, after_t, status}}` (`{}` when the line has none)."""
+    return {
+        str(gap.pk): {"index": gap.index, "after_t": gap.after_t, "status": gap.status}
+        for gap in TextGap.objects.filter(line=line)
+    }
+
+
+def _restore_gaps(page: Page, line: Line | None, state: dict | None) -> None:
+    """Put a line's suggestions back as `state` (`gap_state`) holds them: their line, place and status
+    (a gap reopened loses who decided it)."""
+    for key, value in (state or {}).items():
+        gap = TextGap.objects.filter(pk=int(key), page=page).first()
+        if gap is None:
+            continue
+        gap.line = line if line is not None else gap.line
+        gap.index = int(value.get("index", gap.index))
+        gap.after_t = str(value.get("after_t", gap.after_t) or "")[:200]
+        status = value.get("status") or gap.status
+        if status != gap.status and status == TextGap.Status.OPEN:
+            gap.decided_by = None
+            gap.decided_at = None
+        gap.status = status
+        gap.save(update_fields=["line", "index", "after_t", "status", "decided_by", "decided_at"])
+
+
+def _shift_gaps(line: Line, mapping: dict[int, int], tokens: list[dict]) -> None:
+    """Move the open suggestions of `line` after a change of its tokens.
+
+    `mapping` gives each old token index that survives its new index (`tokens` are the new tokens). A
+    gap after old token k goes after the new place of the last surviving token at or before k, or
+    before the first token (−1) when none survives; `after_t` follows.
+    """
+    kept = sorted(mapping)
+    for gap in TextGap.objects.filter(line=line, status=TextGap.Status.OPEN):
+        before = [k for k in kept if k <= gap.index]
+        index = mapping[before[-1]] if before else -1
+        after_t = str(tokens[index].get("t") or "") if 0 <= index < len(tokens) else ""
+        if (index, after_t) != (gap.index, gap.after_t):
+            gap.index, gap.after_t = index, after_t[:200]
+            gap.save(update_fields=["index", "after_t"])
+
+
+def _aligned(old: list[dict], new: list[dict]) -> dict[int, int]:
+    """Old → new token indices of an edited line: the pairs `retokenize` aligns."""
+    pairs = align_tokens([str(t.get("t") or "") for t in old], [str(t.get("t") or "") for t in new])
+    return {i: j for i, j in pairs if i is not None and j is not None}
 
 
 def _set_tokens(line: Line, tokens: list[dict]) -> None:
@@ -224,13 +360,21 @@ def _compact_orders(page: Page) -> None:
         Line.objects.bulk_update(changed, ["order"])
 
 
+def text_kind(line: Line) -> str:
+    """The kind a line's text joins the page text as: a footnote when `line_kind` says so (D74), else
+    its region's kind (a footnote region's `main` line reads as body)."""
+    region_kind = _region_kind(line)
+    if line_kind(line.role, region_kind) == "footnote":
+        return Region.Kind.FOOTNOTE
+    return Region.Kind.BODY if region_kind in FOOTNOTE_KINDS else region_kind
+
+
 def refresh_page_text(page: Page) -> None:
-    """Rebuild `final_text` (body, blank line, footnotes; Western digits) and `n_unresolved`."""
+    """Rebuild `final_text` (body, blank line, footnotes by `line_kind`; Western digits) and
+    `n_unresolved` (the open items: `ocr.services.page_open_items`)."""
     lines = list(_page_lines(page))
-    page.final_text = to_western_digits(
-        join_region_texts([(_region_kind(line), line.text) for line in lines])
-    )
-    page.n_unresolved = sum(line.n_low for line in lines)
+    page.final_text = to_western_digits(join_region_texts([(text_kind(line), line.text) for line in lines]))
+    page.n_unresolved = page_open_items(page).total
     page.save(update_fields=["final_text", "n_unresolved"])
 
 
@@ -284,13 +428,29 @@ def _preprocess_of(page: Page):
         return None
 
 
+def gap_item(gap: TextGap) -> dict:
+    """One suggestion of a line in the review payload."""
+    return {
+        "id": gap.pk,
+        "index": gap.index,
+        "after_t": gap.after_t,
+        "text": gap.text,
+        "support": round(float(gap.support or 0.0), 2),
+        "status": gap.status,
+    }
+
+
 def line_item(line: Line) -> dict:
-    """One line of the review payload (tokens with every key present)."""
+    """One line of the review payload (tokens with every key present), with its effective `kind`
+    (`ocr.services.line_kind`, D74) and its suggestions (`gaps`, D72; prefetched by `review_payload`)."""
+    region_kind = _region_kind(line)
+    gaps = sorted(line.gaps.all(), key=lambda gap: (gap.index, gap.pk))
     return {
         "id": line.pk,
         "order": line.order,
         "region_id": line.region_id,
-        "region_kind": _region_kind(line),
+        "region_kind": region_kind,
+        "kind": line_kind(line.role, region_kind),
         "bbox": line.bbox,
         "text": line.text,
         "ocr_text": line.ocr_text,
@@ -300,11 +460,13 @@ def line_item(line: Line) -> dict:
         "role": line.role,
         "v": line_version(line),
         "tokens": [normalize_token(token) for token in line.tokens or []],
+        "gaps": [gap_item(gap) for gap in gaps],
     }
 
 
 def page_item(page: Page) -> dict:
-    """The `page` block of the review payload."""
+    """The `page` block of the review payload; `reading` is how the page was read (D73, `{}` before
+    7b) and `n_unresolved` its open items."""
     error = (page.error_message or "").splitlines()
     return {
         "id": page.pk,
@@ -316,21 +478,37 @@ def page_item(page: Page) -> dict:
         "text_state": page.text_state,
         "printed_number": page.printed_number,
         "n_unresolved": page.n_unresolved,
+        "reading": dict(page.reading or {}),
         "error": error[0] if error and page.status == Page.Status.ERROR else "",
         "error_from": page.error_from if page.status == Page.Status.ERROR else "",
     }
 
 
-def _token_counts(tokens_per_line) -> tuple[int, int]:
-    """`(low_total, unresolved)` over lists of tokens."""
-    low = unresolved = 0
-    for tokens in tokens_per_line:
+def page_counts(page: Page) -> dict:
+    """The page's marks: `low_total` (low words outside groups, one per group, every suggestion of its
+    lines, decided or not), `unresolved` (the open ones: words + groups + gaps, `page_open_items`),
+    `resolved` and the open ones by kind."""
+    token_lists = list(page.lines.values_list("tokens", flat=True))
+    items = page_open_items(page)
+    low, groups = 0, set()
+    for tokens in token_lists:
         for token in tokens or []:
-            if token.get("conf") == "low":
+            if token.get("conf") != "low":
+                continue
+            group = group_of(token)
+            if group is None:
                 low += 1
-                if not token.get("res"):
-                    unresolved += 1
-    return low, unresolved
+            else:
+                groups.add(group)
+    low += len(groups) + TextGap.objects.filter(page=page, line__isnull=False).count()
+    return {
+        "low_total": low,
+        "unresolved": items.total,
+        "resolved": low - items.total,
+        "words": items.words,
+        "groups": items.groups,
+        "gaps": items.gaps,
+    }
 
 
 def book_unresolved_total(book_id: int) -> int:
@@ -340,13 +518,17 @@ def book_unresolved_total(book_id: int) -> int:
 
 
 def mutation_counts(page: Page, line: Line | None = None) -> dict:
-    """`counts` of the mutation responses: the line's and page's unresolved words and the book total."""
-    low, unresolved = _token_counts(page.lines.values_list("tokens", flat=True))
+    """`counts` of the mutation responses: the line's open items (`n_low`), the page's (`page_counts`)
+    and the book total."""
+    counts = page_counts(page)
     return {
         "line_n_low": line.n_low if line is not None else 0,
-        "page_unresolved": unresolved,
-        "page_low_total": low,
+        "page_unresolved": counts["unresolved"],
+        "page_low_total": counts["low_total"],
         "book_unresolved_total": book_unresolved_total(page.book_id),
+        "page_words": counts["words"],
+        "page_groups": counts["groups"],
+        "page_gaps": counts["gaps"],
     }
 
 
@@ -375,12 +557,12 @@ def review_neighbours(page: Page) -> tuple[Page | None, Page | None]:
 
 
 def review_payload(page: Page, user) -> dict:
-    """Everything the review screen needs for one page (PHASE3_SPEC §4 shape)."""
+    """Everything the review screen needs for one page (PHASE3_SPEC §4 shape; 7b's additions:
+    `review/fixtures/trust/index.json`)."""
     book = page.book
     summary = book_review_summary(book)
     pre = _preprocess_of(page)
-    lines = list(_page_lines(page))
-    low, unresolved = _token_counts(line.tokens for line in lines)
+    lines = list(_page_lines(page).prefetch_related("gaps"))
     primary, secondary, _fast = engine_names()
     previous, following = review_neighbours(page)
     width = (pre.output_width if pre is not None else 0) or page.width
@@ -408,7 +590,7 @@ def review_payload(page: Page, user) -> dict:
             for region in page.regions.order_by("order", "id")
         ],
         "lines": [line_item(line) for line in lines],
-        "counts": {"low_total": low, "unresolved": unresolved, "resolved": low - unresolved},
+        "counts": page_counts(page),
         "labels": {
             "primary": ENGINE_LABELS.get(primary, primary),
             "secondary": ENGINE_LABELS.get(secondary, secondary),
@@ -432,6 +614,10 @@ def review_payload(page: Page, user) -> dict:
             "approve": reverse("api:page_approve", args=[page.pk]),
             "reopen": reverse("api:page_reopen", args=[page.pk]),
             "filmstrip": reverse("api:book_filmstrip", args=[book.pk]),
+            "insertion": reverse("api:page_insertion", args=[page.pk, 0]).replace("/0/", "/__group__/", 1),
+            "gap_accept": _id_template("gap_accept", "gap_id"),
+            "gap_dismiss": _id_template("gap_dismiss", "gap_id"),
+            "roles": reverse("api:page_roles", args=[page.pk]),
         },
         "can_edit": can_review(user)
         and page.status in REVIEWABLE_STATUSES
@@ -471,11 +657,21 @@ def book_review_summary(book: Book) -> dict:
 
 
 def filmstrip(book: Book) -> list[dict]:
-    """Per non-excluded page `{id, number, thumb_url, is_reviewed, n_unresolved, status, url}` (one query)."""
+    """Per non-excluded page `{id, number, thumb_url, is_reviewed, n_unresolved, status, url, readers}`
+    (one query; `readers` is `Page.reading["readers"]`, '' before 7b, D73)."""
     pages = (
         book.pages.filter(is_excluded=False)
         .select_related("preprocess")
-        .only("id", "number", "book_id", "status", "n_unresolved", "scan_thumbnail", "preprocess__thumbnail")
+        .only(
+            "id",
+            "number",
+            "book_id",
+            "status",
+            "n_unresolved",
+            "reading",
+            "scan_thumbnail",
+            "preprocess__thumbnail",
+        )
         .order_by("number")
     )
     out = []
@@ -491,6 +687,7 @@ def filmstrip(book: Book) -> list[dict]:
                 "n_unresolved": page.n_unresolved,
                 "status": page.status,
                 "url": review_url(page),
+                "readers": readers_of(page.reading),
             }
         )
     return out
@@ -527,13 +724,15 @@ def _clean_typed(text: str | None) -> str:
 def resolve_token(
     line: Line, index, choice: str, text: str | None = None, user=None, expected: str | None = None
 ) -> Line:
-    """Resolve token `index` of `line` with a reading: `primary`, `secondary`, `tess` or `typed`.
+    """Resolve token `index` of `line` with a reading: `primary`, `secondary`, `tess`, `typed` or `sug`.
 
     `primary` keeps the primary model's reading (restores it when another reading was chosen
-    before), `secondary` takes `alt`, `tess` takes Tesseract's word, `typed` takes `text`. Sets
-    `res` to the choice (the token's `conf` is kept). `expected` is the word the client saw at
-    `index`; when it is not there any more, `ReviewConflict` (the indices moved). Raises
-    `ReviewError` (Arabic) on a bad index / choice or a missing alternative.
+    before, the vote's included), `secondary` takes `alt` (with the vote, D71, the reading already
+    in the text: Enter confirms it), `tess` takes Tesseract's word, `typed` takes `text`, `sug` the
+    year read from the number in words (§4.8). Sets `res` to the choice (the token's `conf` is
+    kept). `expected` is the word the client saw at `index`; when it is not there any more,
+    `ReviewConflict` (the indices moved). Raises `ReviewError` (Arabic) on a bad index / choice or a
+    missing alternative.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -556,6 +755,11 @@ def resolve_token(
         if not token.get("tess"):
             raise ReviewError("لا توجد قراءة Tesseract لهذه الكلمة.")
         new = token["tess"]
+    elif choice == "sug":
+        suggestion = token.get("sug")
+        if not isinstance(suggestion, dict) or not suggestion.get("t"):
+            raise ReviewError("لا توجد قراءة مقترحة لهذه الكلمة.")
+        new = str(suggestion["t"])
     else:
         new = _clean_typed(text)
     before = line_snapshot(line)
@@ -599,7 +803,8 @@ def retokenize(old_tokens: list[dict], text: str) -> list[dict]:
 def edit_line(line: Line, text: str, user=None, version: str | None = None) -> Line:
     """Replace the text of a whole line; unchanged words keep their boxes and resolutions.
 
-    Words are separated by whitespace (collapsed to single spaces). `ocr_text` never changes.
+    Words are separated by whitespace (collapsed to single spaces). `ocr_text` never changes. The
+    line's open suggestions follow the words they come after (`_shift_gaps`, the same alignment).
     Empty text is refused (delete the line instead); an unchanged text is a no-op (no revision).
     `version` is the line's `v` as the client read it; a line saved since is a `ReviewConflict`.
     """
@@ -617,9 +822,11 @@ def edit_line(line: Line, text: str, user=None, version: str | None = None) -> L
     if [normalize_token(token)["t"] for token in line.tokens or []] == words:
         return line
     before = line_snapshot(line)
-    _set_tokens(line, retokenize(line.tokens, " ".join(words)))
+    old_tokens = list(line.tokens or [])
+    _set_tokens(line, retokenize(old_tokens, " ".join(words)))
     line.updated_by = _user_or_none(user)
     line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _shift_gaps(line, _aligned(old_tokens, line.tokens), line.tokens)
     _record(page, LineRevision.Action.EDIT, line, before, line_snapshot(line), user)
     refresh_page_text(page)
     return line
@@ -714,9 +921,10 @@ def merge_tokens(
 
     For a name or place the models split in two (D31). The two readings are written together without
     a space; the merged word's box is the union of both boxes (weak when one of them was) and it
-    counts as the reviewer's decision (typed, high confidence, no alternatives). Undo restores both
-    words. `expected` / `expected_next` are the two words the client saw (`ReviewConflict` when they
-    moved). Raises `ReviewError` when there is no word after `index` on the line.
+    counts as the reviewer's decision (typed, high confidence, no alternatives); a suggestion between
+    the two follows the merged word. Undo restores both words. `expected` / `expected_next` are the
+    two words the client saw (`ReviewConflict` when they moved). Raises `ReviewError` when there is
+    no word after `index` on the line.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -739,6 +947,7 @@ def merge_tokens(
     _set_tokens(line, tokens)
     line.updated_by = _user_or_none(user)
     line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _shift_gaps(line, {k: k if k <= i else k - 1 for k in range(len(tokens) + 1)}, line.tokens)
     _record(page, LineRevision.Action.MERGE, line, before, line_snapshot(line), user)
     refresh_page_text(page)
     return line
@@ -750,7 +959,8 @@ def delete_token(line: Line, index, user=None, expected: str | None = None) -> d
 
     Returns `{"line": Line | None, "deleted_line_id": int | None}`: removing the only word of a line
     deletes the line itself (recorded as a line delete, so undo brings the line back). Undo restores
-    the word with its box and readings. `expected`: as in `resolve_token`.
+    the word with its box and readings (and a suggestion after it to its place). `expected`: as in
+    `resolve_token`.
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -768,23 +978,56 @@ def delete_token(line: Line, index, user=None, expected: str | None = None) -> d
         refresh_page_text(page)
         return {"line": None, "deleted_line_id": line_id}
     before = line_snapshot(line)
+    size = len(tokens)
     del tokens[i]
     _set_tokens(line, tokens)
     line.updated_by = _user_or_none(user)
     line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _shift_gaps(line, {k: k if k < i else k - 1 for k in range(size) if k != i}, line.tokens)
     _record(page, LineRevision.Action.DROP_WORD, line, before, line_snapshot(line), user)
     refresh_page_text(page)
     return {"line": line, "deleted_line_id": None}
 
 
+def stored_role(choice: str, region_kind: str | None) -> str:
+    """The `Line.Role` stored for an effective choice of «نوع السطر» (D74) on a line of `region_kind`.
+
+    On a footnote-region line «حاشية» (`footnote`) is its region's own kind and stores `body`, and
+    «محتوى» (`body`) pulls it into the body (`main`); on any other line «حاشية» stores `footnote`.
+    Headings and verse store themselves everywhere. Raises `ReviewError` for an unknown choice.
+    """
+    if choice not in ROLE_CHOICES:
+        raise ReviewError("نوع السطر غير معروف.")
+    if region_kind in FOOTNOTE_KINDS:
+        if choice == Line.Role.FOOTNOTE:
+            return Line.Role.BODY
+        if choice == Line.Role.BODY:
+            return Line.Role.MAIN
+    return choice
+
+
+def _apply_role(page: Page, line: Line, role: str, user, batch: uuid.UUID | None = None) -> bool:
+    """Store `role` (a stored value) on `line` with its revision; False when it already had it."""
+    if line.role == role:
+        return False
+    before = line_snapshot(line)
+    line.role = role
+    line.updated_by = _user_or_none(user)
+    line.save(update_fields=["role", "updated_by", "updated_at"])
+    _record(page, LineRevision.Action.ROLE, line, before, line_snapshot(line), user, batch)
+    return True
+
+
 @transaction.atomic
 def set_line_role(line: Line, role: str, user=None, version: str | None = None) -> Line:
-    """Mark what a line is: body text «محتوى», a main heading «عنوان رئيسي» or a subheading «عنوان فرعي».
+    """Mark what a line is (D32, D74): «محتوى», «عنوان رئيسي», «عنوان فرعي», «شعر» or «حاشية».
 
-    Stored on the line (D32) for assembly (chapters, table of contents) and shown in the review
-    screen. Footnote lines stay body text. An unchanged role records nothing; undo restores the
-    previous role. Raises `ReviewError` (Arabic) for an unknown role or a footnote line, and
-    `ReviewConflict` for a stale `version` (as in `edit_line`).
+    `role` is the effective choice the menu shows (`ROLE_CHOICES`); `stored_role` maps it by the
+    line's region, so a footnote-region line can become a heading, verse or body text («محتوى»), and
+    a body-region line a note. Assembly reads the result through `ocr.services.line_kind`; the page
+    text moves a note line among the footnotes. An unchanged role records nothing; undo restores the
+    previous role. Raises `ReviewError` (Arabic) for an unknown role and `ReviewConflict` for a stale
+    `version` (as in `edit_line`).
     """
     page = _lock_page(line.page)
     _check_editable(page)
@@ -792,25 +1035,209 @@ def set_line_role(line: Line, role: str, user=None, version: str | None = None) 
     if line is None:
         raise ReviewError("السطر غير موجود في هذه الصفحة.")
     _check_version(line, version)
-    if role not in Line.Role.values:
-        raise ReviewError("نوع السطر غير معروف.")
-    if role != Line.Role.BODY and _region_kind(line) == Region.Kind.FOOTNOTE:
-        raise ReviewError("سطر الحاشية لا يكون عنوانًا.")
-    if line.role == role:
-        return line
-    before = line_snapshot(line)
-    line.role = role
-    line.updated_by = _user_or_none(user)
-    line.save(update_fields=["role", "updated_by", "updated_at"])
-    _record(page, LineRevision.Action.ROLE, line, before, line_snapshot(line), user)
+    if _apply_role(page, line, stored_role(role, _region_kind(line)), user):
+        refresh_page_text(page)
     return line
+
+
+@transaction.atomic
+def set_roles(page: Page, line_ids, role: str, user=None) -> list[Line]:
+    """«نوع الأسطر المحدَّدة»: the same effective choice on a ⇧-click range of lines (D74).
+
+    `line_ids` are lines of `page` (at most `MAX_RANGE_LINES`); each line stores `stored_role` of the
+    choice for its own region, with one revision per changed line sharing a batch, so `undo_last`
+    reverts the range in one step. Returns the lines in reading order. Raises `ReviewError` for an
+    empty or foreign id list or an unknown role.
+    """
+    page = _lock_page(page)
+    _check_editable(page)
+    if not isinstance(line_ids, list | tuple) or not line_ids:
+        raise ReviewError("حدّد الأسطر أولًا.")
+    try:
+        parsed = [int(str(value).strip()) for value in line_ids if not isinstance(value, bool | dict | list)]
+    except (TypeError, ValueError):
+        raise ReviewError("الأسطر المحدّدة غير صالحة.") from None
+    ids = list(dict.fromkeys(parsed))
+    if len(parsed) != len(line_ids) or len(ids) > MAX_RANGE_LINES:
+        raise ReviewError("الأسطر المحدّدة غير صالحة.")
+    if role not in ROLE_CHOICES:
+        raise ReviewError("نوع السطر غير معروف.")
+    lines = list(_page_lines(page).filter(pk__in=ids))
+    if len(lines) != len(ids):
+        raise ReviewError("بعض الأسطر المحدّدة ليست في هذه الصفحة.")
+    batch = uuid.uuid4()
+    changed = False
+    for line in lines:
+        changed |= _apply_role(page, line, stored_role(role, _region_kind(line)), user, batch)
+    if changed:
+        refresh_page_text(page)
+    return lines
+
+
+# ====================================================================== words only the second model read
+
+
+def _group_lines(page: Page, group: int) -> list[Line]:
+    """The lines of `page` holding words of insertion group `group` (D72), in reading order."""
+    return [
+        line for line in _page_lines(page) if any(group_of(token) == group for token in line.tokens or [])
+    ]
+
+
+@transaction.atomic
+def resolve_insertion(page: Page, group, keep: bool, user=None) -> dict:
+    """Keep or drop a group of words only the second model read (D72), on every line it covers.
+
+    Keep sets `res = "secondary"` on the group's open words (their text stays); drop removes the
+    group's words, and a line left without words is deleted. One revision per line (`resolve`,
+    `drop_word` or `delete`), all in one batch: `undo_last` brings the whole group back in one step.
+    Suggestions on those lines follow the words around them. Returns `{"lines": [changed lines],
+    "deleted_ids": [ids of the lines removed]}`. Raises `ReviewError` for an unknown group.
+    """
+    page = _lock_page(page)
+    _check_editable(page)
+    try:
+        number = int(str(group).strip()) if not isinstance(group, bool) else None
+    except (TypeError, ValueError):
+        number = None
+    lines = _group_lines(page, number) if number is not None else []
+    if not lines:
+        raise ReviewError("لم تعد هذه الكلمات المقترحة في الصفحة.")
+    batch = uuid.uuid4()
+    changed: list[Line] = []
+    deleted: list[int] = []
+    for line_id in [line.pk for line in lines]:
+        line = _line_of(page, line_id)  # fresh: an earlier line of the group may have been deleted
+        tokens = [normalize_token(token) for token in line.tokens or []]
+        before = line_snapshot(line)
+        if keep:
+            touched = False
+            for token in tokens:
+                if group_of(token) == number and not token.get("res"):
+                    token["res"] = "secondary"
+                    touched = True
+            if not touched:
+                continue
+            _set_tokens(line, tokens)
+            line.updated_by = _user_or_none(user)
+            line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+            _record(page, LineRevision.Action.RESOLVE, line, before, line_snapshot(line), user, batch)
+            changed.append(line)
+            continue
+        kept = [k for k, token in enumerate(tokens) if group_of(token) != number]
+        if not kept:
+            deleted.append(line.pk)
+            _record(page, LineRevision.Action.DELETE, None, before, None, user, batch)
+            line.delete()
+            _compact_orders(page)  # as `delete_line`: the next snapshot holds the order undo needs
+            continue
+        _set_tokens(line, [tokens[k] for k in kept])
+        line.updated_by = _user_or_none(user)
+        line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+        _shift_gaps(line, {k: n for n, k in enumerate(kept)}, line.tokens)
+        _record(page, LineRevision.Action.DROP_WORD, line, before, line_snapshot(line), user, batch)
+        changed.append(line)
+    refresh_page_text(page)
+    for line in changed:
+        line.refresh_from_db()
+    return {"lines": changed, "deleted_ids": deleted}
+
+
+# ====================================================================== suggestions (TextGap, D72)
+
+
+def _gap_of(page: Page, gap_id) -> TextGap:
+    """An open suggestion of `page` that still has its line (`ReviewError` otherwise)."""
+    gap = TextGap.objects.select_related("line").filter(pk=gap_id, page=page).first()
+    if gap is None or gap.line_id is None:
+        raise ReviewError("لم يعد هذا النص المقترح في الصفحة.")
+    if gap.status != TextGap.Status.OPEN:
+        raise ReviewError("حُسم هذا النص المقترح من قبل.")
+    return gap
+
+
+def gap_anchor(tokens: list[dict], index: int, after_t: str) -> int:
+    """Where a suggestion goes now (−1: before the first token): after token `index` when it still
+    reads `after_t`, else after the token reading `after_t` nearest to `index`, else `index` clamped to
+    the line."""
+    size = len(tokens)
+    if index < 0 or not size:
+        return -1
+    if index < size and str(tokens[index].get("t") or "") == after_t:
+        return index
+    places = [k for k, token in enumerate(tokens) if after_t and str(token.get("t") or "") == after_t]
+    if places:
+        return min(places, key=lambda k: (abs(k - index), k))
+    return min(index, size - 1)
+
+
+def _decide_gap(gap: TextGap, status: str, user) -> None:
+    gap.status = status
+    gap.decided_by = _user_or_none(user)
+    gap.decided_at = timezone.now()
+    gap.save(update_fields=["status", "decided_by", "decided_at"])
+
+
+@transaction.atomic
+def accept_gap(gap: TextGap, text: str | None = None, user=None) -> tuple[Line, TextGap]:
+    """Insert a suggestion's words into its line (D72): «إدراج».
+
+    The words (the offered text, or `text` typed over it, whitespace collapsed) become typed tokens
+    after the gap's token, re-anchored by `after_t` (`gap_anchor`); the line's other suggestions
+    after that place move with the words. The gap becomes `inserted`. Recorded as an `edit` whose
+    `after` holds `{"gap": id}`; undo removes the words and reopens the gap. Returns `(line, gap)`.
+    """
+    page = _lock_page(gap.page)
+    _check_editable(page)
+    gap = _gap_of(page, gap.pk)
+    line = _line_of(page, gap.line_id)
+    words = _clean_words(gap.text if text is None else text)
+    if not words:
+        raise ReviewError("اكتب النص المُدرَج أولًا.")
+    tokens = [normalize_token(token) for token in line.tokens or []]
+    if len(" ".join([token["t"] for token in tokens] + words)) > MAX_LINE_CHARS:
+        raise ReviewError("السطر أطول من المسموح.")
+    at = gap_anchor(tokens, gap.index, gap.after_t)
+    before = line_snapshot(line)
+    new = tokens[: at + 1] + [typed_token(word) for word in words] + tokens[at + 1 :]
+    _set_tokens(line, new)
+    line.updated_by = _user_or_none(user)
+    line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _decide_gap(gap, TextGap.Status.INSERTED, user)
+    shift = {k: k if k <= at else k + len(words) for k in range(len(tokens))}
+    _shift_gaps(line, shift, line.tokens)
+    _record(page, LineRevision.Action.EDIT, line, before, {**line_snapshot(line), "gap": gap.pk}, user)
+    refresh_page_text(page)
+    return line, gap
+
+
+@transaction.atomic
+def dismiss_gap(gap: TextGap, user=None) -> tuple[Line, TextGap]:
+    """Drop a suggestion (D72): «تجاهل». The text is unchanged; the revision (action `gap` «نص
+    مقترح») holds the gap's status before and after, and undo reopens it. Returns `(line, gap)`."""
+    page = _lock_page(gap.page)
+    _check_editable(page)
+    gap = _gap_of(page, gap.pk)
+    line = _line_of(page, gap.line_id)
+    _decide_gap(gap, TextGap.Status.DISMISSED, user)
+    _record(
+        page,
+        LineRevision.Action.GAP,
+        line,
+        {"gap": gap.pk, "status": TextGap.Status.OPEN},
+        {"gap": gap.pk, "status": TextGap.Status.DISMISSED},
+        user,
+    )
+    refresh_page_text(page)
+    return line, gap
 
 
 # ====================================================================== undo
 
 
 def _restore_content(page: Page, revision: LineRevision) -> None:
-    """Undo a resolve / edit: the line's text, tokens and box go back to the `before` snapshot."""
+    """Undo a resolve / edit: the line's text, tokens, box, role and suggestions go back to the
+    `before` snapshot (a suggestion the edit inserted is open again)."""
     snap = revision.before or {}
     line = _line_of(page, revision.line_id or snap.get("id"))
     if line is None:
@@ -820,6 +1247,10 @@ def _restore_content(page: Page, revision: LineRevision) -> None:
     line.text = snap.get("text", line.text)
     line.role = snap.get("role") or line.role
     line.save(update_fields=["bbox", "tokens", "text", "n_low", "role", "updated_at"])
+    _restore_gaps(page, line, snap.get("gaps"))
+    gap_id = (revision.after or {}).get("gap")
+    if gap_id is not None:  # an accepted suggestion (`accept_gap`) is open again
+        _restore_gaps(page, line, {str(gap_id): {"status": TextGap.Status.OPEN}})
 
 
 def _undo_insert(page: Page, revision: LineRevision) -> None:
@@ -831,7 +1262,7 @@ def _undo_insert(page: Page, revision: LineRevision) -> None:
 
 
 def _undo_delete(page: Page, revision: LineRevision) -> None:
-    """Undo a delete: the line comes back with its old id, order, region and tokens."""
+    """Undo a delete: the line comes back with its old id, order, region, tokens and suggestions."""
     snap = revision.before or {}
     order = int(snap.get("order") or 0)
     region_id = snap.get("region_id")
@@ -855,6 +1286,7 @@ def _undo_delete(page: Page, revision: LineRevision) -> None:
     _set_tokens(line, [normalize_token(token) for token in snap.get("tokens") or []])
     line.text = snap.get("text", line.text)
     line.save(force_insert=True)
+    _restore_gaps(page, line, snap.get("gaps"))
     _compact_orders(page)
     if line_id is not None:
         # Older revisions of this line lost their link when it was deleted; point them at it again.
@@ -863,23 +1295,17 @@ def _undo_delete(page: Page, revision: LineRevision) -> None:
         ).update(line=line)
 
 
-@transaction.atomic
-def undo_last(page: Page, user=None) -> dict:
-    """Revert the newest revision of the page that is not undone yet and mark it undone.
+def _undo_gap(page: Page, revision: LineRevision) -> None:
+    """Undo a dismissed suggestion: it is open again, on the line it had."""
+    snap = revision.before or {}
+    gap_id = snap.get("gap")
+    if gap_id is not None:
+        _restore_gaps(page, None, {str(gap_id): {"status": snap.get("status") or TextGap.Status.OPEN}})
 
-    Resolve / edit restore the line's previous text and tokens, an insert is removed, a deleted
-    line comes back at its old position, approve / reopen restore the page's review status and
-    the lines' reviewed flags. Returns the new `review_payload`. Raises `ReviewError`
-    «لا شيء للتراجع عنه» when nothing is left to undo.
-    """
-    page = _lock_page(page)
-    revision = page.revisions.filter(undone=False).order_by("-created_at", "-id").first()
-    if revision is None:
-        raise ReviewError("لا شيء للتراجع عنه.")
-    _check_editable(page)
+
+def _undo_one(page: Page, revision: LineRevision) -> None:
+    """Revert one revision (see `undo_last`) and mark it undone."""
     action = revision.action
-    if action not in (LineRevision.Action.APPROVE, LineRevision.Action.REOPEN):
-        _touch_page(page)  # D36; approve / reopen restore their own status snapshot below
     if action in (
         LineRevision.Action.RESOLVE,
         LineRevision.Action.EDIT,
@@ -892,10 +1318,39 @@ def undo_last(page: Page, user=None) -> dict:
         _undo_insert(page, revision)
     elif action == LineRevision.Action.DELETE:
         _undo_delete(page, revision)
+    elif action == LineRevision.Action.GAP:
+        _undo_gap(page, revision)
     else:  # approve / reopen
         _restore_page_state(page, revision.before or {})
     revision.undone = True
     revision.save(update_fields=["undone"])
+
+
+@transaction.atomic
+def undo_last(page: Page, user=None) -> dict:
+    """Revert the newest action of the page that is not undone yet and mark its revisions undone.
+
+    Resolve / edit restore the line's previous text and tokens, an insert is removed, a deleted
+    line comes back at its old position, approve / reopen restore the page's review status and
+    the lines' reviewed flags, a suggestion accepted or dismissed is open again. An action over
+    several lines (a group kept or dropped, a range of roles: one `LineRevision.batch`) is undone at
+    once, newest revision first. Returns the new `review_payload`. Raises `ReviewError`
+    «لا شيء للتراجع عنه» when nothing is left to undo.
+    """
+    page = _lock_page(page)
+    revision = page.revisions.filter(undone=False).order_by("-created_at", "-id").first()
+    if revision is None:
+        raise ReviewError("لا شيء للتراجع عنه.")
+    _check_editable(page)
+    action = revision.action
+    if action not in (LineRevision.Action.APPROVE, LineRevision.Action.REOPEN):
+        _touch_page(page)  # D36; approve / reopen restore their own status snapshot below
+    if revision.batch is not None:
+        batch = list(page.revisions.filter(undone=False, batch=revision.batch).order_by("-created_at", "-id"))
+    else:
+        batch = [revision]
+    for item in batch:
+        _undo_one(page, item)
     refresh_page_text(page)
     if action in (LineRevision.Action.APPROVE, LineRevision.Action.REOPEN):
         _refresh_book(page)
@@ -924,18 +1379,20 @@ def _next_after(page: Page) -> dict:
 def approve_page(page: Page, user, force: bool = False) -> dict:
     """Mark a page reviewed. Returns `{"status", "next_review_url", "next_payload_url", ...}`.
 
-    With unresolved words left and `force` false, raises `ReviewBlocked` (API 409). Every line is
-    marked reviewed (so a new OCR pass keeps them), `reviewed_by` / `reviewed_at` are set and the
-    book status is re-derived. Approving an approved (`reviewed` or `assembled`) page changes nothing.
+    With open items left (unresolved words, open groups of added words, open suggestions:
+    `ocr.services.page_open_items`) and `force` false, raises `ReviewBlocked` (API 409) with their
+    split. Every line is marked reviewed (so a new OCR pass keeps them), `reviewed_by` /
+    `reviewed_at` are set and the book status is re-derived. A suggestion left open never enters the
+    text. Approving an approved (`reviewed` or `assembled`) page changes nothing.
     """
     page = _lock_page(page)
     if page.status in REVIEWED_STATUSES:
         return {"status": page.status, **_next_after(page)}
     if page.status != Page.Status.OCR_DONE or page.text_state != Page.TextState.FINAL:
         raise ReviewError("الصفحة ليست جاهزة للاعتماد بعد.")
-    unresolved = sum(page.lines.values_list("n_low", flat=True))
-    if unresolved and not force:
-        raise ReviewBlocked(unresolved)
+    items = page_open_items(page)
+    if items.total and not force:
+        raise ReviewBlocked(items)
     before = _page_state(page)
     page.status = Page.Status.REVIEWED
     page.reviewed_by = _user_or_none(user)

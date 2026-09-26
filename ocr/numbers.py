@@ -707,6 +707,23 @@ def read_letters(plan: LineLetters, by_id: dict) -> tuple[int, int]:
     return letters, dates
 
 
+def check_years(lines: list) -> int:
+    """`ocr.flags.year_check` on a page's lines (in memory), region by region, after Kraken rewrote
+    their digits (§4.8): a year agreeing with its value in words is settled, a mismatch gets the words'
+    reading as a suggestion. Returns the number of tokens changed."""
+    from . import flags
+
+    changed = 0
+    run: list = []
+    for line in [*lines, None]:
+        if run and (line is None or line.region_id != run[-1].region_id):
+            changed += flags.year_check([item.tokens or [] for item in run])
+            run = []
+        if line is not None:
+            run.append(line)
+    return changed
+
+
 def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumbers:
     """The numbers pass on one finalised page (module docstring). `style`: the book's, when the caller
     knows it (a whole book at once); `engine`: a Kraken engine (tests pass a fake). A line the reviewer
@@ -789,6 +806,8 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         kept = [
             line for pk, line in changed.items() if locked.reviewed_at is None and now.get(pk) == read_at[pk]
         ]
+        if kept:
+            check_years(lines)  # §4.8: Kraken rewrote digits; only the kept lines are saved below
         for line in kept:
             line.text = " ".join(token["t"] for token in line.tokens)
             line.n_low = count_unresolved(line.tokens)

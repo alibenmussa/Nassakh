@@ -895,6 +895,101 @@ def test_clear_only_when_every_page_of_the_book_is_reviewed(book):
     assert set(rows_of(book)) == {"pages_unreviewed"}  # one raw page: no «جاهز»
 
 
+# ---------------------------------------------------------------------- D75: doubtful text
+
+
+def gap(page: ScanPage, status: str = "open") -> None:
+    from ocr.models import TextGap
+
+    TextGap.objects.create(page=page, text="تعالى بطرابلس ونشأ بها", status=status, support=0.4)
+
+
+def test_missing_text_lists_the_pages_with_an_open_suggestion(book):
+    """D75: open `TextGap` rows on pages in the book; decided ones, excluded pages and pages the run left
+    out do not count."""
+    pages = paged(book, {n: "reviewed" for n in range(1, 9)}, included=range(1, 8), excluded=(7,))
+    for number in (3, 5, 5):
+        gap(pages[number])
+    gap(pages[2], "inserted")
+    gap(pages[4], "dismissed")
+    gap(pages[7])  # excluded
+    gap(pages[8])  # not in the book (pages_missing speaks for it)
+    found = rows_of(book)
+    assert found["missing_text"] == [
+        {
+            "code": "missing_text",
+            "level": "warn",
+            "message": "نص قد يكون ناقصًا لم يُحسم في صفحتين: 3، 5.",
+            "action": {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"},
+        }
+    ]
+    assert "clear" not in found
+    codes = [item["code"] for item in readiness.book_readiness(Book.objects.get(pk=book.pk))]
+    assert codes[:2] == ["pages_missing", "missing_text"]  # after the Phase 6 review's rows
+
+
+def test_single_reader_counts_the_unreviewed_pages_one_model_read(book):
+    """D75: `reading.readers` ≠ two on pages still `ocr_done`; a page read before 7b (`{}`) and a reviewed
+    page do not count; the row is info, and `clear` never sits beside it."""
+    statuses = {1: "reviewed", 2: "ocr_done", 3: "ocr_done", 4: "ocr_done", 5: "reviewed", 6: "ocr_done"}
+    pages = paged(book, statuses, included=range(1, 7))
+    readings = {2: "one", 3: "tesseract", 4: "two", 5: "one"}
+    for number, readers in readings.items():
+        ScanPage.objects.filter(pk=pages[number].pk).update(reading={"readers": readers, "partial": False})
+    found = rows_of(book)
+    assert found["single_reader"] == [
+        {
+            "code": "single_reader",
+            "level": "info",
+            "message": "قُرئت صفحتان من الكتاب بنموذج واحد ولم تُراجَعا بعد.",
+            "action": {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"},
+        }
+    ]
+    ScanPage.objects.filter(book=book, status="ocr_done").update(status="reviewed")
+    ScanPage.objects.filter(pk=pages[2].pk).update(status="ocr_done")
+    assert rows_of(book) == {
+        "pages_unreviewed": [
+            {
+                "code": "pages_unreviewed",
+                "level": "warn",
+                "message": "صفحة واحدة في الكتاب لم تُراجَع بعد؛ نصّها كما قرأته النماذج: 2.",
+                "action": {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"},
+            }
+        ],
+        "single_reader": [
+            {
+                "code": "single_reader",
+                "level": "info",
+                "message": "قُرئت صفحة واحدة من الكتاب بنموذج واحد ولم تُراجَع بعد.",
+                "action": {"label": "المراجعة", "url": f"/books/{book.pk}/review/next/"},
+            }
+        ],
+    }
+
+
+def test_the_doubtful_text_messages_agree_with_their_numbers():
+    assert readiness.missing_text_message([3]) == "نص قد يكون ناقصًا لم يُحسم في صفحة واحدة: 3."
+    assert (
+        readiness.missing_text_message([3, 7, 12, 30]) == "نص قد يكون ناقصًا لم يُحسم في 4 صفحات: 3، 7، 12، 30."
+    )
+    assert readiness.missing_text_message(list(range(1, 14))) == (
+        "نص قد يكون ناقصًا لم يُحسم في 13 صفحة: 1، 2، 3، 4، 5، 6، 7، 8…"
+    )
+    assert readiness.single_reader_message(13) == "قُرئت 13 صفحة من الكتاب بنموذج واحد ولم تُراجَع بعد."
+    assert readiness.single_reader_message(4) == "قُرئت 4 صفحات من الكتاب بنموذج واحد ولم تُراجَع بعد."
+    assert readiness.single_reader_message(1) == "قُرئت صفحة واحدة من الكتاب بنموذج واحد ولم تُراجَع بعد."
+
+
+def test_doubtful_text_without_a_run_counts_every_page_of_the_book(book):
+    Manuscript.objects.filter(book=book).update(run=None)
+    page = ScanPage.objects.create(
+        book=book, number=1, source_index=0, status="ocr_done", reading={"readers": "one"}
+    )
+    gap(page)
+    trust = readiness.trust_pages(Book.objects.get(pk=book.pk), Manuscript.objects.get(book=book))
+    assert trust == readiness.TrustPages(missing_text=[1], single_reader=[1])
+
+
 def notes_document() -> dict:
     """Pages 5–12: page-end note paragraphs (flagged: 5, 9), and what must not be flagged."""
     words = " ".join(["كلمة"] * 90)

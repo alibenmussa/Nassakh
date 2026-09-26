@@ -1,0 +1,145 @@
+{
+ "page_tile (page 901, full)": {
+  "id": 901,
+  "number": 2,
+  "status": "ocr_done",
+  "status_label": "تم التعرّف",
+  "dot": "dot-success",
+  "text_state": "final",
+  "flags": [
+   "single_reader"
+  ],
+  "flag_labels": [
+   "قراءة واحدة"
+  ],
+  "n_flags": 1,
+  "printed_number": "",
+  "sequence_issue": "",
+  "is_excluded": false,
+  "error": false,
+  "error_headline": "",
+  "retry_stage": "",
+  "retry_label": "",
+  "rerun_url": "/books/30/pages/2/rerun/",
+  "thumb_url": null,
+  "scan_thumb_url": null,
+  "url": "/books/30/pages/2/",
+  "n_unresolved": 1,
+  "readers": "one",
+  "is_reviewed": false,
+  "review_url": "/books/30/review/2/",
+  "width": 200,
+  "height": 400
+ },
+ "page_tile (page 901, compact)": {
+  "id": 901,
+  "number": 2,
+  "status": "ocr_done",
+  "text_state": "final",
+  "n_unresolved": 1,
+  "n_flags": 1,
+  "sequence_issue": "",
+  "is_excluded": false,
+  "is_reviewed": false,
+  "error": false,
+  "printed_number": "",
+  "flag_labels": [
+   "قراءة واحدة"
+  ],
+  "readers": "one"
+ },
+ "page_tile (page 900, compact: no readers key for two)": {
+  "id": 900,
+  "number": 1,
+  "status": "ocr_done",
+  "text_state": "final",
+  "n_unresolved": 14,
+  "n_flags": 1,
+  "sequence_issue": "",
+  "is_excluded": false,
+  "is_reviewed": false,
+  "error": false,
+  "printed_number": "",
+  "flag_labels": [
+   "نص قد يكون ناقصًا"
+  ]
+ },
+ "filmstrip": {
+  "book_id": 30,
+  "pages": [
+   {
+    "id": 900,
+    "number": 1,
+    "thumb_url": null,
+    "is_reviewed": false,
+    "n_unresolved": 14,
+    "status": "ocr_done",
+    "url": "/books/30/review/1/",
+    "readers": "two"
+   },
+   {
+    "id": 901,
+    "number": 2,
+    "thumb_url": null,
+    "is_reviewed": false,
+    "n_unresolved": 1,
+    "status": "ocr_done",
+    "url": "/books/30/review/2/",
+    "readers": "one"
+   },
+   {
+    "id": 902,
+    "number": 3,
+    "thumb_url": null,
+    "is_reviewed": false,
+    "n_unresolved": 0,
+    "status": "ocr_done",
+    "url": "/books/30/review/3/",
+    "readers": "tesseract"
+   },
+   {
+    "id": 903,
+    "number": 4,
+    "thumb_url": null,
+    "is_reviewed": false,
+    "n_unresolved": 0,
+    "status": "ocr_done",
+    "url": "/books/30/review/4/",
+    "readers": ""
+   }
+  ]
+ },
+ "book_sheets line (page 900, line 9104)": {
+  "id": 9104,
+  "order": 4,
+  "region_kind": "footnote",
+  "kind": "footnote",
+  "bbox": [
+   0.0,
+   0.2,
+   0.5,
+   0.25
+  ],
+  "tokens": [
+   {
+    "t": "(١)",
+    "conf": "low",
+    "res": null
+   },
+   {
+    "t": "انظر",
+    "conf": "high",
+    "res": null
+   },
+   {
+    "t": ":",
+    "conf": "high",
+    "res": null
+   }
+  ]
+ },
+ "attention flags": {
+  "single_reader": "قراءة واحدة",
+  "missing_text": "نص قد يكون ناقصًا"
+ }
+}

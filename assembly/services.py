@@ -29,7 +29,7 @@ from django.utils import timezone
 from books.models import Book, Page
 from editor.models import Manuscript, ManuscriptSnapshot
 from ocr.models import Line
-from ocr.services import SKIPPED_KINDS, is_unresolved
+from ocr.services import SKIPPED_KINDS, is_unresolved, line_kind
 from processing.models import Region
 
 from . import pipeline
@@ -42,6 +42,18 @@ ACTIVE_STATUSES: tuple[str, ...] = (AssemblyRun.Status.QUEUED, AssemblyRun.Statu
 ABANDONED_AFTER = timedelta(minutes=30)  # a queued/running run older than this is taken as lost
 SNAPSHOTS_KEPT = 10  # re-assembly snapshots kept per manuscript (manual ones are never pruned)
 MAX_ROLE_LINES = 500
+# The paragraph menu's «نوع الفقرة» (D74), in its order: the effective choices `set_block_roles` takes and
+# the review service stores per line (`review.services.set_line_role`: «حاشية» on a footnote-region line
+# stores `body`, «محتوى» there stores `main`). A paragraph that starts with a marker whose call is open on
+# its page (`noteFor`) reads the footnote choice as `FOOTNOTE_FOR_LABEL`.
+BLOCK_ROLES: tuple[tuple[str, str], ...] = (
+    ("body", "محتوى"),
+    ("heading", "عنوان رئيسي"),
+    ("subheading", "عنوان فرعي"),
+    ("verse", "شعر"),
+    ("footnote", "حاشية"),
+)
+FOOTNOTE_FOR_LABEL = "حاشية للعلامة ({n})"
 OPTION_KEYS: tuple[str, ...] = ("footnote_numbering", "include_unreviewed", "strip_tatweel")
 EMPTY_SIGNATURE = "0:"
 
@@ -168,9 +180,12 @@ def load_book(book: Book) -> LoadedBook:
 
     Pages: every non-excluded page in book order with its preprocess output size. Lines: every line
     of those pages in reading order with its region kind; running headers and page numbers are left
-    out (`ocr.services.SKIPPED_KINDS`), footnote regions give `footnote` lines, every other kind (and
-    a line without a region) is `body`. Boxes become ratios of the preprocess output size (the gray
-    image the boxes are measured on), falling back to the page's size.
+    out (`ocr.services.SKIPPED_KINDS`). A line's kind is its effective kind (`ocr.services.line_kind`,
+    D74): a line of a footnote region, or one with the `footnote` role, is a `footnote` line; every
+    other line (a `main` role pulls a footnote-region line back, a heading or verse role too; a line
+    without a region) is `body`. Its role is the one the pipeline reads (`pipeline_role`). Boxes become
+    ratios of the preprocess output size (the gray image the boxes are measured on), falling back to
+    the page's size.
     """
     pages = list(
         Page.objects.filter(book_id=book.pk, is_excluded=False)
@@ -227,8 +242,8 @@ def load_book(book: Book) -> LoadedBook:
             LineIn(
                 id=line.pk,
                 order=line.order,
-                kind=pipeline.FOOTNOTE if kind == Region.Kind.FOOTNOTE else pipeline.BODY,
-                role=line.role or pipeline.ROLE_BODY,
+                kind=pipeline.FOOTNOTE if line_kind(line.role, kind) == "footnote" else pipeline.BODY,
+                role=pipeline_role(line.role),
                 text=text,
                 box=_ratio_box(line.bbox, width, height),
                 uncertain=uncertain,
@@ -236,6 +251,12 @@ def load_book(book: Book) -> LoadedBook:
         )
     signatures = {pk: page_signature(counts.get(pk, 0), latest.get(pk)) for pk in items}
     return LoadedBook(pages=list(items.values()), signatures=signatures)
+
+
+def pipeline_role(role: str | None) -> str:
+    """A stored line role as the pipeline reads it (`pipeline.LINE_ROLES`): headings and verse as they
+    are; `body`, `main` and `footnote` are `body` (the line's kind carries the note, `line_kind`)."""
+    return role if role in pipeline.LINE_ROLES else pipeline.ROLE_BODY
 
 
 def _has_preprocess(page: Page) -> bool:
@@ -487,22 +508,33 @@ def set_block_roles(book: Book, user, line_ids, role: str, replace_edited: bool 
     """Set the role of a block's lines through the review service (one revision per changed line), then
     start a run (D38: a heading is a line fact, recorded and undoable like any review action).
 
+    `role` is one of the paragraph menu's choices (`BLOCK_ROLES`, D74): «محتوى», the two headings,
+    «شعر» (each line a verse paragraph of its own) and «حاشية» (the lines become a note; with a marker
+    whose call is open on the page, the next run links it there). It goes to the review service page by
+    page (`review.services.set_roles`: the effective choice, stored per line by its region, one batch per
+    page, so review's undo reverts a page's share in one step). The structure tools rest on an edited
+    book (D49): over a text edited on the book page the request must confirm the replacement
+    (`replace_edited`).
+
     All or nothing: a line of another book → `AssemblyNotFound`; a line the review service refuses
-    (a footnote line as a heading, a page not editable) → `AssemblyError` and no line changes.
+    (a page not editable) → `AssemblyError` and no line changes.
     """
     from review import services as review_services  # other app: lazy import
 
-    if role not in Line.Role.values:
+    if role not in dict(BLOCK_ROLES):
         raise AssemblyError("نوع السطر غير معروف.")
     ids = _line_ids(line_ids)
     lines = list(Line.objects.filter(pk__in=ids).select_related("page"))
     if len(lines) != len(ids) or any(line.page.book_id != book.pk for line in lines):
         raise AssemblyNotFound("السطر غير موجود في هذا الكتاب.")
     check_edited(book, replace_edited)  # before any line changes
+    by_page: dict[int, tuple[Page, list[int]]] = {}
+    for line in sorted(lines, key=lambda item: (item.page.number, item.order, item.pk)):
+        by_page.setdefault(line.page_id, (line.page, []))[1].append(line.pk)
     try:
         with transaction.atomic():
-            for line in sorted(lines, key=lambda item: (item.page.number, item.order, item.pk)):
-                review_services.set_line_role(line, role, user)
+            for page, page_line_ids in by_page.values():
+                review_services.set_roles(page, page_line_ids, role, user)
     except review_services.ReviewError as exc:
         raise AssemblyError(str(exc)) from exc
     return _start(book, user, changed=True)

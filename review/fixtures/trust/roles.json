@@ -1,0 +1,1761 @@
+[
+ {
+  "name": "«حاشية» on a body-region line stores footnote",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9100/role/",
+   "body": {
+    "role": "footnote"
+   }
+  },
+  "status": 200,
+  "response": {
+   "line": {
+    "id": 9100,
+    "order": 0,
+    "region_id": 9000,
+    "region_kind": "body",
+    "kind": "footnote",
+    "bbox": [
+     0,
+     0,
+     100,
+     20
+    ],
+    "text": "قال يحيى فاضلا زاهدا ١٢٥ سنة",
+    "ocr_text": "قال يحيى فاضلا زاهدا ١٢٥ سنة",
+    "is_manual": false,
+    "is_reviewed": false,
+    "n_low": 4,
+    "role": "footnote",
+    "v": "2026-09-26T15:20:00.000000+00:00",
+    "tokens": [
+     {
+      "t": "قال",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       88,
+       0,
+       100,
+       20
+      ],
+      "tess": null,
+      "tc": 91.0,
+      "res": null
+     },
+     {
+      "t": "يحيى",
+      "alt": "يحيى",
+      "conf": "low",
+      "digit": false,
+      "bbox": [
+       70,
+       0,
+       88,
+       20
+      ],
+      "tess": "يحيى",
+      "tc": 88.0,
+      "why": [
+       "disagree"
+      ],
+      "orig": "يجي",
+      "pick": "vote",
+      "res": null
+     },
+     {
+      "t": "فاضلا",
+      "alt": "فاضل",
+      "conf": "low",
+      "digit": false,
+      "bbox": [
+       50,
+       0,
+       70,
+       20
+      ],
+      "tess": null,
+      "tc": 93.0,
+      "why": [
+       "disagree"
+      ],
+      "res": null
+     },
+     {
+      "t": "زاهدا",
+      "alt": "راهدا",
+      "conf": "low",
+      "digit": false,
+      "bbox": [
+       30,
+       0,
+       50,
+       20
+      ],
+      "tess": "زاهد",
+      "tc": 64.0,
+      "why": [
+       "disagree"
+      ],
+      "res": null
+     },
+     {
+      "t": "١٢٥",
+      "alt": null,
+      "conf": "low",
+      "digit": true,
+      "bbox": [
+       15,
+       0,
+       30,
+       20
+      ],
+      "tess": "١٢٠",
+      "tc": 71.0,
+      "why": [
+       "number"
+      ],
+      "res": null
+     },
+     {
+      "t": "سنة",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       0,
+       0,
+       15,
+       20
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "res": null
+     }
+    ],
+    "gaps": [
+     {
+      "id": 9501,
+      "index": -1,
+      "after_t": "",
+      "text": "وقد",
+      "support": 0.0,
+      "status": "open"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "«محتوى» on a footnote-region line stores main",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9104/role/",
+   "body": {
+    "role": "body"
+   }
+  },
+  "status": 200,
+  "response": {
+   "line": {
+    "id": 9104,
+    "order": 4,
+    "region_id": 9001,
+    "region_kind": "footnote",
+    "kind": "body",
+    "bbox": [
+     0,
+     80,
+     100,
+     100
+    ],
+    "text": "(١) انظر :",
+    "ocr_text": "(١) انظر :",
+    "is_manual": false,
+    "is_reviewed": false,
+    "n_low": 1,
+    "role": "main",
+    "v": "2026-09-26T15:20:00.000000+00:00",
+    "tokens": [
+     {
+      "t": "(١)",
+      "alt": null,
+      "conf": "low",
+      "digit": true,
+      "bbox": [
+       90,
+       160,
+       100,
+       180
+      ],
+      "tess": null,
+      "why": [
+       "number"
+      ],
+      "res": null
+     },
+     {
+      "t": "انظر",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       70,
+       160,
+       90,
+       180
+      ],
+      "tess": null,
+      "tc": 94.0,
+      "res": null
+     },
+     {
+      "t": ":",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       66,
+       160,
+       70,
+       180
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "res": null
+     }
+    ],
+    "gaps": []
+   }
+  }
+ },
+ {
+  "name": "«حاشية» on that footnote-region line stores body again",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9104/role/",
+   "body": {
+    "role": "footnote"
+   }
+  },
+  "status": 200,
+  "response": {
+   "line": {
+    "id": 9104,
+    "order": 4,
+    "region_id": 9001,
+    "region_kind": "footnote",
+    "kind": "footnote",
+    "bbox": [
+     0,
+     80,
+     100,
+     100
+    ],
+    "text": "(١) انظر :",
+    "ocr_text": "(١) انظر :",
+    "is_manual": false,
+    "is_reviewed": false,
+    "n_low": 1,
+    "role": "body",
+    "v": "2026-09-26T15:20:00.000000+00:00",
+    "tokens": [
+     {
+      "t": "(١)",
+      "alt": null,
+      "conf": "low",
+      "digit": true,
+      "bbox": [
+       90,
+       160,
+       100,
+       180
+      ],
+      "tess": null,
+      "why": [
+       "number"
+      ],
+      "res": null
+     },
+     {
+      "t": "انظر",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       70,
+       160,
+       90,
+       180
+      ],
+      "tess": null,
+      "tc": 94.0,
+      "res": null
+     },
+     {
+      "t": ":",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       66,
+       160,
+       70,
+       180
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "res": null
+     }
+    ],
+    "gaps": []
+   }
+  }
+ },
+ {
+  "name": "«عنوان رئيسي» on a footnote-region line is allowed",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9104/role/",
+   "body": {
+    "role": "heading"
+   }
+  },
+  "status": 200,
+  "response": {
+   "line": {
+    "id": 9104,
+    "order": 4,
+    "region_id": 9001,
+    "region_kind": "footnote",
+    "kind": "body",
+    "bbox": [
+     0,
+     80,
+     100,
+     100
+    ],
+    "text": "(١) انظر :",
+    "ocr_text": "(١) انظر :",
+    "is_manual": false,
+    "is_reviewed": false,
+    "n_low": 1,
+    "role": "heading",
+    "v": "2026-09-26T15:20:00.000000+00:00",
+    "tokens": [
+     {
+      "t": "(١)",
+      "alt": null,
+      "conf": "low",
+      "digit": true,
+      "bbox": [
+       90,
+       160,
+       100,
+       180
+      ],
+      "tess": null,
+      "why": [
+       "number"
+      ],
+      "res": null
+     },
+     {
+      "t": "انظر",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       70,
+       160,
+       90,
+       180
+      ],
+      "tess": null,
+      "tc": 94.0,
+      "res": null
+     },
+     {
+      "t": ":",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       66,
+       160,
+       70,
+       180
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "res": null
+     }
+    ],
+    "gaps": []
+   }
+  }
+ },
+ {
+  "name": "«شعر» on a body line",
+  "request": {
+   "method": "POST",
+   "url": "/api/lines/9102/role/",
+   "body": {
+    "role": "verse"
+   }
+  },
+  "status": 200,
+  "response": {
+   "line": {
+    "id": 9102,
+    "order": 2,
+    "region_id": 9000,
+    "region_kind": "body",
+    "kind": "body",
+    "bbox": [
+     0,
+     40,
+     100,
+     60
+    ],
+    "text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+    "ocr_text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+    "is_manual": false,
+    "is_reviewed": false,
+    "n_low": 2,
+    "role": "verse",
+    "v": "2026-09-26T15:20:00.000000+00:00",
+    "tokens": [
+     {
+      "t": "ونشأ",
+      "alt": null,
+      "conf": "low",
+      "digit": false,
+      "bbox": [
+       85,
+       40,
+       100,
+       60
+      ],
+      "tess": null,
+      "tc": 80.0,
+      "why": [
+       "missing"
+      ],
+      "ins": 1,
+      "res": null
+     },
+     {
+      "t": "بها",
+      "alt": null,
+      "conf": "low",
+      "digit": false,
+      "bbox": [
+       75,
+       40,
+       85,
+       60
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "why": [
+       "missing"
+      ],
+      "ins": 1,
+      "res": null
+     },
+     {
+      "t": "رحمه",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       60,
+       40,
+       75,
+       60
+      ],
+      "tess": null,
+      "tc": 92.0,
+      "res": null
+     },
+     {
+      "t": "الله",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       50,
+       40,
+       60,
+       60
+      ],
+      "tess": null,
+      "tc": 95.0,
+      "res": null
+     },
+     {
+      "t": "٢٤٢",
+      "alt": null,
+      "conf": "low",
+      "digit": true,
+      "bbox": [
+       40,
+       40,
+       50,
+       60
+      ],
+      "tess": null,
+      "why": [
+       "number",
+       "year"
+      ],
+      "sug": {
+       "t": "٢٤٣",
+       "src": "words",
+       "label": "من الحروف",
+       "words": "ثلاث واربعين ومايتين"
+      },
+      "res": null
+     },
+     {
+      "t": "ثلاث",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       30,
+       40,
+       40,
+       60
+      ],
+      "tess": null,
+      "tc": 90.0,
+      "res": null
+     },
+     {
+      "t": "واربعين",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       15,
+       40,
+       30,
+       60
+      ],
+      "tess": null,
+      "tc": 88.0,
+      "res": null
+     },
+     {
+      "t": "ومايتين",
+      "alt": null,
+      "conf": "high",
+      "digit": false,
+      "bbox": [
+       0,
+       40,
+       15,
+       60
+      ],
+      "tess": null,
+      "tc": 86.0,
+      "res": null
+     }
+    ],
+    "gaps": [
+     {
+      "id": 9500,
+      "index": 3,
+      "after_t": "الله",
+      "text": "تعالى الاجابة",
+      "support": 0.33,
+      "status": "open"
+     }
+    ]
+   }
+  }
+ },
+ {
+  "name": "a range: «حاشية» on lines 9101–9103",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/roles/",
+   "body": {
+    "line_ids": [
+     9101,
+     9102,
+     9103
+    ],
+    "role": "footnote"
+   }
+  },
+  "status": 200,
+  "response": {
+   "lines": [
+    {
+     "id": 9101,
+     "order": 1,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "footnote",
+     "bbox": [
+      0,
+      20,
+      100,
+      40
+     ],
+     "text": "وكان مилادية ※ ١٩٦٦ تعالى بطرابلس",
+     "ocr_text": "وكان مилادية ※ ١٩٦٦ تعالى بطرابلس",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 5,
+     "role": "footnote",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "وكان",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        85,
+        20,
+        100,
+        40
+       ],
+       "tess": "ركان",
+       "tc": 58.0,
+       "why": [
+        "alone"
+       ],
+       "res": null
+      },
+      {
+       "t": "مилادية",
+       "alt": "ميلادية",
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        65,
+        20,
+        85,
+        40
+       ],
+       "tess": "ميلادية",
+       "tc": 77.0,
+       "why": [
+        "script"
+       ],
+       "res": null
+      },
+      {
+       "t": "※",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        60,
+        20,
+        65,
+        40
+       ],
+       "tess": null,
+       "why": [
+        "script"
+       ],
+       "res": null
+      },
+      {
+       "t": "١٩٦٦",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        45,
+        20,
+        60,
+        40
+       ],
+       "tess": null,
+       "why": [
+        "number"
+       ],
+       "src": "kraken",
+       "qari": {
+        "t": "١٩٦٠",
+        "alt": "١٩٦٦",
+        "tess": null
+       },
+       "res": null
+      },
+      {
+       "t": "تعالى",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        30,
+        20,
+        45,
+        40
+       ],
+       "tess": null,
+       "tc": 82.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "بطرابلس",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        10,
+        20,
+        30,
+        40
+       ],
+       "tess": null,
+       "tc": 79.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "id": 9102,
+     "order": 2,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "footnote",
+     "bbox": [
+      0,
+      40,
+      100,
+      60
+     ],
+     "text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+     "ocr_text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 2,
+     "role": "footnote",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "ونشأ",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        85,
+        40,
+        100,
+        60
+       ],
+       "tess": null,
+       "tc": 80.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "بها",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        75,
+        40,
+        85,
+        60
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "رحمه",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        60,
+        40,
+        75,
+        60
+       ],
+       "tess": null,
+       "tc": 92.0,
+       "res": null
+      },
+      {
+       "t": "الله",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        50,
+        40,
+        60,
+        60
+       ],
+       "tess": null,
+       "tc": 95.0,
+       "res": null
+      },
+      {
+       "t": "٢٤٢",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        40,
+        40,
+        50,
+        60
+       ],
+       "tess": null,
+       "why": [
+        "number",
+        "year"
+       ],
+       "sug": {
+        "t": "٢٤٣",
+        "src": "words",
+        "label": "من الحروف",
+        "words": "ثلاث واربعين ومايتين"
+       },
+       "res": null
+      },
+      {
+       "t": "ثلاث",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        30,
+        40,
+        40,
+        60
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "res": null
+      },
+      {
+       "t": "واربعين",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        15,
+        40,
+        30,
+        60
+       ],
+       "tess": null,
+       "tc": 88.0,
+       "res": null
+      },
+      {
+       "t": "ومايتين",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        0,
+        40,
+        15,
+        60
+       ],
+       "tess": null,
+       "tc": 86.0,
+       "res": null
+      }
+     ],
+     "gaps": [
+      {
+       "id": 9500,
+       "index": 3,
+       "after_t": "الله",
+       "text": "تعالى الاجابة",
+       "support": 0.33,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "id": 9103,
+     "order": 3,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "footnote",
+     "bbox": [
+      0,
+      60,
+      100,
+      80
+     ],
+     "text": "وفيها مغاص اللؤلؤ المعروف بالخاركي،",
+     "ocr_text": "وفيها مغاص اللؤلؤ المعروف بالخاركي،",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 1,
+     "role": "footnote",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "وفيها",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        80,
+        60,
+        100,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "مغاص",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        60,
+        60,
+        80,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "اللؤلؤ",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        40,
+        60,
+        60,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "المعروف",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        20,
+        60,
+        40,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "بالخاركي،",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        0,
+        60,
+        20,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      }
+     ],
+     "gaps": []
+    }
+   ]
+  }
+ },
+ {
+  "name": "undo the range (one step)",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/undo/"
+  },
+  "status": 200,
+  "response": {
+   "page": {
+    "id": 900,
+    "number": 1,
+    "book_id": 30,
+    "status": "ocr_done",
+    "status_label": "تم التعرّف",
+    "is_reviewed": false,
+    "text_state": "final",
+    "printed_number": "",
+    "n_unresolved": 14,
+    "reading": {
+     "readers": "two",
+     "partial": false,
+     "groups": 2,
+     "gaps": 2
+    },
+    "error": "",
+    "error_from": ""
+   },
+   "book": {
+    "id": 30,
+    "title": "كتاب الثقة",
+    "total_pages": 4,
+    "reviewed_pages": 0,
+    "unresolved_total": 15
+   },
+   "image": {
+    "display_url": null,
+    "scan_url": null,
+    "width": 200,
+    "height": 400
+   },
+   "regions": [
+    {
+     "id": 9000,
+     "kind": "body",
+     "label": "متن",
+     "bbox": [
+      0,
+      0,
+      100,
+      150
+     ]
+    },
+    {
+     "id": 9001,
+     "kind": "footnote",
+     "label": "حاشية",
+     "bbox": [
+      0,
+      160,
+      100,
+      200
+     ]
+    }
+   ],
+   "lines": [
+    {
+     "id": 9100,
+     "order": 0,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "footnote",
+     "bbox": [
+      0,
+      0,
+      100,
+      20
+     ],
+     "text": "قال يحيى فاضلا زاهدا ١٢٥ سنة",
+     "ocr_text": "قال يحيى فاضلا زاهدا ١٢٥ سنة",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 4,
+     "role": "footnote",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "قال",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        88,
+        0,
+        100,
+        20
+       ],
+       "tess": null,
+       "tc": 91.0,
+       "res": null
+      },
+      {
+       "t": "يحيى",
+       "alt": "يحيى",
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        70,
+        0,
+        88,
+        20
+       ],
+       "tess": "يحيى",
+       "tc": 88.0,
+       "why": [
+        "disagree"
+       ],
+       "orig": "يجي",
+       "pick": "vote",
+       "res": null
+      },
+      {
+       "t": "فاضلا",
+       "alt": "فاضل",
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        50,
+        0,
+        70,
+        20
+       ],
+       "tess": null,
+       "tc": 93.0,
+       "why": [
+        "disagree"
+       ],
+       "res": null
+      },
+      {
+       "t": "زاهدا",
+       "alt": "راهدا",
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        30,
+        0,
+        50,
+        20
+       ],
+       "tess": "زاهد",
+       "tc": 64.0,
+       "why": [
+        "disagree"
+       ],
+       "res": null
+      },
+      {
+       "t": "١٢٥",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        15,
+        0,
+        30,
+        20
+       ],
+       "tess": "١٢٠",
+       "tc": 71.0,
+       "why": [
+        "number"
+       ],
+       "res": null
+      },
+      {
+       "t": "سنة",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        0,
+        0,
+        15,
+        20
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "res": null
+      }
+     ],
+     "gaps": [
+      {
+       "id": 9501,
+       "index": -1,
+       "after_t": "",
+       "text": "وقد",
+       "support": 0.0,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "id": 9101,
+     "order": 1,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "body",
+     "bbox": [
+      0,
+      20,
+      100,
+      40
+     ],
+     "text": "وكان مилادية ※ ١٩٦٦ تعالى بطرابلس",
+     "ocr_text": "وكان مилادية ※ ١٩٦٦ تعالى بطرابلس",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 5,
+     "role": "body",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "وكان",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        85,
+        20,
+        100,
+        40
+       ],
+       "tess": "ركان",
+       "tc": 58.0,
+       "why": [
+        "alone"
+       ],
+       "res": null
+      },
+      {
+       "t": "مилادية",
+       "alt": "ميلادية",
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        65,
+        20,
+        85,
+        40
+       ],
+       "tess": "ميلادية",
+       "tc": 77.0,
+       "why": [
+        "script"
+       ],
+       "res": null
+      },
+      {
+       "t": "※",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        60,
+        20,
+        65,
+        40
+       ],
+       "tess": null,
+       "why": [
+        "script"
+       ],
+       "res": null
+      },
+      {
+       "t": "١٩٦٦",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        45,
+        20,
+        60,
+        40
+       ],
+       "tess": null,
+       "why": [
+        "number"
+       ],
+       "src": "kraken",
+       "qari": {
+        "t": "١٩٦٠",
+        "alt": "١٩٦٦",
+        "tess": null
+       },
+       "res": null
+      },
+      {
+       "t": "تعالى",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        30,
+        20,
+        45,
+        40
+       ],
+       "tess": null,
+       "tc": 82.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "بطرابلس",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        10,
+        20,
+        30,
+        40
+       ],
+       "tess": null,
+       "tc": 79.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "id": 9102,
+     "order": 2,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "body",
+     "bbox": [
+      0,
+      40,
+      100,
+      60
+     ],
+     "text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+     "ocr_text": "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 2,
+     "role": "verse",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "ونشأ",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        85,
+        40,
+        100,
+        60
+       ],
+       "tess": null,
+       "tc": 80.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "بها",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        75,
+        40,
+        85,
+        60
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 1,
+       "res": null
+      },
+      {
+       "t": "رحمه",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        60,
+        40,
+        75,
+        60
+       ],
+       "tess": null,
+       "tc": 92.0,
+       "res": null
+      },
+      {
+       "t": "الله",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        50,
+        40,
+        60,
+        60
+       ],
+       "tess": null,
+       "tc": 95.0,
+       "res": null
+      },
+      {
+       "t": "٢٤٢",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        40,
+        40,
+        50,
+        60
+       ],
+       "tess": null,
+       "why": [
+        "number",
+        "year"
+       ],
+       "sug": {
+        "t": "٢٤٣",
+        "src": "words",
+        "label": "من الحروف",
+        "words": "ثلاث واربعين ومايتين"
+       },
+       "res": null
+      },
+      {
+       "t": "ثلاث",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        30,
+        40,
+        40,
+        60
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "res": null
+      },
+      {
+       "t": "واربعين",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        15,
+        40,
+        30,
+        60
+       ],
+       "tess": null,
+       "tc": 88.0,
+       "res": null
+      },
+      {
+       "t": "ومايتين",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        0,
+        40,
+        15,
+        60
+       ],
+       "tess": null,
+       "tc": 86.0,
+       "res": null
+      }
+     ],
+     "gaps": [
+      {
+       "id": 9500,
+       "index": 3,
+       "after_t": "الله",
+       "text": "تعالى الاجابة",
+       "support": 0.33,
+       "status": "open"
+      }
+     ]
+    },
+    {
+     "id": 9103,
+     "order": 3,
+     "region_id": 9000,
+     "region_kind": "body",
+     "kind": "body",
+     "bbox": [
+      0,
+      60,
+      100,
+      80
+     ],
+     "text": "وفيها مغاص اللؤلؤ المعروف بالخاركي،",
+     "ocr_text": "وفيها مغاص اللؤلؤ المعروف بالخاركي،",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 1,
+     "role": "body",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "وفيها",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        80,
+        60,
+        100,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "مغاص",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        60,
+        60,
+        80,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "اللؤلؤ",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        40,
+        60,
+        60,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "المعروف",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        20,
+        60,
+        40,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      },
+      {
+       "t": "بالخاركي،",
+       "alt": null,
+       "conf": "low",
+       "digit": false,
+       "bbox": [
+        0,
+        60,
+        20,
+        80
+       ],
+       "tess": null,
+       "tc": 85.0,
+       "why": [
+        "missing"
+       ],
+       "ins": 2,
+       "res": null
+      }
+     ],
+     "gaps": []
+    },
+    {
+     "id": 9104,
+     "order": 4,
+     "region_id": 9001,
+     "region_kind": "footnote",
+     "kind": "body",
+     "bbox": [
+      0,
+      80,
+      100,
+      100
+     ],
+     "text": "(١) انظر :",
+     "ocr_text": "(١) انظر :",
+     "is_manual": false,
+     "is_reviewed": false,
+     "n_low": 1,
+     "role": "heading",
+     "v": "2026-09-26T15:20:00.000000+00:00",
+     "tokens": [
+      {
+       "t": "(١)",
+       "alt": null,
+       "conf": "low",
+       "digit": true,
+       "bbox": [
+        90,
+        160,
+        100,
+        180
+       ],
+       "tess": null,
+       "why": [
+        "number"
+       ],
+       "res": null
+      },
+      {
+       "t": "انظر",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        70,
+        160,
+        90,
+        180
+       ],
+       "tess": null,
+       "tc": 94.0,
+       "res": null
+      },
+      {
+       "t": ":",
+       "alt": null,
+       "conf": "high",
+       "digit": false,
+       "bbox": [
+        66,
+        160,
+        70,
+        180
+       ],
+       "tess": null,
+       "tc": 90.0,
+       "res": null
+      }
+     ],
+     "gaps": []
+    }
+   ],
+   "counts": {
+    "low_total": 14,
+    "unresolved": 14,
+    "resolved": 0,
+    "words": 10,
+    "groups": 2,
+    "gaps": 2
+   },
+   "labels": {
+    "primary": "Qari v0.3",
+    "secondary": "Qari v0.2"
+   },
+   "nav": {
+    "prev_url": null,
+    "next_url": "/books/30/review/2/",
+    "next_review_url": "/books/30/review/next/?after=1",
+    "dashboard_url": "/books/30/"
+   },
+   "urls": {
+    "payload": "/api/pages/900/review/",
+    "resolve": "/api/lines/__id__/resolve/",
+    "edit": "/api/lines/__id__/edit/",
+    "delete": "/api/lines/__id__/delete/",
+    "merge": "/api/lines/__id__/merge/",
+    "delete_word": "/api/lines/__id__/delete-word/",
+    "role": "/api/lines/__id__/role/",
+    "insert": "/api/pages/900/lines/",
+    "undo": "/api/pages/900/undo/",
+    "approve": "/api/pages/900/approve/",
+    "reopen": "/api/pages/900/reopen/",
+    "filmstrip": "/api/books/30/filmstrip/",
+    "insertion": "/api/pages/900/insertions/__group__/",
+    "gap_accept": "/api/gaps/__id__/accept/",
+    "gap_dismiss": "/api/gaps/__id__/dismiss/",
+    "roles": "/api/pages/900/roles/"
+   },
+   "can_edit": true
+  }
+ }
+]

@@ -1063,6 +1063,13 @@ def sequence_issues_of(rows: Sequence[tuple[int, str]]) -> dict[int, str]:
     return issues
 
 
+def _readers(page: Page) -> str:
+    """How the page was read (D73, `ocr.services.readers_of`): two / one / tesseract, '' before 7b."""
+    from ocr.services import readers_of  # other app: lazy import
+
+    return readers_of(page.reading)
+
+
 def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> dict:
     """One thumbnail tile of the dashboard grid (also the per-page item of the progress API).
 
@@ -1098,6 +1105,8 @@ def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> di
         "scan_thumb_url": _file_url(page.scan_thumbnail),
         "url": reverse("books:page_detail", args=[page.book_id, page.number]),
         "n_unresolved": page.n_unresolved,
+        # How the page was read (D73): the half-disc marks one reader ('' before 7b).
+        "readers": _readers(page),
         "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
         "review_url": reverse("review:page", args=[page.book_id, page.number]),
         # Image size for the stacked view's aspect-ratio placeholders (cleaned image first, then the scan).
@@ -1124,6 +1133,9 @@ def _compact_tile(page: Page, sequence_issue: str, failed: bool, retry_stage: st
     }
     if n_flags:
         tile["flag_labels"] = [item["label"] for item in flag_items(page.attention_flags)]
+    readers = _readers(page)
+    if readers and readers != "two":  # the compact tile carries only a weak reading (the half-disc)
+        tile["readers"] = readers
     if failed:
         tile["error_headline"] = _headline(page.error_message)
         tile["retry_stage"] = retry_stage
@@ -1157,12 +1169,18 @@ def page_tiles(book: Book, compact: bool = False) -> list[dict]:
 
 
 def attention_pages(book: Book) -> list[dict]:
-    """Non-excluded pages with attention flags, an error or a page-numbering issue, for the dashboard."""
+    """Non-excluded pages with attention flags, an error or a page-numbering issue, for the dashboard.
+
+    An approved page (`reviewed`, `assembled`) leaves the list (D73): the reviewer has looked at it.
+    It stays only for a page-numbering issue, which approval does not settle.
+    """
     items = []
     issues = page_sequence_issues(book)
     pages = book.pages.filter(is_excluded=False).defer(*_TILE_DEFERRED[:4]).order_by("number")
     for page in pages:
         if not page.attention_flags and page.status != Page.Status.ERROR and page.pk not in issues:
+            continue
+        if page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED) and page.pk not in issues:
             continue
         items.append(
             {
@@ -1646,7 +1664,7 @@ def book_sheets(book: Book, first: int, last: int, guides: bool = False) -> dict
         rows = (
             Line.objects.filter(page_id__in=page_ids)
             .select_related("region")
-            .only("page_id", "order", "bbox", "tokens", "region__kind")
+            .only("page_id", "order", "bbox", "tokens", "role", "region__kind")
             .order_by("page_id", "order", "id")
         )
         for line in rows:
@@ -1695,7 +1713,7 @@ def _sheet(
 ) -> dict:
     """One page of `book_sheets` from its already loaded lines, regions and fast runs (`text=False`:
     no provisional lines, which need the fast runs)."""
-    from ocr.services import SKIPPED_KINDS
+    from ocr.services import SKIPPED_KINDS, line_kind
 
     pre = _preprocess_of(page)
     width = (pre.output_width if pre is not None else 0) or page.width
@@ -1723,7 +1741,9 @@ def _sheet(
             {
                 "id": line.pk,
                 "order": line.order,
-                "region_kind": line.region.kind if line.region_id and line.region else "body",
+                "region_kind": (kind := line.region.kind if line.region_id and line.region else "body"),
+                # what the line is in the book (D74): the footnote role makes a note, `main` body text
+                "kind": line_kind(line.role, kind),
                 "bbox": _ratio_box(line.bbox, width, height),
                 "tokens": [
                     {"t": token.get("t", ""), "conf": token.get("conf", "high"), "res": token.get("res")}

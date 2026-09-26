@@ -55,11 +55,17 @@ class Line(models.Model):
     """A visual line of a page with its tokens, alternatives and review state."""
 
     class Role(models.TextChoices):
-        """What the line is in the book, set by a reviewer (D32); assembly uses it for headings."""
+        """What the line is in the book, set by a reviewer (D32, D74). `body` follows the line's region
+        (a line of a footnote region is a note); `footnote` makes a body-region line a note, `main` pulls
+        a footnote-region line back into the body, `verse` keeps the line on its own in assembly.
+        `ocr.services.line_kind` gives the effective kind; the review menu offers the effective choice."""
 
         BODY = "body", "محتوى"
         HEADING = "heading", "عنوان رئيسي"
         SUBHEADING = "subheading", "عنوان فرعي"
+        VERSE = "verse", "شعر"
+        FOOTNOTE = "footnote", "حاشية"
+        MAIN = "main", "محتوى"
 
     page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="lines")
     order = models.PositiveIntegerField("الترتيب")
@@ -93,3 +99,52 @@ class Line(models.Model):
 
     def __str__(self) -> str:
         return f"line {self.order} of page {self.page_id}"
+
+
+class TextGap(models.Model):
+    """Text a model may have skipped, offered to the reviewer and never part of the text (D72).
+
+    7b writes only `kind="words"`: a run of Qari v0.2 words with no Qari v0.3 counterpart that
+    Tesseract does not support (`ocr.flags.secondary_only_runs`). It sits after the token `index` of
+    `line` (−1 = before its first token); `after_t` keeps that token's text so the review services can
+    re-anchor it after an edit. `finalize_page` replaces a page's gaps with its lines; a page with
+    review work keeps them. `accept_gap` inserts the words (`inserted`), `dismiss_gap` drops the offer.
+    """
+
+    class Kind(models.TextChoices):
+        WORDS = "words", "كلمات"
+
+    class Status(models.TextChoices):
+        OPEN = "open", "مفتوح"
+        INSERTED = "inserted", "أُدرج"
+        DISMISSED = "dismissed", "تُجوهل"
+
+    page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="gaps")
+    line = models.ForeignKey(
+        Line, verbose_name="السطر", null=True, blank=True, on_delete=models.SET_NULL, related_name="gaps"
+    )
+    index = models.IntegerField("بعد الكلمة", default=-1)
+    after_t = models.CharField("نص الكلمة السابقة", max_length=200, blank=True)
+    kind = models.CharField("النوع", max_length=10, choices=Kind.choices, default=Kind.WORDS)
+    text = models.TextField("النص المقترح")
+    source = models.CharField("المصدر", max_length=20, default="secondary")
+    support = models.FloatField("تأييد Tesseract", default=0.0)
+    status = models.CharField("الحالة", max_length=10, choices=Status.choices, default=Status.OPEN)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="حسمه",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField("حُسم في", null=True, blank=True)
+    created_at = models.DateTimeField("أُنشئ في", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "نص مقترح"
+        verbose_name_plural = "نصوص مقترحة"
+        ordering = ["page", "line__order", "index", "id"]
+
+    def __str__(self) -> str:
+        return f"gap after {self.index} on line {self.line_id} of page {self.page_id}"

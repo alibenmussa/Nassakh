@@ -2248,3 +2248,137 @@ def test_guides_mode_logic_under_node_on_the_contract_fixtures(editor_client, tm
         "تُعاد 5 صفحات من هذه المرحلة، وتبقى صفحة واحدة معتمدة كما هي.",
         "يُعاد التعرّف عليها بالنماذج: نحو دقيقتين على هذا الجهاز.",
     ]
+
+
+# ---------------------------------------------------------- 7b: the half-disc of a page one model read (D73)
+
+
+def test_tile_and_thumb_shells_carry_the_reader_mark(editor_client):
+    """The grid tile marks a page one model read with a small half-disc before its status dot (the danger
+    tint for Tesseract alone, hidden otherwise); the tile and thumb shells carry it hidden for books.js."""
+
+    def tile(readers):
+        t = {"id": 5, "number": 3, "status": "ocr_done", "status_label": "تم التعرّف", "url": "/p/3/"}
+        t["readers"] = readers
+        html = render_to_string("books/_page_tile.html", {"t": t, "book": None, "role": "proofreader"})
+        return _between(html, '<span class="page-tile-marks">', '<span class="dot')
+
+    one, tesseract, two = tile("one"), tile("tesseract"), tile("two")
+    assert (
+        '<span class="mark-reader" title="قراءة واحدة"><span class="sr-only">قراءة واحدة</span></span>' in one
+    )
+    assert (
+        '<span class="mark-reader is-tesseract" title="نص Tesseract وحده">'
+        '<span class="sr-only">نص Tesseract وحده</span></span>' in tesseract
+    )
+    assert '<span class="mark-reader" hidden>' in two and tile("") == two
+    book, _ = _book(
+        [(Page.Status.OCR_DONE, "final"), (Page.Status.OCR_DONE, "final")], Book.Status.READY_FOR_REVIEW
+    )
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    shell = _between(body, '<template id="tile-shell">', "</template>")
+    assert '<span class="page-tile-marks"><span class="mark-reader" hidden>' in shell
+    thumb = _between(body, '<template id="thumb-shell">', "</template>")
+    assert '<span class="mark-reader" hidden aria-hidden="true"></span>' in thumb
+    css = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
+    assert ".rv-thumb .mark-reader, .bk-thumb .mark-reader { position: absolute; top: 3px;" in css
+    assert ".mark-reader[hidden] { display: none; }" in css
+
+
+READER_RUN = r"""
+(async () => {
+  const cfg = clone(FX['dashboard_config.json'].started);
+  const page = (id, n, readers, extra = {}) => Object.assign({ id, number: n, status: 'ocr_done', status_label: 'تم التعرّف', text_state: 'final', n_unresolved: 2, is_excluded: false, error: false, width: 1000, height: 1500, thumb_url: `/t/${n}.webp`, readers }, extra);
+  const pages = [page(901, 1, 'one'), page(902, 2, 'tesseract'), page(903, 3, 'two'), page(904, 4, '', { status: 'reviewed', is_reviewed: true, n_unresolved: 0 })];
+  const root = new E('div'); const layout = new E('div'); layout.className = 'bk-layout';
+  const stack = new E('div'); stack.setAttribute('data-sheet-stack', ''); const grid = new E('div'); grid.setAttribute('data-page-grid', '');
+  const film = new E('div'); film.setAttribute('data-film-track', '');
+  layout.appendChild(stack); layout.appendChild(grid); layout.appendChild(film); root.appendChild(layout);
+  pages.forEach((p) => {
+    const shell = build(DATA.templates['sheet-shell']).children[0]; shell.dataset.pageId = String(p.id); stack.appendChild(shell);
+    const tile = build(DATA.templates['tile-shell']).children[0]; tile.dataset.pageId = String(p.id); grid.appendChild(tile);
+  });
+  const d = reg.bookDashboard(Object.assign(cfg, { progressUrl: '/api/books/25/progress/', sheetsUrl: '/api/books/25/sheets/', bookUrl: '/books/25/', canEdit: true, bookId: 25,
+    active: false, status: 'ready_for_review', statusLabel: 'بانتظار المراجعة', stages: [], byStatus: { ocr_done: 3, reviewed: 1 }, total: 4, pages, urls: { page: '/books/25/pages/__n__/', review: '/books/25/review/__n__/', rerun: '/books/25/pages/__n__/rerun/', exclude: '/books/25/pages/__n__/exclude/' } }));
+  d.$el = root; d.$watch = () => {}; d.$nextTick = (fn) => fn(); d.$refs = {};
+  d.init(); await settle();
+  const tiles = () => grid.children.map((t) => { d.patchTile(t, d.page(t.dataset.pageId)); const m = t.querySelector('.mark-reader'); return [m.hidden, m.classList.contains('is-tesseract'), m.getAttribute('title'), m.querySelector('.sr-only').textContent]; });
+  const thumbs = () => film.children.map((t) => { const m = t.querySelector('.mark-reader'); return [Number(t.dataset.number), m.hidden, m.classList.contains('is-tesseract'), t.getAttribute('title')]; });
+  out.tiles = tiles();
+  out.thumbs = thumbs();
+  // the compact poll names the readers only for one reader or Tesseract: page 1 read again by both models,
+  // page 3 now read by one
+  d.apply({ total: 4, percent: 100, flags: 0, status: 'ready_for_review', status_label: 'بانتظار المراجعة', dot: 'dot-accent', by_status: {}, active: false,
+    pages: [{ id: 901, number: 1, status: 'ocr_done', n_unresolved: 1 }, { id: 903, number: 3, status: 'ocr_done', n_unresolved: 2, readers: 'one' }] });
+  await settle();
+  out.polledTiles = tiles();
+  out.polledThumbs = thumbs();
+  // D1's contract tiles (review/fixtures/trust/tile.json): the full tile of page 901, then the compact poll
+  const TT = DATA.trust;
+  const full = TT['page_tile (page 901, full)'];
+  const root2 = new E('div'); const grid2 = new E('div'); grid2.setAttribute('data-page-grid', ''); const film2 = new E('div'); film2.setAttribute('data-film-track', '');
+  root2.appendChild(grid2); root2.appendChild(film2);
+  const two = Object.assign({}, full, { id: 900, number: 1, readers: 'two', flag_labels: ['نص قد يكون ناقصًا'], n_unresolved: 14 });
+  [two, full].forEach((p) => { const tile = build(DATA.templates['tile-shell']).children[0]; tile.dataset.pageId = String(p.id); grid2.appendChild(tile); });
+  const d2 = reg.bookDashboard(Object.assign(clone(FX['dashboard_config.json'].started), { progressUrl: '/p', sheetsUrl: '/s', bookUrl: '/books/30/', canEdit: true, bookId: 30, active: false, status: 'ready_for_review', statusLabel: '', stages: [], byStatus: {}, total: 2, pages: [two, full], urls: { page: '/books/30/pages/__n__/', review: '/books/30/review/__n__/', rerun: '/r/__n__/', exclude: '/x/__n__/' } }));
+  d2.$el = root2; d2.$watch = () => {}; d2.$nextTick = (fn) => fn(); d2.$refs = {}; d2.init(); await settle();
+  const marks2 = () => grid2.children.map((t) => { d2.patchTile(t, d2.page(t.dataset.pageId)); return t.querySelector('.mark-reader').hidden; });
+  out.contract = { tiles: marks2(), thumbs: film2.children.map((t) => t.querySelector('.mark-reader').hidden) };
+  d2.apply({ total: 2, percent: 100, flags: 2, status: 'ready_for_review', status_label: '', dot: 'dot-accent', by_status: {}, active: false,
+    pages: [TT['page_tile (page 900, compact: no readers key for two)'], Object.assign({}, TT['page_tile (page 901, compact)'], { n_unresolved: 0 })] });
+  await settle();
+  out.contractPolled = { tiles: marks2(), thumbs: film2.children.map((t) => [t.querySelector('.mark-reader').hidden, t.getAttribute('title')]) };
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_reader_mark_on_tiles_and_thumbs_under_node(editor_client, tmp_path):
+    """books.js patches the half-disc on the grid tiles and the filmstrip's thumbs (D73) from the full tile at
+    first paint and from the compact poll, which names the readers only for one reader or Tesseract."""
+    book, _ = _book([(Page.Status.OCR_DONE, "final")], Book.Status.READY_FOR_REVIEW)
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    data = {
+        "templates": {name: _template(body, name) for name in ("sheet-shell", "tile-shell", "thumb-shell")},
+        "fixtures": {
+            path.name: json.loads(path.read_text(encoding="utf-8")) for path in FIXTURES.glob("*.json")
+        },
+        "trust": json.loads(
+            (ROOT / "review" / "fixtures" / "trust" / "tile.json").read_text(encoding="utf-8")
+        ),
+    }
+    (tmp_path / "data.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(
+        GUIDES_HARNESS[: GUIDES_HARNESS.index("(async () => {")] + READER_RUN, encoding="utf-8"
+    )
+    files = [str(JS / name) for name in ("ui.js", "keys.js", "books.js")]
+    run = subprocess.run(
+        ["node", str(harness), str(tmp_path / "data.json"), *files],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    one = [False, False, "قراءة واحدة", "قراءة واحدة"]
+    tess = [False, True, "نص Tesseract وحده", "نص Tesseract وحده"]
+    none = [True, False, None, "قراءة واحدة"]  # hidden; its screen-reader words wait for the next patch
+    # tiles: [hidden, danger tint, title, screen-reader words]; thumbs: [number, hidden, danger tint, title]
+    assert out["tiles"] == [one, tess, none, none]
+    assert out["thumbs"] == [
+        [1, False, False, "صفحة 1 — تم التعرّف · قراءة واحدة"],
+        [2, False, True, "صفحة 2 — تم التعرّف · نص Tesseract وحده"],
+        [3, True, False, "صفحة 3 — تم التعرّف"],
+        [4, True, False, "صفحة 4 — تم التعرّف"],
+    ]
+    # the poll: page 1 now read by both models (no `readers`), page 3 by one
+    assert out["polledTiles"] == [none, tess, one, none]
+    assert [row[1] for row in out["polledThumbs"]] == [True, False, False, True]
+    assert out["polledThumbs"][2][3] == "صفحة 3 — تم التعرّف · قراءة واحدة"
+    # on D1's contract tiles: page 901 (one reader) keeps its mark through the compact poll, page 900 has none
+    assert out["contract"] == {"tiles": [True, False], "thumbs": [True, False]}
+    assert out["contractPolled"] == {
+        "tiles": [True, False],
+        "thumbs": [[True, "صفحة 1 — تم التعرّف"], [False, "صفحة 2 — تم التعرّف · قراءة واحدة"]],
+    }

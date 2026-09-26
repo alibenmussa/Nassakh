@@ -1,0 +1,139 @@
+{
+ "readings": {
+  "two": {
+   "page": {
+    "id": 900,
+    "number": 1,
+    "book_id": 30,
+    "status": "ocr_done",
+    "status_label": "تم التعرّف",
+    "is_reviewed": false,
+    "text_state": "final",
+    "printed_number": "",
+    "n_unresolved": 14,
+    "reading": {
+     "readers": "two",
+     "partial": false,
+     "groups": 2,
+     "gaps": 2
+    },
+    "error": "",
+    "error_from": ""
+   },
+   "counts": {
+    "low_total": 14,
+    "unresolved": 14,
+    "resolved": 0,
+    "words": 10,
+    "groups": 2,
+    "gaps": 2
+   }
+  },
+  "one": {
+   "page": {
+    "id": 901,
+    "number": 2,
+    "book_id": 30,
+    "status": "ocr_done",
+    "status_label": "تم التعرّف",
+    "is_reviewed": false,
+    "text_state": "final",
+    "printed_number": "",
+    "n_unresolved": 1,
+    "reading": {
+     "readers": "one",
+     "partial": true,
+     "groups": 0,
+     "gaps": 0
+    },
+    "error": "",
+    "error_from": ""
+   },
+   "counts": {
+    "low_total": 1,
+    "unresolved": 1,
+    "resolved": 0,
+    "words": 1,
+    "groups": 0,
+    "gaps": 0
+   }
+  },
+  "tesseract": {
+   "page": {
+    "id": 902,
+    "number": 3,
+    "book_id": 30,
+    "status": "ocr_done",
+    "status_label": "تم التعرّف",
+    "is_reviewed": false,
+    "text_state": "final",
+    "printed_number": "",
+    "n_unresolved": 0,
+    "reading": {
+     "readers": "tesseract",
+     "partial": false,
+     "groups": 0,
+     "gaps": 0
+    },
+    "error": "",
+    "error_from": ""
+   },
+   "counts": {
+    "low_total": 0,
+    "unresolved": 0,
+    "resolved": 0,
+    "words": 0,
+    "groups": 0,
+    "gaps": 0
+   }
+  },
+  "before_7b": {
+   "page": {
+    "id": 903,
+    "number": 4,
+    "book_id": 30,
+    "status": "ocr_done",
+    "status_label": "تم التعرّف",
+    "is_reviewed": false,
+    "text_state": "final",
+    "printed_number": "",
+    "n_unresolved": 0,
+    "reading": {},
+    "error": "",
+    "error_from": ""
+   },
+   "counts": {
+    "low_total": 0,
+    "unresolved": 0,
+    "resolved": 0,
+    "words": 0,
+    "groups": 0,
+    "gaps": 0
+   }
+  }
+ },
+ "header": {
+  "two": {
+   "pill": null,
+   "banner": null
+  },
+  "one": {
+   "pill": {
+    "text": "قراءة واحدة",
+    "level": "warning"
+   },
+   "banner": "قرأ هذه الصفحةَ نموذجٌ واحد، فالعلامات فيها أقل من الحقيقة. قابِل كل سطر بالصورة."
+  },
+  "tesseract": {
+   "pill": {
+    "text": "نص Tesseract وحده",
+    "level": "danger"
+   },
+   "banner": "تعذّرت قراءة هذه الصفحة بالنموذجين، ونصّها من Tesseract وحده. قابِل كل سطر بالصورة."
+  },
+  "before_7b": {
+   "pill": null,
+   "banner": null
+  }
+ }
+}

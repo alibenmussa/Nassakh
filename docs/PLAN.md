@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phases 1–6 built and reviewed; Phase 7 approved 2026-09-26 (D64–D79) and built in four sub-phases: 7a («التخطيط» first, then «المعالجة»; one keymap; a safe round trip) built and integrated 2026-09-26, awaiting the owner's hand test.** Phase specs in `docs/PHASE2_SPEC.md` … `docs/PHASE7_SPEC.md` and `docs/DASHBOARD_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
+Status: **Phases 1–6 built and reviewed; Phase 7 approved 2026-09-26 (D64–D79) and built in four sub-phases: 7a («التخطيط» first, then «المعالجة»; one keymap; a safe round trip) built and integrated 2026-09-26; 7b (trust in the text; footnote and verse roles) built and integrated 2026-09-26, awaiting the owner's hand test.** Phase specs in `docs/PHASE2_SPEC.md` … `docs/PHASE7_SPEC.md` and `docs/DASHBOARD_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 
@@ -209,7 +209,12 @@ Spec `docs/PHASE7_SPEC.md`, decisions D64–D79. Four sub-phases, each built onl
 (`Book.awaits_ocr_start`, D64) until «بدء المعالجة»; the dashboard's «التخطيط» mode replaces the guides screen (D67);
 the footnote rule accepts thick bars (D68); one keymap by physical key, Arabic layout included (D69); no silent chapter
 replacement, approval is not drift, live drift on the book page (D70); re-run and delete dialogs, undo on exclusions.
-**7b** trust in the text (flag policy v2, words only the second model read, honest page state, footnote and verse roles).
+**7b** (built 2026-09-26) every flag has a reason and three readers decide: punctuation is never flagged, a Western number
+all three read alike is sure, foreign letters are flagged, and where Tesseract backs Qari v0.2 its reading goes into the
+text, still open (D71). Words only the second model read come back as a group or a suggestion (D72). Pages one model
+read say so, and approved pages leave the attention list (D73). «حاشية» and «شعر» are line roles, with the continuation
+guard and the stray note (D74), and readiness names doubtful text (D75). Also `rebuild_lines --report` before any write,
+the PDF text layer for Chrome (Q1), and years checked against the number in words.
 **7c** navigation (the stage bar, review's origin), the page-by-page merge, fix everywhere. **7d** designed after 7c's test.
 
 ### Later (not scheduled)

@@ -16,7 +16,9 @@ class LineRevision(models.Model):
     `text`, `ocr_text`, `tokens`, `confidence`, `is_manual`, `is_reviewed`, `n_low`); `before` is
     null for an insert and `after` is null for a delete. For approve / reopen they hold the page's
     status fields and the lines' `is_reviewed` values. `undone` marks a revision reverted by undo
-    (or made obsolete by a new OCR pass).
+    (or made obsolete by a new OCR pass). A `gap` revision records a suggestion decided without a line
+    change (`before` / `after` hold the gap's status); `accept_gap` records an `edit` whose `after`
+    carries `{"gap": id}` so undo reopens the gap.
     """
 
     class Action(models.TextChoices):
@@ -29,6 +31,7 @@ class LineRevision(models.Model):
         ROLE = "role", "نوع السطر"
         APPROVE = "approve", "اعتماد"
         REOPEN = "reopen", "إعادة فتح"
+        GAP = "gap", "نص مقترح"
 
     page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="revisions")
     line = models.ForeignKey(
@@ -52,6 +55,9 @@ class LineRevision(models.Model):
     )
     created_at = models.DateTimeField("في", auto_now_add=True)
     undone = models.BooleanField("تُراجع عنه", default=False)
+    # Revisions made by one action over several lines (a group kept or dropped, a range of roles)
+    # share a batch; `undo_last` reverts the whole batch at once.
+    batch = models.UUIDField("الدفعة", null=True, blank=True, db_index=True)
 
     class Meta:
         verbose_name = "تعديل مراجعة"

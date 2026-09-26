@@ -145,6 +145,8 @@
     background: rgba(37, 99, 235, 0.12);
     box-shadow: 0 0 0 1.5px rgba(37, 99, 235, 0.7), 0 0 0 6px rgba(37, 99, 235, 0.14), 0 0 18px 4px rgba(37, 99, 235, 0.22);
   }
+  /* D72: the words only the second reading has, dotted like their line in the column */
+  .rv-box.is-group { box-shadow: none; border-bottom: 2px dotted rgba(217, 119, 6, 0.6); }
   /* a box the alignment is unsure of (token `bq: "weak"`) is drawn dashed */
   .rv-box.is-weak.is-open { box-shadow: none; border-bottom: 2px dashed rgba(217, 119, 6, 0.55); }
   .rv-box.is-weak.is-hot { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.14); outline: 1.5px dashed rgba(37, 99, 235, 0.7); }
@@ -225,6 +227,27 @@
   .rv-tok.is-hot { background: var(--color-accent-soft); }
   .rv-tok.is-focus, .rv-tok:focus-visible { background: var(--color-accent-soft); box-shadow: var(--ring); }
   .rv-tok.is-digit { font-variant-numeric: tabular-nums; }
+  /* D72: a group of added words is one dotted underline (its inner spaces too); it lights up as one while
+     any of its words is focused. A possible gap is a thin bar ▏ between two words, amber at rest. */
+  .rv-tok.is-group { cursor: pointer; border-bottom: 1.5px dotted rgba(217, 119, 6, 0.8); }
+  .rv-sep.is-group { border-bottom: 1.5px dotted rgba(217, 119, 6, 0.8); }
+  .rv-tok.is-group-focus, .rv-sep.is-group-focus { background: rgba(37, 99, 235, 0.06); }
+  .rv-gap {
+    position: relative;
+    display: inline-block;
+    width: 2px;
+    height: 1.05em;
+    margin-inline: 2px 3px;
+    vertical-align: -0.18em;
+    border-radius: 1px;
+    background: rgba(217, 119, 6, 0.5);
+    cursor: pointer;
+    outline: none;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+  }
+  .rv-gap::before { content: ""; position: absolute; inset: -3px -6px; } /* a hit area wider than the bar */
+  .rv-gap:hover, .rv-gap.is-hot { background: var(--color-warning); }
+  .rv-gap.is-focus, .rv-gap:focus-visible { background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
   /* a word lands: the amber underline turns green and fades while a small check blooms at its end (≤ 400 ms) */
   .rv-tok.is-flash { animation: rv-tok-land 400ms ease-out both; }
   .rv-tok.is-flash::after {
@@ -271,6 +294,9 @@
   .rv-legend { display: flex; align-items: center; gap: 6px; margin-top: 24px; }
   .rv-legend .kbd { margin: 0 1px; }
   .rv-legend-swatch { flex: none; font-size: 13px; line-height: 1.3; color: var(--color-text); border-bottom: 1.5px solid var(--color-warning); }
+  .rv-legend-more { margin-top: 6px; }
+  .rv-legend-swatch.is-group { border-bottom-style: dotted; }
+  .rv-legend-gap { flex: none; display: inline-block; width: 2px; height: 1.05em; margin-inline: 4px; vertical-align: -0.18em; border-radius: 1px; background: rgba(217, 119, 6, 0.5); }
   .rv-empty { padding-block: 12px; }
 
   /* readings popover: rows with key hints, then a correction input */
@@ -287,6 +313,8 @@
     animation: rv-pop-in 150ms ease-out both;
   }
   .rv-pop-title { padding: 4px 8px 6px; font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
+  /* D71: why the word is marked, one quiet line under the title */
+  .rv-pop-reason { margin: -2px 8px 6px; font-size: 12px; line-height: 1.55; color: var(--color-text-2); overflow-wrap: anywhere; }
   .rv-opt {
     display: flex;
     align-items: center;
@@ -305,6 +333,12 @@
   .rv-opt-value { flex: 1; min-width: 0; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
   .rv-opt.is-current .rv-opt-value { font-weight: 500; }
   .rv-opt-label { flex: none; font-size: 11.5px; color: var(--color-text-3); white-space: nowrap; }
+  /* «● في النص»: the reading the text holds now (Enter confirms it) */
+  .rv-opt-now { flex: none; font-size: 11px; color: var(--color-accent-text); white-space: nowrap; }
+  /* a group's two actions and a gap's field, in the popover's rhythm */
+  .rv-pop-acts, .rv-pop-gap { display: flex; flex-direction: column; gap: 2px; }
+  .rv-pop-gap .rv-typed { padding-top: 2px; }
+  .rv-act-main { color: var(--color-text); font-weight: 500; }
   .rv-pop-note { margin: 2px 8px 4px; font-size: 11.5px; color: var(--color-warning-text); }
   /* D31/D32 word actions live in a second-level menu «إجراءات أخرى» beside the popover */
   .rv-pop.is-above { transform-origin: bottom right; animation-name: rv-pop-in-up; }
@@ -340,6 +374,11 @@
   .rv-line.is-subheading .rv-line-text { font-size: 1.08em; font-weight: 600; }
   .rv-role-tag { margin-inline-start: 8px; vertical-align: middle; font-size: 11px; font-weight: 400; }
   .rv-role-check { display: inline-block; width: 14px; color: var(--color-accent-text); }
+  /* D74: a ⇧-click range of lines, whose role the line menu sets together */
+  .rv-line.is-selected { background: var(--color-accent-soft); }
+  .rv-line.is-selected .rv-line-num { color: var(--color-accent-text); }
+  .rv-range { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+  .rv-range-clear { width: 22px; height: 22px; }
   .rv-pop-sep { height: 1px; margin: 4px -6px 8px; background: var(--color-border); }
   .rv-typed { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 2px; }
   .rv-typed .rv-pop-sep { flex: 0 0 calc(100% + 12px); margin-inline: -8px; }
@@ -463,6 +502,23 @@
     font-variant-numeric: tabular-nums;
     box-shadow: 0 0 0 2px var(--color-bg-subtle);
   }
+
+  /* D73: a small half-disc marks a page one model read (Tesseract alone: the danger tint). One mark for review's
+     filmstrip (top-start corner), the dashboard's filmstrip (the same corner) and its grid tiles (before the
+     status dot); it lives here, with the review screen that defines the look, for all three. */
+  .mark-reader {
+    display: inline-block;
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border: 1.25px solid var(--color-warning);
+    border-radius: var(--radius-pill);
+    background: linear-gradient(90deg, var(--color-warning) 50%, var(--color-surface) 50%);
+  }
+  .mark-reader.is-tesseract { border-color: var(--color-danger); background: linear-gradient(90deg, var(--color-danger) 50%, var(--color-surface) 50%); }
+  .mark-reader[hidden] { display: none; }
+  .rv-thumb .mark-reader, .bk-thumb .mark-reader { position: absolute; top: 3px; inset-inline-start: 3px; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85); }
+  .page-tile-marks { display: inline-flex; align-items: center; gap: 5px; }
 
   /* ------------------------------------------------------------ toast, dialogs */
   .rv-toast { z-index: 55; }

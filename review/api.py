@@ -1,9 +1,10 @@
 """JSON endpoints of the review screen (DRF function views, session auth, CSRF as in Phase 2).
 
 GETs need a login; POSTs need a reviewer role (`core.permissions.CanReview`). Refused actions
-answer 400 `{"message": <Arabic>}`; an approval blocked by unresolved words answers 409
-`{"unresolved", "message"}`. Line actions may carry what the client saw: `t` (and `t_next` for a
-merge), the word at `index`, and `v`, the line's version from its payload, for whole-line actions.
+answer 400 `{"message": <Arabic>}`; an approval blocked by open items answers 409
+`{"unresolved", "words", "groups", "gaps", "message"}`. Line actions may carry what the client saw:
+`t` (and `t_next` for a merge), the word at `index`, and `v`, the line's version from its payload,
+for whole-line actions.
 When the line no longer matches (changed in another tab, or an earlier queued action failed) the
 answer is 409 `{"message", "line"}` with the line as it is now; without them nothing is checked.
 
@@ -13,8 +14,12 @@ answer is 409 `{"message", "line"}` with the line as it is now; without them not
 - POST /api/lines/<id>/delete/      `{v?}` → `{deleted_id, counts}`
 - POST /api/lines/<id>/merge/       `{index, t?, t_next?}` → `{line, counts}`
 - POST /api/lines/<id>/delete-word/ `{index, t?}` → `{line, counts}` | `{deleted_id, counts}`
-- POST /api/lines/<id>/role/        `{role, v?}` → `{line}`
+- POST /api/lines/<id>/role/        `{role, v?}` (the effective choice, D74) → `{line}`
 - POST /api/pages/<id>/lines/       `{after, text}` → `{line, lines, counts}`
+- POST /api/pages/<id>/roles/       `{line_ids, role}` → `{lines}` (a ⇧-click range, one undo step)
+- POST /api/pages/<id>/insertions/<group>/ `{keep}` → `{lines, deleted_ids, order, counts, page}` (D72)
+- POST /api/gaps/<id>/accept/       `{text?}` → `{line, gap, counts, page}` (D72)
+- POST /api/gaps/<id>/dismiss/      → `{line, gap, counts, page}`
 - POST /api/pages/<id>/undo/        → review payload
 - POST /api/pages/<id>/approve/     `{force}` → `{status, next_review_url, ...}` | 409
 - POST /api/pages/<id>/reopen/      → review payload
@@ -31,7 +36,7 @@ from rest_framework.response import Response
 
 from books.models import Book, Page
 from core.permissions import CanReview
-from ocr.models import Line
+from ocr.models import Line, TextGap
 
 from . import services
 
@@ -46,7 +51,17 @@ def _data(request: Request) -> dict:
 def _error(exc: services.ReviewError) -> Response:
     """400 / 409 answer of a refused review action."""
     if isinstance(exc, services.ReviewBlocked):
-        return Response({"unresolved": exc.unresolved, "message": str(exc)}, status=status.HTTP_409_CONFLICT)
+        items = exc.items
+        return Response(
+            {
+                "unresolved": exc.unresolved,
+                "words": items.words,
+                "groups": items.groups,
+                "gaps": items.gaps,
+                "message": str(exc),
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
     if isinstance(exc, services.ReviewConflict):
         return Response(
             {"message": str(exc), "line": services.line_item(exc.line)}, status=status.HTTP_409_CONFLICT
@@ -77,7 +92,7 @@ def page_review(request: Request, page_id: int) -> Response:
 @api_view(["POST"])
 @permission_classes([CanReview])
 def line_resolve(request: Request, line_id: int) -> Response:
-    """Resolve one uncertain word with a reading (`primary | secondary | tess | typed`)."""
+    """Resolve one uncertain word with a reading (`primary | secondary | tess | typed | sug`)."""
     line = _line(line_id)
     data = _data(request)
     try:
@@ -119,7 +134,8 @@ def line_edit(request: Request, line_id: int) -> Response:
 @api_view(["POST"])
 @permission_classes([CanReview])
 def line_role(request: Request, line_id: int) -> Response:
-    """Mark a line as body text, a main heading or a subheading (`{role}`)."""
+    """Mark what a line is (`{role}`: body | heading | subheading | verse | footnote, the effective
+    choice)."""
     line = _line(line_id)
     data = _data(request)
     try:
@@ -200,6 +216,79 @@ def page_lines(request: Request, page_id: int) -> Response:
         {"line": services.line_item(line), "lines": order, "counts": services.mutation_counts(page, line)},
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def page_roles(request: Request, page_id: int) -> Response:
+    """The same «نوع السطر» choice on a range of lines (`{line_ids, role}`)."""
+    data = _data(request)
+    try:
+        lines = services.set_roles(
+            _page(page_id), data.get("line_ids"), str(data.get("role") or ""), request.user
+        )
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response({"lines": [services.line_item(line) for line in lines]})
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def page_insertion(request: Request, page_id: int, group: int) -> Response:
+    """Keep (`{keep: true}`) or drop a group of words only the second model read."""
+    raw = _data(request).get("keep")
+    keep = isinstance(raw, bool | int | float | str) and raw in TRUE_VALUES
+    try:
+        result = services.resolve_insertion(_page(page_id), group, keep, request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    page = _page(page_id)
+    return Response(
+        {
+            "lines": [services.line_item(line) for line in result["lines"]],
+            "deleted_ids": result["deleted_ids"],
+            "order": list(page.lines.order_by("order", "id").values("id", "order")),
+            "counts": services.mutation_counts(page),
+            "page": services.page_item(page),
+        }
+    )
+
+
+def _gap_answer(line: Line, gap: TextGap) -> Response:
+    page = _page(line.page_id)
+    return Response(
+        {
+            "line": services.line_item(line),
+            "gap": {"id": gap.pk, "status": gap.status},
+            "counts": services.mutation_counts(page, line),
+            "page": services.page_item(page),
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def gap_accept(request: Request, gap_id: int) -> Response:
+    """Insert a suggestion's words (or `{text}` typed over them) into its line."""
+    gap = get_object_or_404(TextGap.objects.select_related("page"), pk=gap_id)
+    text = _data(request).get("text")
+    try:
+        line, gap = services.accept_gap(gap, text if isinstance(text, str) else None, request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    return _gap_answer(line, gap)
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def gap_dismiss(request: Request, gap_id: int) -> Response:
+    """Drop a suggestion (the text is unchanged)."""
+    gap = get_object_or_404(TextGap.objects.select_related("page"), pk=gap_id)
+    try:
+        line, gap = services.dismiss_gap(gap, request.user)
+    except services.ReviewError as exc:
+        return _error(exc)
+    return _gap_answer(line, gap)
 
 
 @api_view(["POST"])

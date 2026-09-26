@@ -237,8 +237,12 @@ class Page(models.Model):
         "حالة النص", max_length=20, choices=TextState.choices, default=TextState.NONE
     )
 
-    # Uncertain words not yet resolved (sum of `ocr.Line.n_low`), kept by finalize_page and review.
+    # Open review items (D73): unresolved words, one per insertion group, plus the open suggestions
+    # (`ocr.TextGap`); kept by finalize_page and review through `ocr.services.page_open_items`.
     n_unresolved = models.PositiveIntegerField("كلمات غير محسومة", default=0)
+    # How the page was read, written by finalize_page (D73): {"readers": "two" | "one" | "tesseract",
+    # "partial": bool, "groups": int, "gaps": int}. `{}` for pages read before 7b.
+    reading = models.JSONField("القراءة", default=dict, blank=True)
 
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

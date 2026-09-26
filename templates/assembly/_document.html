@@ -1,5 +1,7 @@
 {% comment %}The manuscript fragment (PHASE4_SPEC §4.3): the document rendered by assembly/render.py, then the parts
-of the side panel (contents, warnings) and the meta JSON the Alpine component reads. Served on its own by
+of the side panel (contents, warnings) and the meta JSON the Alpine component reads. A warning's `actions` with a
+role (the `stray_note`'s «جعلها حاشية», D74) become buttons that manuscript.js posts to the roles API (hidden for a
+reader and on an edited book, manuscript.css). Served on its own by
 `assembly:document` after a re-run and swapped in place by manuscript.js (adoptParts moves the side-panel parts into
 their hosts). Static markup only: no Alpine bindings inside, clicks are delegated. Context: render.fragment_context
 (+ book for the review links).{% endcomment %}{% if has_document %}{{ document_html|safe }}
@@ -36,6 +38,7 @@ their hosts). Static markup only: no Alpine bindings inside, clicks are delegate
         <span class="ms-warn-msg">{{ w.message }}</span>
         <span class="ms-warn-actions">
           {% if w.page %}<span class="ms-warn-page num">ص <bdi>{{ w.page }}</bdi></span>{% endif %}
+          {% for a in w.actions %}{% if a.role %}<button type="button" class="link ms-warn-link ms-warn-act" data-warn-role="{{ a.role }}" data-block="{{ w.blockId }}" data-lines="{{ a.lineIds|join:',' }}">{{ a.label }}</button>{% endif %}{% endfor %}
           {% if w.blockId %}<button type="button" class="link ms-warn-link" data-goto="{{ w.blockId }}" data-warn-index="{{ w.index }}">انتقال</button>{% endif %}
           {% if w.page %}<a class="link ms-warn-link" href="{% url 'review:page' book.pk w.page %}">مراجعة</a>{% endif %}
         </span>

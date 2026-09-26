@@ -23,7 +23,7 @@ import logging
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
@@ -39,13 +39,13 @@ from core.arabic import normalize, normalize_ws, parse_output, to_western_digits
 from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
-from . import chooser
+from . import chooser, flags
 from .alignment import build_lines, merged_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
 from .engines.pdf_text import PdfPageRef
 from .engines.qari import max_new_tokens_for
-from .models import Line, OcrRun
+from .models import Line, OcrRun, TextGap
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +57,14 @@ REGION_SCOPE = "region"
 FLAG_FALLBACK = "ocr_fallback"
 FLAG_ALIGNMENT = "alignment_poor"
 FLAG_MERGED = "lines_merged"
+FLAG_SINGLE = "single_reader"  # D73: a region read by one model (or Tesseract alone)
+FLAG_MISSING = "missing_text"  # D72: words only the second model read (a group, a suggestion)
+# How a page was read (`Page.reading["readers"]`, D73), weakest last.
+READERS_TWO = "two"
+READERS_ONE = "one"
+READERS_TESSERACT = "tesseract"
+_READERS_RANK = {READERS_TWO: 0, READERS_ONE: 1, READERS_TESSERACT: 2}
+TEXT_LAYER_SOURCE = "pdf_text"
 
 # A page-number line: only digits (Western, Arabic-Indic, Persian), dashes, dots, brackets, spaces.
 _PN_CHARS = r"\s0-9٠-٩۰-۹\-‐‑‒–—―ـ.·•…()\[\]{}﴾﴿<>«»"
@@ -133,7 +141,8 @@ class Target:
 
 @dataclass
 class RegionText:
-    """The text chosen for one target and what it is built from."""
+    """The text chosen for one target and what it is built from (`alt_partial`: `alt_text` is the clean
+    start of the other model's looped run, D73)."""
 
     target: Target
     text: str
@@ -142,6 +151,19 @@ class RegionText:
     fallback: bool
     reason: str
     source: str
+    alt_partial: bool = False
+
+
+@dataclass
+class Selection:
+    """What `select_reading` chose for one region (`select_text` gives the first five as a tuple)."""
+
+    text: str
+    alt: str | None
+    fallback: bool
+    reason: str
+    source: str
+    alt_partial: bool = False
 
 
 # ---------------------------------------------------------------- settings and inputs
@@ -1026,15 +1048,23 @@ def _latest_runs(page: Page, target: Target) -> dict[str, OcrRun]:
     return latest
 
 
-def select_text(
-    primary: OcrRun | None, secondary: OcrRun | None, tesseract: OcrRun | None
-) -> tuple[str, str | None, bool, str, str]:
-    """Pick the text of one region from its latest runs (D16).
+def looped_prefix_of(run: OcrRun | None) -> str:
+    """The clean start of a model run that looped (`flags.looped_prefix`), '' for any other run."""
+    if run is None or run.status != OcrRun.Status.OK or not run.looped:
+        return ""
+    return flags.looped_prefix(run.raw_output or run.parsed_text or "", hit_cap=run.finish == "length")
 
-    Returns `(text, alt_text, fallback, reason, source)`: the primary when it passes the sanity
-    check (alternatives from the secondary when that passes too), else the secondary when it
-    passes, else the primary when both only differ from Tesseract (`COMPARISON_REASONS`) but agree
-    with each other (`models_agree`), else Tesseract's text with `fallback=True`.
+
+def select_reading(
+    primary: OcrRun | None, secondary: OcrRun | None, tesseract: OcrRun | None, partial: bool = True
+) -> Selection:
+    """Pick the text of one region from its latest runs (D16), and its second reading (D73).
+
+    The primary when it passes the sanity check (alternatives from the secondary when that passes too),
+    else the secondary when it passes, else the primary when both only differ from Tesseract
+    (`COMPARISON_REASONS`) but agree with each other (`models_agree`), else Tesseract's text with
+    `fallback`. When the model not chosen looped, its clean start (`looped_prefix_of`) is the second
+    reading, flagged `alt_partial` (with `partial`; without, the rule before 7b: no second reading).
     """
     reference = (
         tesseract.parsed_text if tesseract is not None and tesseract.status == OcrRun.Status.OK else ""
@@ -1045,13 +1075,21 @@ def select_text(
             return False, "missing"
         return _run_passes(run, reference)
 
+    def prefix(run: OcrRun | None, reason: str) -> str:
+        return looped_prefix_of(run) if partial and reason == "loop" else ""
+
     p_ok, p_reason = passes(primary)
     s_ok, s_reason = passes(secondary)
     if p_ok:
-        alt = secondary.parsed_text if s_ok else None
-        return primary.parsed_text, alt, False, p_reason, primary.engine_name
+        if s_ok:
+            return Selection(primary.parsed_text, secondary.parsed_text, False, p_reason, primary.engine_name)
+        alt = prefix(secondary, s_reason)
+        return Selection(primary.parsed_text, alt or None, False, p_reason, primary.engine_name, bool(alt))
     if s_ok:
-        return secondary.parsed_text, None, False, f"primary:{p_reason}", secondary.engine_name
+        alt = prefix(primary, p_reason)
+        return Selection(
+            secondary.parsed_text, alt or None, False, f"primary:{p_reason}", secondary.engine_name, bool(alt)
+        )
     if (
         p_reason in COMPARISON_REASONS
         and s_reason in COMPARISON_REASONS
@@ -1062,9 +1100,20 @@ def select_text(
         >= MODELS_AGREE_F1
     ):
         # Both differ from Tesseract only, and agree with each other: trust the models (D16).
-        return primary.parsed_text, secondary.parsed_text, False, "models_agree", primary.engine_name
+        return Selection(
+            primary.parsed_text, secondary.parsed_text, False, "models_agree", primary.engine_name
+        )
     source = tesseract.engine_name if tesseract is not None else ""
-    return reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source
+    return Selection(reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source)
+
+
+def select_text(
+    primary: OcrRun | None, secondary: OcrRun | None, tesseract: OcrRun | None
+) -> tuple[str, str | None, bool, str, str]:
+    """`select_reading` as `(text, alt_text, fallback, reason, source)`; `alt_text` may be a looped
+    prefix (`select_reading(...).alt_partial` tells)."""
+    chosen = select_reading(primary, secondary, tesseract)
+    return chosen.text, chosen.alt, chosen.fallback, chosen.reason, chosen.source
 
 
 def _collect_region_texts(page: Page, tesseract: dict[int | None, OcrRun] | None = None) -> list[RegionText]:
@@ -1092,7 +1141,7 @@ def _collect_region_texts(page: Page, tesseract: dict[int | None, OcrRun] | None
             page_target = Target(None, [0, 0, w, h])
             return [
                 RegionText(
-                    page_target, pdf_run.parsed_text, None, tess_lines, False, "text_layer", "pdf_text"
+                    page_target, pdf_run.parsed_text, None, tess_lines, False, "text_layer", TEXT_LAYER_SOURCE
                 )
             ]
 
@@ -1100,13 +1149,24 @@ def _collect_region_texts(page: Page, tesseract: dict[int | None, OcrRun] | None
     for target in _targets(page, (h, w), ocr_only=True):
         runs = _latest_runs(page, target)
         tess = tesseract_of(target, runs)
-        text, alt, fallback, reason, source = select_text(runs.get(primary), runs.get(secondary), tess)
+        chosen = select_reading(runs.get(primary), runs.get(secondary), tess)
         lines = (
             list(tess.params.get("lines") or [])
             if tess is not None and tess.status == OcrRun.Status.OK
             else []
         )
-        out.append(RegionText(target, text, alt, lines, fallback, reason, source))
+        out.append(
+            RegionText(
+                target,
+                chosen.text,
+                chosen.alt,
+                lines,
+                chosen.fallback,
+                chosen.reason,
+                chosen.source,
+                chosen.alt_partial,
+            )
+        )
     return out
 
 
@@ -1187,14 +1247,80 @@ def _set_flags(flags: list, updates: dict[str, bool]) -> list:
     return out
 
 
+def line_kind(role: str | None, region_kind: str | None) -> str:
+    """A line's effective kind in the book (D74): `"footnote"` or `"body"`.
+
+    The `footnote` role makes any line a note; the `body` role follows the region (a line of a
+    footnote region is a note). Every other role (`heading`, `subheading`, `verse`, and `main`, which
+    pulls a footnote-region line back into the body) and every other region give `"body"`. Used by the
+    assembly loader, `review.services.refresh_page_text`, review's `line_item` and `api:book_sheets`.
+    """
+    if role == Line.Role.FOOTNOTE:
+        return "footnote"
+    if (role or Line.Role.BODY) == Line.Role.BODY and region_kind in FOOTNOTE_KINDS:
+        return "footnote"
+    return "body"
+
+
+def readers_of(reading: dict | None) -> str:
+    """How a page was read (`Page.reading["readers"]`, D73): `two`, `one`, `tesseract`, or '' (not read
+    yet, or read before 7b). The dashboard tile and review's filmstrip carry it (the half-disc)."""
+    value = reading.get("readers") if isinstance(reading, dict) else None
+    return value if value in _READERS_RANK else ""
+
+
 def is_unresolved(token: dict) -> bool:
     """A token still waiting for the reviewer: low confidence and no resolution (`res`) yet."""
     return token.get("conf") == "low" and not token.get("res")
 
 
+def group_of(token: dict) -> int | None:
+    """The insertion group of a word only the second model read (`ins`, D72), None for any other."""
+    group = token.get("ins")
+    return group if isinstance(group, int) and not isinstance(group, bool) else None
+
+
 def count_unresolved(tokens: list[dict]) -> int:
-    """Number of unresolved tokens of a line (`Line.n_low`)."""
-    return sum(1 for token in tokens or [] if is_unresolved(token))
+    """Open items of a line (`Line.n_low`): its unresolved words, one per insertion group (D72)."""
+    items = open_items([tokens])
+    return items.words + items.groups
+
+
+@dataclass(frozen=True)
+class OpenItems:
+    """What still waits for the reviewer on a page (D72, D73): unresolved words outside groups, open
+    insertion groups (a group over two lines counts once) and open suggestions (`TextGap`)."""
+
+    words: int = 0
+    groups: int = 0
+    gaps: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.words + self.groups + self.gaps
+
+
+def open_items(token_lists, open_gaps: int = 0) -> OpenItems:
+    """`OpenItems` of a page from its lines' tokens and its number of open gaps (pure)."""
+    words, groups = 0, set()
+    for tokens in token_lists:
+        for token in tokens or []:
+            if not is_unresolved(token):
+                continue
+            group = group_of(token)
+            if group is None:
+                words += 1
+            else:
+                groups.add(group)
+    return OpenItems(words=words, groups=len(groups), gaps=int(open_gaps))
+
+
+def page_open_items(page: Page) -> OpenItems:
+    """`OpenItems` of a saved page: `Page.n_unresolved` is its `total` (refresh_page_text, finalize_page
+    and approve_page use it). Only gaps still attached to a line count (a deleted line's gaps wait for
+    the line's undo)."""
+    gaps = TextGap.objects.filter(page=page, status=TextGap.Status.OPEN, line__isnull=False).count()
+    return open_items(page.lines.values_list("tokens", flat=True), gaps)
 
 
 @dataclass
@@ -1204,6 +1330,8 @@ class ComposedPage:
     `lines` are unsaved `Line` objects; `merged` holds the orders of the lines that look like two
     printed lines in one (`alignment.merged_lines`); `printed` is the number of a dropped
     page-number line ('' when none) and `has_region` whether a page-number region owns the number.
+    `gaps` are the suggestions (D72) as `{order, index, after_t, text, support}` (`order`: their
+    line's), `groups` the number of groups of added words, `reading` what `Page.reading` gets (D73).
     """
 
     region_texts: list[RegionText]
@@ -1215,6 +1343,9 @@ class ComposedPage:
     printed: str
     has_region: bool
     total_tokens: int
+    gaps: list[dict] = field(default_factory=list)
+    groups: int = 0
+    reading: dict = field(default_factory=dict)
 
 
 def _page_geometry(page: Page) -> tuple[list[dict], np.ndarray | None]:
@@ -1232,16 +1363,94 @@ def _page_geometry(page: Page) -> tuple[list[dict], np.ndarray | None]:
     return list(pre.line_boxes or []), gray
 
 
+def one_model(rt: RegionText) -> bool:
+    """A region one model read: not Tesseract's text (fallback), not the text layer, no second reading."""
+    return not rt.fallback and rt.source != TEXT_LAYER_SOURCE and not rt.alt_text
+
+
+@dataclass
+class RegionBuild:
+    """One region's built lines (`alignment.build_lines`), its groups of added words (`{group: run}`),
+    its suggestions (`[(index of the built token the run follows, −1 before the first; run)]`) and how
+    it was read (`two` / `one` / `tesseract`, D73)."""
+
+    built: list[dict]
+    groups: dict[int, flags.Run]
+    gaps: list[tuple[int, flags.Run]]
+    readers: str
+
+
+def build_region(
+    rt: RegionText, bands: list[dict] | None = None, gray: np.ndarray | None = None, next_group: int = 1
+) -> RegionBuild:
+    """Build one region's lines with flag policy v2 (D71) and the words only the second model read (D72).
+
+    The runs of Qari v0.2 words without a Qari v0.3 counterpart that pass the filters
+    (`flags.secondary_only_runs`) are measured against Tesseract around them (`flags.run_support`, on
+    the lines built without them): a run Tesseract supports (`flags.SUPPORT_MIN`) is merged into the
+    text and the lines are built again with its words marked (`inserted`; groups numbered from
+    `next_group`); any other run becomes a suggestion anchored after the token it follows. A region
+    is read by `tesseract` (fallback), by `one` model (no second reading, or a looped prefix that stops
+    before its last token) or by `two`.
+    """
+    single = one_model(rt)
+    built = build_lines(
+        rt.text, rt.alt_text, rt.tess_lines, bands, gray, single=single, partial=rt.alt_partial
+    )
+    primary = rt.text.split()
+    secondary = (rt.alt_text or "").split()
+    runs: list[flags.Run] = []
+    if secondary and primary and not rt.fallback:
+        footnote = rt.target.kind in FOOTNOTE_KINDS
+        runs = [run for run in flags.secondary_only_runs(primary, secondary, footnote) if not run.drop]
+    supported: list[flags.Run] = []
+    unsupported: list[flags.Run] = []
+    for run in runs:
+        run.support = round(flags.run_support(run, built, rt.tess_lines), 2) if rt.tess_lines else 0.0
+        (supported if run.support >= flags.SUPPORT_MIN else unsupported).append(run)
+    groups: dict[int, flags.Run] = {}
+    position = list(range(len(primary)))  # primary token index → its index among the built tokens
+    if supported:
+        merged, inserted = flags.merge_runs(primary, supported)
+        groups = {next_group + n: run for n, run in enumerate(supported)}
+        position = [i for i in range(len(merged)) if i not in inserted]
+        built = build_lines(
+            " ".join(merged),
+            rt.alt_text,
+            rt.tess_lines,
+            bands,
+            gray,
+            single=single,
+            partial=rt.alt_partial,
+            inserted={i: next_group + n for i, n in inserted.items()},
+        )
+    gaps = [(position[run.at - 1] if run.at > 0 else -1, run) for run in unsupported]
+    if rt.fallback:
+        readers = READERS_TESSERACT
+    elif single:
+        readers = READERS_ONE
+    elif rt.alt_partial and flags.last_read(flags.second_readings(primary, secondary)) < len(primary) - 1:
+        readers = READERS_ONE
+    else:
+        readers = READERS_TWO
+    return RegionBuild(built, groups, gaps, readers)
+
+
 def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> ComposedPage:
     """Build the lines and the final text of a page from its runs without touching the database.
 
     `region_texts` defaults to `_collect_region_texts(page)` (the latest runs); a dry run passes
     its own. Tesseract's word boxes are fitted to the page's printed lines (its line bands; its gray
     image splits the ink Tesseract read as one word, `_page_geometry` and `alignment.build_lines`).
-    Tokens go through the word-chooser hook (`ocr.chooser`, D26, off by default). A first or last
-    line of the page that is only a page number is dropped (see `finalize_page`). A region
-    whose tokens are anchored well enough (`MIN_ANCHOR_RATIO`) reports its lines that still look
-    merged in `merged`; with poor anchoring the line split itself is a guess.
+    Each region is built with flag policy v2 and the words only the second model read (`build_region`:
+    groups in the text, suggestions in `gaps`); tokens then go through the word-chooser hook
+    (`ocr.chooser`, D26: the vote by default). A first or last line of the page that is only a page
+    number is dropped (see `finalize_page`), with any suggestion anchored on it. A region whose tokens
+    are anchored well enough (`MIN_ANCHOR_RATIO`) reports its lines that still look merged in
+    `merged`; with poor anchoring the line split itself is a guess. A year followed by its value in
+    words is checked against them (`flags.year_check`, §4.8). `reading` holds the weakest region's
+    readers (D73), whether a looped prefix served as a second reading, and the numbers of groups and
+    gaps.
     """
     if region_texts is None:
         region_texts = _collect_region_texts(page)
@@ -1249,11 +1458,17 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
     main_parts: list[str] = []
     foot_parts: list[str] = []
     merged: list[int] = []
+    gaps: list[dict] = []
     total_tokens = anchored = 0
     has_geometry = False
     order = 0
     bands, gray = _page_geometry(page) if any(rt.tess_lines for rt in region_texts) else ([], None)
-    built_per_region = [build_lines(rt.text, rt.alt_text, rt.tess_lines, bands, gray) for rt in region_texts]
+    builds: list[RegionBuild] = []
+    next_group = 1
+    for rt in region_texts:
+        builds.append(build_region(rt, bands, gray, next_group))
+        next_group += len(builds[-1].groups)
+    built_per_region = [build.built for build in builds]
     # Safety net: a first / last line of the page that is only a page number is dropped from the
     # lines and the text; its number is kept as metadata (`printed_number`). When the text comes
     # from region crops of a page with a page-number region, that region already holds the number.
@@ -1266,13 +1481,17 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
         [built_per_region[r][k]["text"] for r, k in flat], has_region=has_region, known=page.printed_number
     )
     dropped = {flat[i] for i in drop}
-    for r, (rt, built) in enumerate(zip(region_texts, built_per_region, strict=True)):
+    for r, (rt, build) in enumerate(zip(region_texts, builds, strict=True)):
+        built = build.built
         has_geometry = has_geometry or bool(rt.tess_lines)
         n_tokens = sum(len(b["tokens"]) for b in built)
         well_anchored = bool(rt.tess_lines) and n_tokens > 0
         well_anchored = well_anchored and sum(b["n_anchored"] for b in built) >= MIN_ANCHOR_RATIO * n_tokens
         suspect = set(merged_lines(built)) if well_anchored else set()
+        place = {i: (k, x) for k, b in enumerate(built) for x, i in enumerate(b["indices"])}
+        orders: dict[int, int] = {}
         texts = []
+        first_line = len(new_lines)
         for k, b in enumerate(built):
             if (r, k) in dropped:
                 continue
@@ -1294,15 +1513,39 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
                     n_low=count_unresolved(tokens),
                 )
             )
+            orders[k] = order
             if k in suspect:
                 merged.append(order)
             order += 1
             total_tokens += len(tokens)
             anchored += b["n_anchored"]
             texts.append(text)
+        region_lines = new_lines[first_line:]
+        if flags.year_check([line.tokens for line in region_lines]):  # years against their words (§4.8)
+            for line in region_lines:
+                line.n_low = count_unresolved(line.tokens)
+        for after, run in build.gaps:
+            k, x = place[after] if after >= 0 else (0, -1)
+            if k not in orders:
+                continue  # its line was a page-number line, dropped
+            gaps.append(
+                {
+                    "order": orders[k],
+                    "index": x,
+                    "after_t": built[k]["tokens"][x]["t"] if x >= 0 else "",
+                    "text": run.text,
+                    "support": run.support,
+                }
+            )
         (foot_parts if rt.target.kind in FOOTNOTE_KINDS else main_parts).append("\n".join(texts))
     final_text = join_region_texts(
         [(PAGE_KIND, "\n".join(p for p in main_parts if p))] + [(Region.Kind.FOOTNOTE, p) for p in foot_parts]
+    )
+    groups = sum(len(build.groups) for build in builds)
+    readers = max(
+        (build.readers for rt, build in zip(region_texts, builds, strict=True) if rt.text.strip()),
+        key=_READERS_RANK.__getitem__,
+        default=READERS_TWO,
     )
     return ComposedPage(
         region_texts=region_texts,
@@ -1314,16 +1557,27 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
         printed=printed,
         has_region=has_region,
         total_tokens=total_tokens,
+        gaps=gaps,
+        groups=groups,
+        reading={
+            "readers": readers,
+            "partial": any(rt.alt_partial for rt in region_texts),
+            "groups": groups,
+            "gaps": len(gaps),
+        },
     )
 
 
 def finalize_page(page: Page) -> ComposedPage | None:
     """Build the Line rows and the final text of a page from its stored runs; mark it `ocr_done`.
 
-    Low-confidence tokens with several readings go through the word-chooser hook
-    (`ocr.chooser`, D26, off by default); `Line.n_low` counts the unresolved tokens and
-    `Page.n_unresolved` their sum over the page. Review revisions recorded before this pass can no
-    longer be undone (their lines are replaced).
+    Tokens carry flag policy v2's reasons (D71) and go through the word-chooser hook (`ocr.chooser`,
+    D26: the vote); `Line.n_low` counts a line's open items and `Page.n_unresolved` the page's
+    (`page_open_items`: open words, one per open group, open gaps). The page's suggestions (`TextGap`,
+    D72) are replaced with its lines, and `Page.reading` records how it was read (D73): the
+    `single_reader` flag marks a page one model (or Tesseract alone) read, `missing_text` one with
+    groups or gaps. Review revisions recorded before this pass can no longer be undone (their lines
+    are replaced).
 
     A page with review work (reviewed lines or an approval stamp; approved pages are refused by
     `books.services.run_stage`, this guards a pass that was queued before) keeps its lines exactly
@@ -1346,21 +1600,26 @@ def finalize_page(page: Page) -> ComposedPage | None:
     from review.models import LineRevision  # review history of the page (other app: lazy import)
 
     with transaction.atomic():
+        page.gaps.all().delete()
         page.lines.all().delete()
         Line.objects.bulk_create(new_lines)
+        _save_gaps(page, composed.gaps)
         LineRevision.objects.filter(page=page, undone=False).update(undone=True)
         page.final_text = to_western_digits(composed.final_text)
         page.text_state = Page.TextState.FINAL
+        page.reading = composed.reading
         page.attention_flags = _set_flags(
             page.attention_flags,
             {
                 FLAG_FALLBACK: composed.fallback,
                 FLAG_ALIGNMENT: composed.poor,
                 FLAG_MERGED: bool(composed.merged),
+                FLAG_SINGLE: composed.reading.get("readers") != READERS_TWO,
+                FLAG_MISSING: bool(composed.groups or composed.gaps),
             },
         )
-        page.n_unresolved = sum(line.n_low for line in new_lines)
-        fields = ["final_text", "text_state", "attention_flags", "n_unresolved"]
+        page.n_unresolved = page_open_items(page).total
+        fields = ["final_text", "text_state", "reading", "attention_flags", "n_unresolved"]
         if composed.printed and not composed.has_region:
             page.printed_number = composed.printed
             fields.append("printed_number")
@@ -1385,6 +1644,26 @@ def finalize_page(page: Page) -> ComposedPage | None:
         sorted({rt.source for rt in composed.region_texts if rt.source}),
     )
     return composed
+
+
+def _save_gaps(page: Page, gaps: list[dict]) -> list[TextGap]:
+    """Store a composed page's suggestions (`ComposedPage.gaps`) on its lines, just saved (by order)."""
+    if not gaps:
+        return []
+    line_ids = dict(page.lines.values_list("order", "pk"))
+    rows = [
+        TextGap(
+            page=page,
+            line_id=line_ids.get(gap["order"]),
+            index=gap["index"],
+            after_t=str(gap["after_t"] or "")[:200],
+            text=gap["text"],
+            support=float(gap["support"] or 0.0),
+        )
+        for gap in gaps
+        if gap["order"] in line_ids
+    ]
+    return TextGap.objects.bulk_create(rows)
 
 
 def _has_review_work(page: Page) -> bool:

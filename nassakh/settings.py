@@ -152,8 +152,9 @@ NASSAKH = {
     "MAX_PIXELS": 2048 * 28 * 28,
     "MIN_PIXELS": 256 * 28 * 28,
     "MAX_NEW_TOKENS": {"page": 3000, "body": 2500, "footnote": 1000, "other": 600},
-    # Word chooser for uncertain words during finalisation (D26): "none" disables the hook.
-    "WORD_CHOOSER": env("WORD_CHOOSER", default="none"),
+    # Word chooser for uncertain words during finalisation (D26): "vote" (D71) puts the reading Tesseract
+    # backs into the text and leaves the word open; "none" disables the hook.
+    "WORD_CHOOSER": env("WORD_CHOOSER", default="vote"),
     # Book faces not vendored (D45) are looked up in these folders (publishing.fonts).
     "FONT_DIRS": env.list(
         "FONT_DIRS",

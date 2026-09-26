@@ -38,12 +38,88 @@
   const POP_H_GUESS = 220;
   const MORE_W = 248; // the «إجراءات أخرى» submenu
   const MORE_CLOSE_MS = 180; // hover intent: the submenu survives the gap between the two panels
+  // «نوع السطر» (D32, D74): the effective choice; `set_line_role` maps it onto the stored role (on a footnote-
+  // region line «حاشية» stores `body` and «محتوى» stores `main`), so the menu never shows a stored value.
   const ROLES = [
     { value: 'body', label: 'محتوى' },
     { value: 'heading', label: 'عنوان رئيسي' },
     { value: 'subheading', label: 'عنوان فرعي' },
+    { value: 'verse', label: 'شعر' },
+    { value: 'footnote', label: 'حاشية' },
   ];
+  const MARKS = ['علامة واحدة', 'علامتان', 'علامات', 'علامة'];
+  const OPEN_WORDS = ['كلمة غير محسومة', 'كلمتان غير محسومتين', 'كلمات غير محسومة', 'كلمة غير محسومة'];
+  // D73: how a page was read, when it was not read by both models (`page.reading.readers`): the review header's
+  // pill and banner, and the filmstrip's half-disc.
+  const READERS = {
+    one: {
+      label: 'قراءة واحدة',
+      tone: 'warning',
+      banner: 'قرأ هذه الصفحةَ نموذجٌ واحد، فالعلامات فيها أقل من الحقيقة. قابِل كل سطر بالصورة.',
+    },
+    tesseract: {
+      label: 'نص Tesseract وحده',
+      tone: 'danger',
+      banner: 'تعذّرت قراءة هذه الصفحة بالنموذجين، ونصّها من Tesseract وحده. قابِل كل سطر بالصورة.',
+    },
+  };
   const isDigits = (word) => /^[0-9٠-٩۰-۹]+$/.test(word);
+
+  // «صفحة واحدة», «صفحتان», «5 صفحات», «214 صفحة» (= assembly.render.ar_count), Western digits.
+  function arCount(n, forms) {
+    const k = Number(n) || 0;
+    if (k === 1) return forms[0];
+    if (k === 2) return forms[1];
+    const units = k % 100;
+    return `${k} ${units >= 3 && units <= 10 ? forms[2] : forms[3]}`;
+  }
+
+  // The lenient comparison of core.arabic.normalize(…, 'lenient'): no tashkeel or tatweel, folded letters,
+  // Western digits, no punctuation. Only used to say which reading Tesseract backs.
+  const TASHKEEL = /[ؐ-ًؚ-ٰٟۖ-ۭـ]/g;
+  function lenient(text) {
+    let t = String(text || '');
+    try { t = t.normalize('NFKC'); } catch (_) { /* old engine */ }
+    t = t.replace(TASHKEEL, '').replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي');
+    t = t.replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0));
+    return t.replace(/[^\p{L}\p{N}]+/gu, ' ').toLowerCase().replace(/ +/g, ' ').trim();
+  }
+
+  // D71 `script`: the letters and symbols that made a token foreign (ocr/flags.py's classes), distinct, at most 3.
+  const FOREIGN_LETTER = /[Ͱ-ϿЀ-ӿ֐-׿぀-ヿ一-鿿가-힯]/u;
+  const STRANGE = new Set(['※', '★', '∩', '∧', '∨', '≡', '→', '©', '¢', '€', '¥', '^']);
+  function foreignChars(text) {
+    const chars = Array.from(String(text || ''));
+    const arabic = chars.some((ch) => /[؀-ۿݐ-ݿࢠ-ࣿ]/.test(ch) && /\p{L}/u.test(ch));
+    const letters = []; const symbols = [];
+    chars.forEach((ch) => {
+      const latinBeside = arabic && /[A-Za-zÀ-ɏ]/.test(ch); // Arabic and Latin letters in one token
+      if ((FOREIGN_LETTER.test(ch) || latinBeside) && !letters.includes(ch)) letters.push(ch);
+      else if (STRANGE.has(ch) && !symbols.includes(ch)) symbols.push(ch);
+    });
+    return { letters: letters.slice(0, 3), symbols: symbols.slice(0, 3) };
+  }
+  const quoted = (chars) => chars.map((ch) => `«${ch}»`).join('، ');
+
+  // D74 `line_kind(role, region_kind)` (ocr.services): a footnote when the role says so, or when a body-role line
+  // sits in a footnote region; every other role (heading, subheading, verse, main) is body text.
+  function lineKind(role, regionKind) {
+    if (role === 'footnote') return 'footnote';
+    return (role || 'body') === 'body' && regionKind === 'footnote' ? 'footnote' : 'body';
+  }
+  // The role `set_line_role` stores for an effective choice (the optimistic step; the server's line follows).
+  function storedRole(choice, regionKind) {
+    if (regionKind === 'footnote') {
+      if (choice === 'footnote') return 'body';
+      if (choice === 'body') return 'main';
+    }
+    return choice;
+  }
+  // What the menu shows as chosen: headings and verse as they are, else the line's kind («حاشية» / «محتوى»).
+  function effectiveRole(role, regionKind, kind) {
+    if (role === 'heading' || role === 'subheading' || role === 'verse') return role;
+    return (kind || lineKind(role, regionKind)) === 'footnote' ? 'footnote' : 'body';
+  }
 
   // fetch wrapper: never throws; `{ ok, status, data, message }` with an Arabic message on failure.
   async function api(url, options) {
@@ -88,7 +164,7 @@
     } catch (_) { /* no channel (an old browser, a sandbox) */ }
   }
 
-  const fill = (template, id) => String(template || '').replace('__id__', String(id));
+  const fill = (template, id) => String(template || '').replace(/__(id|group)__/, String(id));
   const plainToken = (word) => ({ t: word, alt: null, tess: null, conf: 'high', digit: isDigits(word), bbox: null, res: 'typed' });
   const splitWords = (text) => String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
   const isBox = (b) => Array.isArray(b) && b.length === 4;
@@ -102,17 +178,20 @@
   // exercise it. Keys are read through `NassakhKeys` (keys.js): letters by their place, so the Arabic layout's
   // «ش» on the A key is A; digits in any script; nothing while an IME composes.
   // ctx: inField (typing in an input), inPop (the target is inside the word menu), inFlow (Tab may be taken
-  // over), focused (a word is focused and the page is editable), open (the word menu is open), optionKeys
-  // (digit hints of the focused word's readings).
+  // over), focused (a word, a group of added words or a gap is focused and the page is editable), open (its
+  // menu is open), optionKeys (digit hints of the focused word's readings), gap (the focus is a gap ▏), group
+  // (the focused word belongs to an open group of added words, D72).
   // Two modes, decided by the word menu:
   //   word mode (the menu open on an editable word): 1–9 choose reading n, a digit beyond the readings and any
-  //     other printable character (Latin or Arabic, ؟ and − too) start the correction with that character;
+  //     other printable character (Latin or Arabic, ؟ and − too) start the correction with that character (on a
+  //     gap: the words to insert; a group's menu has no correction);
   //   page mode (the menu closed): A approve, E edit the line, N the next page to review, ? the sheet, + − 0
   //     zoom, Space opens the focused word's menu, a digit still chooses a reading of a focused word; other
   //     letters do nothing, so no correction starts by accident.
-  // In both: ← → PageDown PageUp Home End turn pages, Enter accepts, Tab / ⇧Tab move, ⌥← / ⌥→ merge the
-  // focused word with the next / previous one (D31, RTL: the next word is on the left), ⌫ deletes it, ⌘Z undoes,
-  // ⌘↵ approves the page from anywhere (the correction field of the word menu too).
+  // In both: ← → PageDown PageUp Home End turn pages, Enter accepts (the reading in the text, a group kept, a
+  // gap's words inserted), Tab / ⇧Tab move through the words, groups and gaps, ⌥← / ⌥→ merge the focused word
+  // with the next / previous one (D31, RTL: the next word is on the left), ⌫ deletes it (a gap: dismissed), ⌘Z
+  // undoes, ⌘↵ approves the page from anywhere (the correction field of the word menu too).
   function keyAction(ev, ctx) {
     const K = window.NassakhKeys;
     if (K.composing(ev)) return null;
@@ -125,11 +204,11 @@
     if (k === 'Tab') return c.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
     if (k === 'Enter') return ev.altKey ? 'insert' : (c.focused ? 'accept' : null);
     if (ev.altKey) {
-      if (c.focused && k === 'ArrowLeft') return 'mergeNext';
-      if (c.focused && k === 'ArrowRight') return 'mergePrev';
+      if (c.focused && !c.gap && k === 'ArrowLeft') return 'mergeNext';
+      if (c.focused && !c.gap && k === 'ArrowRight') return 'mergePrev';
       return null;
     }
-    if ((k === 'Backspace' || k === 'Delete') && c.focused) return 'deleteWord';
+    if ((k === 'Backspace' || k === 'Delete') && c.focused) return c.gap ? 'dismissGap' : 'deleteWord';
     if (k === 'ArrowLeft' || k === 'PageDown') return 'nextPage';
     if (k === 'ArrowRight' || k === 'PageUp') return 'prevPage';
     if (k === 'Home') return 'firstPage';
@@ -138,9 +217,9 @@
     const reading = n !== null && n >= 1 && c.focused && (c.optionKeys || []).includes(String(n));
     if (reading) return 'choose' + n;
     if (c.focused && c.open) {
-      // word mode: what the key types starts the correction (a space never does)
+      // word mode: what the key types starts the correction (a space never does); a group's menu has none
       const ch = K.printable(ev);
-      return ch && ch.trim() ? 'type' : null;
+      return ch && ch.trim() && !c.group ? 'type' : null;
     }
     if ((k === ' ' || ev.code === 'Space') && !ev.shiftKey) return c.focused ? 'openWord' : null;
     if (K.is(ev, '?')) return 'sheet';
@@ -154,7 +233,7 @@
     return null;
   }
 
-  window.NassakhReview = Object.assign(window.NassakhReview || {}, { keyAction, api });
+  window.NassakhReview = Object.assign(window.NassakhReview || {}, { keyAction, api, arCount, lenient, foreignChars, lineKind, storedRole, effectiveRole });
 
   document.addEventListener('alpine:init', () => {
     // Shared with the top bar: a plain snapshot (`bar`) and an action dispatcher (`act`).
@@ -178,7 +257,7 @@
       urls: {},
       canEdit: false,
       // ---- words
-      focus: null,        // { lineId, index } focused word (keyboard + popover)
+      focus: null,        // { lineId, index } focused word, or { lineId, index, gap } a focused gap ▏ (D72)
       hot: null,          // { lineId, index } hovered word, from either side
       hotLine: null,      // hovered line id
       flashing: {},       // "lineId-index" → true while the resolve animation plays
@@ -188,6 +267,7 @@
       edit: null,         // { lineId, text }
       insert: null,       // { afterId, text }
       menuFor: null,      // line id whose «…» menu is open
+      range: { anchor: null, ids: [] }, // ⇧-click: the lines whose role changes together (D74)
       // ---- saving
       save: { state: 'idle', pending: 0, failed: [] }, // failed: [{ message, retry }] in order, until retried
       queue: Promise.resolve(),
@@ -196,7 +276,7 @@
       undoToast: null,
       // ---- page
       shown: 0,           // animated resolved counter
-      dialog: { open: false, count: 0 },
+      dialog: { open: false, count: 0, words: 0, suggested: 0, gaps: 0 }, // suggested: open groups and gaps (D73)
       sheetOpen: false,
       stamp: false,
       approving: false,
@@ -256,6 +336,7 @@
         if (data.image) this.image = data.image;
         if (data.regions) this.regions = data.regions;
         if (data.lines) this.lines = data.lines.slice().sort((a, b) => a.order - b.order);
+        if (Array.isArray(data.gaps)) this.adoptGaps(data.gaps);
         if (data.labels) this.labels = data.labels;
         if (data.nav) this.nav = data.nav;
         if (data.urls) this.urls = data.urls;
@@ -264,33 +345,61 @@
         this.syncBar();
       },
 
+      // `words`, `groups` and `gaps` split the open items (D73: the approve dialog names them); kept when given.
       setCounts(c) {
         const lowTotal = Number(c.low_total) || 0;
         const unresolved = Number(c.unresolved) || 0;
         const resolved = c.resolved != null ? Number(c.resolved) || 0 : Math.max(0, lowTotal - unresolved);
         this.counts = { low_total: lowTotal, unresolved, resolved };
+        ['words', 'groups', 'gaps'].forEach((k) => { if (c[k] != null) this.counts[k] = Number(c[k]) || 0; });
         this.tickCounter();
         this.syncBar();
       },
 
-      // Local recount from the lines (optimistic updates); the server's counts replace it afterwards.
+      // Local recount from the lines (optimistic updates); the server's counts replace it afterwards. One item per
+      // group of added words (D72, `count_unresolved`), one per gap; `n_low` stays the line's open words.
       recount() {
-        let low = 0; let open = 0;
-        this.lines.forEach((line) => {
-          let lineLow = 0;
-          (line.tokens || []).forEach((tok) => {
-            if (tok.conf === 'low') { low += 1; if (tok.res == null) { open += 1; lineLow += 1; } }
-          });
-          line.n_low = lineLow;
+        const t = this.tally();
+        this.lines.forEach((line) => { line.n_low = this.lineOpen(line); });
+        this.setCounts({ low_total: t.low, unresolved: t.words + t.groups + t.gaps, words: t.words, groups: t.groups, gaps: t.gaps });
+      },
+
+      // A line's open items as `Line.n_low` counts them: its open words, one per open group on it, no gaps.
+      lineOpen(line) {
+        const groups = new Set();
+        let open = 0;
+        (line.tokens || []).forEach((tok) => {
+          if (!this.isUnresolved(tok)) return;
+          const g = this.groupOf(tok);
+          if (g === null) open += 1; else groups.add(g);
         });
-        this.setCounts({ low_total: low, unresolved: open });
+        return open + groups.size;
+      },
+
+      // The page's marks: `low` all of them (decided or not), then the open ones by kind.
+      tally() {
+        const groups = new Map(); // group → still open
+        let low = 0; let words = 0; let gaps = 0;
+        this.lines.forEach((line) => {
+          (line.tokens || []).forEach((tok) => {
+            if (tok.conf !== 'low') return;
+            const g = this.groupOf(tok);
+            if (g !== null) { groups.set(g, groups.get(g) || tok.res == null); return; }
+            low += 1;
+            if (tok.res == null) words += 1;
+          });
+          (line.gaps || []).forEach((gap) => { low += 1; if (this.gapOpen(gap)) gaps += 1; });
+        });
+        let open = 0;
+        groups.forEach((isOpen) => { low += 1; if (isOpen) open += 1; });
+        return { low, words, groups: open, gaps };
       },
 
       // API `counts` = { line_n_low, page_unresolved, page_low_total, book_unresolved_total }.
       applyApiCounts(c, line) {
         if (!c) return;
         if (line && c.line_n_low != null) line.n_low = c.line_n_low;
-        this.setCounts({ low_total: c.page_low_total, unresolved: c.page_unresolved });
+        this.setCounts({ low_total: c.page_low_total, unresolved: c.page_unresolved, words: c.page_words, groups: c.page_groups, gaps: c.page_gaps });
         if (c.book_unresolved_total != null) this.book.unresolved_total = c.book_unresolved_total;
       },
 
@@ -300,8 +409,11 @@
         const v = (current && current.v) || (line && line.v);
         return v === undefined || v === null ? undefined : v;
       },
+      // A line from an answer. Its gaps come with it when the answer carries them (`line.gaps`), else the line
+      // keeps the ones it has (shifted by the optimistic step; `adoptAnswerGaps` may bring the page's list).
       replaceLine(line) {
         const i = this.lines.findIndex((l) => l.id === line.id);
+        if (!Array.isArray(line.gaps)) line.gaps = i >= 0 ? this.lines[i].gaps || [] : [];
         if (i >= 0) this.lines.splice(i, 1, line); else { this.lines.push(line); this.lines.sort((a, b) => a.order - b.order); }
       },
 
@@ -349,9 +461,34 @@
       },
       get currentLine() { return this.lineById(this.currentLineId); },
       get focused() {
-        const line = this.lineById(this.focus && this.focus.lineId);
+        if (!this.focus || this.focus.gap != null) return null;
+        const line = this.lineById(this.focus.lineId);
         return (line && line.tokens[this.focus.index]) || null;
       },
+      // The focused gap ▏ (D72), still open; null otherwise.
+      get focusedGap() {
+        if (!this.focus || this.focus.gap == null) return null;
+        const gap = this.gapById(this.focus.gap);
+        return gap && this.gapOpen(gap) ? gap : null;
+      },
+      // What the popover shows: a gap's offer, an open group's keep / drop, or the word's readings.
+      get popKind() {
+        if (this.focusedGap) return 'gap';
+        const tok = this.focused;
+        return tok && this.inOpenGroup(tok) ? 'group' : 'word';
+      },
+      // D73: how the page was read (`page.reading.readers`); pages read before 7b count as two readers.
+      get readers() {
+        const r = this.page.reading && this.page.reading.readers;
+        return r === 'one' || r === 'tesseract' ? r : 'two';
+      },
+      // The pill and the banner (nothing for two readers: the agreement pill is cut, §4.3).
+      get readersInfo() { return READERS[this.readers] || null; },
+      get hasGroups() { return this.lines.some((line) => (line.tokens || []).some((tok) => this.inOpenGroup(tok))); },
+      get hasGaps() { return this.lines.some((line) => (line.gaps || []).some((gap) => this.gapOpen(gap))); },
+      get hasWordMarks() { return this.lines.some((line) => (line.tokens || []).some((tok) => tok.conf === 'low' && this.groupOf(tok) === null)); },
+      // «3 علامات» in the lines column's head (Arabic count forms, Western digits)
+      get marksLabel() { return arCount(this.counts.unresolved, MARKS); },
       get errorHeadline() { return String(this.page.error || 'تعطّلت معالجة هذه الصفحة').split('\n')[0].trim(); },
       get zoomLabel() { return Math.round(this.zoom.scale * 100) + '%'; },
       get hasScan() { return Boolean(this.image.scan_url); },
@@ -361,31 +498,118 @@
       },
 
       lineById(id) { return id == null ? null : this.lines.find((l) => l.id === id) || null; },
-      same(a, b) { return Boolean(a && b && a.lineId === b.lineId && a.index === b.index); },
+      same(a, b) {
+        if (!a || !b || a.lineId !== b.lineId) return false;
+        if (a.gap != null || b.gap != null) return a.gap === b.gap;
+        return a.index === b.index;
+      },
       isUnresolved(tok) { return Boolean(tok) && tok.conf === 'low' && tok.res == null; },
       tokId(lineId, i) { return `rv-tok-${lineId}-${i}`; },
+      gapElId(id) { return `rv-gap-${id}`; },
+      refElId(ref) { return ref.gap != null ? this.gapElId(ref.gap) : this.tokId(ref.lineId, ref.index); },
 
-      // ------------------------------------------------------------ words: navigation
-      unresolvedRefs() {
+      // ------------------------------------------------------------ D72: groups of added words, gaps
+      // A token of a group carries `ins` (the group); the group is open while its words are unresolved.
+      groupOf(tok) { return tok && tok.ins != null && tok.ins !== '' ? String(tok.ins) : null; },
+      inOpenGroup(tok) { return this.groupOf(tok) !== null && this.isUnresolved(tok); },
+      // Every word of a group in reading order (a group may run over two lines).
+      groupRefs(group) {
         const out = [];
-        this.lines.forEach((line, li) => (line.tokens || []).forEach((tok, i) => {
-          if (this.isUnresolved(tok)) out.push({ lineId: line.id, index: i, pos: li * 10000 + i });
+        this.lines.forEach((line) => (line.tokens || []).forEach((tok, i) => {
+          if (this.groupOf(tok) === group) out.push({ lineId: line.id, index: i });
         }));
         return out;
       },
-
-      posOf(ref) {
-        const li = this.lines.findIndex((l) => l.id === ref.lineId);
-        return li < 0 ? -1 : li * 10000 + ref.index;
+      get focusedGroup() {
+        const tok = this.focused;
+        return tok && this.inOpenGroup(tok) ? this.groupOf(tok) : null;
+      },
+      get groupSize() { const g = this.focusedGroup; return g === null ? 0 : this.groupRefs(g).length; },
+      // The words between two tokens of one open group are joined by the group's dotted underline too.
+      joinsGroup(line, i) {
+        const a = line.tokens[i];
+        const b = line.tokens[i + 1];
+        const g = a && this.inOpenGroup(a) ? this.groupOf(a) : null;
+        return g !== null && Boolean(b) && this.inOpenGroup(b) && this.groupOf(b) === g;
       },
 
-      // Next (dir 1) / previous (dir -1) unresolved word in reading order, wrapping around.
+      gapOpen(gap) { return Boolean(gap) && (gap.status == null || gap.status === 'open'); },
+      gapById(id) {
+        for (const line of this.lines) {
+          const gap = (line.gaps || []).find((g) => g.id === id);
+          if (gap) return gap;
+        }
+        return null;
+      },
+      lineOfGap(id) { return this.lines.find((line) => (line.gaps || []).some((g) => g.id === id)) || null; },
+      // The open gaps of `line` that sit after token `i` (−1: before its first token).
+      gapsAt(line, i) { return (line.gaps || []).filter((gap) => this.gapOpen(gap) && Number(gap.index) === i); },
+      // A payload's page-level gaps (`{line_id, …}`), placed on their lines; the list is the page's, so a line
+      // it leaves out has none.
+      adoptGaps(gaps) {
+        const byLine = new Map();
+        gaps.forEach((gap) => {
+          const id = gap.line_id != null ? gap.line_id : gap.line;
+          if (!byLine.has(id)) byLine.set(id, []);
+          byLine.get(id).push(gap);
+        });
+        this.lines.forEach((line) => { line.gaps = byLine.get(line.id) || []; });
+      },
+      // A mutation's answer may carry the page's open gaps (`gaps`): they replace the local ones.
+      adoptAnswerGaps(data) { if (data && Array.isArray(data.gaps)) this.adoptGaps(data.gaps); },
+      gapsSnapshot(line) { return (line.gaps || []).map((gap) => Object.assign({}, gap)); },
+      // The optimistic step of a line change: the gaps after token `from` move by `delta` words (never before
+      // the line's start); the server's answer then gives their true places (`retokenize`'s alignment).
+      shiftGaps(line, from, delta) {
+        (line.gaps || []).forEach((gap) => {
+          if (Number(gap.index) >= from) gap.index = Math.max(-1, Number(gap.index) + delta);
+        });
+      },
+
+      // ------------------------------------------------------------ words: navigation
+      // The Tab stops in reading order (D72): open words, one per open group (its first word) and open gaps.
+      unresolvedRefs() {
+        const out = [];
+        const seen = new Set();
+        this.lines.forEach((line, li) => {
+          const base = li * 10000;
+          this.gapsAt(line, -1).forEach((gap) => out.push({ lineId: line.id, index: -1, gap: gap.id, pos: base - 0.5 }));
+          (line.tokens || []).forEach((tok, i) => {
+            if (this.isUnresolved(tok)) {
+              const g = this.groupOf(tok);
+              if (g === null) out.push({ lineId: line.id, index: i, pos: base + i });
+              else if (!seen.has(g)) { seen.add(g); out.push({ lineId: line.id, index: i, group: g, pos: base + i }); }
+            }
+            this.gapsAt(line, i).forEach((gap) => out.push({ lineId: line.id, index: i, gap: gap.id, pos: base + i + 0.5 }));
+          });
+        });
+        return out;
+      },
+
+      // A ref's place in reading order. A word of an open group stands for the whole group: at its last word
+      // going forward (dir 1) and at its first going back, so Tab and ⇧Tab leave the group as one stop.
+      posOf(ref, dir) {
+        const li = this.lines.findIndex((l) => l.id === ref.lineId);
+        if (li < 0) return -1;
+        if (ref.gap != null) return li * 10000 + ref.index + 0.5;
+        const line = this.lines[li];
+        const tok = line.tokens && line.tokens[ref.index];
+        if (tok && this.inOpenGroup(tok)) {
+          const refs = this.groupRefs(this.groupOf(tok));
+          const edge = dir < 0 ? refs[0] : refs[refs.length - 1];
+          return this.lines.findIndex((l) => l.id === edge.lineId) * 10000 + edge.index;
+        }
+        return li * 10000 + ref.index;
+      },
+
+      // Next (dir 1) / previous (dir -1) stop in reading order, wrapping around. `from` is a ref, or `{ at }`: a
+      // place in reading order taken before a change removed its word (a group dropped with its line).
       nextUnresolved(dir, from) {
         const refs = this.unresolvedRefs();
         if (!refs.length) return null;
         const start = from === undefined ? this.focus : from;
         if (!start) return dir > 0 ? refs[0] : refs[refs.length - 1];
-        const cur = this.posOf(start);
+        const cur = start.at != null ? start.at : this.posOf(start, dir);
         if (dir > 0) return refs.find((r) => r.pos > cur) || refs[0];
         for (let i = refs.length - 1; i >= 0; i -= 1) if (refs[i].pos < cur) return refs[i];
         return refs[refs.length - 1];
@@ -401,30 +625,48 @@
         return true;
       },
 
+      // Focus a word or a gap (`ref.gap`) and open its menu (`open: false` keeps it closed).
       focusWord(ref, options) {
         const opts = options || {};
-        this.focus = { lineId: ref.lineId, index: ref.index };
+        this.focus = ref.gap != null ? { lineId: ref.lineId, index: ref.index, gap: ref.gap } : { lineId: ref.lineId, index: ref.index };
         this.menuFor = null;
         this.pop.typed = '';
         this.pop.typing = false;
         const tok = this.focused;
+        const gap = this.focusedGap;
         // any word opens the popover on an editable page (merge / delete, D31); read-only: uncertain words only
-        this.pop.open = opts.open !== false && Boolean(tok) && (tok.conf === 'low' || this.editable);
+        this.pop.open = opts.open !== false && (Boolean(gap) || (Boolean(tok) && (tok.conf === 'low' || this.editable)));
         this.pop.more = false;
         // D32: correction is the main action; a click on a confident word opens it prefilled and selected
         const prefill = this.pop.open && opts.fromClick && tok && tok.conf !== 'low' && this.editable;
         if (prefill) { this.pop.typing = true; this.pop.typed = tok.t; }
+        if (gap) this.pop.typed = String(gap.text || ''); // the words a gap would insert, ready to edit
         if (!hasDOM) return;
         this.tick(() => {
-          const el = document.getElementById(this.tokId(ref.lineId, ref.index));
+          const el = document.getElementById(this.refElId(this.focus || ref));
           if (el) {
             if (document.activeElement !== el) el.focus({ preventScroll: true });
             el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             this.placePop(el);
           }
           if (prefill && this.$refs.typed) { this.$refs.typed.focus({ preventScroll: true }); this.$refs.typed.select(); }
-          if (opts.pan !== false && tok && tok.bbox) this.panTo(tok.bbox);
+          const box = tok ? tok.bbox : this.gapBox(gap);
+          if (opts.pan !== false && box) this.panTo(box);
         });
+      },
+
+      // A gap has no box of its own: the scan shows the word it follows (or the one after it).
+      gapBox(gap) {
+        const line = gap ? this.lineOfGap(gap.id) : null;
+        if (!line) return null;
+        const tokens = line.tokens || [];
+        const near = tokens[Math.max(0, Number(gap.index))] || tokens[Number(gap.index) + 1];
+        return (near && near.bbox) || line.bbox || null;
+      },
+
+      onGapClick(line, gap) {
+        this.range = { anchor: line.id, ids: [] };
+        this.focusWord({ lineId: line.id, index: Number(gap.index), gap: gap.id }, { open: true });
       },
 
       onTokFocus(line, i) {
@@ -433,15 +675,46 @@
         if (tok && tok.conf === 'low') this.focusWord({ lineId: line.id, index: i }, { open: true });
       },
 
-      onTokClick(line, i) {
+      onTokClick(line, i, ev) {
+        if (ev && ev.shiftKey) { this.extendRange(line); return; } // ⇧-click: a range of lines (D74)
+        this.range = { anchor: line.id, ids: [] };
         const tok = line.tokens[i];
         if (tok && (tok.conf === 'low' || this.editable)) this.focusWord({ lineId: line.id, index: i }, { open: true, fromClick: true });
         else { this.focus = null; this.pop.open = false; this.hotLine = line.id; }
       },
 
-      onBoxClick(line, i) {
+      // ------------------------------------------------------------ lines: a ⇧-click range (D74)
+      // A click on a line sets the range's anchor; ⇧-click selects every line from the anchor to it, and the
+      // line menu then sets the role of all of them («نوع الأسطر المحدَّدة (6)»). Esc or a plain click clears it.
+      onLineClick(line, ev) {
+        if (ev && ev.shiftKey) { this.extendRange(line); return; }
+        this.range = { anchor: line.id, ids: [] };
+      },
+      // ⇧ + mousedown would extend the browser's text selection: the range replaces it.
+      onLineMouseDown(ev) { if (ev && ev.shiftKey && ev.preventDefault) ev.preventDefault(); },
+      extendRange(line) {
+        const anchorId = this.lineById(this.range.anchor) ? this.range.anchor : (this.currentLineId != null ? this.currentLineId : line.id);
+        const a = this.lines.findIndex((l) => l.id === anchorId);
+        const b = this.lines.findIndex((l) => l.id === line.id);
+        if (b < 0) return;
+        const [from, to] = a < 0 ? [b, b] : [Math.min(a, b), Math.max(a, b)];
+        this.closePop();
+        this.focus = null;
+        this.menuFor = null;
+        this.range = { anchor: anchorId, ids: this.lines.slice(from, to + 1).map((l) => l.id) };
+      },
+      clearRange() { this.range = { anchor: this.range.anchor, ids: [] }; },
+      inRange(line) { return Boolean(line) && this.range.ids.length > 1 && this.range.ids.includes(line.id); },
+      // The lines the menu of `line` acts on: the range when the line is in it, else the line alone.
+      menuLines(line) { return this.inRange(line) ? this.range.ids.map((id) => this.lineById(id)).filter(Boolean) : [line]; },
+      roleMenuLabel(line) {
+        const n = this.menuLines(line).length;
+        return n > 1 ? `نوع الأسطر المحدَّدة (${n})` : 'نوع السطر';
+      },
+
+      onBoxClick(line, i, ev) {
         if (this.dragMoved) return;
-        this.onTokClick(line, i);
+        this.onTokClick(line, i, ev);
       },
 
       // The part of the lines column the reader can see (the scroller clipped to the window), minus the margin.
@@ -485,7 +758,7 @@
 
       repositionPop() {
         if (!hasDOM || !this.pop.open || !this.focus) return;
-        this.placePop(document.getElementById(this.tokId(this.focus.lineId, this.focus.index)));
+        this.placePop(document.getElementById(this.refElId(this.focus)));
         if (this.pop.more) this.placeMore();
       },
 
@@ -570,13 +843,77 @@
         // a number Kraken read (D50) is its one reading: confirm it, or type the true number; where Qari
         // wrote a letter for it (D51), Qari's letter is the second reading (it may be a real letter)
         const kraken = tok.src === 'kraken';
-        const label = kraken ? 'Kraken' : this.labels.primary || 'النموذج الأول';
-        const second = kraken ? this.labels.primary || 'النموذج الأول' : this.labels.secondary || 'النموذج الثاني';
+        // a word only the second model read (D72) has no reading of the first: its one reading is the second's
+        const added = this.groupOf(tok) !== null;
+        const label = kraken ? 'Kraken' : added ? this.secondaryLabel : this.labels.primary || 'النموذج الأول';
+        const second = kraken ? this.labels.primary || 'النموذج الأول' : this.secondaryLabel;
         rows.push({ choice: 'primary', value: primary, label, current: primary === tok.t });
         if (tok.alt && tok.alt !== primary) rows.push({ choice: 'secondary', value: tok.alt, label: second, current: tok.alt === tok.t });
         if (tok.tess && tok.tess !== primary && tok.tess !== tok.alt) rows.push({ choice: 'tess', value: tok.tess, label: 'Tesseract', current: tok.tess === tok.t });
+        // §4.8: a year read again from the number in words, offered as one more reading («من الحروف»)
+        const sug = tok.sug && tok.sug.t ? tok.sug : null;
+        if (sug && !rows.some((row) => row.value === sug.t)) rows.push({ choice: 'sug', value: sug.t, label: sug.label || 'من الحروف', current: sug.t === tok.t });
         rows.forEach((row, i) => { row.key = String(i + 1); });
         return rows;
+      },
+
+      get primaryLabel() { return this.labels.primary || 'Qari v0.3'; },
+      get secondaryLabel() { return this.labels.secondary || 'Qari v0.2'; },
+
+      // D71: why the focused word is marked, in one line under the popover's title ('' when it is not marked).
+      // `why` is the flag policy's list (first match wins, `year` may follow); tokens stored before 7b have none,
+      // and a number among them keeps the number's line.
+      reasonOf(token) {
+        const tok = token === undefined ? this.focused : token;
+        if (!tok || tok.conf !== 'low') return '';
+        const why = Array.isArray(tok.why) ? tok.why : [];
+        const P = this.primaryLabel;
+        const S = this.secondaryLabel;
+        const primary = tok.orig || tok.t;
+        if (why.includes('year') && tok.sug && tok.sug.words) return `السنة مكتوبة بعدها بالحروف: «${tok.sug.words}» = ${tok.sug.t}.`;
+        switch (why[0]) {
+          case 'disagree':
+            if (tok.pick === 'vote') return `النموذجان مختلفان؛ Tesseract يوافق ${S}، فقراءته في النص.`;
+            if (this.tessBacksPrimary(tok)) return `النموذجان مختلفان؛ Tesseract يوافق ${P}.`;
+            return 'النموذجان مختلفان.';
+          case 'alone': return `لم يقرأ ${S} هذه الكلمة، ولم يؤكّدها Tesseract.`;
+          case 'number': return 'رقم: قابِله بالصورة.';
+          case 'script': {
+            const found = foreignChars(`${primary} ${tok.t}`);
+            if (found.letters.length) return `في الكلمة حروف ليست عربية (${quoted(found.letters)}).`;
+            if (found.symbols.length) return `في الكلمة رمز غريب (${quoted(found.symbols)}).`;
+            return 'في الكلمة حروف ليست عربية.';
+          }
+          case 'single':
+            return tok.tess ? `قرأ هذه المنطقةَ نموذجٌ واحد، ويقرأ Tesseract هنا «${tok.tess}».` : 'قرأ هذه المنطقةَ نموذجٌ واحد.';
+          case 'missing': return `كلمات أضافتها القراءة الثانية: قرأها ${S} وTesseract ولم يقرأها ${P}.`;
+          default: return !why.length && tok.digit ? 'رقم: قابِله بالصورة.' : '';
+        }
+      },
+      get reason() { return this.reasonOf(); },
+      // The group menu's line (its title says «كلمات أضافتها القراءة الثانية»).
+      get groupReason() { return `قرأها ${this.secondaryLabel} وTesseract ولم يقرأها ${this.primaryLabel}.`; },
+      // The popover's title and its reason line, per kind (§4.1, §4.2).
+      get popTitle() {
+        if (this.popKind === 'gap') return 'قد تكون هنا كلمات ناقصة';
+        if (this.popKind === 'group') return 'كلمات أضافتها القراءة الثانية';
+        const tok = this.focused;
+        if (tok && tok.conf === 'low') return this.canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة';
+        return 'تصحيح الكلمة';
+      },
+      get popReason() {
+        if (this.popKind === 'gap') return `يقرأ النموذج الثاني هنا: «${this.gapOffer}»`;
+        if (this.popKind === 'group') return this.groupReason;
+        return this.reason;
+      },
+
+      // Without the vote, Tesseract is on the first model's side when its word is the first model's (it is kept on
+      // the token only where it differs, so a boxed token without one agrees) and not the second's.
+      tessBacksPrimary(tok) {
+        const primary = lenient(tok.orig || tok.t);
+        if (tok.tess == null || tok.tess === '') return Boolean(tok.bbox);
+        const tess = lenient(tok.tess);
+        return tess === primary && tess !== lenient(tok.alt);
       },
 
       chooseNth(n) {
@@ -593,16 +930,19 @@
         return Boolean(next);
       },
 
-      // Enter: confirm the reading now in the text. An unresolved word takes the primary reading (PHASE3_SPEC
-      // §4); a word the chooser picked (D26) records the reviewer's confirmation of that reading; a word the
-      // reviewer already resolved, or a confident one, needs no request: the popover closes and focus moves on.
+      // Enter: confirm what is in the text (D71: the option marked «● في النص», so a word the vote gave Qari
+      // v0.2's reading keeps it), keep a group of added words, or insert a gap's words (D72). A word the chooser
+      // picked (D26) records the reviewer's confirmation of that reading; a word the reviewer already resolved,
+      // or a confident one, needs no request: the popover closes and focus moves on.
       accept() {
+        if (!this.editable) return Promise.resolve(false);
+        if (this.focusedGap) return this.acceptGap();
         const tok = this.focused;
-        if (!tok || !this.editable) return Promise.resolve(false);
-        if (this.isUnresolved(tok)) return this.choose('primary');
-        if (tok.res === 'chooser') {
+        if (!tok) return Promise.resolve(false);
+        if (this.inOpenGroup(tok)) return this.keepGroup();
+        if (this.isUnresolved(tok) || tok.res === 'chooser') {
           const cur = this.options().find((o) => o.current);
-          if (cur) return this.choose(cur.choice);
+          return this.choose(cur ? cur.choice : 'primary');
         }
         this.advance(this.focus);
         return Promise.resolve(false);
@@ -618,6 +958,7 @@
         let value = tok.orig || tok.t;
         if (choice === 'secondary') value = tok.alt;
         else if (choice === 'tess') value = tok.tess;
+        else if (choice === 'sug') value = tok.sug && tok.sug.t;
         else if (choice === 'typed') value = String(text || '').replace(/\s+/g, ' ').trim();
         if (!value) return Promise.resolve(false);
         if (choice === 'typed' && value === tok.t && !this.isUnresolved(tok)) { this.closePop(); return Promise.resolve(false); }
@@ -633,7 +974,9 @@
         tok.res = choice;
         if (wasOpen) {
           line.n_low = Math.max(0, (line.n_low || 0) - 1);
-          this.setCounts({ low_total: this.counts.low_total, unresolved: this.counts.unresolved - 1, resolved: this.counts.resolved + 1 });
+          const c = this.counts;
+          const split = c.words != null ? { words: Math.max(0, c.words - 1), groups: c.groups, gaps: c.gaps } : {};
+          this.setCounts(Object.assign({ low_total: c.low_total, unresolved: c.unresolved - 1, resolved: c.resolved + 1 }, split));
         }
         this.flash(ref);
         if (!this.advance(ref) && wasOpen && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A');
@@ -686,11 +1029,13 @@
         if (k < 0 || k + 1 >= tokens.length) return Promise.resolve(false);
         const before = tokens.map((t) => Object.assign({}, t));
         const beforeText = line.text;
+        const beforeGaps = this.gapsSnapshot(line);
         const beforeCounts = Object.assign({}, this.counts);
         const merged = plainToken(tokens[k].t + tokens[k + 1].t);
         merged.bbox = unionBox(tokens[k].bbox, tokens[k + 1].bbox);
         tokens.splice(k, 2, merged);
         line.text = tokens.map((t) => t.t).join(' ');
+        this.shiftGaps(line, k + 1, -1);
         this.recount();
         this.closePop();
         const at = { lineId: line.id, index: k };
@@ -700,11 +1045,12 @@
         return this.request(() => api(fill(this.urls.merge, line.id), { method: 'POST', body: seen }), {
           apply: (data) => {
             if (data.line) this.replaceLine(data.line);
+            this.adoptAnswerGaps(data);
             this.applyApiCounts(data.counts, this.lineById(line.id));
           },
           rollback: () => {
             const l = this.lineById(line.id);
-            if (l) { l.tokens = before; l.text = beforeText; }
+            if (l) { l.tokens = before; l.text = beforeText; l.gaps = beforeGaps; }
             this.setCounts(beforeCounts);
             this.recount();
           },
@@ -722,9 +1068,11 @@
         if (tokens.length === 1) { this.closePop(); this.focus = null; return this.removeLine(line); }
         const before = tokens.map((t) => Object.assign({}, t));
         const beforeText = line.text;
+        const beforeGaps = this.gapsSnapshot(line);
         const beforeCounts = Object.assign({}, this.counts);
         tokens.splice(ref.index, 1);
         line.text = tokens.map((t) => t.t).join(' ');
+        this.shiftGaps(line, ref.index, -1);
         this.recount();
         this.closePop();
         this.focusWord({ lineId: line.id, index: Math.min(ref.index, tokens.length - 1) }, { open: false });
@@ -732,12 +1080,13 @@
         return this.request(() => api(fill(this.urls.delete_word, line.id), { method: 'POST', body: seen }), {
           apply: (data, seq) => {
             if (data.line) this.replaceLine(data.line);
+            this.adoptAnswerGaps(data);
             this.applyApiCounts(data.counts, this.lineById(line.id));
             this.showUndoToast('حُذفت الكلمة', seq);
           },
           rollback: () => {
             const l = this.lineById(line.id);
-            if (l) { l.tokens = before; l.text = beforeText; }
+            if (l) { l.tokens = before; l.text = beforeText; l.gaps = beforeGaps; }
             this.setCounts(beforeCounts);
             this.recount();
           },
@@ -745,7 +1094,139 @@
         });
       },
 
+      // ------------------------------------------------------------ D72: a group kept or dropped, a gap decided
+      // Keep (Enter, «إبقاء الكلمات (12)») or drop («حذف الكلمات (12)») every word of the focused group, on
+      // whichever lines it runs over (`resolve_insertion`, one batch: one ⌘Z undoes it). Optimistic: kept words
+      // lose the dotted underline at once, dropped ones leave the text; a failure restores the lines.
+      resolveGroup(keep) {
+        const group = this.focusedGroup;
+        if (group === null || !this.editable) return Promise.resolve(false);
+        const refs = this.groupRefs(group);
+        const ids = Array.from(new Set(refs.map((r) => r.lineId)));
+        const before = ids.map((id) => JSON.parse(JSON.stringify(this.lineById(id))));
+        const beforeCounts = Object.assign({}, this.counts);
+        const first = refs[0];
+        const n = refs.length;
+        const before0 = { at: this.posOf(first, -1) - 0.75 }; // just before the group: where a drop leaves off
+        ids.forEach((id) => {
+          const line = this.lineById(id);
+          if (keep) {
+            line.tokens.forEach((tok) => { if (this.groupOf(tok) === group && tok.res == null) tok.res = 'secondary'; });
+            return;
+          }
+          // a gap after old word i now follows the last kept word at or before it (−1: the line's start)
+          const place = [];
+          let last = -1;
+          line.tokens.forEach((tok, i) => { if (this.groupOf(tok) !== group) last += 1; place[i] = last; });
+          (line.gaps || []).forEach((gap) => { const g = Number(gap.index); if (g >= 0) gap.index = place[g]; });
+          line.tokens = line.tokens.filter((tok) => this.groupOf(tok) !== group);
+          line.text = line.tokens.map((t) => t.t).join(' ');
+        });
+        // a line that was all added words goes with them (the answer brings it back if the server keeps it)
+        if (!keep) this.lines = this.lines.filter((l) => !ids.includes(l.id) || (l.tokens || []).length > 0);
+        this.recount();
+        if (keep) refs.forEach((r) => this.flash(r));
+        if (!this.advance(keep ? refs[n - 1] : before0) && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A');
+        return this.request(() => api(fill(this.urls.insertion, group), { method: 'POST', body: { keep: Boolean(keep) } }), {
+          apply: (data, seq) => {
+            // {lines: the changed lines, deleted_ids: lines the drop emptied, order: the page's lines after it}
+            const gone = new Set(data.deleted_ids || []);
+            if (gone.size) this.lines = this.lines.filter((l) => !gone.has(l.id));
+            (data.lines || []).forEach((line) => this.replaceLine(line));
+            if (Array.isArray(data.order)) this.reorder(data.order);
+            this.adoptAnswerGaps(data);
+            this.applyApiCounts(data.counts);
+            if (data.page) Object.assign(this.page, data.page);
+            if (!keep) this.showUndoToast(n === 1 ? 'حُذفت الكلمة المضافة' : 'حُذفت الكلمات المضافة', seq);
+          },
+          rollback: () => {
+            before.forEach((line) => this.replaceLine(line));
+            this.setCounts(beforeCounts);
+            this.recount();
+          },
+          retry: () => { this.focus = { lineId: first.lineId, index: first.index }; return this.resolveGroup(keep); },
+        });
+      },
+      keepGroup() { return this.resolveGroup(true); },
+      dropGroup() { return this.resolveGroup(false); },
+
+      // Insert the focused gap's words (Enter, «إدراج»), as offered or as typed in its field (`accept_gap`); the
+      // gap closes, and ⌘Z reopens it. The words land after the gap's word, typed (sure) like a correction.
+      acceptGap(text) {
+        const gap = this.focusedGap;
+        const line = gap ? this.lineOfGap(gap.id) : null;
+        if (!gap || !line || !this.editable) return Promise.resolve(false);
+        const typed = splitWords(text === undefined ? (this.pop.typed || gap.text) : text).join(' ');
+        if (!typed) return Promise.resolve(false);
+        const before = JSON.parse(JSON.stringify(line));
+        const beforeCounts = Object.assign({}, this.counts);
+        const words = splitWords(typed);
+        const at = Math.max(-1, Number(gap.index));
+        gap.status = 'inserted';
+        this.shiftGaps(line, at + 1, words.length);
+        line.tokens.splice(at + 1, 0, ...words.map(plainToken));
+        line.text = line.tokens.map((t) => t.t).join(' ');
+        this.recount();
+        const landed = { lineId: line.id, index: at + words.length };
+        words.forEach((_, k) => this.flash({ lineId: line.id, index: at + 1 + k }));
+        if (!this.advance(landed) && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A');
+        // the offered words go as they are (`{}`); words the reviewer changed travel as `text`
+        const offered = splitWords(gap.text).join(' ');
+        const body = typed === offered ? {} : { text: typed };
+        return this.request(() => api(fill(this.urls.gap_accept, gap.id), { method: 'POST', body }), {
+          apply: (data) => {
+            if (data.line) this.replaceLine(data.line);
+            this.adoptAnswerGaps(data);
+            this.applyApiCounts(data.counts, this.lineById(line.id));
+            if (data.page) Object.assign(this.page, data.page);
+          },
+          rollback: () => { this.replaceLine(before); this.setCounts(beforeCounts); },
+          retry: () => { this.focus = { lineId: line.id, index: at, gap: gap.id }; return this.acceptGap(typed); },
+        });
+      },
+
+      // ⌫ on a gap, «تجاهل»: the offer is dropped (`dismiss_gap`, «نص مقترح» in the history); ⌘Z or the toast
+      // brings it back. Nothing in the text changes.
+      dismissGap() {
+        const gap = this.focusedGap;
+        const line = gap ? this.lineOfGap(gap.id) : null;
+        if (!gap || !line || !this.editable) return Promise.resolve(false);
+        const beforeStatus = gap.status || 'open';
+        const beforeCounts = Object.assign({}, this.counts);
+        gap.status = 'dismissed';
+        this.recount();
+        const ref = { lineId: line.id, index: Number(gap.index), gap: gap.id };
+        if (!this.advance(ref) && this.counts.unresolved === 0) this.toast('حُسمت كل الكلمات · اعتمد الصفحة بـ A');
+        return this.request(() => api(fill(this.urls.gap_dismiss, gap.id), { method: 'POST', body: {} }), {
+          apply: (data, seq) => {
+            if (data.line) this.replaceLine(data.line);
+            this.adoptAnswerGaps(data);
+            this.applyApiCounts(data.counts, data.line ? this.lineById(data.line.id) : null);
+            if (data.page) Object.assign(this.page, data.page);
+            this.showUndoToast('تُجوهل النص المقترح', seq);
+          },
+          rollback: () => { const g = this.gapById(ref.gap); if (g) g.status = beforeStatus; this.setCounts(beforeCounts); },
+          retry: () => { this.focus = ref; return this.dismissGap(); },
+        });
+      },
+
+      // What the gap offers, in the popover's line («يقرأ النموذج الثاني هنا: «الاجابة»»).
+      get gapOffer() { const gap = this.focusedGap; return gap ? String(gap.text || '').trim() : ''; },
+      gapTitle(gap) { return gap ? `قد تكون هنا كلمات ناقصة: «${String(gap.text || '').trim()}»` : ''; },
+      groupCountLabel(verb) { return `${verb} (${this.groupSize})`; },
+
       startTyping(ch) {
+        if (this.focusedGap && this.editable) {
+          // on a gap the field holds the words to insert: a key starts them afresh (Esc brings the offer back)
+          this.pop.open = true;
+          this.pop.typing = true;
+          this.pop.typed = ch || '';
+          this.tick(() => {
+            const input = this.$refs.gapTyped;
+            if (input) { input.focus(); try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) { /* fine */ } }
+          });
+          return;
+        }
         if (!this.focused || !this.editable) return;
         this.pop.open = true;
         this.pop.typing = true;
@@ -777,12 +1258,18 @@
         setTimeout(() => { const next = Object.assign({}, this.flashing); delete next[key]; this.flashing = next; }, FLASH_MS);
       },
 
+      // An open group's words carry a dotted underline instead of the amber one (D72); the whole group lights up
+      // while one of its words is focused.
       tokClass(line, tok, i) {
         const ref = { lineId: line.id, index: i };
         const low = tok.conf === 'low';
+        const group = this.inOpenGroup(tok);
+        const focusGroup = this.focusedGroup;
         return {
           'is-low': low,
-          'is-open': low && tok.res == null,
+          'is-open': low && tok.res == null && !group,
+          'is-group': group,
+          'is-group-focus': group && focusGroup !== null && this.groupOf(tok) === focusGroup,
           'is-resolved': low && tok.res != null,
           'is-focus': this.same(this.focus, ref),
           'is-hot': this.same(this.hot, ref),
@@ -791,48 +1278,101 @@
         };
       },
 
+      // The space after word i: part of the group's underline when both neighbours are in the same open group.
+      sepClass(line, i) {
+        if (!this.joinsGroup(line, i)) return {};
+        const g = this.groupOf(line.tokens[i]);
+        return { 'rv-sep': true, 'is-group': true, 'is-group-focus': g === this.focusedGroup };
+      },
+
+      gapClass(gap) {
+        return { 'is-focus': Boolean(this.focus && this.focus.gap === gap.id), 'is-hot': Boolean(this.hot && this.hot.gap === gap.id) };
+      },
+
       boxClass(line, tok, i) {
         const ref = { lineId: line.id, index: i };
         return {
-          'is-open': this.isUnresolved(tok),
+          'is-open': this.isUnresolved(tok) && !this.inOpenGroup(tok),
+          'is-group': this.inOpenGroup(tok),
           'is-hot': this.same(this.hot, ref) || this.same(this.focus, ref),
           'is-weak': tok.bq === 'weak', // the alignment is unsure of this box: drawn dashed
         };
       },
 
-      // D32: what the line is in the book (body text, main heading, subheading); undo restores it.
-      setRole(line, role) {
+      // D32, D74: what the line is in the book: «محتوى» · «عنوان رئيسي» · «عنوان فرعي» · «شعر» · «حاشية». The
+      // request carries the effective choice (`set_line_role` maps it onto the stored role: on a footnote-region
+      // line «حاشية» is `body` and «محتوى» is `main`); undo restores it.
+      lineRole(line) { return line ? effectiveRole(line.role, line.region_kind, line.kind) : 'body'; },
+      lineKindOf(line) { return line ? line.kind || lineKind(line.role, line.region_kind) : 'body'; },
+      setRole(line, choice) {
         this.menuFor = null;
-        if (!line || !this.editable || (line.role || 'body') === role) return Promise.resolve(false);
-        const before = line.role || 'body';
-        line.role = role;
-        return this.request(() => api(fill(this.urls.role, line.id), { method: 'POST', body: { role, v: this.versionOf(line) } }), {
+        if (!line || !this.editable || this.lineRole(line) === choice) return Promise.resolve(false);
+        const before = { role: line.role || 'body', kind: line.kind };
+        line.role = storedRole(choice, line.region_kind);
+        line.kind = lineKind(line.role, line.region_kind);
+        return this.request(() => api(fill(this.urls.role, line.id), { method: 'POST', body: { role: choice, v: this.versionOf(line) } }), {
           apply: (data) => { if (data.line) this.replaceLine(data.line); },
-          rollback: () => { const l = this.lineById(line.id); if (l) l.role = before; },
-          retry: () => this.setRole(this.lineById(line.id), role),
+          rollback: () => { const l = this.lineById(line.id); if (l) { l.role = before.role; l.kind = before.kind; } },
+          retry: () => this.setRole(this.lineById(line.id), choice),
         });
       },
 
+      // The line menu's role for its lines: one line (`setRole`, with its version) or a ⇧-click range
+      // (`set_roles`, one revision per line in one batch, so one ⌘Z undoes it). The lines already of that kind
+      // are left out of the request; none left, nothing is sent.
+      setMenuRole(line, choice) {
+        const lines = this.menuLines(line);
+        if (lines.length <= 1) return this.setRole(line, choice);
+        this.menuFor = null;
+        const changing = lines.filter((l) => this.lineRole(l) !== choice);
+        if (!this.editable || !changing.length) return Promise.resolve(false);
+        const before = changing.map((l) => ({ id: l.id, role: l.role || 'body', kind: l.kind }));
+        changing.forEach((l) => { l.role = storedRole(choice, l.region_kind); l.kind = lineKind(l.role, l.region_kind); });
+        const body = { line_ids: changing.map((l) => l.id), role: choice };
+        return this.request(() => api(this.urls.roles, { method: 'POST', body }), {
+          apply: (data) => {
+            (data.lines || []).forEach((l) => this.replaceLine(l));
+            this.clearRange();
+          },
+          rollback: () => before.forEach((b) => { const l = this.lineById(b.id); if (l) { l.role = b.role; l.kind = b.kind; } }),
+          retry: () => this.setMenuRole(this.lineById(line.id), choice),
+        });
+      },
+
+      // The menu's check: the role of the menu's lines when they share one, else none.
+      menuRoleChecked(line, value) {
+        const lines = this.menuLines(line);
+        return lines.length > 0 && lines.every((l) => this.lineRole(l) === value);
+      },
+
+      // The quiet tag after the line: headings and verse by name, a body-region line made a note «حاشية», and a
+      // footnote-region line pulled into the body «محتوى» (`main`).
       roleLabel(line) {
-        const role = ROLES.find((r) => r.value === (line && line.role));
-        return role && role.value !== 'body' ? role.label : '';
+        if (!line) return '';
+        const role = line.role || 'body';
+        if (role === 'main') return 'محتوى';
+        const found = ROLES.find((r) => r.value === role);
+        return found && found.value !== 'body' ? found.label : '';
       },
 
       lineClass(line) {
         return {
           'is-heading': line.role === 'heading',
           'is-subheading': line.role === 'subheading',
+          'is-verse': line.role === 'verse',
           'is-current': this.currentLineId === line.id,
           'is-reviewed': Boolean(line.is_reviewed),
           'is-manual': Boolean(line.is_manual),
           'is-editing': Boolean(this.edit && this.edit.lineId === line.id),
-          'is-footnote': line.region_kind === 'footnote',
+          'is-footnote': this.lineKindOf(line) === 'footnote',
+          'is-selected': this.inRange(line),
         };
       },
 
+      // «الحواشي» over the first note line of a run (the line's kind, D74: a role can make or unmake a note).
       showGroup(line, li) {
         const prev = li > 0 ? this.lines[li - 1] : null;
-        return line.region_kind === 'footnote' && (!prev || prev.region_kind !== 'footnote');
+        return this.lineKindOf(line) === 'footnote' && (!prev || this.lineKindOf(prev) !== 'footnote');
       },
 
       // ------------------------------------------------------------ lines: edit / insert / delete
@@ -1074,6 +1614,7 @@
           this.openDialog(this.counts.unresolved);
           return Promise.resolve(false);
         }
+        this.clearRange();
         this.dialog.open = false;
         this.approving = true;
         this.closePop();
@@ -1091,7 +1632,7 @@
           onFail: (res) => {
             this.approving = false;
             if (res.status === 409) {
-              this.openDialog((res.data && res.data.unresolved) || this.counts.unresolved);
+              this.openDialog((res.data && res.data.unresolved) || this.counts.unresolved, res.data);
               return true;
             }
             return false;
@@ -1099,9 +1640,31 @@
         });
       },
 
-      openDialog(count) {
-        this.dialog = { open: true, count: Number(count) || 0 };
+      // D73: the dialog counts the open words and the open suggestions (groups of added words and gaps). The
+      // split comes from the server's 409 when it gives one (`words`, `groups`, `gaps`), else from the page.
+      openDialog(count, detail) {
+        const total = Number(count) || 0;
+        const d = detail || {};
+        const t = this.tally();
+        const given = d.words != null || d.groups != null || d.gaps != null;
+        const gaps = given ? Number(d.gaps) || 0 : Math.min(total, t.gaps);
+        const suggested = given ? (Number(d.groups) || 0) + gaps : Math.min(total, t.groups + t.gaps);
+        const words = given && d.words != null ? Number(d.words) || 0 : Math.max(0, total - suggested);
+        this.dialog = { open: true, count: total, words, suggested, gaps };
         this.tick(() => { const el = this.$refs.dialogCancel; if (el) el.focus(); });
+      },
+
+      // = review.services.blocked_message: open words only «بقيت 4 كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟» (review's
+      // sentence as it always read); with suggestions «بقيت 3 علامات: كلمتان غير محسومتين وكلمات مقترحة لم تُحسم.
+      // اعتماد الصفحة رغم ذلك؟» (Arabic count forms, Western digits).
+      get dialogTitle() {
+        const d = this.dialog;
+        const ask = 'اعتماد الصفحة رغم ذلك؟';
+        if (!d.suggested) return `بقيت ${d.count} كلمة غير محسومة. ${ask}`;
+        const parts = [];
+        if (d.words) parts.push(arCount(d.words, OPEN_WORDS));
+        parts.push('كلمات مقترحة لم تُحسم');
+        return `بقيت ${arCount(d.count, MARKS)}: ${parts.join(' و')}. ${ask}`;
       },
 
       // Stamp (400 ms), then the next page needing review slides in from the reading direction.
@@ -1186,6 +1749,7 @@
           this.gen += 1; // responses still in flight for the old page are dropped when they arrive
           this.focus = null; this.hot = null; this.hotLine = null; this.closePop();
           this.edit = null; this.insert = null; this.menuFor = null; this.dialog.open = false; this.dismissUndo();
+          this.range = { anchor: null, ids: [] };
           if (this.save.failed.length) {
             // their retries target lines of the page being left: say so instead of keeping a chip that lies
             this.save.failed = [];
@@ -1258,12 +1822,16 @@
         else this.toast('لا صفحات بانتظار المراجعة');
       },
 
+      // «صفحة 3 · 3 علامات · قراءة واحدة»: the open items (words, groups and gaps, D73) and a single reader.
       thumbTitle(p) {
         const parts = [`صفحة ${p.number}`];
         if (p.is_reviewed) parts.push('مُراجَعة');
-        else if (p.n_unresolved > 0) parts.push(`${p.n_unresolved} كلمة غير محسومة`);
+        else if (p.n_unresolved > 0) parts.push(arCount(p.n_unresolved, MARKS));
+        const readers = READERS[p.readers];
+        if (readers) parts.push(readers.label);
         return parts.join(' · ');
       },
+      readersOf(p) { return p && READERS[p.readers] ? p.readers : ''; },
 
       // ------------------------------------------------------------ filmstrip
       async loadFilm() {
@@ -1569,7 +2137,7 @@
         const body = []; const notes = [];
         this.lines.forEach((line) => {
           const text = line.text || (line.tokens || []).map((t) => t.t).join(' ');
-          (line.region_kind === 'footnote' ? notes : body).push(text);
+          (this.lineKindOf(line) === 'footnote' ? notes : body).push(text);
         });
         return [body.join('\n'), notes.join('\n')].filter(Boolean).join('\n\n');
       },
@@ -1610,20 +2178,23 @@
         if (this.menuFor != null) { this.menuFor = null; return; }
         if (this.pop.more) { this.closeMore(true); return; }
         if (this.pop.typing) {
-          // readings above the input: Esc returns to them; a correction-only popover (a confident word) just closes
-          if (this.options().length) { this.pop.typing = false; this.pop.typed = ''; } else this.closePop();
+          // readings above the input: Esc returns to them; a correction-only popover (a confident word) just
+          // closes; a gap's field gets its offer back
+          const gap = this.focusedGap;
+          if (gap) { this.pop.typing = false; this.pop.typed = String(gap.text || ''); } else if (this.options().length) { this.pop.typing = false; this.pop.typed = ''; } else this.closePop();
           this.refocusWord();
           return;
         }
         // the menu closes and the focus stays on its word (page mode: A, E, N are commands again)
         if (this.pop.open) { this.closePop(); this.refocusWord(); return; }
         if (this.edit || this.insert) { this.cancelEdit(); return; }
+        if (this.range.ids.length) { this.clearRange(); return; }
         if (this.undoToast) { this.dismissUndo(); return; }
         if (this.focus) { this.focus = null; return; }
       },
 
       refocusWord() {
-        this.tick(() => { const el = this.focus && document.getElementById(this.tokId(this.focus.lineId, this.focus.index)); if (el) el.focus(); });
+        this.tick(() => { const el = this.focus && document.getElementById(this.refElId(this.focus)); if (el) el.focus(); });
       },
 
       // ------------------------------------------------------------ keyboard
@@ -1644,9 +2215,13 @@
         if (inPop && !inField && (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown')) return;
         const outside = Boolean(target.closest && target.closest('.rv-bar, .rv-film, .rv-toolbar, .sidebar, .topbar'));
         const inFlow = !inField && !outside && tag !== 'button' && tag !== 'a';
-        const focused = Boolean(this.focused) && this.editable;
+        const gap = Boolean(this.focusedGap);
+        const group = this.focusedGroup !== null;
+        const focused = (Boolean(this.focused) || gap) && this.editable;
         const open = focused && this.pop.open;
-        const action = keyAction(ev, { inField, inPop, inFlow, focused, open, optionKeys: this.options().map((o) => o.key) });
+        // a group's menu keeps or drops its words: no readings to choose, no correction to start
+        const optionKeys = gap || group ? [] : this.options().map((o) => o.key);
+        const action = keyAction(ev, { inField, inPop, inFlow, focused, open, optionKeys, gap, group });
         if (action) this.runAction(action, ev);
       },
 
@@ -1656,15 +2231,16 @@
         if (this.pop.open && this.pop.typing) {
           const value = this.pop.typed.trim();
           const tok = this.focused;
-          if (value && tok && this.editable && (value !== tok.t || this.isUnresolved(tok))) this.submitTyped();
+          if (value && this.focusedGap && this.editable) this.acceptGap(value); // words typed into a gap's field
+          else if (value && tok && this.editable && (value !== tok.t || this.isUnresolved(tok))) this.submitTyped();
         }
         this.closePop();
         return this.approve(false);
       },
 
-      // Space on a focused word: its menu, as a click opens it.
+      // Space on a focused word or gap: its menu, as a click opens it.
       openWord() {
-        if (!this.focus || !this.focused) return false;
+        if (!this.focus || !(this.focused || this.focusedGap)) return false;
         this.focusWord(this.focus, { open: true, pan: false });
         return true;
       },
@@ -1684,6 +2260,7 @@
           case 'mergeNext': stop(); this.mergeWord(1); break;
           case 'mergePrev': stop(); this.mergeWord(-1); break;
           case 'deleteWord': stop(); this.deleteWord(); break;
+          case 'dismissGap': stop(); this.dismissGap(); break;
           case 'approve': stop(); this.approveFromKeys(); break;
           case 'nextReview': stop(); this.goNextReview(); break;
           case 'nextPage': stop(); this.goNextPage(); break;

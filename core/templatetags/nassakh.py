@@ -39,6 +39,9 @@ FLAG_LABELS: dict[str, str] = {
     "ocr_fallback": "استُخدم نص Tesseract الاحتياطي",
     "alignment_poor": "ربط الكلمات بالأسطر ضعيف",
     "lines_merged": "سطران مطبوعان في سطر واحد",
+    # D73: a region read by one model (or Tesseract alone); D72: words only the second model read
+    "single_reader": "قراءة واحدة",
+    "missing_text": "نص قد يكون ناقصًا",
 }
 
 

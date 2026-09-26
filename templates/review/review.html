@@ -104,7 +104,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
               <div class="rv-line-boxes">
                 <template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i">
                   <div class="rv-box" x-show="tok.bbox" :class="boxClass(line, tok, i)" :style="tok.bbox ? boxStyle(tok.bbox) : ''"
-                       @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onBoxClick(line, i)"></div>
+                       @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onBoxClick(line, i, $event)"></div>
                 </template>
               </div>
             </template>
@@ -121,9 +121,18 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
       <div class="rv-toolbar">
         <div class="rv-toolbar-start">
           <h2 class="section-title">النص</h2>
-          <span class="badge badge-warning" x-show="ready && counts.unresolved > 0" x-cloak><bdi class="num" x-text="counts.unresolved"></bdi> غير محسومة</span>
+          {# D73: a page one model read says so (the agreement pill for two readers is cut); the marks count words, groups and gaps #}
+          <span class="badge rv-readers" :class="readersInfo ? 'badge-' + readersInfo.tone : ''" x-show="ready && readersInfo" x-cloak x-text="readersInfo ? readersInfo.label : ''" data-readers></span>
+          <span class="badge badge-warning" x-show="ready && counts.unresolved > 0" x-cloak x-text="marksLabel" data-marks></span>
           <span class="badge" x-show="ready && counts.low_total > 0 && counts.unresolved === 0" x-cloak>حُسمت كلها</span>
           <span class="meta" x-show="page.printed_number" x-cloak>الرقم المطبوع: <bdi class="num" x-text="page.printed_number"></bdi></span>
+          {# D74: a ⇧-click range of lines, whose role the line menu sets together #}
+          <span class="rv-range meta" x-show="range.ids.length > 1" x-cloak>
+            <span>الأسطر المحدَّدة (<bdi class="num" x-text="range.ids.length"></bdi>)</span>
+            <button type="button" class="btn-icon btn-icon-sm rv-range-clear" title="إلغاء التحديد (Esc)" aria-label="إلغاء تحديد الأسطر" @click="clearRange()">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+            </button>
+          </span>
         </div>
         <div class="rv-toolbar-end">
           <button type="button" class="btn btn-ghost btn-sm" x-show="ready && lines.length" x-cloak @click="copyPage()" aria-label="نسخ نص الصفحة">
@@ -142,6 +151,12 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <div class="banner banner-info rv-note" x-show="!canEdit && ready" x-cloak>
           <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
           <span class="grow">عرض فقط: حسم الكلمات وتعديل الأسطر متاحان للمدقّقين والمحرّرين.</span>
+        </div>
+
+        {# D73: one reader (or Tesseract alone): the marks undercount, so every line is read against the scan #}
+        <div class="banner rv-note rv-readers-note" :class="readersInfo && readersInfo.tone === 'danger' ? 'banner-danger' : ''" x-show="ready && !loading && readersInfo" x-cloak role="note" data-readers-banner>
+          <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+          <span class="grow" x-text="readersInfo ? readersInfo.banner : ''"></span>
         </div>
 
         {# error: Arabic headline, retry from the dashboard stage #}
@@ -174,19 +189,52 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         {# the lines #}
         <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading" x-cloak>
 
-          {# word popover (D31/D32): readings, then the correction (the main action), then a second-level menu with merge and delete #}
-          <div class="rv-pop" x-ref="pop" x-show="pop.open && focused" x-cloak :style="pop.style" :class="{ 'is-above': pop.above }"
-               role="dialog" aria-label="قائمة الكلمة" @mousedown.stop @click.outside="onPopOutside()" @keydown.escape.stop.prevent="closeTop()">
-            <div class="rv-pop-title" x-text="focused && focused.conf === 'low' ? (canEdit ? 'اختر القراءة الصحيحة' : 'قراءات هذه الكلمة') : 'تصحيح الكلمة'"></div>
-            <template x-for="opt in options()" :key="opt.choice">
-              <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
-                <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
-                <bdi class="rv-opt-value" x-text="opt.value"></bdi>
-                <span class="rv-opt-label" x-text="opt.label"></span>
-              </button>
+          {% comment %}The word popover (D31/D32, D71/D72): one of three kinds (popKind). A word: why it is marked (the reason
+          line), its readings with the one in the text marked «● في النص» (Enter confirms it), the correction (the main
+          action), then a second-level menu with merge and delete. A group of added words: keep them (Enter) or drop
+          them in one step. A gap ▏: its words, editable, to insert (Enter), or dismiss (⌫).{% endcomment %}
+          <div class="rv-pop" x-ref="pop" x-show="pop.open && (focused || focusedGap)" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-group': popKind === 'group', 'is-gap': popKind === 'gap' }"
+               role="dialog" aria-label="قائمة الكلمة" :aria-label="popKind === 'word' ? 'قائمة الكلمة' : popTitle" @mousedown.stop @click.outside="onPopOutside()" @keydown.escape.stop.prevent="closeTop()">
+            <div class="rv-pop-title" x-text="popTitle"></div>
+            <p class="rv-pop-reason" x-show="popReason" x-text="popReason" data-reason></p>
+            <template x-if="popKind === 'word'">
+              <div class="rv-opts">
+                <template x-for="opt in options()" :key="opt.choice">
+                  <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
+                    <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
+                    <bdi class="rv-opt-value" x-text="opt.value"></bdi>
+                    <span class="rv-opt-now" x-show="opt.current && focused && focused.conf === 'low'">● في النص</span>
+                    <span class="rv-opt-label" x-text="opt.label"></span>
+                  </button>
+                </template>
+              </div>
             </template>
-            <p class="rv-pop-note" x-show="focused && focused.digit">رقم: تحقّق منه على الصورة</p>
-            <template x-if="editable">
+            <template x-if="popKind === 'group' && editable">
+              <div class="rv-pop-acts">
+                <button type="button" class="rv-act rv-act-main" @click="keepGroup()" title="إبقاء الكلمات في النص (Enter)">
+                  <span class="rv-act-label" x-text="groupCountLabel('إبقاء الكلمات')"></span>
+                  <span class="rv-act-keys"><kbd class="kbd">↵</kbd></span>
+                </button>
+                <button type="button" class="rv-act rv-act-danger" @click="dropGroup()" title="حذف الكلمات المضافة من النص">
+                  <span class="rv-act-label" x-text="groupCountLabel('حذف الكلمات')"></span>
+                </button>
+              </div>
+            </template>
+            <template x-if="popKind === 'gap' && editable">
+              <div class="rv-pop-gap">
+                <form class="rv-typed rv-gap-form" @submit.prevent="acceptGap(pop.typed)">
+                  <label class="sr-only" for="rv-gap-input">الكلمات المقترحة</label>
+                  <input id="rv-gap-input" class="input" x-ref="gapTyped" x-model="pop.typed" autocomplete="off" spellcheck="false" dir="auto"
+                         @focus="pop.typing = true" @keydown.escape.stop.prevent="closeTop()">
+                  <button type="submit" class="btn btn-sm" :disabled="!pop.typed.trim()" title="إدراج الكلمات بعد هذه الكلمة (Enter)">إدراج</button>
+                </form>
+                <button type="button" class="rv-act rv-act-quiet" @click="dismissGap()" title="تجاهل النص المقترح (⌫)">
+                  <span class="rv-act-label">تجاهل</span>
+                  <span class="rv-act-keys"><kbd class="kbd">⌫</kbd></span>
+                </button>
+              </div>
+            </template>
+            <template x-if="editable && popKind === 'word'">
               <form class="rv-typed" @submit.prevent="submitTyped()">
                 <div class="rv-pop-sep" aria-hidden="true" x-show="options().length"></div>
                 <label class="sr-only" for="rv-typed-input">تصحيح</label>
@@ -195,7 +243,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                 <button type="submit" class="btn btn-sm" :disabled="!pop.typed.trim()">حفظ</button>
               </form>
             </template>
-            <template x-if="editable">
+            <template x-if="editable && popKind === 'word'">
               <div class="rv-more-host" @mouseenter="openMore()" @mouseleave="closeMoreSoon()">
                 <div class="rv-pop-sep" aria-hidden="true"></div>
                 <button type="button" class="rv-act rv-more-row" x-ref="moreRow" aria-haspopup="menu" :aria-expanded="pop.more"
@@ -227,16 +275,20 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
           <ol class="rv-lines" dir="rtl">
             <template x-for="(line, li) in lines" :key="line.id">
-              <li class="rv-line" :class="lineClass(line)" :style="'--i:' + Math.min(li, 24)" :data-id="line.id"
-                  @mouseenter="hotLine = line.id" @mouseleave="hotLine = null" @dblclick.prevent="startEdit(line)">
+              {# a click sets the anchor of a ⇧-click range (D74); ⇧-click extends it to this line #}
+              <li class="rv-line" :class="lineClass(line)" :style="'--i:' + Math.min(li, 24)" :data-id="line.id" :aria-selected="inRange(line) ? 'true' : null"
+                  @mouseenter="hotLine = line.id" @mouseleave="hotLine = null" @dblclick.prevent="startEdit(line)"
+                  @mousedown="onLineMouseDown($event)" @click="onLineClick(line, $event)">
                 <template x-if="showGroup(line, li)">
                   <div class="rv-group group-label" aria-hidden="true">الحواشي</div>
                 </template>
                 <span class="rv-line-num num" aria-hidden="true" x-text="li + 1"></span>
 
                 <template x-if="!edit || edit.lineId !== line.id">
-                  {# tokens are separated by real spaces so selecting a line copies separate words #}
-                  <p class="rv-line-text"><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span class="rv-w"><span class="rv-tok" :id="tokId(line.id, i)" :class="tokClass(line, tok, i)" :tabindex="tok.conf === 'low' ? 0 : -1" :role="tok.conf === 'low' ? 'button' : null" :aria-haspopup="tok.conf === 'low' ? 'dialog' : null" @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onTokClick(line, i)" @focus="onTokFocus(line, i)" x-text="tok.t"></span><span x-text="i < line.tokens.length - 1 ? ' ' : ''"></span></span></template><span class="badge rv-manual" x-show="line.is_manual" x-cloak>مُدرَج</span><span class="badge rv-role-tag" x-show="roleLabel(line)" x-cloak x-text="roleLabel(line)"></span></p>
+                  {% comment %}Tokens are separated by real spaces so selecting a line copies separate words. D72: an open group of
+                  added words carries one dotted underline (the spaces inside it too, `sepClass`); a gap ▏ sits after the
+                  word it follows (`gapsAt(line, i)`, −1 before the first word).{% endcomment %}
+                  <p class="rv-line-text"><template x-for="gap in gapsAt(line, -1)" :key="'g' + gap.id"><span class="rv-gap" :id="gapElId(gap.id)" :class="gapClass(gap)" tabindex="0" role="button" aria-haspopup="dialog" :aria-label="gapTitle(gap)" :title="gapTitle(gap)" @mouseenter="hot = { lineId: line.id, index: -1, gap: gap.id }" @mouseleave="hot = null" @click.stop="onGapClick(line, gap)"></span></template><template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i"><span class="rv-w"><span class="rv-tok" :id="tokId(line.id, i)" :class="tokClass(line, tok, i)" :tabindex="tok.conf === 'low' ? 0 : -1" :role="tok.conf === 'low' ? 'button' : null" :aria-haspopup="tok.conf === 'low' ? 'dialog' : null" @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onTokClick(line, i, $event)" @focus="onTokFocus(line, i)" x-text="tok.t"></span><span :class="sepClass(line, i)" x-text="i < line.tokens.length - 1 ? ' ' : ''"></span><template x-for="gap in gapsAt(line, i)" :key="'g' + gap.id"><span class="rv-gap" :id="gapElId(gap.id)" :class="gapClass(gap)" tabindex="0" role="button" aria-haspopup="dialog" :aria-label="gapTitle(gap)" :title="gapTitle(gap)" @mouseenter="hot = { lineId: line.id, index: i, gap: gap.id }" @mouseleave="hot = null" @click.stop="onGapClick(line, gap)"></span></template></span></template><span class="badge rv-manual" x-show="line.is_manual" x-cloak>مُدرَج</span><span class="badge rv-role-tag" x-show="roleLabel(line)" x-cloak x-text="roleLabel(line)"></span></p>
                 </template>
                 <template x-if="edit && edit.lineId === line.id">
                   <div class="rv-editor-wrap">
@@ -246,7 +298,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                   </div>
                 </template>
 
-                <div class="rv-line-tools" x-show="editable" x-cloak>
+                <div class="rv-line-tools" x-show="editable" x-cloak @click.stop>
                   <button type="button" class="btn-icon btn-icon-sm" title="تعديل السطر (E)" aria-label="تعديل السطر" @click.stop="startEdit(line)">
                     <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
                   </button>
@@ -257,24 +309,32 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                     <button type="button" class="btn-icon btn-icon-sm" title="المزيد" aria-label="قائمة السطر" aria-haspopup="menu" :aria-expanded="menuFor === line.id" @click.stop="closePop(); menuFor = menuFor === line.id ? null : line.id">
                       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
                     </button>
+                    {# on a line of a ⇧-click range the menu sets the role of every selected line, and nothing else #}
                     <div class="menu rv-menu" role="menu" x-show="menuFor === line.id" x-cloak @click.outside="menuFor = null" x-transition.opacity.duration.120ms>
-                      <div class="menu-label">السطر <bdi class="num" x-text="li + 1"></bdi><span x-show="line.is_manual"> · مُدرَج يدويًا</span></div>
-                      <button type="button" class="menu-item" role="menuitem" @click="startEdit(line)">تعديل السطر <kbd class="kbd ms-auto">E</kbd></button>
-                      <button type="button" class="menu-item" role="menuitem" @click="startInsert(line)">إدراج سطر بعده</button>
-                      <template x-if="line.region_kind !== 'footnote'">
-                        <div role="group" aria-label="نوع السطر">
+                      <template x-if="!inRange(line)">
+                        <div>
+                          <div class="menu-label">السطر <bdi class="num" x-text="li + 1"></bdi><span x-show="line.is_manual"> · مُدرَج يدويًا</span></div>
+                          <button type="button" class="menu-item" role="menuitem" @click="startEdit(line)">تعديل السطر <kbd class="kbd ms-auto">E</kbd></button>
+                          <button type="button" class="menu-item" role="menuitem" @click="startInsert(line)">إدراج سطر بعده</button>
                           <div class="menu-sep" aria-hidden="true"></div>
-                          <div class="menu-label">نوع السطر</div>
-                          <template x-for="r in roles" :key="r.value">
-                            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="(line.role || 'body') === r.value ? 'true' : 'false'" @click="setRole(line, r.value)">
-                              <span class="rv-role-check" aria-hidden="true" x-text="(line.role || 'body') === r.value ? '✓' : ''"></span>
-                              <span x-text="r.label"></span>
-                            </button>
-                          </template>
                         </div>
                       </template>
-                      <div class="menu-sep" aria-hidden="true"></div>
-                      <button type="button" class="menu-item is-danger" role="menuitem" @click="removeLine(line)">حذف السطر</button>
+                      {# D74: the effective choice («حاشية» on a footnote-region line, «محتوى» pulls it back into the body) #}
+                      <div role="group" :aria-label="roleMenuLabel(line)" aria-label="نوع السطر">
+                        <div class="menu-label" x-text="roleMenuLabel(line)">نوع السطر</div>
+                        <template x-for="r in roles" :key="r.value">
+                          <button type="button" class="menu-item" role="menuitemradio" :aria-checked="menuRoleChecked(line, r.value) ? 'true' : 'false'" @click="setMenuRole(line, r.value)">
+                            <span class="rv-role-check" aria-hidden="true" x-text="menuRoleChecked(line, r.value) ? '✓' : ''"></span>
+                            <span x-text="r.label"></span>
+                          </button>
+                        </template>
+                      </div>
+                      <template x-if="!inRange(line)">
+                        <div>
+                          <div class="menu-sep" aria-hidden="true"></div>
+                          <button type="button" class="menu-item is-danger" role="menuitem" @click="removeLine(line)">حذف السطر</button>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </div>
@@ -303,6 +363,15 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
             <span class="rv-legend-swatch" aria-hidden="true">أ</span>
             <span>تحتها خط: كلمة غير مؤكَّدة. <span x-show="editable"><kbd class="kbd">Tab</kbd> للانتقال بينها، <kbd class="kbd">1</kbd>–<kbd class="kbd">3</kbd> لاختيار قراءة، أو اكتب التصحيح مباشرة؛ <kbd class="kbd">⌘↵</kbd> لاعتماد الصفحة.</span></span>
           </p>
+          {# D72: the two new marks, named once under the lines when the page has them #}
+          <p class="rv-legend rv-legend-more meta" x-show="hasGroups" x-cloak>
+            <span class="rv-legend-swatch is-group" aria-hidden="true">أ</span>
+            <span>خط منقَّط: كلمات أضافتها القراءة الثانية<span x-show="editable">؛ <kbd class="kbd">Enter</kbd> لإبقائها</span>.</span>
+          </p>
+          <p class="rv-legend rv-legend-more meta" x-show="hasGaps" x-cloak>
+            <span class="rv-legend-gap" aria-hidden="true"></span>
+            <span>قد تكون هنا كلمات ناقصة<span x-show="editable">؛ <kbd class="kbd">Enter</kbd> لإدراجها، <kbd class="kbd">⌫</kbd> لتجاهلها</span>.</span>
+          </p>
         </div>
       </div>
 
@@ -323,6 +392,8 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
           <span class="rv-thumb-num num" x-text="p.number"></span>
           <span class="rv-thumb-mark is-check" x-show="p.is_reviewed"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></span>
           <span class="rv-thumb-mark is-count" x-show="!p.is_reviewed && p.n_unresolved > 0" x-text="p.n_unresolved"></span>
+          {# D73: a half-disc marks a page one model read (Tesseract alone: the danger tint) #}
+          <span class="mark-reader" x-show="readersOf(p)" :class="{ 'is-tesseract': readersOf(p) === 'tesseract' }" aria-hidden="true"></span>
         </a>
       </template>
     </div>
@@ -343,8 +414,11 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
   {# ------------------------------------------------------------ approve with unresolved words #}
   <div class="rv-scrim" x-show="dialog.open" x-cloak x-transition.opacity.duration.150ms @click.self="dialog.open = false">
     <div class="rv-modal rv-dialog" role="alertdialog" aria-modal="true" aria-labelledby="rv-dialog-title" @keydown.tab="trapTab($event, $el)">
-      <h2 class="rv-modal-title" id="rv-dialog-title">بقيت <bdi class="num" x-text="dialog.count"></bdi> كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟</h2>
-      <p class="meta">تبقى الكلمات غير المحسومة بخطّها الكهرماني في النص، ويمكن إعادة فتح الصفحة لاحقًا.</p>
+      {# D73: the open words and the open suggestions (groups of added words, gaps), in Arabic count forms #}
+      <h2 class="rv-modal-title" id="rv-dialog-title" x-text="dialogTitle"></h2>
+      <p class="meta" x-show="dialog.words > 0 || !dialog.suggested">تبقى الكلمات غير المحسومة بخطّها الكهرماني في النص، ويمكن إعادة فتح الصفحة لاحقًا.</p>
+      <p class="meta" x-show="dialog.suggested > dialog.gaps" data-dialog-groups>تبقى الكلمات المضافة التي لم تُحسم في النص كما هي.</p>
+      <p class="meta" x-show="dialog.gaps > 0" data-dialog-suggested>لا يدخل الكتابَ نصٌّ مقترح لم يُحسم.</p>
       <div class="rv-modal-actions">
         <button type="button" class="btn" x-ref="dialogCancel" @click="dialog.open = false">متابعة المراجعة</button>
         <button type="button" class="btn rv-btn-force" @click="approve(true)">اعتماد</button>
@@ -366,16 +440,17 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
       <dl class="rv-keys">
         <dt><span class="group-label">في قائمة الكلمة</span></dt><dd></dd>
         <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
-        <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة الحالية</dd>
+        <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة التي في النص («● في النص»)؛ على كلمات مضافة: إبقاؤها؛ على <span class="rv-legend-gap" aria-hidden="true"></span><span class="sr-only">موضع كلمات ناقصة</span>: إدراج الكلمات المقترحة</dd>
         <dt><span class="meta">أيّ حرف، عربيًا كان أو لاتينيًا</span></dt><dd>بدء تصحيح مكتوب للكلمة، ثم <kbd class="kbd">Enter</kbd> أو <kbd class="kbd">Tab</kbd> لحفظه والانتقال</dd>
-        <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">⇧Tab</kbd></dt><dd>الكلمة غير المحسومة التالية / السابقة</dd>
+        <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">⇧Tab</kbd></dt><dd>العلامة التالية / السابقة: كلمة غير محسومة، أو كلمات مضافة، أو موضع كلمات ناقصة</dd>
         <dt><kbd class="kbd">⌥←</kbd> / <kbd class="kbd">⌥→</kbd></dt><dd>دمج الكلمة مع التالية / السابقة</dd>
-        <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة</dd>
+        <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة؛ على موضع كلمات ناقصة: تجاهل الكلمات المقترحة</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة، ويبقى التحديد على الكلمة</dd>
         <dt><kbd class="kbd">⌘↵</kbd></dt><dd>اعتماد الصفحة</dd>
         <dt><span class="group-label">في الصفحة</span></dt><dd></dd>
         <dt><span class="meta">نقرة على كلمة</span> / <kbd class="kbd">Space</kbd></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
-        <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي</dd>
+        <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي، شعر، حاشية</dd>
+        <dt><span class="meta">⇧ + نقرة على سطر</span></dt><dd>تحديد الأسطر حتى هذا السطر، ثم «نوع الأسطر المحدَّدة» من قائمة السطر</dd>
         <dt><kbd class="kbd">A</kbd></dt><dd>اعتماد الصفحة</dd>
         <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
         <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية بانتظار المراجعة</dd>

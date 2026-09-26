@@ -16,6 +16,9 @@ markup, CSS and footnote passes, with only rules that never move a line added.
   subtitle —, creator «نسّاخ», `/Lang (ar)`, the export's time).
 
 **Steps:** prepare → layout → footnotes → (relax) → write (the engine's passes, `on_pass`) → check.
+Between the write and the check, `pdf_text.fix_text_layer` reverses the ToUnicode entries of the Arabic
+ligatures (PHASE7_SPEC §4.7, owner question 1): Chrome, Firefox and MuPDF copy «لا» right; the check reads
+the file as it ships.
 
 **The check** reads the file back with PyMuPDF (`audit_pdf`): its page count and boxes (a file that does
 not match is an `InvalidExport`), and the font of every span — a character set in a face that is not a
@@ -54,6 +57,7 @@ from .exporters import (
     Progress,
 )
 from .model import PageSetup
+from .pdf_text import fix_text_layer
 from .readiness import CHECKS, WARN, action, missing_font_rows, page_checks_row, row
 
 log = logging.getLogger(__name__)
@@ -489,8 +493,9 @@ class PdfExporter:
         rendered = get_engine().render(render_job, progress.cancelled, on_pass=progress)
         if progress.cancelled():
             raise ExportCancelled
+        text_layer = fix_text_layer(rendered.pdf)  # Arabic ligatures copy in logical order (§4.7)
         progress("check")
-        audit = audit_pdf(rendered.pdf, fonts)
+        audit = audit_pdf(text_layer.data, fonts)
         errors = check_boxes(audit, setup, output)
         if audit.page_count != rendered.page_count:
             errors.append(f"the file has {audit.page_count} pages, the render {rendered.page_count}")
@@ -519,11 +524,14 @@ class PdfExporter:
             "reference": reference.source if reference is not None else None,
             "bleed_mm": output.bleed_mm if output.is_print else 0,
             "crop_marks": bool(output.crop_marks) if output.is_print else False,
+            "text_layer": text_layer.entries,
         }
         lines = [
             f"{self.format}: {rendered.page_count} pages, {rendered.passes} passes,"
             f" {rendered.duration_ms} ms",
             f"fonts: {', '.join(stats['fonts'])}",
+            f"text layer: {text_layer.entries} Arabic ligature entries reversed"
+            f" in {text_layer.changed_cmaps} of {text_layer.cmaps} ToUnicode maps",
         ]
         for name, found in audit.foreign.items():
             lines.append(f"foreign font {name} on pages {found['pages']}: {found['chars'][:40]!r}")
@@ -532,7 +540,7 @@ class PdfExporter:
         if reference is None:
             lines.append("no finished preview or current live layout to compare the pages with")
         return ExportResult(
-            data=rendered.pdf, page_count=rendered.page_count, warnings=warnings, stats=stats, log=lines
+            data=text_layer.data, page_count=rendered.page_count, warnings=warnings, stats=stats, log=lines
         )
 
 

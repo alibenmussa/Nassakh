@@ -1,0 +1,484 @@
+{
+ "document": {
+  "type": "doc",
+  "attrs": {
+   "bookId": 0,
+   "runId": 0,
+   "assembledAt": null,
+   "footnoteNumbering": "page",
+   "digitStyle": "western",
+   "seams": [
+    {
+     "page": 2,
+     "from_page": 1,
+     "mode": "split",
+     "decision": "auto",
+     "reason": "geometry"
+    },
+    {
+     "page": 3,
+     "from_page": 2,
+     "mode": "split",
+     "decision": "auto",
+     "reason": "geometry"
+    },
+    {
+     "page": 4,
+     "from_page": 3,
+     "mode": "split",
+     "decision": "auto",
+     "reason": "geometry"
+    },
+    {
+     "page": 5,
+     "from_page": 4,
+     "mode": "split",
+     "decision": "auto",
+     "reason": "geometry"
+    }
+   ]
+  },
+  "content": [
+   {
+    "type": "title",
+    "attrs": {
+     "text": "كتاب الحواشي والشعر",
+     "author": "المؤلف"
+    }
+   },
+   {
+    "type": "heading",
+    "attrs": {
+     "level": 1,
+     "id": "h1001",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1001
+     ],
+     "reviewed": true
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "الفصل الأول"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1002",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1002,
+      1003,
+      1004
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "قال الشاعر في وصف الحرب ما يرويه الناس في مجالسهم الى اليوم وهو من البسيط:"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1005",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1005
+     ],
+     "reviewed": true,
+     "suggestedRole": null,
+     "style": "verse"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "لله دري اذا اعدو على فرسي"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1006",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1006
+     ],
+     "reviewed": true,
+     "suggestedRole": null,
+     "style": "verse"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "الى الهياج ونار الحرب تستعر"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1007",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1007
+     ],
+     "reviewed": true,
+     "suggestedRole": null,
+     "style": "verse"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وفي يدي صارم افري الرؤوس به"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1008",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1008
+     ],
+     "reviewed": true,
+     "suggestedRole": null,
+     "style": "verse"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "في حده الموت لا يبقي ولا يذر"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p1009",
+     "sourcePages": [
+      1
+     ],
+     "sourceLineIds": [
+      1009
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "ثم انصرف الى بلده."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p2001",
+     "sourcePages": [
+      2
+     ],
+     "sourceLineIds": [
+      2001,
+      2002,
+      2003
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وذكر ذلك ابن غلبون"
+     },
+     {
+      "type": "footnote",
+      "attrs": {
+       "id": "n2004",
+       "number": 1,
+       "marker": "1",
+       "sourcePage": 2,
+       "sourceLineIds": [
+        2004
+       ],
+       "orphan": false
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "انظر كتاب التذكار صفحة 186 وكتاب المنهل العذب صفحة 259"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " في تاريخه وأطال في وصف الحملة وما جرى فيها من الوقائع."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p3001",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      3001,
+      3002,
+      3003
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وكان الأسطول كله تحت إمرة المارشال ديستري"
+     },
+     {
+      "type": "footnote",
+      "attrs": {
+       "id": "n3004",
+       "number": 1,
+       "marker": "1",
+       "sourcePage": 3,
+       "sourceLineIds": [
+        3004
+       ],
+       "orphan": false
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "انظر تاريخ البحرية الفرنسية لليون غيران."
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " فتوقف أولًا على سواحل طرابلس."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p4001",
+     "sourcePages": [
+      4
+     ],
+     "sourceLineIds": [
+      4001,
+      4002,
+      4003
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وفي تلك السنة (1) وصل الأسطول الى طرابلس وضرب المدينة بالمدافع حتى طلب أهلها الصلح."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p4004",
+     "sourcePages": [
+      4
+     ],
+     "sourceLineIds": [
+      4004
+     ],
+     "reviewed": true,
+     "suggestedRole": null,
+     "noteFor": "1"
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "(1) الأسطول الفرنسي بقيادة دوكين."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5001",
+     "sourcePages": [
+      5
+     ],
+     "sourceLineIds": [
+      5001,
+      5002,
+      5003
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وقال في موضع آخر"
+     },
+     {
+      "type": "footnote",
+      "attrs": {
+       "id": "n5004",
+       "number": 1,
+       "marker": "1",
+       "sourcePage": 5,
+       "sourceLineIds": [
+        5004
+       ],
+       "orphan": false
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "هذا سطر جعله المراجع حاشية."
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " كلامًا طويلًا في هذا المعنى لا نطيل بذكره."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5005",
+     "sourcePages": [
+      5
+     ],
+     "sourceLineIds": [
+      5005
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وهذا سطر أعاده المراجع الى المتن."
+     }
+    ]
+   }
+  ]
+ },
+ "warnings": [
+  {
+   "code": "note_marker_missing",
+   "severity": "warning",
+   "page": 3,
+   "blockId": "p3001",
+   "lineIds": [
+    3004
+   ],
+   "message": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.",
+   "marker": "1"
+  },
+  {
+   "code": "stray_note",
+   "severity": "warning",
+   "page": 4,
+   "blockId": "p4004",
+   "lineIds": [
+    4004
+   ],
+   "message": "فقرة في الصفحة 4 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
+   "marker": "1",
+   "actions": [
+    {
+     "key": "footnote",
+     "label": "جعلها حاشية",
+     "role": "footnote",
+     "lineIds": [
+      4004
+     ]
+    },
+    {
+     "key": "go",
+     "label": "انتقال",
+     "blockId": "p4004"
+    }
+   ]
+  }
+ ],
+ "stats": {
+  "pages_included": 5,
+  "pages_skipped": 0,
+  "pages_unreviewed": 0,
+  "headings": 1,
+  "chapters": 1,
+  "paragraphs": 12,
+  "footnotes": 3,
+  "joins": 0,
+  "words": 131,
+  "running_heads": 0
+ },
+ "seams": [
+  {
+   "page": 2,
+   "from_page": 1,
+   "mode": "split",
+   "decision": "auto",
+   "reason": "geometry"
+  },
+  {
+   "page": 3,
+   "from_page": 2,
+   "mode": "split",
+   "decision": "auto",
+   "reason": "geometry"
+  },
+  {
+   "page": 4,
+   "from_page": 3,
+   "mode": "split",
+   "decision": "auto",
+   "reason": "geometry"
+  },
+  {
+   "page": 5,
+   "from_page": 4,
+   "mode": "split",
+   "decision": "auto",
+   "reason": "geometry"
+  }
+ ],
+ "version": 1,
+ "reviewed": {
+  "1": true,
+  "2": true,
+  "3": true,
+  "4": true,
+  "5": true
+ }
+}

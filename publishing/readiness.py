@@ -20,9 +20,15 @@ Western digits (`assembly.render.ar_count`).
   by text, at most 80 words, in the run of such paragraphs that ends its page (a run that is not the
   whole page) → «عرض» (the book page on the first one's chapter, `?chapter=`: the book page does not
   take a block yet);
+- `missing_text` (warn, D75): pages of the book (those its assembly run included; every page not
+  excluded before the first run) with an open suggestion of words a model may have skipped (an open
+  `ocr.TextGap`, D72) → «المراجعة»;
 - `review_drift` (warn): pages whose text changed in review after the manuscript was built
   (`editor.services.review_drift`) → «الكتاب»;
 - `assembly_running` (warn): an assembly of the book is queued or running;
+- `single_reader` (info, D75): pages of the book that one model read (`Page.reading.readers` is `one`,
+  or `tesseract` when the page's text is Tesseract's alone; a page read before 7b, `{}`, is not counted)
+  and that nobody has reviewed yet (`ocr_done`) → «المراجعة»;
 - `book_details` (info): no author for the title page and the file's properties; a copyright page with
   neither publisher nor year → «بيانات الكتاب» (`?tab=format`);
 - `no_headings` (info): a contents page but no chapter headings;
@@ -163,6 +169,18 @@ def missing_message(pages: list[int]) -> str:
     return f"{ar_count(len(pages), PAGES)} لم تدخل الكتاب بعد: {numbers_text(pages)}"
 
 
+def missing_text_message(pages: list[int]) -> str:
+    """«نص قد يكون ناقصًا لم يُحسم في 4 صفحات: 3، 7، 12، 30.» (D75)"""
+    return f"نص قد يكون ناقصًا لم يُحسم في {ar_count(len(pages), PAGES_OF)}: {numbers_text(pages)}"
+
+
+def single_reader_message(count: int) -> str:
+    """«قُرئت 13 صفحة من الكتاب بنموذج واحد ولم تُراجَع بعد.» (D75)"""
+    if count == 2:
+        return "قُرئت صفحتان من الكتاب بنموذج واحد ولم تُراجَعا بعد."
+    return f"قُرئت {ar_count(count, PAGES)} من الكتاب بنموذج واحد ولم تُراجَع بعد."
+
+
 def stray_notes_message(count: int, marker: str, pages: list[int]) -> str:
     """«3 فقرات في أواخر صفحاتها تبدأ بعلامة حاشية مثل «(1)» ولم تُربَط حاشيةً: ص 5، 12، 30.»"""
     listed = numbers_text(pages)
@@ -185,6 +203,46 @@ class BookPages:
     unreviewed: list[int]
     missing: list[int]
     missing_in_pipeline: bool
+
+
+@dataclass(frozen=True)
+class TrustPages:
+    """The pages whose text nobody has checked yet (D75): the numbers of the pages with an open
+    suggestion of missing words, and of the unreviewed pages that one model read."""
+
+    missing_text: list[int]
+    single_reader: list[int]
+
+
+SINGLE_READERS: frozenset[str] = frozenset({"one", "tesseract"})  # `Page.reading.readers` (D73)
+
+
+def trust_pages(book: Book, manuscript) -> TrustPages:
+    """`TrustPages` of the book (two queries): the pages its manuscript's run included (every page not
+    excluded when there is no run) with an open `ocr.TextGap`, and those still `ocr_done` whose
+    `reading.readers` is one model or Tesseract alone."""
+    from assembly.pipeline import UNREVIEWED_STATUS
+    from books.models import Page
+    from ocr.models import TextGap
+
+    run = getattr(manuscript, "run", None)
+    pages = Page.objects.filter(book_id=book.pk, is_excluded=False).exclude(status=Page.Status.EXCLUDED)
+    if run is not None:
+        pages = pages.filter(pk__in=[int(key) for key in (run.included or {}) if str(key).isdigit()])
+    gaps = (
+        TextGap.objects.filter(page__in=pages, status=TextGap.Status.OPEN)
+        .order_by("page__number")
+        .values_list("page__number", flat=True)
+        .distinct()
+    )
+    single = [
+        number
+        for number, reading in pages.filter(status=UNREVIEWED_STATUS)
+        .order_by("number")
+        .values_list("number", "reading")
+        if isinstance(reading, dict) and reading.get("readers") in SINGLE_READERS
+    ]
+    return TrustPages(missing_text=list(dict.fromkeys(gaps)), single_reader=single)
 
 
 def book_pages(book: Book, manuscript) -> BookPages | None:
@@ -344,6 +402,9 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
         message = stray_notes_message(len(strays), strays[0].marker, sorted({note.page for note in strays}))
         show = {"label": SHOW_LABEL, "url": chapter_url(book.pk, document, strays[0].index)}
         rows.append(row("stray_notes", WARN, message, show))
+    trust = trust_pages(book, manuscript)
+    if trust.missing_text:
+        rows.append(row("missing_text", WARN, missing_text_message(trust.missing_text), review))
 
     drift = review_drift(book, manuscript)
     if drift["pages"]:
@@ -362,6 +423,8 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
     if running:
         rows.append(row("assembly_running", WARN, ASSEMBLY_RUNNING))
 
+    if trust.single_reader:
+        rows.append(row("single_reader", INFO, single_reader_message(len(trust.single_reader)), review))
     model = book_model(document, setup, title=book.title, author=book.author)
     if not model.front.author.strip():
         rows.append(row("book_details", INFO, NO_AUTHOR, action(DETAILS_LABEL, book.pk, "format")))

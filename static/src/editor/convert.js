@@ -130,7 +130,10 @@ function inlineToEditor(items, inNote) {
 function paragraphToEditor(node, style) {
   const a = attrsOf(node);
   const chosen = style || (PARAGRAPH_STYLES.includes(a.style) ? a.style : null);
-  return { type: 'paragraph', attrs: { ...sourceAttrs(a), style: chosen }, content: inlineToEditor(node.content, false) };
+  // D74: the marker number of an open call on the paragraph's page, kept so the manuscript still reads
+  // «حاشية للعلامة (n)» after the book page saves (null is dropped on save)
+  const noteFor = typeof a.noteFor === 'string' && a.noteFor ? a.noteFor : null;
+  return { type: 'paragraph', attrs: { ...sourceAttrs(a), style: chosen, noteFor }, content: inlineToEditor(node.content, false) };
 }
 
 function blockToEditor(node) {
@@ -436,6 +439,7 @@ function followingAttrs(node, type) {
   delete a.level;
   delete a.text;
   delete a.author;
+  delete a.noteFor; // D74: the second half does not start with the marker
   a.id = newId('e');
   if (type === 'paragraph' && node.type !== 'paragraph') delete a.style;
   return a;

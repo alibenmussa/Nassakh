@@ -443,6 +443,8 @@ def test_build_lines_puts_tokens_on_the_matching_tesseract_lines():
         "digit": False,
         "bbox": tokens["الكتاب"]["bbox"],
         "tess": tokens["الكتاب"]["tess"],
+        "tc": 90.0,
+        "why": ["disagree"],
     }
     assert tokens["الكتاب"]["bbox"] is not None
     assert (
@@ -476,10 +478,14 @@ def test_build_lines_without_geometry_uses_the_text_line_breaks():
     assert build_lines("", None, []) == []
 
 
-def test_build_lines_flags_tokens_the_secondary_does_not_have():
+def test_build_lines_flags_tokens_the_secondary_does_not_have_unless_tesseract_read_them():
+    """D71: a word Qari v0.2 lacks is sure when Tesseract read the same word, else `alone`."""
     lines = build_lines("قال الأمير في سنة", "قال في سنة", tess_lines("قال الامير في سنة"))
     tok = next(t for t in lines[0]["tokens"] if t["t"] == "الأمير")
-    assert tok["conf"] == "low" and tok["alt"] is None
+    assert tok["conf"] == "high" and tok["alt"] is None and "why" not in tok
+    lines = build_lines("قال الأمير في سنة", "قال في سنة", tess_lines("قال الوزير في سنة"))
+    tok = next(t for t in lines[0]["tokens"] if t["t"] == "الأمير")
+    assert tok["conf"] == "low" and tok["why"] == ["alone"] and tok["tess"] == "الوزير"
 
 
 def test_join_region_texts_orders_body_then_footnotes_and_skips_header_and_number():
@@ -1097,6 +1103,8 @@ def test_page_text_and_runs_api_require_login_and_return_lines(client, page, use
         "digit": True,
         "bbox": line["tokens"][4]["bbox"],
         "tess": None,
+        "tc": 90.0,  # Tesseract's confidence of the word it took (D71)
+        "why": ["number"],
     }
 
     runs = client.get(runs_url).json()["runs"]
@@ -1383,14 +1391,17 @@ def test_finalize_page_counts_unresolved_words_on_the_page(page):
     assert page.n_unresolved == 3 == sum(line.n_low for line in page.lines.all())
 
 
-def test_word_chooser_is_off_by_default_and_the_placeholder_chooses_nothing(page, settings):
+def test_word_chooser_defaults_to_the_vote_and_the_placeholder_chooses_nothing(page, settings):
+    """D71: the default chooser is the vote; `choose_word` (a future classifier) is not called by it."""
     from ocr import chooser
 
-    assert settings.NASSAKH["WORD_CHOOSER"] == "none" and not chooser.enabled()
+    assert settings.NASSAKH["WORD_CHOOSER"] == "vote" and chooser.enabled()
     assert chooser.choose_word({"t": "a", "alt": "b", "conf": "low"}, {}) is None
     with mock.patch("ocr.chooser.choose_word") as choose:
         page = _full_run(page)
     choose.assert_not_called()
+    settings.NASSAKH = {**settings.NASSAKH, "WORD_CHOOSER": "none"}
+    assert not chooser.enabled()
     settings.NASSAKH = {**settings.NASSAKH, "WORD_CHOOSER": "placeholder"}
     services.finalize_page(page)  # enabled, but the placeholder returns None
     page.refresh_from_db()
@@ -1815,3 +1826,199 @@ def test_rebuild_lines_page_needs_a_book():
 
     with pytest.raises(CommandError, match="--page needs --book"):
         _rebuild({}, "--page", "3")
+
+
+# ---------------------------------------------------------------- 7b: trust (D71–D73)
+
+
+def test_select_text_offers_the_clean_start_of_a_looped_run_as_a_partial_second_reading():
+    tess = OcrRun(engine_name="tesseract", parsed_text=REF_20)
+    good = OcrRun(engine_name="qari_v03", parsed_text=REF_20)
+    raw = "كلمة0 كلمة1 كلمه2 كلمة3 " + "واخذ عن جماعة من الفضلاء " * 8
+    looped = OcrRun(engine_name="qari_v02", raw_output=raw, parsed_text=raw, looped=True)
+    chosen = services.select_reading(good, looped, tess)
+    assert chosen.alt_partial and chosen.text == REF_20 and not chosen.fallback
+    assert chosen.alt.startswith("كلمة0 كلمة1 كلمه2 كلمة3") and chosen.alt.count("الفضلاء") <= 1
+    assert services.select_text(good, looped, tess)[1] == chosen.alt
+    before = services.select_reading(good, looped, tess, partial=False)  # the rule before 7b
+    assert before.alt is None and not before.alt_partial
+    # the primary looped, the secondary passed: the primary's clean start is the second reading
+    chosen = services.select_reading(
+        OcrRun(engine_name="qari_v03", raw_output=raw, parsed_text=raw, looped=True),
+        OcrRun(engine_name="qari_v02", parsed_text=REF_20),
+        tess,
+    )
+    assert chosen.source == "qari_v02" and chosen.alt_partial and chosen.alt.startswith("كلمة0")
+
+
+# the secondary read «إن الكتب مفيد» where the primary skipped it (Tesseract has it: a group), and
+# «الكريم جدا» at the end, which Tesseract does not have (a suggestion)
+SKIPPING_PRIMARY = "قال الأمير في سنة ١٩٦٦ وهذا سطر ثانٍ من المتن"
+READING_SECONDARY = SECONDARY_BODY + " الكريم جدا"
+
+
+def test_finalize_page_writes_the_reading_the_groups_and_the_gaps(page):
+    from ocr.models import TextGap
+
+    add_regions(page)
+    with registry.override(engines(primary_body=SKIPPING_PRIMARY, secondary_body=READING_SECONDARY)):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.reading == {"readers": "two", "partial": False, "groups": 1, "gaps": 1}
+    assert "missing_text" in page.attention_flags and "single_reader" not in page.attention_flags
+    body = list(page.lines.filter(region__kind="body").order_by("order"))
+    group = [t for line in body for t in line.tokens if t.get("ins") == 1]
+    assert [t["t"] for t in group] == ["إن", "الكتب", "مفيد"]
+    assert all(t["why"] == ["missing"] and t["conf"] == "low" and t.get("res") is None for t in group)
+    assert "إن الكتب مفيد" in body[0].text  # in the text, marked (Tesseract's boxes place it)
+    gap = TextGap.objects.get(page=page)
+    assert (gap.text, gap.status, gap.kind, gap.source) == ("الكريم جدا", "open", "words", "secondary")
+    assert gap.line_id == body[-1].pk and gap.after_t == "المتن" and gap.support < 0.7
+    assert gap.index == len(body[-1].tokens) - 1
+    items = services.page_open_items(page)
+    assert (items.groups, items.gaps) == (1, 1) and page.n_unresolved == items.total
+    assert sum(line.n_low for line in page.lines.all()) == items.words + items.groups  # no gaps in n_low
+
+
+def test_a_group_over_two_lines_counts_once_and_the_counts_are_pure():
+    tokens_a = [{"t": "أ", "conf": "low", "ins": 1}, {"t": "ب", "conf": "low", "why": ["disagree"]}]
+    tokens_b = [{"t": "ج", "conf": "low", "ins": 1}, {"t": "د", "conf": "low", "ins": 2, "res": "secondary"}]
+    assert services.count_unresolved(tokens_a) == 2 and services.count_unresolved(tokens_b) == 1
+    items = services.open_items([tokens_a, tokens_b], open_gaps=2)
+    assert (items.words, items.groups, items.gaps, items.total) == (1, 1, 2, 4)
+    assert services.group_of({"ins": True}) is None and services.group_of({"ins": 3}) == 3
+
+
+def test_a_page_one_model_read_says_so_and_is_flagged(page):
+    add_regions(page)
+    with registry.override(engines(secondary_body="")):  # the secondary read nothing
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.reading["readers"] == "one" and page.reading["gaps"] == 0
+    assert "single_reader" in page.attention_flags
+    assert services.readers_of(page.reading) == "one" and services.readers_of({}) == ""
+
+
+def test_a_page_read_from_tesseract_alone_reads_tesseract(page):
+    add_regions(page)
+    looping = OcrResult(text=PRIMARY_BODY, duration_s=1.0, output_tokens=2500, finish="length")
+    runaway = " ".join(f"كلمة{i}" for i in range(60))
+    with registry.override(engines(primary_body=looping, secondary_body=runaway)):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert page.reading["readers"] == "tesseract" and "ocr_fallback" in page.attention_flags
+
+
+def test_a_new_ocr_pass_replaces_the_gaps_but_a_page_with_review_work_keeps_them(page):
+    from ocr.models import TextGap
+
+    add_regions(page)
+    fakes = engines(primary_body=SKIPPING_PRIMARY, secondary_body=READING_SECONDARY)
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    first = TextGap.objects.get(page=page).pk
+    services.finalize_page(page)
+    assert list(TextGap.objects.filter(page=page).values_list("text", flat=True)) == ["الكريم جدا"]
+    assert TextGap.objects.get(page=page).pk != first  # replaced with the lines
+    page.lines.filter(order=0).update(is_reviewed=True)
+    kept = TextGap.objects.get(page=page)
+    services.finalize_page(page)
+    assert list(TextGap.objects.filter(page=page)) == [kept]
+
+
+def test_line_kind_follows_the_role_then_the_region():
+    assert services.line_kind("footnote", "body") == "footnote"
+    assert services.line_kind("body", "footnote") == "footnote"
+    assert services.line_kind(None, "footnote") == "footnote"
+    for role in ("main", "heading", "subheading", "verse"):
+        assert services.line_kind(role, "footnote") == "body"
+    assert services.line_kind("body", "body") == "body" and services.line_kind("body", None) == "body"
+
+
+def test_rebuild_lines_recomputes_reasons_and_reading_and_schedules_the_numbers_pass(page):
+    _, fakes = _old_page(page)
+    Page.objects.filter(pk=page.pk).update(reading={})  # read before 7b
+    for line in page.lines.all():  # tokens stored before 7b: no reasons
+        line.tokens = [{k: v for k, v in token.items() if k not in ("why", "tc")} for token in line.tokens]
+        line.save(update_fields=["tokens"])
+    calls = len(fakes["qari_v03"].calls) + len(fakes["qari_v02"].calls)
+    with mock.patch("ocr.numbers.schedule") as schedule:
+        _rebuild(fakes, str(page.book_id))
+    assert len(fakes["qari_v03"].calls) + len(fakes["qari_v02"].calls) == calls  # no model call
+    page.refresh_from_db()
+    assert page.reading["readers"] == "two"
+    assert any("tc" in token for line in page.lines.all() for token in line.tokens)  # recomputed
+    schedule.assert_called()
+
+
+def test_rebuild_lines_refuses_a_book_whose_manuscript_was_edited(page):
+    from django.core.management.base import CommandError
+
+    from editor.models import Manuscript
+
+    _, fakes = _old_page(page)
+    Manuscript.objects.create(book=page.book, origin=Manuscript.Origin.EDITOR)
+    before = list(page.lines.values_list("id", flat=True))
+    with pytest.raises(CommandError, match="--include-edited"):
+        _rebuild(fakes, str(page.book_id))
+    out = _rebuild(fakes)  # every book: the edited one is listed and left alone
+    assert "skipping book(s) with an edited manuscript" in out
+    assert list(page.lines.values_list("id", flat=True)) == before
+    _rebuild(fakes, str(page.book_id), "--include-edited")
+    assert list(page.lines.values_list("id", flat=True)) != before
+
+
+def test_rebuild_lines_report_writes_nothing_and_measures_the_flags(page, user):
+    from review import services as review
+
+    page = _full_run(page)
+    line = page.lines.filter(region__kind="body").order_by("order").first()
+    index = next(i for i, t in enumerate(line.tokens) if t["t"] == "الكتاب")
+    review.resolve_token(line, index, "typed", "الكتابة", user)  # a flagged word the reviewer changed
+    review.approve_page(page, user, force=True)
+    lines = list(page.lines.order_by("order").values_list("id", "tokens"))
+    out = _rebuild(engines(), "--report", str(page.book_id))
+    assert list(page.lines.order_by("order").values_list("id", "tokens")) == lines
+    assert "nothing is written" in out and f"book {page.book_id}: 1 approved page(s)" in out
+    today = next(row for row in out.splitlines() if row.strip().startswith("today"))
+    assert "100.0% caught (1 of 1 errors" in today
+    rows = __import__("ocr.report", fromlist=["book_rows"]).book_rows(page.book_id)[0]
+    assert sum(row.changed for row in rows) == 1
+
+
+def test_finalize_page_checks_a_year_against_its_value_in_words(page):
+    body = "توفي سنة ( ٢٤٢ ) ثلاث واربعين ومايتين وولي ابنه"
+    add_regions(page)
+    with registry.override(engines(primary_body=body, secondary_body=body)):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    token = next(t for line in page.lines.all() for t in line.tokens if t["t"] == "٢٤٢")
+    assert token["why"] == ["number", "year"] and token.get("res") is None
+    assert token["sug"] == {"t": "٢٤٣", "src": "words", "label": "من الحروف", "words": "ثلاث واربعين ومايتين"}
+
+
+def test_the_numbers_pass_checks_the_years_again_after_kraken(page):
+    from ocr import numbers
+
+    add_regions(page)
+    region = page.regions.get(kind="body")
+    line = Line.objects.create(
+        page=page,
+        order=0,
+        region=region,
+        tokens=[
+            {"t": "٢٤٣", "conf": "low", "why": ["number", "year"], "sug": {"t": "٢٤٢", "src": "words"}},
+            {"t": "اثنتين", "conf": "high"},
+        ],
+    )
+    following = Line.objects.create(
+        page=page, order=1, region=region, tokens=[{"t": "واربعين", "conf": "high"}, {"t": "ومايتين"}]
+    )
+    lines = [line, following]
+    line.tokens[0]["t"] = "٢٤٢"  # as Kraken read it
+    assert numbers.check_years(lines) == 1
+    assert line.tokens[0]["res"] == "words" and "sug" not in line.tokens[0]

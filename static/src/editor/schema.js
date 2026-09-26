@@ -74,6 +74,8 @@ export const Paragraph = Node.create({
         parseHTML: (el) => (PARAGRAPH_STYLES.includes(el.getAttribute('data-style')) ? el.getAttribute('data-style') : null),
         renderHTML: (attrs) => (attrs.style ? { 'data-style': attrs.style } : {}),
       },
+      // D74: the marker number of an open call on its page (the manuscript's «حاشية للعلامة (n)»)
+      noteFor: { default: null, rendered: false, keepOnSplit: false },
     };
   },
   parseHTML() {

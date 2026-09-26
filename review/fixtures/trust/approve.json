@@ -1,0 +1,38 @@
+[
+ {
+  "name": "open items left: 409",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/approve/",
+   "body": {
+    "force": false
+   }
+  },
+  "status": 409,
+  "response": {
+   "unresolved": 14,
+   "words": 10,
+   "groups": 2,
+   "gaps": 2,
+   "message": "بقيت 14 علامة: 10 كلمات غير محسومة وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟"
+  }
+ },
+ {
+  "name": "forced approval",
+  "request": {
+   "method": "POST",
+   "url": "/api/pages/900/approve/",
+   "body": {
+    "force": true
+   }
+  },
+  "status": 200,
+  "response": {
+   "status": "reviewed",
+   "next_review_url": "/books/30/review/2/",
+   "next_payload_url": "/api/pages/901/review/",
+   "next_number": 2,
+   "dashboard_url": "/books/30/"
+  }
+ }
+]

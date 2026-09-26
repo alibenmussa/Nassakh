@@ -1,0 +1,105 @@
+{
+ "about": "`assembly.render.fragment_context` of `manuscript.json` (the manuscript view's markup and meta, D74): `blocks` the rendered verse paragraph (`data-style=\"verse\"`: the paragraph menu's «شعر» is checked) and the paragraph whose leading marker has an open call on its page (`data-note-for`: the menu reads «حاشية للعلامة (n)»); `warnings` the D74 warnings as `meta.warnings` gives them (`flat_warnings`: `marker`, and `actions` for `stray_note`); `groups` their side-panel groups (`group_warnings`).",
+ "blocks": {
+  "verse": "<p class=\"ms-p ms-block\" id=\"b-p1005\" data-block=\"p1005\" data-pages=\"1\" data-src=\"1\" data-lines=\"1005\" data-reviewed=\"true\" data-style=\"verse\" tabindex=\"0\">لله دري اذا اعدو على فرسي</p>",
+  "noteFor": "<p class=\"ms-p ms-block\" id=\"b-p4004\" data-block=\"p4004\" data-pages=\"4\" data-src=\"4\" data-lines=\"4004\" data-reviewed=\"true\" data-note-for=\"1\" tabindex=\"0\">(1) الأسطول الفرنسي بقيادة دوكين.</p>"
+ },
+ "warnings": [
+  {
+   "index": 0,
+   "code": "note_marker_missing",
+   "severity": "warning",
+   "page": 3,
+   "blockId": "p3001",
+   "lineIds": [
+    3004
+   ],
+   "message": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.",
+   "marker": "1"
+  },
+  {
+   "index": 1,
+   "code": "stray_note",
+   "severity": "warning",
+   "page": 4,
+   "blockId": "p4004",
+   "lineIds": [
+    4004
+   ],
+   "message": "فقرة في الصفحة 4 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
+   "marker": "1",
+   "actions": [
+    {
+     "key": "footnote",
+     "label": "جعلها حاشية",
+     "role": "footnote",
+     "lineIds": [
+      4004
+     ]
+    },
+    {
+     "key": "go",
+     "label": "انتقال",
+     "blockId": "p4004"
+    }
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "code": "note_marker_missing",
+   "label": "حواشٍ بلا علامة رُبطت بموضعها",
+   "severity": "warning",
+   "count": 1,
+   "items": [
+    {
+     "index": 0,
+     "code": "note_marker_missing",
+     "severity": "warning",
+     "page": 3,
+     "blockId": "p3001",
+     "lineIds": [
+      3004
+     ],
+     "message": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.",
+     "marker": "1"
+    }
+   ]
+  },
+  {
+   "code": "stray_note",
+   "label": "فقرات تبدأ بعلامة حاشية",
+   "severity": "warning",
+   "count": 1,
+   "items": [
+    {
+     "index": 1,
+     "code": "stray_note",
+     "severity": "warning",
+     "page": 4,
+     "blockId": "p4004",
+     "lineIds": [
+      4004
+     ],
+     "message": "فقرة في الصفحة 4 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
+     "marker": "1",
+     "actions": [
+      {
+       "key": "footnote",
+       "label": "جعلها حاشية",
+       "role": "footnote",
+       "lineIds": [
+        4004
+       ]
+      },
+      {
+       "key": "go",
+       "label": "انتقال",
+       "blockId": "p4004"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

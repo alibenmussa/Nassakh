@@ -327,8 +327,9 @@ sit one level deeper in «إجراءات أخرى», which opens on hover, click
 one mis-click away. A merged word gets the union of both boxes; deleting a line's only word deletes the line.
 The menu opens below the word and flips above near the bottom of the column, never crosses a side edge, and the
 submenu opens on whichever side has room; a click anywhere else closes it (D31, D32). The line menu «⋯» marks
-what a line is: «محتوى», «عنوان رئيسي» or «عنوان فرعي» (not for footnotes); headings show larger in the column
-with a small tag, and assembly will use them for chapters and the table of contents. Every action is undoable.
+what a line is: «محتوى», «عنوان رئيسي» or «عنوان فرعي», and since 7b «شعر» and «حاشية» on any line, also for a range
+(§15); headings show larger in the column with a small tag, and assembly will use them for chapters and the table of
+contents. Every action is undoable.
 The «?» button shows the full sheet.
 
 ### What a review action changes
@@ -361,13 +362,13 @@ lines were replaced, so they can no longer be undone.
 | GET | `pages/<id>/review/` | `page_review` | review payload (PHASE3_SPEC §4) |
 | POST | `lines/<id>/resolve/` | `line_resolve` | `{index, choice, text?}` → `{line, counts, page}` |
 | POST | `lines/<id>/merge/` | `line_merge` | `{index}` joins word `index` with the next one → `{line, counts}` |
-| POST | `lines/<id>/role/` | `line_role` | `{role}` = `body` / `heading` / `subheading` → `{line}` |
+| POST | `lines/<id>/role/` | `line_role` | `{role}` = `body` / `heading` / `subheading` / `verse` / `footnote` (the effective choice, 7b §15) → `{line}` |
 | POST | `lines/<id>/delete-word/` | `line_delete_word` | `{index}` → `{line, counts}`, or `{deleted_id, counts}` when it was the line's only word |
 | POST | `lines/<id>/edit/` | `line_edit` | `{text}` → `{line, counts}` |
 | POST | `lines/<id>/delete/` | `line_delete` | → `{deleted_id, counts}` |
 | POST | `pages/<id>/lines/` | `page_lines` | `{after: line id or null, text}` → 201 `{line, lines, counts}` |
 | POST | `pages/<id>/undo/` | `page_undo` | → review payload |
-| POST | `pages/<id>/approve/` | `page_approve` | `{force}` → `{status, next_review_url, next_payload_url, next_number, dashboard_url}`, or 409 `{unresolved, message}` |
+| POST | `pages/<id>/approve/` | `page_approve` | `{force}` → `{status, next_review_url, next_payload_url, next_number, dashboard_url}`, or 409 `{unresolved, words, groups, gaps, message}` (7b) |
 | POST | `pages/<id>/reopen/` | `page_reopen` | → review payload |
 | GET | `books/<id>/filmstrip/` | `book_filmstrip` | `{book_id, pages: [{id, number, thumb_url, is_reviewed, n_unresolved, status, url}]}` |
 | GET | `books/<id>/sheets/?from&to` | `book_sheets` | `{book_id, from, to, total, pages: [...]}` (≤ 40 pages) |
@@ -377,10 +378,12 @@ lines were replaced, so they can no longer be undone.
 
 ### Word-chooser hook (D26)
 
-`ocr/chooser.py:choose_word(token, context)` is called by `finalize_page` for every unresolved low-confidence word
-with at least two distinct readings (`t`, `alt`, `tess`) when `NASSAKH["WORD_CHOOSER"]` (env `WORD_CHOOSER`) is not
-`none` (the default). It returns None today (placeholder for a future small classifier). A returned string that is
-one of the readings becomes the word with `res = "chooser"`; `conf` stays `low`. No UI.
+Since 7b the hook is on: `NASSAKH["WORD_CHOOSER"]` (env `WORD_CHOOSER`) defaults to `vote`, the three-reader vote of
+D71 (§15), which puts Qari v0.2's reading into the text where Tesseract backs it and leaves the word open
+(`pick = "vote"`, `res` null). `none` turns it off. Any other name calls `ocr/chooser.py:choose_word(token, context)`
+for every unresolved low-confidence word with at least two distinct readings (`t`, `alt`, `tess`); it returns None
+(placeholder for a future small classifier), and a returned reading would become the word with `res = "chooser"`,
+`conf` staying `low`. The workers read the setting at start: restart them after a change.
 
 ## 11. Phase 4 — assembly and the manuscript view
 
@@ -585,7 +588,153 @@ for all pages, a reset or an undo), `book_guides_preview` (POST), `page_guides_o
 `book_sheets?guides=1` (each sheet's bands and doubts), `review_drift` (GET). HTML: `books:start` («استخراج الصفحات»),
 `books:start_ocr`, `books:delete`. The request and answer bodies are fixed in `books/fixtures/guides/` (`index.json`).
 
-## 15. Troubleshooting
+## 15. Phase 7b — trust in the text: reasons, the vote, the second reading, roles
+
+Spec `docs/PHASE7_SPEC.md` §4, decisions D71–D75.
+
+**Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`ocr.0004_roles_textgap`: the
+line roles «شعر», «حاشية», «محتوى» and the table `ocr.TextGap`; `review.0004_revision_batch_gap`: `LineRevision.batch`
+and the action «نص مقترح»; `books.0008_page_reading`: `Page.reading`; no data change), then start both workers and the
+web server again. `static/dist/` is built. `Page.reading` has no database default, so a worker started before 7b fails
+a new upload with `null value in column "reading"`, and only restarted workers vote (below). Pages already read keep
+their tokens until `rebuild_lines` (below); pages read from now on get 7b when they are finalised.
+
+**Why a word is flagged (D71, `ocr/flags.py`).** An uncertain token stores its reasons in `why` (`conf = "low"` exactly
+when `why` is not empty), and the popover's first line says it:
+
+| `why` | When | The popover says |
+|---|---|---|
+| `disagree` | Qari v0.3 and v0.2 differ (lenient: tanween, hamza, ة/ه, shadda ignored) | «النموذجان مختلفان.», or with the vote «…؛ Tesseract يوافق Qari v0.2، فقراءته في النص.», or «…؛ Tesseract يوافق Qari v0.3.» |
+| `alone` | v0.2 has no counterpart and Tesseract did not read the same word | «لم يقرأ Qari v0.2 هذه الكلمة، ولم يؤكّدها Tesseract.» |
+| `number` | any number, except a Western-digit number all three readers read alike (sure; amends D17) | «رقم: قابِله بالصورة.» (Kraken's reading follows, D50) |
+| `script` | Greek, Cyrillic, Hebrew, kana, CJK or Hangul letters, one of ※ ★ ∩ ∧ ∨ ≡ → © ¢ € ¥ ^, or Arabic and Latin letters in one token | «في الكلمة حروف ليست عربية («и»…).» / «في الكلمة رمز غريب («※»).» |
+| `single` | a region one model read, where Tesseract reads an Arabic word at conf ≥ 85 with another dotless skeleton | «قرأ هذه المنطقةَ نموذجٌ واحد، ويقرأ Tesseract هنا «…».» |
+| `missing` | the words of a group (below) | «كلمات أضافتها القراءة الثانية: …» |
+| `year` | a year in digits differs from the number written after it in words («سنة ( ٢٤٢ ) اثنتين واربعين ومايتين») | «السنة مكتوبة بعدها بالحروف: «…» = ٢٤٣.», with the extra reading «٢٤٣ · من الحروف» (`sug`); an agreeing year is settled (`res = "words"`) |
+
+Punctuation is split off both readings and compared only with marks, so it is never flagged («القرآن.» = «القرآن .»,
+«،» against «.» is not a flag). New token keys (JSON, no migration): `why`, `pick`, `tc` (Tesseract's confidence),
+`ins` (the group) and `sug` (the year's reading).
+
+**The vote (D71, the D26 hook).** `NASSAKH["WORD_CHOOSER"]` (env `WORD_CHOOSER`) defaults to `vote`: where the models
+disagree and Tesseract reads what v0.2 reads, v0.2's reading goes into the text (`t = alt`, `orig` keeps v0.3's,
+`pick = "vote"`) and the word stays open (`res` null). Review marks the reading in the text «● في النص», and Enter
+confirms it. The vote never touches numbers, Kraken's tokens or D51's lone «ا/ه/ع». `WORD_CHOOSER=none` turns it off
+(restart the workers). The reading keys are numbered in order (1 = v0.3, then v0.2 when it has a reading, then
+Tesseract).
+
+**Words only the second model read (D72).** Runs of v0.2 words with no v0.3 counterpart are kept, except runs of
+numbers, duplicates of words within ±12 words, one-word splits («هير» of «هيرودوت») and a running head at the start
+of a body region.
+- **A group** (Tesseract supports ≥ 70 % of its words): it is in the text with a dotted amber underline. Its popover
+  offers «إبقاء الكلمات (12)» (Enter; its tokens get `res = "secondary"`) and «حذف الكلمات (12)». One undo step, across
+  lines too.
+- **A suggestion** (`ocr.TextGap`, `kind = "words"`, any other run): a thin bar ▏ between two words, «قد تكون هنا كلمات
+  ناقصة». «إدراج» (Enter) inserts the words as offered or as typed over them, and «تجاهل» (⌫) drops it; undo reopens
+  it. It is never text until inserted, and it moves with edits, merges and deletions of its line.
+- Tab visits words, groups and suggestions in reading order. The page's count (`Page.n_unresolved`, the tiles and
+  filmstrips) is open words + one per open group + open suggestions; `Line.n_low` stays words only.
+- The approve dialog names them: «بقيت 3 علامات: كلمتان غير محسومتين وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟».
+  An open suggestion never enters the book. An open group on a force-approved page does, because its words are text.
+
+**Pages one model read (D73).** `finalize_page` writes `Page.reading` = `{readers: two | one | tesseract, partial,
+groups, gaps}` (`{}` on pages read before 7b). `one`: a region had one model's reading beyond the clean start of a
+looped reading (that start now counts as a second reading); `tesseract`: a region fell back to Tesseract's text.
+- Review shows the pill «قراءة واحدة» (warning) or «نص Tesseract وحده» (danger), and a banner over the lines («قرأ هذه
+  الصفحةَ نموذجٌ واحد، فالعلامات فيها أقل من الحقيقة. قابِل كل سطر بالصورة.»).
+- The dashboard's tiles and filmstrip and review's filmstrip mark such a page with a half-disc.
+- «تحتاج انتباهًا» gains «قراءة واحدة» and «نص قد يكون ناقصًا», and it leaves out approved pages (unless they are in
+  error or have a page-number issue).
+
+**Roles: footnote and verse (D74).**
+- Review's line menu «نوع السطر»: «محتوى» · «عنوان رئيسي» · «عنوان فرعي» · «شعر» · «حاشية», on every line (the old
+  refusal of headings on footnote lines is gone). It offers the effective choice: on a line of a footnote region,
+  «حاشية» stores `body` and «محتوى» stores `main` (the line goes back into the body); on a body line «حاشية» stores
+  `footnote`.
+- ⇧-click another line (or a scan box) to select a range: the menu reads «نوع الأسطر المحدَّدة (6)» and sets them all in
+  one undo step (`LineRevision.batch`).
+- Assembly reads each line's kind through `ocr.services.line_kind`. A `footnote` line is a note and a `main` line is
+  body. A `verse` line is never joined to another one (not at a page seam, not by a manual join); it becomes its own
+  paragraph `style = verse`, and pairing hemistichs into bayts is 7d.
+- The manuscript's paragraph menu gains «شعر» and «حاشية». It reads «حاشية للعلامة (1)» when the paragraph starts with a
+  marker whose call is open on its page; the book page keeps that mark (`noteFor`) when it saves. The choice goes
+  through review's roles (one undo step per page). An edited book asks first (`replace_edited`, D49).
+- **The continuation guard.** A note line without a marker at the top of a page's footnotes continues the previous
+  page's note only when that note does not end with terminal punctuation and this page's body has no open call.
+  Otherwise it is a note of this page, linked to an open call there (a call in brackets or superscript, 1–15 or `*`,
+  below the page's smallest numbered note), with the warning «حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.»
+  (`note_marker_missing`). On the dev books, reassembly makes more notes (130 → 149) and more orphans (68 → 83), mostly
+  on book 19. Those are separate notes whose markers the OCR lost; before 7b they were glued onto the previous note.
+- **The stray note.** A body paragraph at the end of its page that starts with a bracketed marker or `*`, where the
+  page has an open call with that number, gets the warning «فقرة في الصفحة 3 تبدأ بعلامة حاشية «(1)» ولم تُربط.» with
+  «جعلها حاشية» · «انتقال».
+
+**Readiness (D75).** «قبل الإخراج» gains two rows, and «جاهز» still shows only when there is no warn or info row.
+- `missing_text` (warn, after the stray-notes row): «نص قد يكون ناقصًا لم يُحسم في 4 صفحات: 3، 7، 12، 30.».
+- `single_reader` (info, before the book-details rows): «قُرئت 13 صفحة من الكتاب بنموذج واحد ولم تُراجَع بعد.».
+- Both open «المراجعة». Pages read before 7b (`reading = {}`) are not counted.
+
+**Existing books: `rebuild_lines --report`, then the write (D39, §4.6).**
+- `manage.py rebuild_lines --report [book …]` writes nothing. For every approved page it rebuilds the tokens the
+  reviewer first saw and prints, per book and in total, five policies:
+  - `today`: before 7b;
+  - `v2`: the gate;
+  - `v2+single`: v2 with the adopted single-reader rule;
+  - `v2+loose`: v2 with any different Arabic word at conf ≥ 70;
+  - `v2 as written`: what the write stores.
+
+  For each it gives the flags, the useful share (flags the reviewer acted on) and the catch rate (errors that were
+  flagged), then the groups and suggestions and the pages with no flags but errors. `--verbose-suggestions` lists
+  each suggestion.
+- Without ids, the report covers every book with an approved page. For the numbers of §2.4 pass
+  `11 12 13 15 16 17 18 19 20 21 22 23 25 26`.
+
+  | Books (dev copy, 2026-09-26) | Before 7b | v2 (the gate) | v2 as written |
+  |---|---|---|---|
+  | 23 + 25 | 275 flags, 33.1 % useful, 62.8 % caught | 144, 61.8 %, 61.4 % | 151, 60.9 %, 63.4 % |
+  | the 14 of §2.4 | 675, 42.7 %, 75.4 % | 519, 54.1 %, 73.6 % | 548, 51.8 %, 74.3 % |
+
+  519 against §2.4's 518: «الإيyan» (book 26 page 7) mixes Arabic and Latin letters, so it is `script`.
+- `manage.py rebuild_lines [book …] [--book ID --page N] [--dry-run] [--include-edited]` recomputes, from the stored runs,
+  the reasons, the vote, the groups, the suggestions and `reading`. No model is called (Tesseract reads the rescue
+  bands, as in D39), and the numbers pass is scheduled again, so the workers must be running.
+  - It skips and lists pages with review work: approved, reviewed or excluded pages, and pages with any revision or a
+    manual or reviewed line.
+  - A book whose manuscript was edited on the book page is refused when named, and skipped with a note when no ids
+    are given. `--include-edited` overrides that, but the rebuild would then flood the round trip.
+  - On the dev copy it rebuilt 60 pages of books 1, 3–10, 14, 16, 20, 22 and 27 in 16 s. The 88 pages with review work
+    stayed byte-identical (page, lines, revisions, suggestions, runs, regions). The 9 edited books (13, 17, 18, 19, 21,
+    23, 24, 25, 26) were skipped.
+- Run them in order: `--report`, `--dry-run`, then the write.
+
+**The PDF text layer (owner question 1: reverse).**
+- `publishing/pdf_text.py` rewrites the `/ToUnicode` maps of both PDFs after the write and before the audit. Each entry
+  that maps one glyph to several Arabic characters (the lam-alef ligatures) is reversed. Latin ligatures («fi»),
+  single characters and Arabic-Indic digits keep theirs.
+- Chrome (PDFium), poppler and MuPDF now copy «لا» right (measured; Firefox's pdf.js reorders the same way). Preview
+  and Safari copy it reversed, so copy from Chrome.
+- Book 23's screen PDF read by PyMuPDF: words with letters 65.9 % → 99.9 %. With the numbers counted it is 98.7 %,
+  because MuPDF alone reads a multi-digit run backwards (poppler reads them right).
+- Fully vocalised text still copies poorly (book 26: 75 % in MuPDF, 52 % in poppler), because some mark glyphs have no
+  text entry at all.
+
+**Endpoints** (under `/api/`, names in the `api` namespace):
+
+| Method | URL | Name | Body → answer |
+|---|---|---|---|
+| POST | `pages/<id>/roles/` | `page_roles` | `{line_ids, role}` → `{lines}` (a ⇧-click range, one undo step) |
+| POST | `pages/<id>/insertions/<group>/` | `page_insertion` | `{keep}` → `{lines, deleted_ids, order, counts, page}` |
+| POST | `gaps/<id>/accept/` | `gap_accept` | `{text?}` → `{line, gap, counts, page}` |
+| POST | `gaps/<id>/dismiss/` | `gap_dismiss` | → `{line, gap, counts, page}` |
+
+- The review payload's lines carry `kind` (`body` / `footnote`) and `gaps`, its page carries `reading`, and `counts`
+  splits `words` / `groups` / `gaps`.
+- The tiles and filmstrips carry `readers`.
+- `api:manuscript_roles` takes `verse` and `footnote`.
+- The contracts are in `review/fixtures/trust/` and `assembly/fixtures/trust/` (read `index.json` first).
+  `NASSAKH_WRITE_TRUST_FIXTURES=1` or `NK_WRITE_TRUST_FIXTURES=1` rewrites them from the live payloads.
+
+## 16. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -600,6 +749,12 @@ for all pages, a reset or an undo), `book_guides_preview` (POST), `page_guides_o
 | `column books_book.awaits_ocr_start does not exist` | the database is older than Phase 7a: stop the workers, `make migrate`, start them again (§14) |
 | a new book stays «تم التخطيط» | by design: look at the pages, then press «بدء المعالجة» (§14) |
 | «لم تبدأ المعالجة بعد؛ اضغط «بدء المعالجة» أولًا.» on a re-run | the book is still in «التخطيط»: only «تجهيز الصفحات» runs before «بدء المعالجة» |
+| `null value in column "reading" of relation "books_page" violates not-null constraint` on an upload | a worker started before 7b: stop both workers and start them again (§15) |
+| `relation "ocr_textgap" does not exist` or `column review_linerevision.batch does not exist` | the database is older than Phase 7b: stop the workers, `make migrate`, start them again (§15) |
+| `rebuild_lines`: «The manuscript of book(s) … was edited on the book page» | by design: an edited book is left alone. `--include-edited` rebuilds it anyway, and the round trip then offers the changes |
+| an amber word whose text is not Qari v0.3's reading | the vote (D71): Tesseract backed Qari v0.2, whose reading is «● في النص»; Enter confirms it. `WORD_CHOOSER=none` turns the vote off (restart the workers) |
+| «قراءة واحدة» on a page | one model read a region (a looped Qari v0.2, or a fallback): the flags there are fewer than the errors, so compare every line with the scan |
+| a PDF copied from Preview or Safari reads «ال» for «لا» | by design (owner question 1): the text layer is written for Chrome, Firefox and poppler; copy from Chrome |
 | dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` («قيد التخطيط») or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
 | `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `book_text`, `book_sheets`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`, and the review names in §10) |
 | review screen read-only | the user has no `proofreader` / `editor` / `admin` group (Django admin → Users), or the page has no final text yet |

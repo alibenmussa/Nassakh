@@ -10,7 +10,8 @@ starts a run answers 202 `services.run_payload`.
 - GET  /api/books/<id>/manuscript/state/      → `services.manuscript_state`
 - GET  /api/books/<id>/manuscript/            → `{document, warnings, stats, seams, version}`
 - POST /api/books/<id>/manuscript/seams/      `{page, mode: "join" | "split" | "auto"}`
-- POST /api/books/<id>/manuscript/roles/      `{line_ids: [...], role}`
+- POST /api/books/<id>/manuscript/roles/      `{line_ids: [...], role}` (`services.BLOCK_ROLES`: body,
+  heading, subheading, verse «شعر», footnote «حاشية»)
 - POST /api/books/<id>/manuscript/suggestions/ `{block_id, action: "dismiss"}`
 """
 
@@ -105,7 +106,8 @@ def manuscript_seam(request: Request, book_id: int) -> Response:
 @api_view(["POST"])
 @permission_classes([CanReview])
 def manuscript_roles(request: Request, book_id: int) -> Response:
-    """Set the role of a block's lines (body / heading / subheading) through review, then re-run."""
+    """Set the role of a block's lines (body / heading / subheading / verse / footnote) through review,
+    then re-run."""
     book = _book(book_id)
     data = _data(request)
     try:

@@ -310,7 +310,14 @@ def test_undo_resolve_restores_the_word(page, reviewer):
     assert line.tokens[1]["t"] == "الكتب" and line.tokens[1]["res"] is None and line.n_low == 2
     assert reload(page).n_unresolved == 4 and page.final_text.startswith("قال الكتب 1966")
     assert page.revisions.get().undone
-    assert payload["counts"] == {"low_total": 4, "unresolved": 4, "resolved": 0}
+    assert payload["counts"] == {
+        "low_total": 4,
+        "unresolved": 4,
+        "resolved": 0,
+        "words": 4,
+        "groups": 0,
+        "gaps": 0,
+    }
 
 
 def test_undo_edit_restores_text_and_tokens(page):
@@ -484,7 +491,17 @@ def test_filmstrip_lists_non_excluded_pages_in_one_query(page, book, django_asse
     assert strip[0]["thumb_url"].endswith("thumb.webp") and strip[0]["n_unresolved"] == 4
     assert strip[1]["is_reviewed"] and strip[1]["thumb_url"] is None
     assert strip[0]["url"] == reverse("review:page", args=[book.pk, 1])
-    assert set(strip[0]) == {"id", "number", "thumb_url", "is_reviewed", "n_unresolved", "status", "url"}
+    assert set(strip[0]) == {
+        "id",
+        "number",
+        "thumb_url",
+        "is_reviewed",
+        "n_unresolved",
+        "status",
+        "url",
+        "readers",
+    }
+    assert strip[0]["readers"] == ""  # read before 7b (D73)
 
 
 def test_review_payload_shape(page, reviewer, book):
@@ -517,7 +534,14 @@ def test_review_payload_shape(page, reviewer, book):
     assert line["region_kind"] == "body" and line["is_manual"] is False and line["n_low"] == 2
     assert set(line["tokens"][0]) >= {"t", "alt", "tess", "conf", "digit", "bbox", "res"}
     assert payload["lines"][2]["region_kind"] == "footnote"
-    assert payload["counts"] == {"low_total": 4, "unresolved": 4, "resolved": 0}
+    assert payload["counts"] == {
+        "low_total": 4,
+        "unresolved": 4,
+        "resolved": 0,
+        "words": 4,
+        "groups": 0,
+        "gaps": 0,
+    }
     assert payload["labels"] == {"primary": "Qari v0.3", "secondary": "Qari v0.2"}
     assert payload["nav"]["prev_url"] is None
     assert payload["nav"]["next_url"] == reverse("review:page", args=[book.pk, 2])
@@ -574,6 +598,9 @@ def test_api_resolve_edit_delete_insert(reviewer_client, page):
         "page_unresolved": 3,
         "page_low_total": 4,
         "book_unresolved_total": 3,
+        "page_words": 3,
+        "page_groups": 0,
+        "page_gaps": 0,
     }
     assert body["page"]["n_unresolved"] == 3 and body["page"]["status"] == "ocr_done"
 
@@ -592,7 +619,15 @@ def test_api_resolve_edit_delete_insert(reviewer_client, page):
     assert response.json() == {
         "deleted_id": body["line"]["id"],
         # the edit typed «ثانٍ» (high confidence): 3 low words are left on the page
-        "counts": {"line_n_low": 0, "page_unresolved": 2, "page_low_total": 3, "book_unresolved_total": 2},
+        "counts": {
+            "line_n_low": 0,
+            "page_unresolved": 2,
+            "page_low_total": 3,
+            "book_unresolved_total": 2,
+            "page_words": 2,
+            "page_groups": 0,
+            "page_gaps": 0,
+        },
     }
 
 
@@ -807,13 +842,13 @@ def test_set_line_role_marks_headings_and_undo_restores_body(page, reviewer):
     assert line.role == "body" and line.text == first.text  # the words are untouched
 
 
-def test_set_line_role_refuses_unknown_roles_and_footnote_headings(page):
+def test_set_line_role_refuses_unknown_roles_and_allows_headings_on_footnote_lines(page):
+    """D74: the refusal «سطر الحاشية لا يكون عنوانًا» is gone; `main` is stored, never chosen."""
     first, _second, foot = lines_of(page)
-    with pytest.raises(services.ReviewError, match="نوع السطر غير معروف."):
-        services.set_line_role(first, "chapter")
-    with pytest.raises(services.ReviewError, match="سطر الحاشية لا يكون عنوانًا."):
-        services.set_line_role(foot, "heading")
-    assert services.set_line_role(foot, "body").role == "body"
+    for role in ("chapter", "main"):
+        with pytest.raises(services.ReviewError, match="نوع السطر غير معروف."):
+            services.set_line_role(first, role)
+    assert services.set_line_role(foot, "heading").role == "heading"
 
 
 def test_undo_of_a_deleted_heading_brings_its_role_back(page):
@@ -918,3 +953,626 @@ def test_review_next_on_the_last_pending_page_stays_on_it(reviewer_client, page,
     response = reviewer_client.get(url, follow=True)
     assert response.redirect_chain[-1][0] == reverse("books:detail", args=[book.pk])
     assert "لا صفحات بانتظار المراجعة" in [str(m) for m in response.context["messages"]]
+
+
+# ------------------------------------------------------------ 7b: the trust contract (fixtures for the UI)
+#
+# The pages below hold one token of each 7b shape (D71–D74, §4.8) as `ocr.alignment.build_lines`, the
+# vote (`ocr.chooser`) and the numbers pass write them; `test_trust_payloads_equal_the_fixtures` runs
+# every new read and write through the API and compares the answers with review/fixtures/trust/*.json
+# (the contract of the review UI; `NASSAKH_WRITE_TRUST_FIXTURES=1` rewrites the files).
+
+TRUST_DIR = __import__("pathlib").Path(__file__).parent / "fixtures" / "trust"
+TRUST_BOOK, TRUST_PAGES = 30, (900, 901, 902, 903)
+STAMP = "2026-09-26T15:20:00.000000+00:00"  # every line version (`v`) and ISO stamp, normalised
+
+
+def ttok(t, why=None, bbox=None, tc=None, **extra) -> dict:
+    """A token as `build_lines` stores it: `conf` low exactly when `why` is set."""
+    token = {
+        "t": t,
+        "alt": extra.pop("alt", None),
+        "conf": "low" if why else "high",
+        "digit": extra.pop("digit", False),
+        "bbox": bbox,
+        "tess": extra.pop("tess", None),
+    }
+    if tc is not None:
+        token["tc"] = tc
+    if why:
+        token["why"] = list(why)
+    token.update(extra)
+    return token
+
+
+def _trust_line(page, pk, order, region, tokens, role=Line.Role.BODY) -> Line:
+    text = " ".join(t["t"] for t in tokens)
+    return Line.objects.create(
+        pk=pk,
+        page=page,
+        order=order,
+        region=region,
+        bbox=[0, order * 20, W, order * 20 + 20],
+        text=text,
+        ocr_text=text,
+        tokens=tokens,
+        role=role,
+        n_low=ocr_count(tokens),
+    )
+
+
+def ocr_count(tokens) -> int:
+    from ocr.services import count_unresolved
+
+    return count_unresolved(tokens)
+
+
+def trust_book() -> Book:
+    """Book 30 «كتاب الثقة»: page 900 (number 1) read by two models, with a vote, every reason, two
+    groups of added words (one over two lines, one filling a line), two suggestions and a note; page
+    901 read by one model (a looped prefix), page 902 Tesseract's text, page 903 read before 7b."""
+    from ocr.models import TextGap
+
+    Book.objects.filter(pk=TRUST_BOOK).delete()
+    book = Book.objects.create(pk=TRUST_BOOK, title="كتاب الثقة", status=Book.Status.READY_FOR_REVIEW)
+
+    def page_of(pk, number, reading, flags=()):
+        page = Page.objects.create(
+            pk=pk,
+            book=book,
+            number=number,
+            source_index=number - 1,
+            status=Page.Status.OCR_DONE,
+            text_state=Page.TextState.FINAL,
+            width=W * 2,
+            height=H * 2,
+            reading=reading,
+            attention_flags=list(flags),
+        )
+        body = Region.objects.create(pk=pk * 10, page=page, kind="body", bbox=[0, 0, W, 150], order=0)
+        foot = Region.objects.create(pk=pk * 10 + 1, page=page, kind="footnote", bbox=[0, 160, W, H], order=1)
+        return page, body, foot
+
+    two, body, foot = page_of(
+        900,
+        1,
+        {"readers": "two", "partial": False, "groups": 2, "gaps": 2},
+        ["missing_text"],
+    )
+    _trust_line(
+        two,
+        9100,
+        0,
+        body,
+        [
+            ttok("قال", bbox=[88, 0, 100, 20], tc=91.0),
+            # the vote (D71): Tesseract backs Qari v0.2, whose reading is in the text; still open
+            ttok(
+                "يحيى",
+                ["disagree"],
+                [70, 0, 88, 20],
+                88.0,
+                alt="يحيى",
+                tess="يحيى",
+                orig="يجي",
+                pick="vote",
+            ),
+            # the models differ and Tesseract reads as Qari v0.3 (tess null: the same word)
+            ttok("فاضلا", ["disagree"], [50, 0, 70, 20], 93.0, alt="فاضل"),
+            ttok("زاهدا", ["disagree"], [30, 0, 50, 20], 64.0, alt="راهدا", tess="زاهد"),
+            ttok("١٢٥", ["number"], [15, 0, 30, 20], 71.0, digit=True, tess="١٢٠"),
+            ttok("سنة", bbox=[0, 0, 15, 20], tc=90.0),
+        ],
+    )
+    _trust_line(
+        two,
+        9101,
+        1,
+        body,
+        [
+            ttok("وكان", ["alone"], [85, 20, 100, 40], 58.0, tess="ركان"),
+            ttok("مилادية", ["script"], [65, 20, 85, 40], 77.0, alt="ميلادية", tess="ميلادية"),
+            ttok("※", ["script"], [60, 20, 65, 40]),
+            ttok(
+                "١٩٦٦",
+                ["number"],
+                [45, 20, 60, 40],
+                digit=True,
+                src="kraken",
+                qari={"t": "١٩٦٠", "alt": "١٩٦٦", "tess": None},
+            ),
+            # words only the second model read, supported by Tesseract (D72): group 1, over two lines
+            ttok("تعالى", ["missing"], [30, 20, 45, 40], 82.0, ins=1),
+            ttok("بطرابلس", ["missing"], [10, 20, 30, 40], 79.0, ins=1),
+        ],
+    )
+    _trust_line(
+        two,
+        9102,
+        2,
+        body,
+        [
+            ttok("ونشأ", ["missing"], [85, 40, 100, 60], 80.0, ins=1),
+            ttok("بها", ["missing"], [75, 40, 85, 60], 90.0, ins=1),
+            ttok("رحمه", bbox=[60, 40, 75, 60], tc=92.0),
+            ttok("الله", bbox=[50, 40, 60, 60], tc=95.0),
+            # §4.8: the year printed again in words
+            ttok(
+                "٢٤٢",
+                ["number", "year"],
+                [40, 40, 50, 60],
+                digit=True,
+                sug={"t": "٢٤٣", "src": "words", "label": "من الحروف", "words": "ثلاث واربعين ومايتين"},
+            ),
+            ttok("ثلاث", bbox=[30, 40, 40, 60], tc=90.0),
+            ttok("واربعين", bbox=[15, 40, 30, 60], tc=88.0),
+            ttok("ومايتين", bbox=[0, 40, 15, 60], tc=86.0),
+        ],
+    )
+    _trust_line(
+        two,
+        9103,
+        3,
+        body,
+        [
+            ttok(word, ["missing"], [100 - 20 * (k + 1), 60, 100 - 20 * k, 80], 85.0, ins=2)
+            for k, word in enumerate(["وفيها", "مغاص", "اللؤلؤ", "المعروف", "بالخاركي،"])
+        ],
+    )
+    _trust_line(
+        two,
+        9104,
+        4,
+        foot,
+        [
+            ttok("(١)", ["number"], [90, 160, 100, 180], digit=True),
+            ttok("انظر", bbox=[70, 160, 90, 180], tc=94.0),
+            ttok(":", bbox=[66, 160, 70, 180], tc=90.0),
+        ],
+    )
+    # suggestions Tesseract did not support (D72): after «الله» of line 9102, and before line 9100
+    TextGap.objects.create(
+        pk=9500, page=two, line_id=9102, index=3, after_t="الله", text="تعالى الاجابة", support=0.33
+    )
+    TextGap.objects.create(pk=9501, page=two, line_id=9100, index=-1, after_t="", text="وقد", support=0.0)
+
+    one, body, _foot = page_of(
+        901, 2, {"readers": "one", "partial": True, "groups": 0, "gaps": 0}, ["single_reader"]
+    )
+    _trust_line(
+        one,
+        9110,
+        0,
+        body,
+        [
+            ttok("ولد", bbox=[80, 0, 100, 20], tc=93.0),
+            # a one-reader region (D73): Tesseract's confident word there has another skeleton
+            ttok("يجي", ["single"], [60, 0, 80, 20], 90.0, tess="يحيى"),
+            ttok("بطرابلس", bbox=[30, 0, 60, 20], tc=88.0),
+        ],
+    )
+    tess, body, _foot = page_of(
+        902,
+        3,
+        {"readers": "tesseract", "partial": False, "groups": 0, "gaps": 0},
+        ["ocr_fallback", "single_reader"],
+    )
+    _trust_line(
+        tess, 9120, 0, body, [ttok("نص", bbox=[80, 0, 100, 20]), ttok("احتياطي", bbox=[40, 0, 80, 20])]
+    )
+    old, body, _foot = page_of(903, 4, {})
+    _trust_line(old, 9130, 0, body, [ttok("قديم", bbox=[80, 0, 100, 20])])
+    for page in Page.objects.filter(book=book):
+        services.refresh_page_text(page)
+    return book
+
+
+def _normal(value):
+    """`value` with line versions and ISO stamps replaced by `STAMP` (they change on every run)."""
+    if isinstance(value, dict):
+        return {k: STAMP if k in ("v", "decided_at") and v else _normal(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normal(v) for v in value]
+    return value
+
+
+def _call(client, method: str, url: str, body=None) -> dict:
+    if method == "GET":
+        response = client.get(url)
+    else:
+        response = client.post(url, json.dumps(body or {}), content_type="application/json")
+    return {
+        "request": {"method": method, "url": url, **({"body": body} if body is not None else {})},
+        "status": response.status_code,
+        "response": _normal(response.json()),
+    }
+
+
+def _gap_url(action: str, gap_id: int) -> str:
+    return reverse(f"api:gap_{action}", args=[gap_id])
+
+
+def _insertion_url(group) -> str:
+    return reverse("api:page_insertion", args=[900, group])
+
+
+def _line_url(name: str, line_id: int) -> str:
+    return reverse(f"api:{name}", args=[line_id])
+
+
+def trust_contract(client) -> dict[str, object]:
+    """Every fixture file's content, from live answers (see `TRUST_DIR/index.json`)."""
+    from books import services as books_services
+    from ocr.models import TextGap
+
+    out: dict[str, object] = {}
+    review = reverse("api:page_review", args=[900])
+    undo = reverse("api:page_undo", args=[900])
+
+    trust_book()
+    payload = _call(client, "GET", review)
+    out["review_payload.json"] = payload
+    lines = {line["id"]: line for line in payload["response"]["lines"]}
+    tokens = {
+        "sure": lines[9100]["tokens"][0],
+        "vote": lines[9100]["tokens"][1],
+        "disagree_v03": lines[9100]["tokens"][2],
+        "disagree": lines[9100]["tokens"][3],
+        "number": lines[9100]["tokens"][4],
+        "alone": lines[9101]["tokens"][0],
+        "script_letters": lines[9101]["tokens"][1],
+        "script_symbol": lines[9101]["tokens"][2],
+        "kraken": lines[9101]["tokens"][3],
+        "missing": lines[9101]["tokens"][4],
+        "year": lines[9102]["tokens"][4],
+    }
+    single = _call(client, "GET", reverse("api:page_review", args=[901]))["response"]
+    tokens["single"] = single["lines"][0]["tokens"][1]
+
+    readings = {}
+    for pk, name in zip(TRUST_PAGES, ("two", "one", "tesseract", "before_7b"), strict=True):
+        answer = _call(client, "GET", reverse("api:page_review", args=[pk]))["response"]
+        readings[name] = {"page": answer["page"], "counts": answer["counts"]}
+    out["reading.json"] = {
+        "readings": readings,
+        "header": {
+            "two": {"pill": None, "banner": None},
+            "one": {
+                "pill": {"text": "قراءة واحدة", "level": "warning"},
+                "banner": "قرأ هذه الصفحةَ نموذجٌ واحد، فالعلامات فيها أقل من الحقيقة. قابِل كل سطر بالصورة.",
+            },
+            "tesseract": {
+                "pill": {"text": "نص Tesseract وحده", "level": "danger"},
+                "banner": "تعذّرت قراءة هذه الصفحة بالنموذجين، ونصّها من Tesseract وحده. قابِل كل سطر بالصورة.",
+            },
+            "before_7b": {"pill": None, "banner": None},
+        },
+    }
+
+    insertion = []
+    insertion.append(
+        {
+            "name": "keep group 1 (lines 9101 and 9102)",
+            **_call(client, "POST", _insertion_url(1), {"keep": True}),
+        }
+    )
+    tokens["kept"] = insertion[-1]["response"]["lines"][0]["tokens"][4]
+    insertion.append({"name": "undo the keep (one step)", **_call(client, "POST", undo)})
+    insertion.append(
+        {
+            "name": "drop group 1 (lines 9101 and 9102)",
+            **_call(client, "POST", _insertion_url(1), {"keep": False}),
+        }
+    )
+    insertion.append(
+        {
+            "name": "drop group 2 (it fills line 9103: the line goes)",
+            **_call(client, "POST", _insertion_url(2), {"keep": False}),
+        }
+    )
+    insertion.append({"name": "undo the drop of group 2 (line 9103 is back)", **_call(client, "POST", undo)})
+    out["insertion.json"] = insertion
+
+    trust_book()
+    gaps = []
+    gaps.append(
+        {"name": "accept gap 9500 with the offered words", **_call(client, "POST", _gap_url("accept", 9500))}
+    )
+    tokens["typed"] = gaps[-1]["response"]["line"]["tokens"][4]
+    gaps.append({"name": "undo: the words go, gap 9500 is open again", **_call(client, "POST", undo)})
+    gaps.append(
+        {
+            "name": "accept gap 9501 with typed words",
+            **_call(client, "POST", _gap_url("accept", 9501), {"text": "  وقد   كان "}),
+        }
+    )
+    gaps.append({"name": "dismiss gap 9500", **_call(client, "POST", _gap_url("dismiss", 9500))})
+    gaps.append({"name": "undo: gap 9500 is open again", **_call(client, "POST", undo)})
+    edited = "رحمه الله ٢٤٢ ثلاث واربعين ومايتين"
+    gaps.append(
+        {
+            "name": "an edit of line 9102 re-anchors gap 9500 (after «الله»: index 1)",
+            **_call(client, "POST", _line_url("line_edit", 9102), {"text": edited}),
+        }
+    )
+    out["gaps.json"] = gaps
+
+    trust_book()
+    roles = []
+    roles.append(
+        {
+            "name": "«حاشية» on a body-region line stores footnote",
+            **_call(client, "POST", _line_url("line_role", 9100), {"role": "footnote"}),
+        }
+    )
+    roles.append(
+        {
+            "name": "«محتوى» on a footnote-region line stores main",
+            **_call(client, "POST", _line_url("line_role", 9104), {"role": "body"}),
+        }
+    )
+    roles.append(
+        {
+            "name": "«حاشية» on that footnote-region line stores body again",
+            **_call(client, "POST", _line_url("line_role", 9104), {"role": "footnote"}),
+        }
+    )
+    roles.append(
+        {
+            "name": "«عنوان رئيسي» on a footnote-region line is allowed",
+            **_call(client, "POST", _line_url("line_role", 9104), {"role": "heading"}),
+        }
+    )
+    roles.append(
+        {
+            "name": "«شعر» on a body line",
+            **_call(client, "POST", _line_url("line_role", 9102), {"role": "verse"}),
+        }
+    )
+    roles.append(
+        {
+            "name": "a range: «حاشية» on lines 9101–9103",
+            **_call(
+                client,
+                "POST",
+                reverse("api:page_roles", args=[900]),
+                {"line_ids": [9101, 9102, 9103], "role": "footnote"},
+            ),
+        }
+    )
+    roles.append({"name": "undo the range (one step)", **_call(client, "POST", undo)})
+    out["roles.json"] = roles
+
+    trust_book()
+    approve = reverse("api:page_approve", args=[900])
+    out["approve.json"] = [
+        {"name": "open items left: 409", **_call(client, "POST", approve, {"force": False})},
+        {"name": "forced approval", **_call(client, "POST", approve, {"force": True})},
+    ]
+
+    trust_book()
+    TextGap.objects.filter(pk=9501).update(status=TextGap.Status.DISMISSED)
+    errors = [
+        {"name": "an unknown group", **_call(client, "POST", _insertion_url(7), {"keep": True})},
+        {"name": "a decided gap", **_call(client, "POST", _gap_url("accept", 9501))},
+        {"name": "an unknown gap", **_call(client, "POST", _gap_url("dismiss", 99999))},
+        {
+            "name": "typed words that are blank",
+            **_call(client, "POST", _gap_url("accept", 9500), {"text": "  "}),
+        },
+        {"name": "an unknown role", **_call(client, "POST", _line_url("line_role", 9100), {"role": "main"})},
+        {
+            "name": "a range without lines",
+            **_call(client, "POST", reverse("api:page_roles", args=[900]), {"line_ids": [], "role": "verse"}),
+        },
+        {
+            "name": "a range with another page's line",
+            **_call(
+                client,
+                "POST",
+                reverse("api:page_roles", args=[900]),
+                {"line_ids": [9100, 9110], "role": "verse"},
+            ),
+        },
+    ]
+    out["errors.json"] = errors
+
+    trust_book()
+    book = Book.objects.get(pk=TRUST_BOOK)
+    one = Page.objects.get(pk=901)
+    sheets = books_services.book_sheets(book, 1, 1)
+    out["tile.json"] = {
+        "page_tile (page 901, full)": _normal(books_services.page_tile(one)),
+        "page_tile (page 901, compact)": _normal(books_services.page_tile(one, compact=True)),
+        "page_tile (page 900, compact: no readers key for two)": _normal(
+            books_services.page_tile(Page.objects.get(pk=900), compact=True)
+        ),
+        "filmstrip": _call(client, "GET", reverse("api:book_filmstrip", args=[TRUST_BOOK]))["response"],
+        "book_sheets line (page 900, line 9104)": _normal(sheets["pages"][0]["lines"][4]),
+        "attention flags": {
+            code: label
+            for code, label in (("single_reader", "قراءة واحدة"), ("missing_text", "نص قد يكون ناقصًا"))
+        },
+    }
+    out["tokens.json"] = tokens
+    return out
+
+
+def test_trust_payloads_equal_the_fixtures(reviewer_client):
+    import os
+
+    contract = trust_contract(reviewer_client)
+    if os.environ.get("NASSAKH_WRITE_TRUST_FIXTURES"):
+        for name, content in contract.items():
+            (TRUST_DIR / name).write_text(json.dumps(content, ensure_ascii=False, indent=1) + "\n")
+    index = json.loads((TRUST_DIR / "index.json").read_text())
+    assert set(index["files"]) == set(contract)
+    for name, content in contract.items():
+        assert json.loads((TRUST_DIR / name).read_text()) == json.loads(json.dumps(content)), name
+
+
+# ---------------------------------------------------------------- 7b: the services behind the contract
+
+
+@pytest.fixture
+def trust(db):
+    trust_book()
+    return Page.objects.get(pk=900)
+
+
+def gap(pk):
+    from ocr.models import TextGap
+
+    return TextGap.objects.get(pk=pk)
+
+
+def texts(page) -> list[str]:
+    return [line.text for line in lines_of(page)]
+
+
+def test_accept_gap_inserts_the_words_and_undo_takes_them_out_and_reopens_it(trust, reviewer):
+    line, accepted = services.accept_gap(gap(9500), user=reviewer)
+    assert accepted.status == "inserted" and accepted.decided_by == reviewer and accepted.decided_at
+    assert line.text == "ونشأ بها رحمه الله تعالى الاجابة ٢٤٢ ثلاث واربعين ومايتين"
+    assert [t["res"] for t in line.tokens[4:6]] == ["typed", "typed"]
+    revision = trust.revisions.get()
+    assert revision.action == "edit" and revision.after["gap"] == 9500
+    assert reload(trust).n_unresolved == 13 and "تعالى الاجابة" in trust.final_text
+    services.undo_last(trust, reviewer)
+    reopened = gap(9500)
+    assert (reopened.status, reopened.decided_by, reopened.decided_at) == ("open", None, None)
+    assert Line.objects.get(pk=9102).text == "ونشأ بها رحمه الله ٢٤٢ ثلاث واربعين ومايتين"
+    assert reload(trust).n_unresolved == 14
+
+
+def test_accept_gap_takes_typed_words_and_re_anchors_by_the_word_it_follows(trust):
+    line = Line.objects.get(pk=9102)
+    tokens = [dict(t) for t in line.tokens]
+    Line.objects.filter(pk=9102).update(tokens=[{"t": "بدء", "conf": "high"}, *tokens])  # indices moved
+    line, _ = services.accept_gap(gap(9500), "  كما   قال ")
+    words = line.text.split()
+    assert words[words.index("الله") + 1 : words.index("الله") + 3] == ["كما", "قال"]
+    assert services.gap_anchor([{"t": "أ"}, {"t": "ب"}], 5, "غائب") == 1
+    assert services.gap_anchor([{"t": "أ"}], -1, "") == -1
+
+
+def test_dismiss_gap_leaves_the_text_and_undo_reopens_it(trust, reviewer):
+    before = reload(trust).final_text
+    _, dismissed = services.dismiss_gap(gap(9500), reviewer)
+    assert dismissed.status == "dismissed" and reload(trust).final_text == before
+    assert trust.revisions.get().action == LineRevision.Action.GAP and reload(trust).n_unresolved == 13
+    with pytest.raises(services.ReviewError, match="حُسم هذا النص المقترح"):
+        services.dismiss_gap(gap(9500))
+    services.undo_last(trust)
+    assert gap(9500).status == "open" and reload(trust).n_unresolved == 14
+
+
+def test_line_actions_move_the_gaps_with_their_words_and_undo_puts_them_back(trust):
+    line = Line.objects.get(pk=9102)  # gap 9500 after «الله» (index 3)
+    services.delete_token(line, 0)  # «ونشأ» goes
+    assert (gap(9500).index, gap(9500).after_t) == (2, "الله")
+    services.merge_tokens(Line.objects.get(pk=9102), 1)  # «رحمه» + «الله»
+    assert (gap(9500).index, gap(9500).after_t) == (1, "رحمهالله")
+    services.edit_line(Line.objects.get(pk=9102), "قال رحمهالله ٢٤٢")
+    assert (gap(9500).index, gap(9500).after_t) == (1, "رحمهالله")
+    for _ in range(3):
+        services.undo_last(trust)
+    assert (gap(9500).index, gap(9500).after_t) == (3, "الله")
+
+
+def test_a_deleted_line_takes_its_gaps_out_of_the_counts_and_undo_brings_them_back(trust):
+    services.delete_line(Line.objects.get(pk=9102))
+    assert gap(9500).line_id is None and services.page_counts(reload(trust))["gaps"] == 1
+    services.undo_last(trust)
+    assert gap(9500).line_id == 9102 and gap(9500).status == "open"
+    assert services.page_counts(reload(trust))["gaps"] == 2
+
+
+def test_keeping_a_group_over_two_lines_and_undoing_it_in_one_step(trust, reviewer):
+    result = services.resolve_insertion(trust, 1, True, reviewer)
+    assert [line.pk for line in result["lines"]] == [9101, 9102] and result["deleted_ids"] == []
+    group = [t for pk in (9101, 9102) for t in Line.objects.get(pk=pk).tokens if t.get("ins") == 1]
+    assert len(group) == 4 and all(t["res"] == "secondary" for t in group)
+    batch = {r.batch for r in trust.revisions.all()}
+    assert len(batch) == 1 and None not in batch and trust.revisions.count() == 2
+    services.undo_last(trust, reviewer)
+    group = [t for pk in (9101, 9102) for t in Line.objects.get(pk=pk).tokens if t.get("ins") == 1]
+    assert all(t.get("res") is None for t in group) and reload(trust).n_unresolved == 14
+
+
+def test_dropping_groups_removes_their_words_and_a_line_they_fill(trust):
+    services.resolve_insertion(trust, 1, False)
+    assert texts(trust)[1:3] == ["وكان مилادية ※ ١٩٦٦", "رحمه الله ٢٤٢ ثلاث واربعين ومايتين"]
+    result = services.resolve_insertion(trust, 2, False)
+    assert result["deleted_ids"] == [9103] and [line.order for line in lines_of(trust)] == [0, 1, 2, 3]
+    services.undo_last(trust)
+    assert texts(trust)[3] == "وفيها مغاص اللؤلؤ المعروف بالخاركي،"
+    services.undo_last(trust)
+    assert texts(trust)[1].endswith("تعالى بطرابلس") and texts(trust)[2].startswith("ونشأ بها")
+    with pytest.raises(services.ReviewError, match="لم تعد هذه الكلمات المقترحة"):
+        services.resolve_insertion(trust, 9, True)
+
+
+def test_roles_take_the_effective_choice_on_both_region_kinds(trust):
+    body, foot = Line.objects.get(pk=9100), Line.objects.get(pk=9104)
+    assert services.stored_role("footnote", "body") == "footnote"
+    assert services.stored_role("footnote", "footnote") == "body"
+    assert services.stored_role("body", "footnote") == "main"
+    assert services.stored_role("verse", "footnote") == "verse"
+    assert services.set_line_role(body, "footnote").role == "footnote"
+    assert "قال يحيى" in reload(trust).final_text.split("\n\n")[1]  # the line is among the notes now
+    assert services.set_line_role(foot, "body").role == "main"
+    assert "(1) انظر" in reload(trust).final_text.split("\n\n")[0]  # pulled into the body
+    assert services.set_line_role(foot, "footnote").role == "body"
+    assert services.set_line_role(foot, "heading").role == "heading"  # no refusal any more (D74)
+    assert services.set_line_role(Line.objects.get(pk=9102), "verse").role == "verse"
+
+
+def test_set_roles_on_a_range_is_one_undo_step(trust, reviewer):
+    lines = services.set_roles(trust, [9101, "9102", 9103, 9104], "footnote", reviewer)
+    assert [line.role for line in lines] == ["footnote", "footnote", "footnote", "body"]  # 9104 unchanged
+    assert trust.revisions.count() == 3 and len({r.batch for r in trust.revisions.all()}) == 1
+    services.undo_last(trust, reviewer)
+    assert [line.role for line in lines_of(trust)] == ["body"] * 5
+    for bad in ([], [9101, "x"], [9101, 9110], "9101"):
+        with pytest.raises(services.ReviewError):
+            services.set_roles(trust, bad, "footnote")
+    with pytest.raises(services.ReviewError, match="نوع السطر غير معروف"):
+        services.set_roles(trust, [9101], "main")
+
+
+def test_approve_counts_open_groups_and_gaps(trust, reviewer):
+    with pytest.raises(services.ReviewBlocked) as exc:
+        services.approve_page(trust, reviewer)
+    assert (exc.value.items.words, exc.value.items.groups, exc.value.items.gaps) == (10, 2, 2)
+    assert (
+        str(exc.value) == "بقيت 14 علامة: 10 كلمات غير محسومة وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟"
+    )
+    items = services.OpenItems(words=2, groups=0, gaps=1)
+    assert services.blocked_message(items) == (
+        "بقيت 3 علامات: كلمتان غير محسومتين وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟"
+    )
+    assert (
+        services.blocked_message(services.OpenItems(words=4))
+        == "بقيت 4 كلمة غير محسومة. اعتماد الصفحة رغم ذلك؟"
+    )
+    # the words only the second model read, kept: only the suggestions are left
+    services.resolve_insertion(trust, 1, True)
+    services.resolve_insertion(trust, 2, True)
+    for line in lines_of(trust):
+        for index, token in enumerate(line.tokens):
+            if token.get("conf") == "low" and not token.get("res"):
+                line = services.resolve_token(line, index, "primary")
+    with pytest.raises(services.ReviewBlocked) as exc:
+        services.approve_page(trust, reviewer)
+    assert exc.value.unresolved == 2 and str(exc.value).startswith("بقيت علامتان: كلمات مقترحة لم تُحسم")
+    services.dismiss_gap(gap(9500))
+    services.dismiss_gap(gap(9501))
+    assert services.approve_page(trust, reviewer)["status"] == "reviewed"
+
+
+def test_resolve_with_the_year_from_the_words(trust):
+    line = services.resolve_token(Line.objects.get(pk=9102), 4, "sug")
+    assert line.tokens[4]["t"] == "٢٤٣" and line.tokens[4]["res"] == "sug" and line.tokens[4]["orig"] == "٢٤٢"
+    with pytest.raises(services.ReviewError, match="لا توجد قراءة مقترحة"):
+        services.resolve_token(line, 0, "sug")

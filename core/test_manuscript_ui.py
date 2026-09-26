@@ -1685,3 +1685,152 @@ def test_dashboard_manuscript_logic_under_node(tmp_path):
         "toast": "هذا الإجراء يتطلب صلاحية محرّر.",
     }
     assert out["polled"] == ["manuscript", "مُجمَّعة · 214 صفحة · 3 ملاحظات"]
+
+
+# ------------------------------------------------ 7b: footnote and verse as roles (PHASE7_SPEC §4.4, D74)
+
+TRUST = ROOT / "assembly" / "fixtures" / "trust"
+
+MS_TRUST_RUN = r"""
+(async () => {
+  const out = {};
+  const { c, root } = make(fixture.state_ready, fixture.fragment_v1);
+  out.roles = c.roles.map((r) => [r.value, r.label]);
+  // the menu reads what a block is (a verse line's paragraph by its style) and «حاشية للعلامة (n)» when its
+  // leading marker's call is open on its page
+  const menuOf = (id) => { c.openMenu(id); const m = { role: c.menu.role, noteFor: c.menu.noteFor, labels: c.roles.map((r) => c.roleLabel(r)), lines: c.menu.lines }; c.closePop(); return m; };
+  out.menus = { note: menuOf('p4004'), verse: menuOf('p1005'), body: menuOf('p1002'), heading: menuOf('h1001') };
+  out.blockRole = ['p1005', 'p1009', 'h1001'].map((id) => NassakhManuscript.blockRole(root.querySelector(`[data-block="${id}"]`)));
+  // «حاشية للعلامة (1)» posts the footnote role on the block's lines (the roles endpoint's contract body)
+  const run = async (fn) => { calls.length = 0; stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v1; const p = fn(); const live = c.liveMessage; await p; await flush(); await flush(); await flush(); return { post: posts().map((x) => x.slice(1, 3)), live }; };
+  out.note = await run(() => c.setRole('p4004', 'footnote'));
+  out.verse = await run(() => c.setRole('p1002', 'verse'));
+  out.back = await run(() => c.setRole('p1005', 'body'));
+  out.heading = await run(() => c.setRole('p1009', 'heading'));
+  calls.length = 0; out.same = [await c.setRole('p1006', 'verse'), await c.setRole('p1009', 'body'), posts().length];
+  // the stray_note warning's «جعلها حاشية» · «انتقال» in the side panel
+  const host = root.querySelector('[data-ms-warnings-host]');
+  const stray = host.querySelector('.ms-warn[data-block="p4004"]');
+  out.stray = { msg: stray.querySelector('.ms-warn-msg').textContent, links: stray.querySelectorAll('.ms-warn-link').map((b) => [b.tagName, b.textContent, b.getAttribute('data-warn-role'), b.getAttribute('data-lines'), b.getAttribute('data-goto')]) };
+  const marker = host.querySelector('.ms-warn[data-block="p3001"]');
+  out.markerMissing = { msg: marker.querySelector('.ms-warn-msg').textContent, acts: marker.querySelectorAll('[data-warn-role]').length };
+  out.act = await run(() => { c.onSideClick({ target: stray.querySelector('[data-warn-role]'), preventDefault: () => {} }); return flush(); });
+  // «انتقال» goes to the paragraph
+  c.onSideClick({ target: stray.querySelector('[data-goto]'), preventDefault: () => {} }); out.goto = c.focused;
+  // a reader has no structure tools; an edited book refuses them (the book page owns the structure, D49)
+  const rd = make(fixture.state_ready, fixture.fragment_v1); rd.c.canReview = false; calls.length = 0;
+  out.reader = [await rd.c.warnRole(rd.root.querySelector('[data-ms-warnings-host] [data-warn-role]')), await rd.c.setRole('p4004', 'footnote'), posts().length];
+  const ed = make(Object.assign({}, fixture.state_ready, { edited: true }), fixture.fragment_v1); await flush(); calls.length = 0;
+  out.edited = [await ed.c.warnRole(ed.root.querySelector('[data-ms-warnings-host] [data-warn-role]')), await ed.c.setRole('p1002', 'verse'), posts().length];
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_manuscript_trust_roles_under_node(tmp_path):
+    """D74 in the manuscript view, on D2's contract fixtures rendered by `assembly.render`: the paragraph
+    menu's «شعر» and «حاشية» («حاشية للعلامة (1)» on a paragraph whose call is open on its page), the requests
+    the roles endpoint expects, and the stray_note warning's «جعلها حاشية» · «انتقال»."""
+    manuscript = json.loads((TRUST / "manuscript.json").read_text(encoding="utf-8"))
+    roles = json.loads((TRUST / "block_roles.json").read_text(encoding="utf-8"))
+    fixture = {
+        "config": {
+            "bookId": 1,
+            "title": "كتاب الحواشي والشعر",
+            "canEdit": True,
+            "canReview": True,
+            "pageCount": 5,
+            "countsText": "",
+            "urls": {
+                "assemble": "/api/books/1/assemble/",
+                "state": "/api/books/1/manuscript/state/",
+                "data": "/api/books/1/manuscript/",
+                "seams": "/api/books/1/manuscript/seams/",
+                "roles": "/api/books/1/manuscript/roles/",
+                "suggestions": "/api/books/1/manuscript/suggestions/",
+                "page": "/books/1/manuscript/",
+                "document": "/books/1/manuscript/document/",
+                "sheets": "/api/books/1/sheets/",
+                "review": "/books/1/review/__n__/",
+                "dashboard": "/books/1/",
+                "book": "/books/1/layout/",
+            },
+        },
+        "fragment_v1": render_to_string(
+            "assembly/_document.html", {"book": SimpleNamespace(pk=1), **render.fragment_context(manuscript)}
+        ),
+        "sheet": {"id": 7, "number": 1, "width": 1000, "height": 1500, "lines": []},
+        "state_ready": _state(warnings_count=len(manuscript["warnings"])),
+        "state_ready_v2": _state(version=2, run={"id": 9, "status": "done", "stage": "save", "error": ""}),
+        "roles": roles,
+    }
+    (tmp_path / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    harness.write_text(HARNESS[: HARNESS.index("(async () => {")] + MS_TRUST_RUN, encoding="utf-8")
+    run = subprocess.run(
+        [
+            "node",
+            str(harness),
+            str(JS / "manuscript.js"),
+            str(tmp_path / "fixture.json"),
+            str(JS / "keys.js"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+
+    # «نوع الفقرة»: the five choices of `BLOCK_ROLES`, in order
+    assert out["roles"] == [[r["value"], r["label"]] for r in roles["roles"]]
+    labels = [r["label"] for r in roles["roles"]]
+    note_for = [*labels[:4], roles["footnoteFor"].format(n=1)]
+    assert note_for[4] == "حاشية للعلامة (1)"
+    # the current choice: a heading by its tag, a verse line's paragraph by its style, else body text
+    assert out["menus"] == {
+        "note": {"role": "body", "noteFor": "1", "labels": note_for, "lines": [4004]},
+        "verse": {"role": "verse", "noteFor": "", "labels": labels, "lines": [1005]},
+        "body": {"role": "body", "noteFor": "", "labels": labels, "lines": [1002, 1003, 1004]},
+        "heading": {"role": "heading", "noteFor": "", "labels": labels, "lines": [1001]},
+    }
+    assert out["blockRole"] == ["verse", "body", "heading"]
+    # every choice posts the block's lines with the role (the contract's request), with its live message
+    url = "/api/books/1/manuscript/roles/"
+    request = roles["request"]["body"]
+    assert out["note"] == {"post": [[url, request]], "live": roles["liveMessages"]["footnote"]}
+    assert out["verse"] == {
+        "post": [[url, {"line_ids": [1002, 1003, 1004], "role": "verse"}]],
+        "live": roles["liveMessages"]["verse"],
+    }
+    assert out["back"] == {"post": [[url, {"line_ids": [1005], "role": "body"}]], "live": "تصير الفقرة محتوى"}
+    assert out["heading"]["post"] == [[url, {"line_ids": [1009], "role": "heading"}]]
+    assert out["same"] == [False, False, 0]  # the block's own role again: nothing is sent
+    # the stray_note warning: «جعلها حاشية» (the footnote role on its lines) · «انتقال» · «مراجعة»
+    assert out["stray"] == {
+        "msg": "فقرة في الصفحة 4 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
+        "links": [
+            ["BUTTON", "جعلها حاشية", "footnote", "4004", None],
+            ["BUTTON", "انتقال", None, None, "p4004"],
+            ["A", "مراجعة", None, None, None],
+        ],
+    }
+    assert out["markerMissing"] == {"msg": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.", "acts": 0}
+    assert out["act"] == {"post": [[url, request]], "live": "تصير الفقرة حاشية"}
+    assert out["goto"] == "p4004"
+    # a reader and an edited book: nothing is sent
+    assert out["reader"] == [False, False, 0] and out["edited"] == [False, False, 0]
+
+
+def test_manuscript_trust_markup_and_styles():
+    """The paragraph menu names each choice through `roleLabel(r)`, a reader's screen carries `is-reader` (the
+    warning's structure action rests there and on an edited book), and a verse line's paragraph is centred."""
+    view = (ROOT / "templates" / "assembly" / "manuscript.html").read_text(encoding="utf-8")
+    assert '<span x-text="roleLabel(r)"></span>' in view and "'is-reader': !canReview" in view
+    assert "نوع الفقرة (محتوى، عنوان، شعر، حاشية)" in view
+    fragment = (ROOT / "templates" / "assembly" / "_document.html").read_text(encoding="utf-8")
+    assert 'class="link ms-warn-link ms-warn-act" data-warn-role="{{ a.role }}"' in fragment
+    assert fragment.index("data-warn-role") < fragment.index('data-goto="{{ w.blockId }}"')
+    css = (ROOT / "static" / "src" / "components" / "manuscript.css").read_text(encoding="utf-8")
+    assert '.ms-p[data-style="verse"] {' in css
+    assert ".ms-screen:is(.is-reader, .is-edited) .ms-warn-act { display: none; }" in css

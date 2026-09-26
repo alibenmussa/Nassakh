@@ -752,6 +752,10 @@ def build_lines(
     tesseract_lines: list[dict],
     bands: list[dict] | None = None,
     gray: np.ndarray | None = None,
+    *,
+    single: bool = False,
+    partial: bool = False,
+    inserted: dict[int, int] | None = None,
 ) -> list[dict]:
     """Split the chosen text into visual lines with per-token confidence.
 
@@ -776,37 +780,55 @@ def build_lines(
     anchored word take their share, and without such words the run stays on the previous anchored
     line (leading ones take the first anchored line). An abbreviation and its number («(ج ١،») share a
     Tesseract word, whose box is the number's (`holders`). Without Tesseract lines the primary
-    text's own line breaks are used. `alt` is the secondary engine's token when its normalised form
-    differs; `conf` is `low` when an alt differs, when the secondary has no counterpart for the
-    token, or when the token is a number (D17). A box that still looks wrong (`weak_boxes`) is marked
+    text's own line breaks are used. A box that still looks wrong (`weak_boxes`) is marked
     `bq: "weak"`.
 
+    Confidence is flag policy v2 (D71, `ocr.flags.classify`): `alt` is Qari v0.2's reading of the token
+    (`flags.second_readings`: punctuation split off, glued back in the token's shape) when it differs
+    leniently, and `why` lists the reasons a token is doubtful (`conf` is `low` exactly then). Without
+    `secondary_text` the region had one model reading when `single` (a `single` flag where Tesseract's
+    confident Arabic word there has another skeleton), else no model reading to compare (the text
+    layer, Tesseract's own text: only `script` and `number`). With `partial` the secondary text is the
+    clean start of a looped run (D73): the tokens after the last one it reads are one-reader. `inserted`
+    maps token indices to the group of words only the second model read that were merged into the text
+    (D72): those tokens are `why: ["missing"]`, `ins: <group>`, low. `tc` is the confidence of the
+    Tesseract word a token took.
+
     Returns `[{order, bbox, text, tokens, n_low, n_anchored, n_unseen, tess_words, tess_matched,
-    rescued, two_bands, confidence}]` with tokens `{"t", "alt", "conf", "digit", "bbox", "tess"}` and
-    `"bq": "weak"` on a weak box (`tess` = Tesseract's word when it differs). `n_anchored` counts the
-    tokens anchored to a Tesseract word by the alignment or a run's evidence (not those boxed by their
-    place in a line, as before D63: the page's `alignment_poor` flag); `n_unseen` the words
-    (`is_word`) no Tesseract word accounts for; `tess_words` / `tess_matched` are the words of the
-    Tesseract line and how many of them a primary word matched; `rescued` marks a line that only the
-    line rescue found, `two_bands` one whose Tesseract line covers two printed lines.
+    rescued, two_bands, confidence, indices}]` (`indices`: the line's tokens' places in the text)
+    with tokens `{"t", "alt", "conf", "digit", "bbox", "tess"}`, `tc` when a Tesseract word was
+    taken, `why` / `ins` when set and `"bq": "weak"` on a weak box (`tess` = Tesseract's word when it
+    differs). `n_anchored` counts the tokens anchored to a Tesseract word by the alignment or a run's evidence
+    (not those boxed by their place in a line, as before D63: the page's `alignment_poor` flag); `n_unseen`
+    the words (`is_word`) no Tesseract word accounts for; `tess_words` / `tess_matched` are the words of the
+    Tesseract line and how many of them a primary word matched; `rescued` marks a line that only the line
+    rescue found, `two_bands` one whose Tesseract line covers two printed lines.
     """
     p_tokens = primary_text.split()
     if not p_tokens:
         return []
     n = len(p_tokens)
 
-    alts: list[str | None] = [None] * n
-    disagree: list[bool] = [False] * n
-    if secondary_text and secondary_text.split():
-        s_tokens = secondary_text.split()
+    from . import flags  # the policy (D71) imports this module's alignment
+
+    s_tokens = (secondary_text or "").split()
+    readings = flags.second_readings(p_tokens, s_tokens) if s_tokens else [None] * n
+    alts: list[str | None] = [
+        s if s is not None and flags.lenient(s) != flags.lenient(p) else None
+        for p, s in zip(p_tokens, readings, strict=True)
+    ]
+    # the rule before 7b, kept for a lone letter that may be a digit (D51): the whitespace alignment
+    legacy: list[bool] = [False] * n
+    if s_tokens:
         for i, j in align_tokens(p_tokens, s_tokens):
-            if i is None:
-                continue
-            if j is None:
-                disagree[i] = True
-            elif norm_token(p_tokens[i]) != norm_token(s_tokens[j]):
-                alts[i] = s_tokens[j]
-                disagree[i] = True
+            if i is not None and (j is None or norm_token(p_tokens[i]) != norm_token(s_tokens[j])):
+                legacy[i] = True
+    if s_tokens:
+        cutoff = flags.last_read(readings) if partial else n - 1
+        two: list[bool | None] = [i <= cutoff for i in range(n)]
+    else:
+        two = [False if single else None] * n
+    inserted = dict(inserted or {})
 
     source = list(tesseract_lines or [])
     lines_in = fit_lines(source, page_bands(bands))
@@ -815,6 +837,8 @@ def build_lines(
     tess_of: list[str | None] = [None] * n  # Tesseract's reading when it differs from the primary
     unseen: list[bool] = [False] * n
     word_of: list[int | None] = [None] * n
+    took: list[bool] = [False] * n  # the token took a Tesseract word (its box and reading)
+    tconf_of: list[float | None] = [None] * n  # that word's confidence
     taken: set[int] = set()
     anchored_by: set[int] = set()  # tokens anchored to a Tesseract word (`take`)
     read: dict[int | None, tuple[int, int]] = {k: (0, 0) for k in range(len(lines_in))}
@@ -839,11 +863,13 @@ def build_lines(
         line_of[i] = words[j][0]
         bbox_of[i] = words[j][1].get("bbox")
         taken.add(j)
+        took[i] = True
+        conf = words[j][1].get("conf")
+        tconf_of[i] = float(conf) if isinstance(conf, int | float) else None
         if anchor:
             anchored_by.add(i)
         word = text_of(j)
-        if word and norm_token(word) != norm_token(p_tokens[i]):
-            tess_of[i] = word
+        tess_of[i] = word if word and norm_token(word) != norm_token(p_tokens[i]) else None
 
     # A region's first / last Tesseract line that holds one short word and is a printed line of its own
     # (no other line covers its band): a page number («١٨» read "\A"), which the region's leading /
@@ -1214,17 +1240,27 @@ def build_lines(
         for i in indices:
             tok = p_tokens[i]
             digit = is_digit_token(tok)
-            low = digit or disagree[i]
-            tokens.append(
-                {
-                    "t": tok,
-                    "alt": alts[i],
-                    "conf": "low" if low else "high",
-                    "digit": digit,
-                    "bbox": bbox_of[i],
-                    "tess": tess_of[i],
-                }
-            )
+            if i in inserted:
+                why = [flags.MISSING]
+            else:
+                why = flags.classify(
+                    tok, readings[i], tess_of[i], tconf_of[i], took[i], two[i], today=legacy[i]
+                )
+            token = {
+                "t": tok,
+                "alt": alts[i],
+                "conf": "low" if why else "high",
+                "digit": digit,
+                "bbox": bbox_of[i],
+                "tess": tess_of[i],
+            }
+            if took[i] and tconf_of[i] is not None:
+                token["tc"] = tconf_of[i]
+            if why:
+                token["why"] = why
+            if i in inserted:
+                token["ins"] = inserted[i]
+            tokens.append(token)
         built.append((key, indices, tokens))
     pitch = line_pitch(_valid_bands(bands)) or line_pitch(
         [{"y0": b[1], "y1": b[3]} for line in source if (b := _box(line))]
@@ -1260,6 +1296,7 @@ def build_lines(
                 "rescued": key in rescued,
                 "two_bands": key in two_bands,
                 "confidence": round(1.0 - n_low / len(tokens), 3) if tokens else 1.0,
+                "indices": list(indices),
             }
         )
     return lines

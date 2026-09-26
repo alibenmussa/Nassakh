@@ -1,0 +1,37 @@
+{
+ "about": "The manuscript's paragraph menu «نوع الفقرة» (D74, PHASE7_SPEC §4.4): its choices in order, as `assembly.services.BLOCK_ROLES`. Each choice posts the roles endpoint with the block's lines; the review service stores the effective role per line. A paragraph whose attrs carry `noteFor` (its leading marker's call is open on its page) reads the footnote choice as `footnoteFor` with n = noteFor. The current choice of a block: h2 → heading, h3 → subheading, a paragraph with `style: \"verse\"` → verse, any other paragraph → body.",
+ "roles": [
+  {"value": "body", "label": "محتوى"},
+  {"value": "heading", "label": "عنوان رئيسي"},
+  {"value": "subheading", "label": "عنوان فرعي"},
+  {"value": "verse", "label": "شعر"},
+  {"value": "footnote", "label": "حاشية"}
+ ],
+ "footnoteFor": "حاشية للعلامة ({n})",
+ "request": {
+  "method": "POST",
+  "url": "api:manuscript_roles",
+  "body": {"line_ids": [4004], "role": "footnote"},
+  "status": 202,
+  "refused": {
+   "400": {"detail": "نوع السطر غير معروف.", "edited": false},
+   "400 (a line of a page whose text is not there yet)": {"detail": "الصفحة ليست جاهزة للمراجعة بعد؛ انتظر حتى ينتهي التعرّف على نصها.", "edited": false},
+   "404": {"detail": "السطر غير موجود في هذا الكتاب.", "edited": false},
+   "409": {"detail": "حُرِّر نص هذا الكتاب في صفحة الكتاب، وإعادة تجميعه تستبدل النص المحرَّر بنص الصفحات. أكّد الاستبدال أولًا.", "edited": true}
+  }
+ },
+ "liveMessages": {
+  "body": "تصير الفقرة محتوى",
+  "heading": "تصير الفقرة عنوانًا رئيسيًا",
+  "subheading": "تصير الفقرة عنوانًا فرعيًا",
+  "verse": "تصير الفقرة شعرًا",
+  "footnote": "تصير الفقرة حاشية"
+ },
+ "blockAfter": {
+  "body": "p<first line id>",
+  "heading": "h<first line id>",
+  "subheading": "h<first line id>",
+  "verse": "p<id of each line>: one verse paragraph per line",
+  "footnote": "the block leaves the body: its lines become the note n<first line id>"
+ }
+}

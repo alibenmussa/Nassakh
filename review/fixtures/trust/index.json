@@ -1,0 +1,98 @@
+{
+  "about": "The 7b contract of review's trust payloads (docs/PHASE7_SPEC.md §4.1–§4.4, §4.8): D71 flag reasons and the vote, D72 groups of added words and suggestions (gaps), D73 how a page was read, D74 line roles. Every file holds real payloads of the pages built by `review/tests.py::trust_page` (book 30 «كتاب الثقة», page 900 = number 1, read by two models; page 901 = number 2, read by one model; page 902 = number 3, Tesseract's text); `review/tests.py` checks the live payloads against these files (ids are fixed, line versions `v` and ISO stamps normalised to the fixture's).",
+  "files": {
+    "review_payload.json": "GET api:page_review of page 900: the whole payload (page with `reading`, lines with `kind` and `gaps`, tokens with the new keys, `counts` with words / groups / gaps, the new `urls`)",
+    "tokens.json": "one token of each shape, by name: sure, vote, disagree_v03 (Tesseract with v0.3), disagree, alone, number, kraken, script_letters, script_symbol, single, missing (a group's word), kept (a group kept), year (§4.8 `sug`), typed (a gap's words inserted)",
+    "reading.json": "`page.reading` of the three readers (two / one with a looped prefix / tesseract) and of a page read before 7b ({}); and the review header each implies",
+    "insertion.json": "POST api:page_insertion: keep and drop of a group spanning two lines, drop of a group that fills a whole line (the line goes), undo of a drop (the batch comes back as one step); {request, status, response}",
+    "gaps.json": "POST api:gap_accept (the offered words, and typed words), api:gap_dismiss, undo reopening the gap, a gap re-anchored by an edit of its line; {request, status, response}",
+    "roles.json": "POST api:line_role with the effective choice on a body-region and a footnote-region line (what is stored, `kind`), POST api:page_roles on a range, undo of the range (one step); {request, status, response}",
+    "approve.json": "POST api:page_approve: 409 with the open items split into words, groups and gaps, and the forced approval",
+    "errors.json": "400 / 404 / 409 answers of the new writes",
+    "tile.json": "the dashboard tile's `readers` (full and compact `page_tile`), review's filmstrip item, a `book_sheets` line with `kind`, the two new attention flags"
+  },
+  "token": {
+    "always": {
+      "t": "the reading in the text",
+      "alt": "Qari v0.2's reading when it differs leniently (punctuation split off, D71); a Kraken number: Qari's own letter (D51) or null",
+      "tess": "Tesseract's word when it differs from the primary's reading, else null",
+      "conf": "'low' exactly when `why` is non-empty (tokens stored before 7b: `low` without `why`)",
+      "digit": "a number token",
+      "bbox": "gray-image pixels or null",
+      "res": "null = open; primary | secondary | tess | typed | sug | chooser | words (§4.8, agreed with the words)"
+    },
+    "optional (absent when not set)": {
+      "why": "non-empty list of reason codes, first match first: script | number | disagree | alone | single | missing, and `year` after `number` (§4.8)",
+      "pick": "'vote': the vote put Qari v0.2's reading in the text (t = alt, `orig` = Qari v0.3's); `res` stays null, the word stays open; Enter confirms the current reading (choice `secondary`)",
+      "orig": "Qari v0.3's reading once another reading replaced it (the vote, or a resolution): choice `primary` restores it",
+      "tc": "Tesseract's confidence (0–100) of the word it read there",
+      "ins": "the group (int ≥ 1, unique on its page) of a word only the second model read, merged into the text (D72); a group may run over two lines; open while any of its words has res null",
+      "sug": "§4.8: {t: the year from the words, src: 'words', label: 'من الحروف', words: the number in words as printed}; choice `sug` takes it",
+      "src": "'kraken': a number the numbers pass read (D50), its one reading; `qari` keeps Qari's readings",
+      "bq": "'weak': an unsure box (drawn dashed)"
+    },
+    "choices of api:line_resolve": [
+      "primary",
+      "secondary",
+      "tess",
+      "typed",
+      "sug"
+    ]
+  },
+  "why (the popover's reason line, Arabic copy of §4.1)": {
+    "disagree": "«النموذجان مختلفان.»; with pick = vote: «النموذجان مختلفان؛ Tesseract يوافق Qari v0.2، فقراءته في النص.»; with Tesseract on v0.3's side (lenient(tess) = lenient(orig or t), or tess null with a box): «النموذجان مختلفان؛ Tesseract يوافق Qari v0.3.»",
+    "alone": "«لم يقرأ Qari v0.2 هذه الكلمة، ولم يؤكّدها Tesseract.»",
+    "number": "«رقم: قابِله بالصورة.»",
+    "script": "«في الكلمة حروف ليست عربية («и»، «л»).» or «في الكلمة رمز غريب («※»).»",
+    "single": "«قرأ هذه المنطقةَ نموذجٌ واحد، ويقرأ Tesseract هنا «يحيى».» (Tesseract's word is `tess`)",
+    "missing": "«كلمات أضافتها القراءة الثانية: قرأها Qari v0.2 وTesseract ولم يقرأها Qari v0.3.»",
+    "year": "«السنة مكتوبة بعدها بالحروف: «ثلاث واربعين ومايتين» = ٢٤٣.» (sug.words, sug.t)"
+  },
+  "line_item": {
+    "new": {
+      "kind": "`ocr.services.line_kind(role, region_kind)`: 'footnote' | 'body' (showGroup and is-footnote read it)",
+      "gaps": "the line's suggestions, by index then id: [{id, index, after_t, text, support, status}]; `index` −1 = before the first token, k = after token k; `after_t` the text of token k ('' for −1); `support` Tesseract's share (0–1, 2 decimals); `status` open | inserted | dismissed (only open gaps are drawn, Tab visits them)"
+    },
+    "role": "the stored role: body | heading | subheading | verse | footnote | main. The menu shows the effective choice: heading, subheading and verse as they are, else «حاشية» when kind = footnote and «محتوى» otherwise. `main` is shown as «محتوى»"
+  },
+  "page_item": {
+    "reading": "{} for a page read before 7b, else {readers: 'two' | 'one' | 'tesseract', partial: bool, groups: n, gaps: n} as `finalize_page` wrote it (the groups and gaps it made; the live open counts are in `counts`)",
+    "n_unresolved": "the page's open items: unresolved words outside groups + one per open group + open gaps (`ocr.services.page_open_items`)"
+  },
+  "counts": {
+    "review payload": "{low_total, unresolved, resolved, words, groups, gaps}: `low_total` = low words outside groups + one per group + every gap of the page's lines (any status); `unresolved` = words + groups + gaps (the open ones); `resolved` = low_total − unresolved",
+    "mutation responses": "{line_n_low, page_unresolved, page_low_total, book_unresolved_total, page_words, page_groups, page_gaps} (same rules; `line_n_low` = `Line.n_low`: the line's open words, one per open group on it, no gaps)"
+  },
+  "urls (review payload)": {
+    "insertion": "api:page_insertion with `__group__` for the group: /api/pages/900/insertions/__group__/",
+    "gap_accept": "api:gap_accept with `__id__`: /api/gaps/__id__/accept/",
+    "gap_dismiss": "api:gap_dismiss with `__id__`: /api/gaps/__id__/dismiss/",
+    "roles": "api:page_roles: /api/pages/900/roles/"
+  },
+  "writes": {
+    "POST api:page_insertion {keep: bool}": "keep: res = 'secondary' on the group's open words (on any line); drop: its words are removed, a line left empty is deleted. → 200 {lines: [line_item of each changed line], deleted_ids: [ids of lines removed], order: [{id, order}] (the page's lines after the change), counts, page}. One revision per line, one batch: undo reverts the whole group",
+    "POST api:gap_accept {text?}": "inserts the gap's words (or `text`, typed, whitespace-collapsed) as typed tokens after token `index`, re-anchored by `after_t`; the gap becomes inserted. → 200 {line, gap: {id, status}, counts, page}. Undo removes the words and reopens the gap",
+    "POST api:gap_dismiss": "the gap becomes dismissed, the text is unchanged (revision action `gap` «نص مقترح»). → 200 {line, gap: {id, status}, counts, page}. Undo reopens it",
+    "POST api:line_role {role, v?}": "`role` is the effective choice: body | heading | subheading | verse | footnote. On a footnote-region line «حاشية» stores body and «محتوى» stores main; on a body-region line «حاشية» stores footnote. Headings and verse are allowed on every line. → 200 {line}",
+    "POST api:page_roles {line_ids: [ids], role}": "the same choice on a ⇧-click range; one revision per changed line, one batch (undo: one step). → 200 {lines: [line_item of each line of line_ids, in order]}",
+    "POST api:page_undo": "the review payload; a batch (a group kept or dropped, a range of roles) is undone at once; a gap accepted or dismissed is open again",
+    "POST api:page_approve {force}": "409 {unresolved, words, groups, gaps, message} while open items remain and force is false; the message: «بقيت 3 علامات: كلمتان غير محسومتين وكلمات مقترحة لم تُحسم. اعتماد الصفحة رغم ذلك؟» (the dialog adds «لا يدخل الكتابَ نصٌّ مقترح لم يُحسم.» when groups + gaps > 0)"
+  },
+  "tile": {
+    "readers": "page_tile (dashboard grid, progress API) and review's filmstrip: 'two' | 'one' | 'tesseract' | '' (not read yet, or read before 7b); the half-disc marks 'one' (and 'tesseract'). The compact tile carries it only when it is 'one' or 'tesseract'",
+    "n_unresolved": "the open items (as page_item)",
+    "attention flags": {
+      "single_reader": "قراءة واحدة",
+      "missing_text": "نص قد يكون ناقصًا"
+    }
+  },
+  "readers (finalize_page)": "the weakest region: 'tesseract' when a region fell back to Tesseract's text (flag ocr_fallback), 'one' when a region had one model reading beyond the looped prefix of the other, else 'two'; `partial` when a region's second reading is a looped prefix. Pages with readers ≠ 'two' get the attention flag single_reader, pages with groups or gaps missing_text. Approved pages leave the attention list",
+  "notes (added when the payload files were generated; no shape above changed)": {
+    "files": "every file but index.json is written by `review/tests.py::test_trust_payloads_equal_the_fixtures` (NASSAKH_WRITE_TRUST_FIXTURES=1) and compared with the live answers on every run; cases are lists of {name, request: {method, url, body?}, status, response}; reading.json is {readings: {two, one, tesseract, before_7b: {page, counts}}, header: the pill and banner each implies (§4.3)}; tile.json holds the compact tile of a two-reader page too (no `readers` key)",
+    "kraken": "a number the numbers pass read (`src: 'kraken'`) is low and keeps the `why` its token had (usually ['number']); the UI reads a Kraken token as `number` even where `why` is missing",
+    "insertion counts": "the insertion answer's `counts.line_n_low` is 0 (the group may cover several lines); each line_item carries its own `n_low`",
+    "undo": "api:page_undo answers the whole review payload (as before 7b); a batch comes back in one call",
+    "404": "an unknown gap id or line id answers DRF's 404 {detail} (English), as the line routes always did",
+    "year": "§4.8 is built (`ocr.flags.year_check`, at finalize and after the numbers pass): the `year` token of tokens.json has the shape it writes — why [..., 'year'], sug {t, src: 'words', label: 'من الحروف', words}; a year that agrees with its words gets res 'words' (settled, no sug)"
+  }
+}
