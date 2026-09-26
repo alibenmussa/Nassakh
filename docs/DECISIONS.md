@@ -314,3 +314,26 @@ Kraken 6 pins torch ≤ 2.9 and the project runs 2.14, so it runs in its own env
 through a small runner process, one call per page. Next: numbers found from the ink (half of the number words have no
 word box), Kraken fine-tuned on reviewed lines, and numbers Qari wrote as letters («(ع ه – ه م)» for «(٧٥٤–٧٧٥م)»).
 
+## D51 — Numbers Qari wrote as letters go through Kraken too; Qari's letter stays the second reading (2026-09-26, extends D50)
+Qari writes some Arabic-Indic digits as the letter they look like (١ «ا», ٥ «ه», ٤ «ع») or drops a date's digits:
+«(ج ا، ص٢٣٨)» for «(ج١، ص٢٣٨)», a footnote mark «ا» for «١», «(ه) الخزر» for «(٥) الخزر», «(هـ – م)» for
+«(٨٤٧–٨٦١م)». The word then holds no digit, so D50 never reads it and review shows it as a sure word. Labelled by hand on
+six books (`playground/digits/REPORT.md`, round 3): 56 such letters, 13 real letters of the same shape («(هـ)» in a
+lettered list, the hijri «هـ» after a year, an index heading «(ع)») and 3 digit-less dates. In books printed with
+Arabic-Indic digits the pass now also reads, for a line holding a lone «ا»/«ه»/«هـ»/«ع» (with brackets or punctuation)
+or a bracketed date without digits, the whole line with Kraken, and the letter's own area (its word box, or a gap that
+holds only it and punctuation, with a smaller side margin). The letter takes the number Kraken read between Qari's
+neighbouring letters in the line, else the one number in its own area when the rest of the area matches Qari; nothing
+when Kraken reads Qari's letter itself in the letter's box. Result: 45 of 56 read, 40 of the 41 of known value exact,
+none of the 13 real letters changed; the dates all exact (read in their own area, the line as a fallback). The token is
+Kraken's and low-confidence (D17); unlike a D50 number, Qari's letter stays offered as the second reading (labelled with
+Qari's name), since it may be a real letter. A digit-less date (a bracket holding only short marks and a dash,
+never words) becomes one token with Kraken's date and Qari's dash, Qari's reading offered second; its own area is
+read only when no number or bracket shares it, else the whole line decides, anchored on the neighbours.
+Two fixes to D50 found on the way: Kraken writes the Persian «۶» for the page's «٤» (same shape; it is mapped to «٤»),
+and when it drops the spaces between numbers set apart by a comma or a slash it gives them in the wrong order («٥٢ ، ٥٣»
+→ «٥٣،٥٢»); an area's numbers now take the page's right-to-left order when that agrees better with Qari's digits
+(a slash date set left to right keeps Kraken's order). The pass saves a line only when nobody changed it while Kraken
+read (the page row locked as review does; `left_to_reviewer` in the run's params otherwise). Not fixed: a letter Qari
+split off a number («2 ه» for «٥٢», «4 ه ق» for «٥٥٤ ق») gets its digit but stays a separate word.
+

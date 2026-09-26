@@ -284,6 +284,8 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
   out.optionKeys = c.options().map((o) => [o.key, o.choice]);
   // a number Kraken read (D50): its one reading, labelled Kraken (confirm it or type the true number)
   out.krakenOptions = c.options({ t: '(٣٢٠–٣٢٢هـ)', conf: 'low', src: 'kraken', alt: null, tess: null, digit: true }).map((o) => [o.key, o.choice, o.label]);
+  // a letter Qari wrote for a digit (D51): Kraken's number first, Qari's letter second under Qari's label
+  out.letterOptions = c.options({ t: '(٥)', conf: 'low', src: 'kraken', alt: '(ه)', tess: null, digit: true }).map((o) => [o.key, o.choice, o.label, o.value]);
   // choose secondary: optimistic, then the server line/counts land
   c.focusWord({ lineId: 51, index: 1 });
   const serverLine = clone(config.lines[0]); serverLine.tokens[1].t = 'الامير'; serverLine.tokens[1].res = 'secondary'; serverLine.n_low = 1;
@@ -639,6 +641,10 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
     assert out["optionKeysNoTess"] == [["1", "primary"], ["2", "secondary"]]
     assert out["optionKeys"] == [["1", "primary"], ["2", "secondary"], ["3", "tess"]]
     assert out["krakenOptions"] == [["1", "primary", "Kraken"]]
+    assert out["letterOptions"] == [
+        ["1", "primary", "Kraken", "(٥)"],
+        ["2", "secondary", "Qari v0.3", "(ه)"],  # Qari's own letter, under the primary model's label
+    ]
     # after a secondary choice the primary reading survives in `orig`: all three rows, secondary current
     assert out["resolvedOptions"] == [
         ["primary", True, False],

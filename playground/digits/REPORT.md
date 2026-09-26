@@ -91,6 +91,43 @@ Arabic-Indic print too), so the style needs a book setting (detected, confirmabl
 Integration note: Kraken 6 pins torch ≤ 2.9 and numpy 2.0 (the project runs torch 2.14), so it needs
 its own environment (a small worker) or a port of its recognition network.
 
+## Round 3 (2026-09-26): numbers Qari wrote as letters
+Qari writes some Arabic-Indic digits as the letter they look like, so the word holds no digit and the
+numbers pass (D50) never reads it: «(ج ا، ص٢٣٨)» for «(ج١، ص٢٣٨)», footnote marks «ا» for «١» / «١١»,
+«(ه) الخزر» for «(٥) الخزر», and dates with their digits gone, «(ع ه – ه م)» for «(٧٥٤–٧٧٥م)»,
+«(هـ – م)» for «(٨٤٧–٨٦١م)». `letters.py` collects, in the six books printed with Arabic-Indic digits
+(one per source PDF), every lone «ا»/«ه»/«هـ»/«ع» (85), bracketed single letter (21) and bracketed date
+without digits (3). 80 of the 109 were labelled from the crops (29 crops showed another word: the
+word box belonged to a neighbour): 56 letters standing for (part of) a number, 13 real letters
+(«(هـ)» in a lettered list, the hijri «هـ» after a year, the index heading «(ع)»), 6 punctuation or
+nothing, 3 dates. Nearly every lone «ا» is a digit (Arabic has no one-letter word «ا»); «ه» is both.
+
+| Rule (77 labelled letters) | Numbers read (of 56) | Exact (known value) | Real letters changed (of 13) |
+|---|---|---|---|
+| Kraken on the letter's own area, margin 0.3 (the pass's) | 21 | 13 | 1 |
+| own area, side margin 0.15 | 23 | 17 of 17 | 0 |
+| Kraken on the whole line, the number between Qari's neighbours | 39 | 36 of 37 | 1 |
+| **line, else own area; not when the box shows Qari's letter** | **45** | **40 of 41** | **0** |
+
+"Own area" means one number there and the rest of Kraken's reading equal to Qari's (brackets,
+punctuation); "between Qari's neighbours" means the digits found exactly once in the line between the
+last two letters of the word before and the first two of the word after (punctuation, marks, alef
+forms ignored). The line wins because a third of the letters' word boxes hold the next word
+(`(ج ا، ص٢٣٨)`: the box of «ا،» shows «ص٢٣٨).»), and a gap reading takes in bits of the neighbours.
+The veto (Kraken reads Qari's letter in its box) keeps «(ع)» a letter; the line alone read it «(۶)».
+
+The pass's own code on the same pages (`letters_dryrun.py`, unreviewed lines only, nothing saved):
+38 of 47 letters read, 33 of 34 exact, no real letter changed, the 3 dates exact (read in their own
+area; the whole line read «٨٤٧» as «٨٥٧»). Kraken takes about 2 s a page for it. Misses: a letter Qari
+split off a number («2 ه ، 3 ه» for «٥٢ ، ٥٣») gets its digit but stays a word of its own; tiny marks.
+
+Found on the way, fixed in the pass: Kraken writes the Persian six «۶» for the page's «٤» (the same
+shape: «٧٥۶» for «٧٥٤», «ص۲۶٠» for «ص٢٤٠», «(۶)» for «(ع)»), so «۶» is read as «٤»; it writes «0» for
+a bold «٥» in a tight box (read as «٥» where Qari saw «ه»); and when it drops the spaces between
+numbers set apart by a comma it gives them left to right («٥٢ ، ٥٣» → «٥٣،٥٢»; 16 of 114 multi-number
+areas of the pass disagree with the page's order), so the page's order is used when it agrees better
+with Qari's digits (a slash date set left to right keeps Kraken's order).
+
 ## Ideas for the next round (not tested yet)
 - Fine-tune Kraken's base model on our books' typefaces (the OpenITI study reached > 97.5% character
   accuracy with 800–1,000 lines of a typeface); corrected lines from review are that training data.
@@ -111,5 +148,16 @@ playground/digits/.venv-kraken/bin/python playground/digits/run_kraken.py   # re
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True playground/digits/.venv-paddle/bin/python playground/digits/run_paddle.py
 .venv/bin/python playground/digits/score.py                # the tables above
 ```
+Round 3 (letters):
+```
+.venv/bin/python playground/digits/letters.py find          # letters.json, letters_request.json
+.venv-kraken/bin/python -P ocr/engines/kraken_runner.py < playground/digits/letters_request.json > playground/digits/letters_result.json
+.venv/bin/python playground/digits/letters.py sheet         # sheets/letters-NN.png + the readings
+.venv/bin/python playground/digits/letters_eval.py request  # then the runner on letters_eval_request.json
+.venv/bin/python playground/digits/letters_eval.py score    # the table above
+.venv/bin/python playground/digits/letters_dryrun.py        # the pass's own code, not saved
+```
+`letters_truth.json` holds round 3's labels.
+
 `truth.json` holds the hand labels; add a reader by writing `results/<name>.json` as
 `{variant: {crop id: text}}` and `score.py` picks it up.

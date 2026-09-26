@@ -1,0 +1,369 @@
+{
+ "b9p1l0t4": {
+  "is": "letter",
+  "qari": "ه"
+ },
+ "b9p1l17t9": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b9p1l18t7": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b9p1l18t10": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b9p2l2t8": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b9p2l12t2": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b9p2l17t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b9p3l8t5": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b9p3l17t6": {
+  "is": "digit",
+  "qari": "ع"
+ },
+ "b9p4l7t3": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b13p3l0t4": {
+  "is": "letter",
+  "qari": "ه"
+ },
+ "b13p4l2t8": {
+  "is": "other",
+  "qari": "ه"
+ },
+ "b13p4l12t2": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b13p4l17t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b13p5l18t6": {
+  "is": "digit",
+  "qari": "ع"
+ },
+ "b13p6l17t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b18p1l0t4": {
+  "is": "letter",
+  "qari": "ه"
+ },
+ "b18p2l2t8": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b18p2l12t2": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b18p2l17t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b18p4l11t6": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b18p4l17t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b19p14l3t2": {
+  "is": "other",
+  "qari": "ه"
+ },
+ "b19p15l8t12": {
+  "is": "digit",
+  "value": "١٠",
+  "qari": "ا"
+ },
+ "b19p17l3t8": {
+  "is": "date",
+  "value": "(٧٥٤–٧٧٥م)",
+  "qari": "(ع ه – ه م)"
+ },
+ "b19p17l3t9": {
+  "is": "date-part",
+  "qari": "ه"
+ },
+ "b19p17l3t11": {
+  "is": "date-part",
+  "qari": "ه"
+ },
+ "b19p17l16t11": {
+  "is": "date",
+  "value": "(٨٤٧–٨٦١م)",
+  "qari": "(هـ – م)"
+ },
+ "b19p17l17t8": {
+  "is": "date",
+  "value": "(٨٣٣–٨٤٢م)",
+  "qari": "(هـ – م)"
+ },
+ "b19p17l18t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b19p22l2t0": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b19p22l4t0": {
+  "is": "letter",
+  "qari": "(أ)"
+ },
+ "b19p22l22t0": {
+  "is": "letter",
+  "qari": "(ب)"
+ },
+ "b19p23l14t0": {
+  "is": "letter",
+  "qari": "(ج)"
+ },
+ "b19p26l9t0": {
+  "is": "letter",
+  "qari": "(د)"
+ },
+ "b19p29l1t0": {
+  "is": "letter",
+  "qari": "(ه)"
+ },
+ "b19p30l25t1": {
+  "is": "other",
+  "qari": "ا"
+ },
+ "b19p33l11t3": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p33l13t3": {
+  "is": "letter",
+  "qari": "هـ،"
+ },
+ "b19p34l24t9": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p34l24t10": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b19p36l7t2": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p39l4t8": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p39l14t1": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p41l19t4": {
+  "is": "digit",
+  "value": "١١",
+  "qari": "ا"
+ },
+ "b19p41l25t0": {
+  "is": "digit",
+  "value": "١١",
+  "qari": "ا"
+ },
+ "b19p48l23t0": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "(ه)"
+ },
+ "b19p49l18t9": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p54l10t11": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p54l19t7": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p54l26t14": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p64l14t9": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p65l8t11": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p65l19t10": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p65l21t10": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p65l26t0": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا"
+ },
+ "b19p66l12t8": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p66l25t4": {
+  "is": "digit",
+  "value": "١",
+  "qari": "ا،"
+ },
+ "b19p66l26t0": {
+  "is": "digit",
+  "value": "٢",
+  "qari": "ا"
+ },
+ "b19p75l10t1": {
+  "is": "digit",
+  "value": "١١",
+  "qari": "ا"
+ },
+ "b19p75l11t4": {
+  "is": "digit",
+  "value": "١٢",
+  "qari": "ا"
+ },
+ "b19p75l13t8": {
+  "is": "digit",
+  "value": "١٣",
+  "qari": "ا"
+ },
+ "b19p75l21t0": {
+  "is": "digit",
+  "value": "١١",
+  "qari": "ا"
+ },
+ "b19p89l14t8": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b20p5l0t6": {
+  "is": "other",
+  "qari": "ع"
+ },
+ "b20p6l1t4": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b20p6l15t11": {
+  "is": "other",
+  "qari": "هـ"
+ },
+ "b20p9l14t7": {
+  "is": "other",
+  "qari": "ه"
+ },
+ "b20p10l2t7": {
+  "is": "letter",
+  "qari": "ه"
+ },
+ "b20p10l13t0": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b20p10l15t2": {
+  "is": "digit",
+  "qari": "ه"
+ },
+ "b20p13l0t0": {
+  "is": "letter",
+  "qari": "(ب)"
+ },
+ "b20p14l2t10": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "ه"
+ },
+ "b20p14l7t0": {
+  "is": "letter",
+  "qari": "(ع)"
+ },
+ "b20p14l9t8": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "ه"
+ },
+ "b20p15l0t0": {
+  "is": "letter",
+  "qari": "( م )"
+ },
+ "b20p15l3t9": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "ه"
+ },
+ "b20p15l10t12": {
+  "is": "digit",
+  "value": "٩",
+  "qari": "ه"
+ },
+ "b20p16l4t3": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "ه"
+ },
+ "b20p16l10t7": {
+  "is": "digit",
+  "value": "٥",
+  "qari": "ه"
+ }
+}

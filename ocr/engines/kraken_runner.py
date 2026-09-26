@@ -6,16 +6,18 @@ environment (`make kraken` → `.venv-kraken/`) and the project talks to it thro
     <kraken python> ocr/engines/kraken_runner.py < request.json > response.json
 
 request:  {"model": "<.mlmodel path>", "pages": [{"image": "<gray page image>",
-           "lines": [{"id": <any>, "bbox": [x0, y0, x1, y1]}]}]}
+           "lines": [{"id": <any>, "bbox": [x0, y0, x1, y1], "margin_x": <optional>}]}]}
 response: {"ok": true, "model": "<file name>", "seconds": <float>,
            "lines": [{"id": <as given>, "text": "<the line, logical order>",
                       "chars": [[<char>, x0, x1, <confidence 0–1>], ...]}]}
           or {"ok": false, "error": "<message>"}
 
-Each line is cut from the page with a margin, read as one line (a straight baseline at 75 % of the
-crop, the crop as its boundary, as the OpenITI / Jawi model cards do) and its characters come back
-in logical (reading) order, BiDi base direction right-to-left, with their horizontal extent in page
-pixels. Nothing here imports Django or the project; the pure helpers are tested from the project.
+Each line is cut from the page with a margin (`MARGIN` × its height; `margin_x`, when given, left
+and right instead: a short area read with less of its neighbours), read as one line (a straight
+baseline at 75 % of the crop, the crop as its boundary, as the OpenITI / Jawi model cards do) and its
+characters come back in logical (reading) order, BiDi base direction right-to-left, with their
+horizontal extent in page pixels. Nothing here imports Django or the project; the pure helpers are
+tested from the project.
 """
 
 from __future__ import annotations
@@ -34,11 +36,16 @@ MARGIN = 0.3  # of the line box height, kept around the line
 BASELINE = 0.75  # the baseline's height in the crop, from the top
 
 
-def padded(bbox: list[int], width: int, height: int) -> tuple[int, int, int, int]:
-    """The line box with a margin of `MARGIN` × its height, clamped to the page."""
+def padded(
+    bbox: list[int], width: int, height: int, margin_x: float | None = None
+) -> tuple[int, int, int, int]:
+    """The line box with a margin of `MARGIN` × its height (`margin_x` × it left and right, when
+    given), clamped to the page."""
     x0, y0, x1, y1 = (int(v) for v in bbox)
-    pad = max(4, int(MARGIN * max(1, y1 - y0)))
-    return max(0, x0 - pad), max(0, y0 - pad), min(width, x1 + pad), min(height, y1 + pad)
+    tall = max(1, y1 - y0)
+    pad = max(4, int(MARGIN * tall))
+    pad_x = pad if margin_x is None else max(2, int(float(margin_x) * tall))
+    return max(0, x0 - pad_x), max(0, y0 - pad), min(width, x1 + pad_x), min(height, y1 + pad)
 
 
 def char_rows(prediction: str, cuts, confidences, dx: int) -> list[list]:
@@ -89,7 +96,7 @@ def read(request: dict) -> dict:
         with Image.open(page["image"]) as img:
             img = img.convert("L")
             for line in page.get("lines") or []:
-                box = padded(line["bbox"], img.width, img.height)
+                box = padded(line["bbox"], img.width, img.height, line.get("margin_x"))
                 crop = img.crop(box)
                 if crop.width < 4 or crop.height < 4:
                     out.append({"id": line.get("id"), "text": "", "chars": []})

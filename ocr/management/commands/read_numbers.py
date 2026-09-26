@@ -1,7 +1,8 @@
-"""`manage.py read_numbers --book ID [--page N]`: the numbers pass (D50) on pages already OCR'd.
+"""`manage.py read_numbers --book ID [--page N]`: the numbers pass (D50, D51) on pages already OCR'd.
 
 New pages get it by themselves after Qari (`ocr.numbers.schedule`); this runs it on a book's
-finalised pages now, synchronously, and prints what Kraken read on each. The book's printed digits are
+finalised pages now, synchronously, and prints what Kraken read on each (with the letters Qari wrote
+for digits and the dates it wrote without them, D51). The book's printed digits are
 decided once (`ocr.numbers.book_style`); a book printed with Western digits is left alone. Reviewed
 lines, resolved words and approved pages are never touched; numbers already read are not read again.
 """
@@ -43,7 +44,7 @@ class Command(BaseCommand):
                 "nothing to read: the numbers pass is for books printed with Arabic-Indic digits"
             )
             return
-        areas = applied = 0
+        areas = applied = letters = dates = 0
         for page in pages:
             try:
                 done = numbers.read_page_numbers(page, engine=engine, style=style)
@@ -52,6 +53,16 @@ class Command(BaseCommand):
                 continue
             areas += done.areas
             applied += done.applied
-            note = f" ({done.skipped})" if done.skipped else ""
-            self.stdout.write(f"page {page.number}: {done.applied} of {done.areas} numbers read{note}")
-        self.stdout.write(self.style.SUCCESS(f"done: Kraken read {applied} of {areas} number areas"))
+            letters += done.letters
+            dates += done.dates
+            notes = [done.skipped] if done.skipped else []
+            notes += [f"{done.letters} letters"] if done.letters else []
+            notes += [f"{done.dates} dates"] if done.dates else []
+            note = f" ({', '.join(notes)})" if notes else ""
+            self.stdout.write(f"page {page.number}: {done.applied} numbers read, {done.areas} areas{note}")
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"done: Kraken read {applied} numbers in {areas} areas"
+                f" ({letters} written as letters, {dates} dates without digits)"
+            )
+        )

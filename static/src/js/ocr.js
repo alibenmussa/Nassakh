@@ -307,8 +307,11 @@ document.addEventListener('alpine:init', () => {
 
     tokenOptions(tok) {
       if (!tok) return [];
-      const rows = [{ label: config.primaryLabel || 'النموذج الأول', value: tok.orig || tok.t }];
-      if (tok.alt) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: tok.alt });
+      // a number Kraken read (D50) is Kraken's; its `alt` is Qari's own letter (D51), the first model's
+      const kraken = tok.src === 'kraken';
+      const first = config.primaryLabel || 'النموذج الأول';
+      const rows = [{ label: kraken ? 'Kraken' : first, value: tok.orig || tok.t }];
+      if (tok.alt) rows.push({ label: kraken ? first : config.secondaryLabel || 'النموذج الثاني', value: tok.alt });
       else if (!tok.digit) rows.push({ label: config.secondaryLabel || 'النموذج الثاني', value: '— لا مقابل' });
       if (tok.tess) rows.push({ label: 'Tesseract', value: tok.tess });
       return rows;

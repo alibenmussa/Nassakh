@@ -14,7 +14,8 @@ manuscript, in book order:
   scan page it was read from.
 - `readings` come from the OCR tokens of the container's source lines (`sourceLineIds`): the unresolved
   word's primary reading (`orig`, else `t`), the second model's (`alt`) and Tesseract's (`tess`),
-  distinct ones only, labelled like the review screen. The k-th uncertain word of a container is matched
+  distinct ones only, labelled like the review screen (a number Kraken read: «Kraken», and Qari's own
+  letter as `alt` where it wrote one, D50–D51). The k-th uncertain word of a container is matched
   with the next low-confidence token of its lines that reads the same (diacritics aside); a word the
   editor changed since has no readings (it can still be typed or accepted).
 
@@ -171,11 +172,14 @@ def _readings(token: dict, word: str, labels: dict[str, str], normalize=None) ->
         text = normalize(str(value or "")) if value else ""
         if text and text not in (seen for _engine, seen in rows):
             rows.append((engine, text))
-    kraken = token.get("src") == "kraken"  # a number Kraken read (D50): its reading is the only one
+    # a number Kraken read (D50): its reading is the only one, but for Qari's letter where Qari wrote a
+    # letter for it (D51), kept as the second reading under Qari's label
+    kraken = token.get("src") == "kraken"
+    kraken_labels = {**labels, "primary": "Kraken", "secondary": labels["primary"]}
     return [
         {
             "engine": engine,
-            "label": "Kraken" if kraken and engine == "primary" else labels[engine],
+            "label": (kraken_labels if kraken else labels)[engine],
             "text": text,
             "current": text == word,
         }

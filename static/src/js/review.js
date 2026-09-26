@@ -532,10 +532,13 @@
         // `orig` (sent once a resolution changed `t`) keeps the primary model's reading, so all three
         // readings stay offered after a word was resolved; `current` marks the one now in the text.
         const primary = tok.orig || tok.t;
-        // a number Kraken read (D50) is its one reading: confirm it, or type the true number
-        const label = tok.src === 'kraken' ? 'Kraken' : this.labels.primary || 'النموذج الأول';
+        // a number Kraken read (D50) is its one reading: confirm it, or type the true number; where Qari
+        // wrote a letter for it (D51), Qari's letter is the second reading (it may be a real letter)
+        const kraken = tok.src === 'kraken';
+        const label = kraken ? 'Kraken' : this.labels.primary || 'النموذج الأول';
+        const second = kraken ? this.labels.primary || 'النموذج الأول' : this.labels.secondary || 'النموذج الثاني';
         rows.push({ choice: 'primary', value: primary, label, current: primary === tok.t });
-        if (tok.alt && tok.alt !== primary) rows.push({ choice: 'secondary', value: tok.alt, label: this.labels.secondary || 'النموذج الثاني', current: tok.alt === tok.t });
+        if (tok.alt && tok.alt !== primary) rows.push({ choice: 'secondary', value: tok.alt, label: second, current: tok.alt === tok.t });
         if (tok.tess && tok.tess !== primary && tok.tess !== tok.alt) rows.push({ choice: 'tess', value: tok.tess, label: 'Tesseract', current: tok.tess === tok.t });
         rows.forEach((row, i) => { row.key = String(i + 1); });
         return rows;

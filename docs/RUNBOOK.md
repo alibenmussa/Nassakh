@@ -424,6 +424,12 @@ digits keep Qari's numbers (it reads those better). Kraken needs its own environ
 once; without it the pass is skipped. For pages OCR'd before: `manage.py read_numbers --book ID [--page N]` (about 2 s
 a page); re-assemble the book afterwards to bring the numbers into the manuscript.
 
+The same pass reads the numbers Qari wrote as letters (D51): a lone «ا», «ه» or «ع» (a footnote mark, «ج ا،», «(ه)») and
+bracketed dates without digits («(هـ – م)»). Kraken reads the line; the letter becomes the number found between its
+neighbours and shows two readings in review: «Kraken» (the number) and Qari's letter (for a real letter such as
+«(هـ)» in a lettered list). A digit-less date becomes one word with Kraken's date (Qari's reading second). A line the reviewer changes while
+Kraken reads is left as they made it.
+
 **Known limits.** WeasyPrint cannot fake bold or italic: Lotus (no bold file) prints headings regular, Arabic italic prints
 upright. A single footnote longer than a page spills over. Word export (Phase 6) paginates slightly differently, so its page
 count can differ from the preview's.

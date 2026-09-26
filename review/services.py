@@ -8,7 +8,8 @@ Every mutating service runs in one transaction on a locked page row, records a `
 Western digits (D6). The printed page number is never part of the lines, so it never re-enters
 the text. Tokens and texts keep their diacritics exactly as stored or typed.
 
-Token keys: `t` (current reading), `alt` (secondary model), `tess` (Tesseract), `conf`, `digit`,
+Token keys: `t` (current reading), `alt` (secondary model; for a number Kraken read, Qari's own
+letter where it wrote one, D51), `tess` (Tesseract), `conf`, `digit`,
 `bbox` (gray-image pixels), `res` (`None | primary | secondary | tess | typed | chooser`) and,
 once a resolution changed `t`, `orig` (the primary model's reading, so «النموذج الأول» can be
 chosen again after another reading).
@@ -46,7 +47,8 @@ DEFAULT_REGION_KIND = Region.Kind.BODY  # lines without a region (text-layer pag
 MAX_TYPED_WORDS = 6
 MAX_TYPED_CHARS = 120
 MAX_LINE_CHARS = 2000
-# `src`: "kraken" for a number the numbers pass read (D50): its one reading, confirmed or typed
+# `src`: "kraken" for a number the numbers pass read (D50): its one reading, confirmed or typed; where
+# Qari wrote a letter for it (D51) Qari's letter is its `alt`
 TOKEN_KEYS: tuple[str, ...] = ("t", "alt", "tess", "conf", "digit", "bbox", "res", "src")
 
 

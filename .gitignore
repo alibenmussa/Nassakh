@@ -44,5 +44,7 @@ playground/digits/crops/
 playground/digits/sheets/
 playground/digits/lines*.json
 playground/digits/areas_*.json
+playground/digits/letters*_request.json
+playground/digits/letters*_result.json
 playground/digits/results_lines_*.json
 playground/digits/*.err

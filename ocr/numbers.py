@@ -23,7 +23,23 @@ The pass, for one finalised page (`read_page_numbers`):
    from the offered readings (`alt`, `tess` → None), `src` = "kraken"; the token stays low-confidence
    (D17) until the reviewer confirms it. Reviewed lines and resolved tokens are never touched.
 
-Pure functions up to `apply_reading`; the service (`read_page_numbers`) does the I/O.
+Numbers Qari wrote as letters (D51): Qari writes some Arabic-Indic digits as the letter they look
+like (١ → «ا», ٥ → «ه», ٤ → «ع»: «(ج ا، ص…)», «(ه) الخزر», a footnote mark «ا») or drops a date's
+digits altogether («(٨٤٧–٨٦١م)» → «(هـ – م)»), so the word holds no digit and step 2 never sees it.
+5. `is_letter_digit` / `digitless_dates` find them; Kraken reads their whole line, and each one's own
+   area when it has one to itself (a box, or a gap shared with punctuation only; a letter's with less
+   of its neighbours).
+6. A letter takes the number Kraken read between Qari's neighbours in the line (`anchored_number`,
+   the neighbours' letters around it; no box needed), else the one number in its own area when the
+   rest of the area agrees with Qari (`box_number`); never when Kraken read Qari's letter itself in
+   its own area (`shows_letter`: a real letter, «(هـ)» of a lettered list, the hijri «هـ»). Qari's
+   letter stays offered as the second reading (`apply_letter`). A digit-less date becomes the one
+   bracketed date Kraken read in its own area, else between the same neighbours in the line
+   (`date_reading`); one token, Qari's reading offered second (`replace_date`).
+On 77 labelled letters of six books (playground/digits/REPORT.md, round 3): 45 of 56 numbers read,
+40 of 41 of known value exact, none of 13 real letters changed; the three digit-less dates exact.
+
+Pure functions up to `replace_date`; the service (`read_page_numbers`) does the I/O.
 """
 
 from __future__ import annotations
@@ -39,7 +55,9 @@ _RUN = re.compile(f"[{DIGIT_CHARS}]+")
 _DIGIT = re.compile(f"[{DIGIT_CHARS}]")
 _EASTERN = re.compile("[٠-٩]")
 _WESTERN = re.compile("[0-9]")
-TO_ARABIC_INDIC = str.maketrans("0123456789۰۱۲۳۴۵۶۷۸۹", "٠١٢٣٤٥٦٧٨٩" * 2)
+# Kraken's digits as the page's (Arabic-Indic): by value, but Kraken's Persian six «۶» is the page's
+# «٤» (the two share a shape; it wrote «٧٥۶» for «٧٥٤» and «ص۲۶٠» for «ص٢٤٠», playground/digits round 3)
+KRAKEN_DIGITS = str.maketrans("0123456789۰۱۲۳۴۵۶۷۸۹", "٠١٢٣٤٥٦٧٨٩٠١٢٣٤٥٤٧٨٩")
 
 ARABIC_INDIC = "arabic_indic"
 WESTERN = "western"
@@ -165,14 +183,45 @@ def _joined(chars: list) -> list[list]:
     return runs
 
 
+def _by_position(runs: list[list]) -> list[list]:
+    """The runs right to left on the page (reading order), when Kraken placed every character."""
+    if any(row[1] is None or row[2] is None for run in runs for row in run):
+        return runs
+    return sorted(runs, key=lambda run: -sum(row[1] + row[2] for row in run) / len(run))
+
+
+def _likeness(qari: list[str], numbers: list[str]) -> int:
+    """The digits Qari's numbers share with `numbers`, place by place from the units (Qari drops
+    leading digits more than the last ones)."""
+    score = 0
+    for ours, theirs in zip(qari, numbers, strict=False):
+        ours, theirs = ours.translate(KRAKEN_DIGITS), theirs.translate(KRAKEN_DIGITS)
+        score += sum(a == b for a, b in zip(reversed(ours), reversed(theirs), strict=False))
+    return score
+
+
+def _ordered(runs: list[list], qari: list[str]) -> list[str]:
+    """Kraken's numbers of an area in reading order. Kraken gives them in its logical order, which is
+    wrong when it dropped the spaces between numbers set apart by a comma or a slash («٥٢ ، ٥٣» read
+    «٥٣،٥٢»: BiDi then keeps them left to right); on the page they are right to left. Neither is
+    always right (a date «٨/٣٨» set without spaces is left to right on the page too), so the page's
+    order is taken when it agrees better with Qari's digits."""
+    numbers = ["".join(str(row[0]) for row in run) for run in runs]
+    placed = ["".join(str(row[0]) for row in run) for run in _by_position(runs)]
+    if placed != numbers and _likeness(qari, placed) > _likeness(qari, numbers):
+        return placed
+    return numbers
+
+
 def assign(area_tokens: list[dict], chars: list) -> list[list[str]] | None:
     """Kraken's numbers for each token of an area, in order (each token gets as many numbers as it has
     digit runs in Qari's reading), or None when the counts cannot be matched."""
     wanted = [len(_RUN.findall(str(token.get("t") or ""))) or 1 for token in area_tokens]
+    qari = [n for token in area_tokens for n in (_RUN.findall(str(token.get("t") or "")) or [""])]
     for runs in (digit_runs(chars), _joined(chars)):
-        numbers = ["".join(str(row[0]) for row in run) for run in runs]
-        if len(numbers) != sum(wanted):
+        if len(runs) != sum(wanted):
             continue
+        numbers = _ordered(runs, qari)
         out, k = [], 0
         for n in wanted:
             out.append(numbers[k : k + n])
@@ -198,9 +247,9 @@ def apply_reading(token: dict, numbers: list[str] | None = None, whole: str = ""
         return False
     text = str(token.get("t") or "")
     runs = list(_RUN.finditer(text))
-    arabic = [number.translate(TO_ARABIC_INDIC) for number in numbers or []]
+    arabic = [number.translate(KRAKEN_DIGITS) for number in numbers or []]
     if whole:
-        new = whole.translate(TO_ARABIC_INDIC)
+        new = whole.translate(KRAKEN_DIGITS)
     elif runs and len(runs) == len(arabic):
         parts, last = [], 0
         for match, number in zip(runs, arabic, strict=True):
@@ -221,6 +270,253 @@ def apply_reading(token: dict, numbers: list[str] | None = None, whole: str = ""
     token["digit"] = True
     token["conf"] = "low"  # D17: a number is confirmed by the reviewer
     return True
+
+
+# ============================================================ 5.–6. numbers Qari wrote as letters (D51)
+
+# a letter that looks like a digit, alone, with brackets or punctuation: «ا» (١), «ه»/«هـ» (٥), «ع» (٤)
+LETTER_TOKEN = re.compile(r"^([(\[«“\"]?)([اهع]ـ?)([)\]»”\"]?[.،:؛]?)$")
+LETTER_MARGIN = 0.15  # a letter's own area is read with this margin left and right (of its height)
+ANCHOR_LETTERS = 2  # the neighbours' letters that must surround the number in Kraken's line
+DATE_MAX_TOKENS = 8
+DATE_MAX_CHARS = 24
+DATE_MARK_LETTERS = 2  # a digit-less date holds only marks this short («ع», «ه», «هـ», «م»), no words
+# alef forms → ا; «ى» and Kraken's Persian «ی» → ي; its Persian «ک» → ك
+_ALEFS = str.maketrans(
+    "\u0623\u0625\u0622\u0671\u0649\u06cc\u06a9", "\u0627\u0627\u0627\u0627\u064a\u064a\u0643"
+)
+_NOT_SKELETON = re.compile(r"[^ء-ي٠-٩A-Za-z]|ـ")
+_MARKS = re.compile(r"[\u064B-\u0655\u0670ـ\s]")
+_WORDISH = re.compile(f"[ء-يA-Za-z{DIGIT_CHARS}]")
+_DASH = re.compile(r"[–—\-/]")
+_DATE_END = re.compile(r"(?:م|هـ|ه)\s*\)[.،:؛]?$")
+_BRACKETED = re.compile(r"\([^()]*\)")
+_BRACKET = re.compile(r"[()]")
+_DATE_SHAPE = re.compile(r"^\(([٠-٩]+(?:هـ|ه|م)?)([–—\-/])([٠-٩]+(?:هـ|ه|م)?)\)$")
+
+
+def skeleton(text) -> str:
+    """Letters and digits only, to compare two readings: digits as the page's, alef forms, «ى» and
+    Kraken's Persian letters folded; no punctuation, spaces, marks or tatweel."""
+    return _NOT_SKELETON.sub("", str(text or "").translate(KRAKEN_DIGITS).translate(_ALEFS))
+
+
+def _plain(text) -> str:
+    """A reading without spaces, marks or tatweel, digits as the page's."""
+    return _MARKS.sub("", str(text or "")).translate(KRAKEN_DIGITS)
+
+
+def is_letter_digit(token: dict) -> bool:
+    """A lone letter Qari may have written for a digit (not a number, not resolved, not read yet)."""
+    if token.get("res") or token.get("src") == "kraken" or is_number(token):
+        return False
+    return bool(LETTER_TOKEN.match(str(token.get("t") or "")))
+
+
+def digitless_dates(tokens: list[dict]) -> list[tuple[int, int]]:
+    """`(first, last)` of each bracketed date Qari wrote without its digits, «(هـ – م)», «(ع ه – ه م)»:
+    a bracket group of at most `DATE_MAX_TOKENS` tokens with a dash or a slash, ending in «م» or «هـ»,
+    holding no digit and no word, only marks of at most `DATE_MARK_LETTERS` letters (never real text:
+    «(كتابه – شرحه)» is not one); one «(» only; none of its tokens resolved."""
+    out: list[tuple[int, int]] = []
+    i = 0
+    while i < len(tokens):
+        if str(tokens[i].get("t") or "").startswith("("):
+            for j in range(i, min(len(tokens), i + DATE_MAX_TOKENS)):
+                closing = str(tokens[j].get("t") or "")
+                if ")" not in (closing[1:] if j == i else closing):
+                    continue
+                group = tokens[i : j + 1]
+                text = " ".join(str(t.get("t") or "") for t in group)
+                if (
+                    len(text) <= DATE_MAX_CHARS
+                    and "(" not in text[1:]
+                    and not _DIGIT.search(text)
+                    and _DASH.search(text)
+                    and _DATE_END.search(text)
+                    and all(len(skeleton(piece)) <= DATE_MARK_LETTERS for piece in text.split())
+                    and not any(t.get("res") or t.get("src") == "kraken" for t in group)
+                ):
+                    out.append((i, j))
+                    i = j  # past the date; a group refused is searched again from its next token
+                break
+        i += 1
+    return out
+
+
+def letter_area(tokens: list[dict], i: int, line_bbox: list[int]) -> tuple[list[int], str, bool] | None:
+    """Letter token `i`'s own area: `(bbox, Qari's reading of the area without the letter, is its
+    box)`. Its word box; else the gap between its boxed neighbours when nothing but punctuation shares
+    it (a gap holding words or numbers too says nothing of where the letter is: None)."""
+    token = tokens[i]
+    rest = LETTER_TOKEN.sub(r"\1\3", str(token.get("t") or ""))
+    if token.get("bbox"):
+        return [int(v) for v in token["bbox"]], rest, True
+    lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
+    right = next((j for j in range(i - 1, -1, -1) if tokens[j].get("bbox")), None)
+    left = next((j for j in range(i + 1, len(tokens)) if tokens[j].get("bbox")), None)
+    inside = range(right + 1 if right is not None else 0, left if left is not None else len(tokens))
+    if any(_WORDISH.search(str(tokens[j].get("t") or "")) for j in inside if j != i):
+        return None
+    x1 = int(tokens[right]["bbox"][0]) if right is not None else lx1
+    x0 = int(tokens[left]["bbox"][2]) if left is not None else lx0
+    if x1 - x0 < 3:
+        return None
+    text = "".join(rest if j == i else str(tokens[j].get("t") or "") for j in inside)
+    return [x0, ly0, x1, ly1], text, False
+
+
+def _neighbour(tokens: list[dict], start: int, step: int) -> str:
+    """The skeleton of the nearest token from `start` on (by `step`) that has letters or digits."""
+    j = start
+    while 0 <= j < len(tokens):
+        found = skeleton(tokens[j].get("t"))
+        if found:
+            return found
+        j += step
+    return ""
+
+
+def anchored_number(line_text: str, tokens: list[dict], i: int, n: int = ANCHOR_LETTERS) -> str:
+    """Kraken's number for letter token `i` out of its reading of the whole line: the digits found
+    exactly once between the neighbours' letters (the last `n` of the word before, the first `n` of the
+    word after, as Qari read them; the line's start or end when there is none); '' when not found."""
+    before, after = _neighbour(tokens, i - 1, -1), _neighbour(tokens, i + 1, 1)
+    # lookarounds: the neighbours' letters are not used up, so every place that fits is counted
+    left = f"(?<={re.escape(before[-n:])})" if before else "^"
+    right = f"(?={re.escape(after[:n])})" if after else "$"
+    found = re.findall(left + "([٠-٩]+)" + right, skeleton(line_text))
+    return found[0] if len(found) == 1 else ""
+
+
+def box_number(chars: list, rest: str) -> str:
+    """Kraken's number for a letter out of its reading of the letter's own area: the one digit run
+    there, when the rest of Kraken's reading is what Qari read in the area besides the letter; ''."""
+    text = _plain("".join(str(row[0]) for row in chars))
+    runs = _RUN.findall(text)
+    if len(runs) != 1 or _DIGIT.sub("", text) != _plain(rest):
+        return ""
+    return runs[0]
+
+
+def shows_letter(chars: list, token_text: str) -> bool:
+    """Kraken read Qari's letter itself in the letter's own box: a real letter."""
+    read = skeleton("".join(str(row[0]) for row in chars))
+    return bool(read) and read == skeleton(token_text)
+
+
+def apply_letter(token: dict, number: str) -> bool:
+    """The letter becomes Kraken's `number` (Qari's brackets and punctuation stay); Qari's reading stays
+    offered as the second one, `alt` (it may be a real letter); the token is Kraken's and low (D17).
+    A lone zero where Qari saw «ه» is «٥» (both are a circle; Kraken wrote «0» for a bold «٥»)."""
+    match = LETTER_TOKEN.match(str(token.get("t") or ""))
+    if not match or not number or not is_letter_digit(token):
+        return False
+    number = number.translate(KRAKEN_DIGITS)
+    if number == "٠" and match.group(2).startswith("ه"):
+        number = "٥"
+    token["qari"] = {"t": token.get("t"), "alt": token.get("alt"), "tess": token.get("tess")}
+    token["t"] = match.group(1) + number + match.group(3)
+    token["alt"] = match.group(0)
+    token["tess"] = None
+    token["src"] = "kraken"
+    token["digit"] = True
+    token["conf"] = "low"
+    return True
+
+
+def date_area(tokens: list[dict], first: int, last: int, line_bbox: list[int]) -> list[int] | None:
+    """Where the date `tokens[first:last + 1]` is: its tokens' boxes, else the gap between its nearest
+    boxed neighbours (the word before it is on its right), at the line's height, when no number and no
+    bracket shares that gap (one could be another date, read in the date's place: None). Words may:
+    Kraken reads no bracketed date out of them."""
+    lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
+    boxes = [t["bbox"] for t in tokens[first : last + 1] if t.get("bbox")]
+    if len(boxes) == last - first + 1:
+        return [
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        ]
+    boxed = [bool(t.get("bbox")) for t in tokens]
+    right = first if boxed[first] else next((j for j in range(first - 1, -1, -1) if boxed[j]), None)
+    left = last if boxed[last] else next((j for j in range(last + 1, len(tokens)) if boxed[j]), None)
+    start = 0 if right is None else (right if right == first else right + 1)
+    end = len(tokens) if left is None else (left + 1 if left == last else left)
+    others = (tokens[j] for j in range(start, end) if not first <= j <= last)
+    if any(is_number(t) or _BRACKET.search(str(t.get("t") or "")) for t in others):
+        return None
+    x1 = lx1 if right is None else int(tokens[right]["bbox"][2 if right == first else 0])
+    x0 = lx0 if left is None else int(tokens[left]["bbox"][0 if left == last else 2])
+    return [x0, ly0, x1, ly1] if x1 - x0 >= 3 else None
+
+
+def _dated(shape, tokens: list[dict], first: int, last: int) -> str:
+    """Kraken's date (`_DATE_SHAPE` match) written with Qari's dash; the hijri mark as printed, «هـ»
+    (the readings were compared without tatweel)."""
+    dash = _DASH.search(" ".join(str(t.get("t") or "") for t in tokens[first : last + 1]))
+    start, sep, end = (re.sub("ه$", "هـ", part) for part in shape.groups())
+    return f"({start}{dash.group(0) if dash else sep}{end})"
+
+
+def date_reading(
+    line_text: str, tokens: list[dict], first: int, last: int, area_text: str = "", n: int = ANCHOR_LETTERS
+) -> str:
+    """Kraken's reading of the digit-less date `tokens[first:last + 1]`: the one bracketed date
+    («(digits[م|هـ]–digits[م|هـ])») in its reading of the date's own area (`area_text`), else the one
+    in its reading of the whole line with Qari's neighbours on either side (the line's start or end
+    when there is none); written with Qari's dash; '' when not found."""
+    if area_text:
+        found = [
+            shape for m in _BRACKETED.finditer(_plain(area_text)) if (shape := _DATE_SHAPE.match(m.group(0)))
+        ]
+        if len(found) == 1:
+            return _dated(found[0], tokens, first, last)
+    before, after = _neighbour(tokens, first - 1, -1), _neighbour(tokens, last + 1, 1)
+    plain = _plain(line_text)
+    found = []
+    for match in _BRACKETED.finditer(plain):
+        shape = _DATE_SHAPE.match(match.group(0))
+        if not shape:
+            continue
+        head, tail = skeleton(plain[: match.start()]), skeleton(plain[match.end() :])
+        if (head.endswith(before[-n:]) if before else not head) and (
+            tail.startswith(after[:n]) if after else not tail
+        ):
+            found.append(shape)
+    return _dated(found[0], tokens, first, last) if len(found) == 1 else ""
+
+
+def replace_date(tokens: list[dict], first: int, last: int, reading: str) -> dict:
+    """The date's tokens become one token holding Kraken's `reading` (with what Qari read before its
+    «(» and after its «)»); Qari's reading of the date is kept under `qari` and stays offered as the
+    second reading, as a letter's does; low (D17). Returns it."""
+    group = tokens[first : last + 1]
+    text = " ".join(str(t.get("t") or "") for t in group)
+    head, tail = text[: text.index("(")], text[text.rindex(")") + 1 :]
+    boxes = [t["bbox"] for t in group if t.get("bbox")]
+    bbox = None
+    if len(boxes) == len(group):
+        bbox = [
+            min(b[0] for b in boxes),
+            min(b[1] for b in boxes),
+            max(b[2] for b in boxes),
+            max(b[3] for b in boxes),
+        ]
+    token = {
+        "t": head + reading + tail,
+        "alt": text,
+        "tess": None,
+        "conf": "low",
+        "digit": True,
+        "bbox": bbox,
+        "res": None,
+        "src": "kraken",
+        "qari": {"t": text, "alt": None, "tess": None},
+    }
+    tokens[first : last + 1] = [token]
+    return token
 
 
 # ====================================================================== the pass (I/O)
@@ -271,25 +567,31 @@ def page_style(page) -> str:
 
 @dataclass
 class PageNumbers:
-    """What the pass did on a page."""
+    """What the pass did on a page: Kraken's areas, the numbers it gave (`applied`, letters and dates
+    among them)."""
 
     style: str = ""
     areas: int = 0
     applied: int = 0
+    letters: int = 0
+    dates: int = 0
     seconds: float = 0.0
     skipped: str = ""
 
     def as_dict(self) -> dict:
-        return {k: getattr(self, k) for k in ("style", "areas", "applied", "seconds", "skipped")}
+        keys = ("style", "areas", "applied", "letters", "dates", "seconds", "skipped")
+        return {k: getattr(self, k) for k in keys}
 
 
-def page_areas(page) -> tuple[list[dict], list[tuple]]:
-    """The areas to read on a page's unreviewed lines: runner requests and `(line, area)` pairs."""
+def _unreviewed_lines(page) -> list:
+    return [line for line in page.lines.filter(is_reviewed=False).order_by("order") if line.bbox]
+
+
+def page_areas(page, lines: list | None = None) -> tuple[list[dict], list[tuple]]:
+    """The number areas to read on a page's unreviewed lines: runner requests and `(line, area)` pairs."""
     requests: list[dict] = []
     index: list[tuple] = []
-    for line in page.lines.filter(is_reviewed=False).order_by("order"):
-        if not line.bbox:
-            continue
+    for line in _unreviewed_lines(page) if lines is None else lines:
         tokens = line.tokens or []
         for k, area in enumerate(number_areas(tokens, line.bbox)):
             if all(tokens[i].get("res") or tokens[i].get("src") == "kraken" for i in area.tokens):
@@ -299,14 +601,81 @@ def page_areas(page) -> tuple[list[dict], list[tuple]]:
     return requests, index
 
 
+@dataclass
+class LineLetters:
+    """A line's letters Qari may have written for digits and its digit-less dates (D51), with the
+    letters' own areas (`letter_area`, by token index)."""
+
+    line: object
+    letters: list[int]
+    dates: list[tuple[int, int]]
+    areas: dict[int, tuple[list[int], str, bool]]
+    date_areas: dict[int, list[int]] = field(default_factory=dict)  # by the date's first token
+
+    def requests(self) -> list[dict]:
+        """The runner's areas: the whole line, each letter's own area with less of its neighbours, and
+        each date's own area."""
+        out = [{"id": f"{self.line.pk}:line", "bbox": [int(v) for v in self.line.bbox]}]
+        for i, (bbox, _rest, _box) in self.areas.items():
+            out.append({"id": f"{self.line.pk}:letter{i}", "bbox": bbox, "margin_x": LETTER_MARGIN})
+        for first, bbox in self.date_areas.items():
+            out.append({"id": f"{self.line.pk}:date{first}", "bbox": bbox})
+        return out
+
+
+def page_letters(page, lines: list | None = None) -> list[LineLetters]:
+    """The lines of a page with letters or digit-less dates to read (D51)."""
+    out: list[LineLetters] = []
+    for line in _unreviewed_lines(page) if lines is None else lines:
+        tokens = line.tokens or []
+        dates = digitless_dates(tokens)
+        in_dates = {i for first, last in dates for i in range(first, last + 1)}
+        letters = [i for i, token in enumerate(tokens) if i not in in_dates and is_letter_digit(token)]
+        if not (letters or dates):
+            continue
+        areas = {i: area for i in letters if (area := letter_area(tokens, i, line.bbox))}
+        date_areas = {
+            first: bbox for first, last in dates if (bbox := date_area(tokens, first, last, line.bbox))
+        }
+        out.append(LineLetters(line, letters, dates, areas, date_areas))
+    return out
+
+
+def read_letters(plan: LineLetters, by_id: dict) -> tuple[int, int]:
+    """Kraken's numbers into a line's letters and digit-less dates (module docstring, 6), in place:
+    `(letters, dates)` changed."""
+    row = by_id.get(f"{plan.line.pk}:line") or {}
+    text = str(row.get("text") or "")
+    tokens = plan.line.tokens
+    letters = dates = 0
+    for i in plan.letters:
+        own = (by_id.get(f"{plan.line.pk}:letter{i}") or {}).get("chars") or []
+        area = plan.areas.get(i)
+        if area and shows_letter(own, str(tokens[i].get("t") or "")):
+            continue  # its own area, read alone, shows Qari's letter: a letter
+        number = anchored_number(text, tokens, i) if text else ""
+        if not number and area and own:
+            number = box_number(own, area[1])
+        letters += apply_letter(tokens[i], number)
+    for first, last in sorted(plan.dates, reverse=True):  # right to left: earlier indexes stay put
+        own = str((by_id.get(f"{plan.line.pk}:date{first}") or {}).get("text") or "")
+        reading = date_reading(text, tokens, first, last, own)
+        if reading:
+            replace_date(tokens, first, last, reading)
+            dates += 1
+    return letters, dates
+
+
 def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumbers:
     """The numbers pass on one finalised page (module docstring). `style`: the book's, when the caller
-    knows it (a whole book at once); `engine`: a Kraken engine (tests pass a fake)."""
+    knows it (a whole book at once); `engine`: a Kraken engine (tests pass a fake). A line the reviewer
+    changed while Kraken read is left as they made it."""
     import json
 
     from django.db import transaction
 
-    from ocr.models import OcrRun
+    from books.models import Page
+    from ocr.models import Line, OcrRun
     from ocr.services import count_unresolved
     from review.services import refresh_page_text  # the review app owns the text of a page's lines
 
@@ -324,15 +693,29 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
     if pre is None or not pre.gray_image:
         result.skipped = "no image"
         return result
-    requests, index = page_areas(page)
-    result.areas = len(requests)
-    if not requests:
+    lines = _unreviewed_lines(page)
+    requests, index = page_areas(page, lines)
+    plans = page_letters(page, lines)
+    requests_all = requests + [request for plan in plans for request in plan.requests()]
+    result.areas = len(requests_all)
+    if not requests_all:
         return result
+    read_at = {line.pk: line.updated_at for line in lines}
     engine = engine or registry.get_engine("kraken")
-    answer = engine.read([{"image": pre.gray_image.path, "lines": requests}])
+    answer = engine.read([{"image": pre.gray_image.path, "lines": requests_all}])
     result.seconds = float(answer.get("elapsed") or answer.get("seconds") or 0.0)
     by_id = {row.get("id"): row for row in answer.get("lines") or []}
     changed: dict[int, object] = {}
+    counts: dict[int, list[int]] = {}  # line → [numbers, letters, dates] Kraken gave it
+
+    def gave(line, numbers: int = 0, letters: int = 0, dates: int = 0) -> None:
+        if numbers or letters or dates:
+            changed[line.pk] = line
+            count = counts.setdefault(line.pk, [0, 0, 0])
+            count[0] += numbers
+            count[1] += letters
+            count[2] += dates
+
     for request, (line, area) in zip(requests, index, strict=True):
         row = by_id.get(request["id"])
         if not row:
@@ -342,23 +725,39 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         own_box = len(area.tokens) == 1 and bool(tokens[area.tokens[0]].get("bbox"))
         if numbers is None and own_box:
             whole = box_text(row.get("chars") or [])
-            if whole and apply_reading(tokens[area.tokens[0]], whole=whole):
-                result.applied += 1
-                changed[line.pk] = line
+            gave(line, bool(whole) and apply_reading(tokens[area.tokens[0]], whole=whole))
             continue
         if numbers is None:
             continue
-        for i, found in zip(area.tokens, numbers, strict=True):
-            if apply_reading(tokens[i], found):
-                result.applied += 1
-                changed[line.pk] = line
+        gave(
+            line, sum(apply_reading(tokens[i], found) for i, found in zip(area.tokens, numbers, strict=True))
+        )
+    for plan in plans:
+        letters, dates = read_letters(plan, by_id)
+        gave(plan.line, letters=letters, dates=dates)
     with transaction.atomic():
-        for line in changed.values():
+        locked = Page.objects.select_for_update(of=("self",)).get(pk=page.pk)  # as review does
+        now = dict(
+            Line.objects.filter(pk__in=list(changed), is_reviewed=False).values_list("pk", "updated_at")
+        )
+        kept = [
+            line for pk, line in changed.items() if locked.reviewed_at is None and now.get(pk) == read_at[pk]
+        ]
+        for line in kept:
             line.text = " ".join(token["t"] for token in line.tokens)
             line.n_low = count_unresolved(line.tokens)
             line.save(update_fields=["tokens", "text", "n_low", "updated_at"])
-        if changed:
+            numbers, letters, dates = counts[line.pk]
+            result.applied += numbers + letters + dates
+            result.letters += letters
+            result.dates += dates
+        if kept:
             refresh_page_text(page)
+        params = {"areas": result.areas, "applied": result.applied, "style": result.style}
+        if result.letters or result.dates:
+            params.update(letters=result.letters, dates=result.dates)
+        if len(kept) < len(changed):
+            params["left_to_reviewer"] = len(changed) - len(kept)  # changed or removed while Kraken read
         OcrRun.objects.create(
             page=page,
             engine_name=engine.name,
@@ -368,11 +767,11 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
             input_variant="gray",
             raw_output=json.dumps(answer.get("lines") or [], ensure_ascii=False),
             parsed_text="\n".join(str(row.get("text") or "") for row in answer.get("lines") or []),
-            params={"areas": result.areas, "applied": result.applied, "style": result.style},
+            params=params,
             duration_ms=int(result.seconds * 1000),
             finish="n/a",
         )
-    log.info("page %s: Kraken read %d of %d number areas", page.pk, result.applied, result.areas)
+    log.info("page %s: Kraken gave %d readings (%d areas read)", page.pk, result.applied, result.areas)
     return result
 
 
