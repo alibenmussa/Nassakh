@@ -1,0 +1,10 @@
+ECMA-376 Office Open XML schemas (WordprocessingML and the DrawingML / shared schemas it imports),
+used only by the tests to validate every generated .docx part.
+
+Source: https://github.com/python-openxml/python-docx/tree/master/ref/xsd (fetched 2026-09-26), which
+carries the ECMA-376 schemas unchanged. Local edits:
+- xml.xsd is a minimal stand-in for http://www.w3.org/2001/xml.xsd (xml:space, xml:lang), written here;
+- wml.xsd and shared-math.xsd import the XML namespace with schemaLocation="xml.xsd" so lxml resolves it
+  offline.
+The Word 2010+ extension namespaces (w14, w15, ... declared mc:Ignorable) are not in these schemas; the
+validator drops them before validating (see playground/word/validate_spike.py).

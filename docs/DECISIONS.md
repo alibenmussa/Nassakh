@@ -337,3 +337,23 @@ and when it drops the spaces between numbers set apart by a comma or a slash it 
 read (the page row locked as review does; `left_to_reviewer` in the run's params otherwise). Not fixed: a letter Qari
 split off a number («2 ه» for «٥٢», «4 ه ق» for «٥٥٤ ق») gets its digit but stays a separate word.
 
+
+## D52–D61 — Phase 6: export, Word first (2026-09-26; details and reasons in docs/PHASE6_SPEC.md §0)
+- **D52** Phase 6 in three steps: 6a the export history, the export page and Word; 6b PDF for print and screen as real
+  exports; 6c EPUB 3. On the owner's go (§15.1) all three are built in one run.
+- **D53** Nassakh writes the .docx itself (lxml + zipfile, every part in schema order); python-docx only reads files
+  back in the tests (amends D43).
+- **D54** The preview is the reference: exact line pitch, the same face per character, «(n)» calls, continuous page
+  numbers, a contents field pre-filled with the preview's page numbers (never `updateFields`), footnotes restarting
+  per page; what Word cannot follow is listed with the file.
+- **D55** Kashida on by default as Word's *low* kashida (none / low / medium / high; medium and high lengthen the book).
+- **D56** Uncertain words as Word comments by «نسّاخ»: an option, off by default.
+- **D57** Only Amiri (OFL) is embedded; the Microsoft / Monotype / Linotype faces are named, not embedded.
+- **D58** Every export is a `publishing.Export` row with its file, on its own Celery queue `export`; one active export
+  per book and format; the newest 5 files per format kept.
+- **D59** One export page «الإخراج» (`/books/<id>/export/`), not a modal: «قبل الإخراج», one block per format, «السجل».
+- **D60** The Latin-face fix first (a role whose file is the Latin face's has no `unicode-range`), the preview drops
+  bleed and crop marks, `ENGINE_VERSION = "nk-print-5"`.
+- **D61** PDF for print (TrimBox, optional bleed and crop marks) and for screen (clean outline, RTL reading) are fresh
+  final renders through the book page's engine, so they have its pages. No PDF/X or PDF/A claim.
+- D62 (the Word calibration results) is recorded after the owner's calibration pass.
