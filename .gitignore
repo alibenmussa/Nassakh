@@ -49,3 +49,4 @@ playground/digits/letters*_result.json
 playground/word/out/
 playground/digits/results_lines_*.json
 playground/digits/*.err
+playground/ux/

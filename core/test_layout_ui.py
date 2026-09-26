@@ -2613,3 +2613,52 @@ def test_compiled_css_modal_scrolls_page_labels_and_open_bar():
     hairline = re.search(r"\.lp-patch \.ed-pb:before\{([^}]*)\}", css)
     assert hairline and "margin-inline-end:-1px" in hairline.group(1)
     assert not re.search(r"\.lp-patch\.is-open\{[^}]*box-shadow:0 0 0 calc", css)
+
+
+# ---------------------------------------------------------------- the undo toast (UX test, 2026-09-26)
+
+
+def test_the_undo_toast_never_runs_its_undo_by_being_shown(tmp_path):
+    """Showing an undo toast must not undo. Alpine calls a function that a directive's expression evaluates
+    to, and the «تراجع» button was shown with `x-show="$store.bookToast && $store.bookToast.action"`: every
+    snapshot restore, digit conversion and replace-all was undone the moment its toast appeared. The test
+    evaluates the button's own x-show expression the way Alpine does (a function result is called)."""
+    if NODE is None:
+        pytest.skip("node is not installed")
+    overlays = (ROOT / "templates" / "editor" / "_book_overlays.html").read_text(encoding="utf-8")
+    match = re.search(r'<button[^>]*x-show="([^"]+)"[^>]*@click="\$store\.bookToast\.run\(\)"', overlays)
+    assert match, "the undo button of the book page's toast"
+    source = f"""
+const {{ readFileSync }} = require('fs');
+const stores = {{}};
+globalThis.document = {{ addEventListener() {{}} }};
+globalThis.Alpine = {{
+  data() {{}},
+  store: (n, v) => {{ if (v !== undefined) stores[n] = v; return stores[n]; }},
+}};
+globalThis.window = globalThis;
+(0, eval)(readFileSync({json.dumps(str(BOOK_JS / "page.js"))}, 'utf8'));
+globalThis.NassakhBook.register();
+const toast = stores.bookToast;
+let undone = 0;
+toast.show('استُعيدت النسخة', () => {{ undone += 1; }});
+// Alpine's rule: evaluate the expression; a function result is called with the scope
+const alpine = (expr) => {{
+  const v = new Function('$store', `return (${{expr}})`)(stores);
+  return typeof v === 'function' ? v() : v;
+}};
+const shown = [alpine({json.dumps(match.group(1))}), alpine({json.dumps(match.group(1))})];
+const afterShow = undone;
+toast.run();
+const afterRun = undone;
+toast.show('بلا تراجع');
+const noAction = alpine({json.dumps(match.group(1))});
+clearTimeout(toast.timer);
+const result = {{ shown, afterShow, afterRun, noAction: Boolean(noAction), hasAction: toast.hasAction }};
+console.log(JSON.stringify(result));
+"""
+    out = _run_node(tmp_path, "toast.cjs", source)
+    assert out["shown"] == [True, True]  # the button shows ...
+    assert out["afterShow"] == 0  # ... without running the undo
+    assert out["afterRun"] == 1  # «تراجع» runs it once
+    assert out["noAction"] is False and out["hasAction"] is False  # a toast without an undo shows no button

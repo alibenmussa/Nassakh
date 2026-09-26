@@ -189,7 +189,7 @@ Context: can_edit.{% endcomment %}
 {# the undo toast (DESIGN.md §6): one action, replaces the shared toast while it shows #}
 <div class="toast ed-toast" role="status" aria-live="polite" x-show="$store.bookToast && $store.bookToast.visible" x-cloak x-transition.opacity.duration.200ms data-undo-toast>
   <span class="grow" x-text="$store.bookToast && $store.bookToast.message"></span>
-  <button type="button" class="btn" x-show="$store.bookToast && $store.bookToast.action" @click="$store.bookToast.run()">تراجع</button>
+  <button type="button" class="btn" x-show="$store.bookToast && $store.bookToast.hasAction" @click="$store.bookToast.run()">تراجع</button>
   <button type="button" class="toast-close" aria-label="إغلاق" @click="$store.bookToast.hide()">
     <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
   </button>

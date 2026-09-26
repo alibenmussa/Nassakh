@@ -130,24 +130,29 @@
     });
 
     // The undo toast (DESIGN.md §6): one at a time, one action; a new one replaces the old. `local` marks a
-    // toast whose undo is the chapter's own history (the next edit retires it).
+    // toast whose undo is the chapter's own history (the next edit retires it). The template binds its button
+    // to `hasAction`, never to `action`: Alpine *calls* a function that a directive's expression evaluates
+    // to, so `x-show="…action"` ran every undo the moment its toast appeared (a restore, a digit conversion
+    // or a replace-all undone at once, again on every re-evaluation).
     if (typeof Alpine.store === 'function') {
       Alpine.store('bookToast', {
         message: '',
         visible: false,
         action: null,
+        hasAction: false,
         local: false,
         timer: null,
         show(message, action, ms = 8000, local = false) {
           clearTimeout(this.timer);
           this.message = message;
           this.action = typeof action === 'function' ? action : null;
+          this.hasAction = this.action !== null;
           this.local = Boolean(local);
           this.visible = true;
-          this.timer = setTimeout(() => { this.visible = false; this.action = null; }, ms);
+          this.timer = setTimeout(() => this.hide(), ms);
         },
         run() { const fn = this.action; this.hide(); if (fn) fn(); },
-        hide() { clearTimeout(this.timer); this.visible = false; this.action = null; },
+        hide() { clearTimeout(this.timer); this.visible = false; this.action = null; this.hasAction = false; },
       });
     }
   }
