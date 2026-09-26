@@ -121,7 +121,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
       <div class="rv-scan" x-ref="scan" :class="{ 'is-dragging': drag && drag.moved, 'is-zoomed': zoom.scale > 1 }"
            @wheel.prevent="onWheel($event)" @pointerdown="onPointerDown($event)" @pointermove="onPointerMove($event)"
-           @pointerup="onPointerUp($event)" @pointercancel="onPointerUp($event)" @dblclick.prevent="zoom.scale > 1 ? zoomReset() : zoomIn()">
+           @pointerup="onPointerUp($event)" @pointercancel="onPointerUp($event)" @click="onScanClick($event)" @dblclick.prevent="zoom.scale > 1 ? zoomReset() : zoomIn()">
         <div class="rv-sheet" dir="ltr" :class="{ 'is-gliding': gliding, 'show-scan': tab === 'scan' }" :style="sheetStyle">
           <img class="rv-img rv-img-display" :src="image.display_url" alt="" draggable="false" decoding="async">
           <img class="rv-img rv-img-scan" :src="image.scan_url || image.display_url" alt="" draggable="false" decoding="async" loading="lazy">
@@ -130,7 +130,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
             <template x-for="line in lines" :key="'b' + line.id">
               <div class="rv-line-boxes">
                 <template x-for="(tok, i) in line.tokens" :key="line.id + '-' + i">
-                  <div class="rv-box" x-show="tok.bbox" :class="boxClass(line, tok, i)" :style="tok.bbox ? boxStyle(tok.bbox) : ''"
+                  <div class="rv-box" x-show="tok.bbox" :class="boxClass(line, tok, i)" :style="tok.bbox ? boxStyle(tok.bbox) : ''" :data-line="line.id" :data-i="i"
                        @mouseenter="hot = { lineId: line.id, index: i }" @mouseleave="hot = null" @click.stop="onBoxClick(line, i, $event)"></div>
                 </template>
               </div>

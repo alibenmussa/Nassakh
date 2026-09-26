@@ -123,6 +123,8 @@
   .rv-img-scan { position: absolute; inset: 0; height: 100%; object-fit: fill; opacity: 0; transition: opacity 200ms ease; }
   .rv-sheet.show-scan .rv-img-scan { opacity: 1; }
   .rv-overlay { position: absolute; inset: 0; pointer-events: none; }
+  /* the boxes sit on the processed image; the original is only a reference, so they hide there */
+  .rv-sheet.show-scan .rv-overlay { visibility: hidden; }
   .rv-band {
     position: absolute;
     left: 0;

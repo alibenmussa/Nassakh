@@ -2343,3 +2343,62 @@ def test_fix_everywhere_sheet_on_the_contract(tmp_path):
     assert chip["message"] == "صُحّحت الكلمة" and chip["elsewhere"]["text"] == offered["text"]
     assert out["elsewhere"]["open"] is True and out["elsewhere"]["from"] == offered["from"]
     assert out["elsewhere"]["to"] == offered["to"]
+
+
+# ------------------------------------------------ the scan finds its words in the text
+
+SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + r"""
+(async () => {
+  const out = {};
+  // a pointerdown on a box (the scan captures the pointer, so the click may come to the scan itself)
+  const press = (c, line, i, extra) => c.onPointerDown({ pointerType: 'mouse', button: 0, pointerId: 1, clientX: 10, clientY: 10,
+    target: { closest: () => (line == null ? null : { dataset: { line: String(line), i: String(i) } }) }, currentTarget: null, ...(extra || {}) });
+  const release = (c) => c.onPointerUp({ pointerId: 1 });
+  const click = (c, extra) => { const ev = { stopped: false, stopPropagation() { this.stopped = true; }, ...(extra || {}) }; c.onScanClick(ev); return ev.stopped; };
+  // an uncertain word: its menu opens in the text, as a click there does; the image does not move
+  const u = make(); const zoom = JSON.stringify(u.zoom);
+  press(u, 51, 1); release(u); const stopped = click(u);
+  out.uncertain = { focus: clone(u.focus), open: u.pop.open, stopped, still: JSON.stringify(u.zoom) === zoom };
+  // a confident word: focused (scrolled to) in the text, no menu
+  const s = make(); press(s, 52, 1); release(s); click(s);
+  out.sure = { focus: clone(s.focus), open: s.pop.open };
+  // a drag's release is no tap, and the click goes on to the popover's click-outside
+  const d = make(); press(d, 51, 1); d.onPointerMove({ pointerId: 1, clientX: 40, clientY: 10 }); release(d);
+  out.drag = { stopped: click(d), focus: d.focus };
+  // the image outside every box does nothing
+  const n = make(); press(n, null); release(n);
+  out.none = { stopped: click(n), focus: n.focus };
+  // ⇧ on a box extends the range of lines, as in the text
+  const r = make(); r.onLineClick(r.lineById(51), {}); press(r, 53, 0); release(r); click(r, { shiftKey: true });
+  out.range = r.range.ids;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
+    """A tap on a box of the processed image goes to the word in the text: an uncertain word opens its menu
+    there (as a click in the text does), a confident word is focused without a menu, the image stays put; a
+    drag is no tap. The boxes carry their word's address, and «الأصل» hides them."""
+    harness = tmp_path / "harness.js"
+    harness.write_text(SCAN_HARNESS, encoding="utf-8")
+    fixture = tmp_path / "config.json"
+    fixture.write_text(json.dumps(_config(), ensure_ascii=False), encoding="utf-8")
+    run = subprocess.run(
+        ["node", str(harness), str(JS / "review.js"), str(fixture), str(JS / "keys.js")],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    assert out["uncertain"] == {"focus": {"lineId": 51, "index": 1}, "open": True, "stopped": True, "still": True}
+    assert out["sure"] == {"focus": {"lineId": 52, "index": 1}, "open": False}
+    assert out["drag"] == {"stopped": False, "focus": None}
+    assert out["none"] == {"stopped": False, "focus": None}
+    assert out["range"] == [51, 52, 53]
+
+    body = _render()
+    assert '@click="onScanClick($event)"' in body and ':data-line="line.id" :data-i="i"' in body
+    src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
+    assert ".rv-sheet.show-scan .rv-overlay { visibility: hidden; }" in src

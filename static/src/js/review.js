@@ -328,6 +328,7 @@
       gliding: false,
       drag: null,
       dragMoved: false,
+      tapBox: null, // the scan box under the last pointerdown: its tap opens the word in the text
       pinch: null,
       pointers: null,
       reduced: false,
@@ -783,9 +784,29 @@
         return n > 1 ? `نوع الأسطر المحدَّدة (${n})` : 'نوع السطر';
       },
 
+      // A box on the image finds its word in the text: an uncertain word opens its menu there, exactly as a
+      // click in the text does; any other word is focused and scrolled into view, with no menu (a correction
+      // starts in the text). The image stays where it is (the reader is looking at it).
       onBoxClick(line, i, ev) {
         if (this.dragMoved) return;
-        this.onTokClick(line, i, ev);
+        if (ev && ev.shiftKey) { this.extendRange(line); return; }
+        this.range = { anchor: line.id, ids: [] };
+        const tok = line.tokens[i];
+        if (!tok) return;
+        this.focusWord({ lineId: line.id, index: i }, { open: tok.conf === 'low', fromClick: true, pan: false });
+      },
+
+      // The scan captures the pointer on pointerdown (to drag), so the browser may deliver the click to the scan
+      // rather than to the box under it: the box pressed is remembered on pointerdown and handled here. A drag's
+      // release is no tap. Stopping the click keeps the popover's click-outside from closing what it opened.
+      onScanClick(ev) {
+        const tap = this.tapBox;
+        this.tapBox = null;
+        if (!tap || this.dragMoved) return;
+        const line = this.lines.find((l) => String(l.id) === tap.line);
+        if (!line) return;
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        this.onBoxClick(line, tap.index, ev);
       },
 
       // The part of the lines column the reader can see (the scroller clipped to the window), minus the margin.
@@ -2188,6 +2209,8 @@
           return;
         }
         this.drag = { x: ev.clientX, y: ev.clientY, ox: this.zoom.x, oy: this.zoom.y, moved: false };
+        const hit = ev.target && ev.target.closest ? ev.target.closest('.rv-box') : null;
+        this.tapBox = hit && hit.dataset ? { line: String(hit.dataset.line), index: Number(hit.dataset.i) } : null;
         const el = ev.currentTarget;
         if (el && el.setPointerCapture) { try { el.setPointerCapture(ev.pointerId); } catch (_) { /* fine */ } }
       },
