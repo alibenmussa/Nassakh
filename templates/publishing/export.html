@@ -11,7 +11,8 @@ Alpine.store('exportPage').view. Styles: static/src/components/export.css (ex-) 
 Context: book, config. Western digits everywhere.
 {% endcomment %}
 {% block head_title %}الإخراج · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}<span class="title-page">الإخراج</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current="export" %}{% endblock %}
 
 {% block header_actions %}
 <div class="lo-bar" x-data="exportBar" data-export-bar>
@@ -22,11 +23,7 @@ Context: book, config. Western digits everywhere.
     <a class="bk-poll" x-show="v && v.pollState === 'auth'" x-cloak href="{% url 'accounts:login' %}?next={{ request.path|urlencode }}">
       <span class="dot" aria-hidden="true"></span><span>انتهت الجلسة · تسجيل الدخول</span>
     </a>
-    <a class="btn btn-ghost btn-sm" href="{% url 'editor:layout' book.pk %}" title="صفحة الكتاب" data-back-link>
-      <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-      <span>الكتاب</span>
-    </a>
-    {# «⋯»: the book page, the manuscript, the dashboard #}
+    {# «⋯»: the book page, the manuscript (every step is in the stage bar, D76) #}
     <div class="menu-anchor" @keydown.escape.window="open = false">
       <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
         <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
@@ -41,11 +38,6 @@ Context: book, config. Western digits everywhere.
           <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
           <span>المخطوطة</span>
         </a>
-        <div class="menu-sep" role="separator"></div>
-        <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
-          <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-          <span>لوحة الكتاب</span>
-        </a>
       </div>
     </div>
   </div>
@@ -56,9 +48,9 @@ Context: book, config. Western digits everywhere.
 {{ config|json_script:"export-config" }}
 {% if not config.book.has_manuscript %}
 {% url 'assembly:manuscript' book.pk as manuscript_url %}
-{% include "partials/_empty_state.html" with title="لا كتاب للإخراج بعد" text="حوّل الكتاب إلى مخطوطة وافتحه في صفحة الكتاب أولًا؛ من هنا يُخرَج بعد ذلك ملف Word." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-download" %}
+{% include "partials/_empty_state.html" with title="لا كتاب للإخراج بعد" text="اجمع مخطوطة الكتاب أولًا، ثم افتحه في «الكتاب»؛ من هنا تُخرَج بعد ذلك ملفاته." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-download" %}
 {% else %}
-<div class="ex-page" data-export-page x-data="exportPage(JSON.parse(document.getElementById('export-config').textContent))"
+<div class="ex-page" data-export-page data-rail x-data="exportPage(JSON.parse(document.getElementById('export-config').textContent))"
      @visibilitychange.document="onVisible()" @pageshow.window="onPageShow($event)">
   <p class="sr-only" role="status" aria-live="polite" x-text="live"></p>
 

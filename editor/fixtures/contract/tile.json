@@ -1,0 +1,20 @@
+{
+ "page_tile (full): the new key": {
+  "a page with final text": {
+   "primary_url": "/books/40/review/1/",
+   "url": "/books/40/pages/1/",
+   "review_url": "/books/40/review/1/"
+  },
+  "a page still processing (no final text)": {
+   "primary_url": "/books/40/pages/8/",
+   "url": "/books/40/pages/8/",
+   "review_url": "/books/40/review/8/"
+  },
+  "an excluded page": {
+   "primary_url": "/books/40/pages/5/",
+   "url": "/books/40/pages/5/",
+   "review_url": "/books/40/review/5/"
+  }
+ },
+ "compact tile (the poll)": "no primary_url: the tile computes it from text_state == 'final' and not is_excluded (config.urls.review, else config.urls.page)"
+}

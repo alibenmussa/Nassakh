@@ -1,0 +1,169 @@
+{
+ "GET /api/books/42/occurrences/?q=السعودي&fold_alef=1&whole_word=1&match_tashkeel=0": {
+  "status": 200,
+  "response": {
+   "query": "السعودي",
+   "options": {
+    "match_tashkeel": false,
+    "fold_alef": true,
+    "whole_word": true
+   },
+   "total": 4,
+   "pages": 3,
+   "picked": 2,
+   "truncated": false,
+   "results": [
+    {
+     "number": 1,
+     "page_id": 4201,
+     "status": "reviewed",
+     "status_label": "مُراجَعة",
+     "approved": true,
+     "image": {
+      "url": "/media/books/42/pages/1/display.png",
+      "width": 1000,
+      "height": 1400
+     },
+     "lines": [
+      {
+       "line_id": 42011,
+       "v": "2026-09-26T15:20:00.000000+00:00",
+       "index": 0,
+       "word": "السعودي",
+       "before": "",
+       "after": "رأس الصفحة وقد ذكر المؤرخ",
+       "bbox": [
+        120,
+        40,
+        260,
+        80
+       ],
+       "line_bbox": [
+        100,
+        40,
+        900,
+        80
+       ],
+       "res": null,
+       "conf": "high",
+       "head": true,
+       "pick": false
+      },
+      {
+       "line_id": 42012,
+       "v": "2026-09-26T15:20:00.000000+00:00",
+       "index": 3,
+       "word": "«السعودي»",
+       "before": "رأس الصفحة وقد ذكر المؤرخ",
+       "after": "في كتابه مروج الذهب",
+       "bbox": [
+        570,
+        200,
+        710,
+        240
+       ],
+       "line_bbox": [
+        100,
+        200,
+        900,
+        240
+       ],
+       "res": null,
+       "conf": "low",
+       "head": false,
+       "pick": true
+      }
+     ]
+    },
+    {
+     "number": 2,
+     "page_id": 4202,
+     "status": "ocr_done",
+     "status_label": "تم التعرّف",
+     "approved": false,
+     "image": {
+      "url": "/media/books/42/pages/2/display.png",
+      "width": 1000,
+      "height": 1400
+     },
+     "lines": [
+      {
+       "line_id": 42021,
+       "v": "2026-09-26T15:20:00.000000+00:00",
+       "index": 1,
+       "word": "السعودي،",
+       "before": "قال",
+       "after": "وهو ثقة",
+       "bbox": [
+        270,
+        120,
+        410,
+        160
+       ],
+       "line_bbox": [
+        100,
+        120,
+        900,
+        160
+       ],
+       "res": null,
+       "conf": "high",
+       "head": false,
+       "pick": true
+      }
+     ]
+    },
+    {
+     "number": 3,
+     "page_id": 4203,
+     "status": "ocr_done",
+     "status_label": "تم التعرّف",
+     "approved": false,
+     "image": {
+      "url": "/media/books/42/pages/3/display.png",
+      "width": 1000,
+      "height": 1400
+     },
+     "lines": [
+      {
+       "line_id": 42031,
+       "v": "2026-09-26T15:20:00.000000+00:00",
+       "index": 0,
+       "word": "السعودي",
+       "before": "",
+       "after": "في أخبار الزمان",
+       "bbox": [
+        120,
+        120,
+        260,
+        160
+       ],
+       "line_bbox": [
+        100,
+        120,
+        900,
+        160
+       ],
+       "res": "primary",
+       "conf": "low",
+       "head": false,
+       "pick": false
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "… an empty query": {
+  "status": 400,
+  "response": {
+   "message": "اكتب الكلمة التي تريد تصحيحها."
+  }
+ },
+ "… more than one word": {
+  "status": 400,
+  "response": {
+   "message": "يُصحَّح في كل الكتاب كلمة واحدة في كل مرة."
+  }
+ }
+}

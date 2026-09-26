@@ -220,9 +220,19 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "data-editor-open" not in body
     )
     assert "x-text=\"d.status === 'error' ? 'إعادة بدء المعالجة' : 'بدء المعالجة'\"" in body
-    # status chip, progress bar, poll pill, «⋯» menu with copy / «التخطيط» / re-run items (each asks first,
-    # §3.6) / «حذف الكتاب…» / all books
-    assert 'class="bk-status"' in body and 'aria-label="نسبة إتمام المعالجة"' in body
+    # D76 (PHASE7 §5.1): the status chip and its bar fold into the stage bar's current step («المعالجة»; the
+    # chip's words stay for a screen reader); the poll pill, «⋯» menu with copy / «التخطيط» / re-run items
+    # (each asks first, §3.6) / «حذف الكتاب…» / the shortcut sheet / all books
+    assert 'class="bk-status"' not in body and 'aria-label="نسبة إتمام المعالجة"' not in body
+    assert 'data-stage-bar data-rail data-current="ocr"' in body
+    assert '<span class="sr-only" role="status" x-text="d.statusText"></span>' in body
+    # the «كل الكتب» ghost is retired (§5.2): the rail's «الكتب» and the «⋯» keep the way to the list
+    head = body[
+        body.index('<div class="bk-bar" x-data>') : body.index(
+            '<template x-if="$store.book && $store.book.dash">'
+        )
+    ]
+    assert "كل الكتب" not in head
     assert "تعذّر التحديث · إعادة المحاولة" in body and "انتهت الجلسة · تسجيل الدخول" in body
     menu = body[
         body.index('class="menu menu-popover bk-menu"') : body.index(
@@ -237,6 +247,8 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "data-guides-menu-item" in menu
         and "حذف الكتاب…" in menu
         and "كل الكتب" in menu
+        and "اختصارات لوحة المفاتيح" in menu
+        and "d.openSheet()" in menu
     )
     assert "d.openRerun('ocr'," in menu and "d.openDelete()" in menu
     # the re-run dialog posts the stage it names; the delete dialog names what is lost (§3.13)
@@ -349,7 +361,8 @@ def test_text_panel_uses_the_decode_host_and_keeps_the_final_markup():
 def test_page_detail_offers_the_review_entry_point_when_the_route_exists(editor_client):
     book, pages = _book([(Page.Status.OCR_DONE, "final")])
     body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
-    assert "لوحة الكتاب" in body
+    # D76: the stage bar leads everywhere; «لوحة الكتاب» is retired (§5.2)
+    assert "لوحة الكتاب" not in body and 'data-stage-bar data-rail data-current="ocr"' in body
     url = _optional("review:page", book.pk, 1)
     if url:
         assert "مراجعة الصفحة" in body and f'href="{url}"' in body and body.count("btn-primary") == 1
@@ -1037,8 +1050,9 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "thumbs": 4,
         "noFilmState": True,
     }
-    # the only window listeners are resize and scroll: no wheel / touch / key listener ends the follow mode
-    assert out["vWindowListeners"] == ["resize", "scroll"]
+    # the only window listeners are resize and scroll, and the focus that refreshes the progress once (D76,
+    # §5.4): no wheel / touch / key listener ends the follow mode
+    assert out["vWindowListeners"] == ["focus", "resize", "scroll"]
     # a turn slides out for 200 ms; a second press mid-turn moves the target, the sheet lands once
     assert out["vTurn"]["midTurn"] == {"turning": "out-next", "current": 1, "timer": 1}
     assert out["vTurn"]["after"] == {
@@ -1367,7 +1381,7 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert out["phase5"]["stale"] == ["reassemble", "تغيّر نص صفحتان بعد التجميع", ""]
     assert out["phase5"]["reader"] == "manuscript" and out["phase5"]["noUrl"] == "manuscript"
     assert (
-        out["phase5"]["noPages"] == "17×24 سم · لم تُخرَج صفحاته بعد"
+        out["phase5"]["noPages"] == "17×24 سم · لم تُرتَّب صفحاته بعد"
         and out["phase5"]["running"] == "manuscript"
     )
     # the end of processing: no reload, a toast with the review entry, the primary swaps
@@ -1548,7 +1562,8 @@ def test_guides_mode_states_uploaded_preparing_and_error(editor_client):
     body = editor_client.get(reverse("books:detail", args=[book2.pk])).content.decode()
     assert _config(body)["startAction"] == "startOcrDisabled"
     assert 'x-text="emptyTitle">تُستخرج الصفحات الآن</h2>' in body
-    assert 'aria-label="نسبة الصفحات المُجهَّزة" x-show="d.showBar"' in body
+    # the mode's chip and bar are the stage bar's «التخطيط» now (D76, §5.1)
+    assert 'data-stage-bar data-rail data-current="pages"' in body and "نسبة الصفحات المُجهَّزة" not in body
     # every page failed: today's error banner and «إعادة استخراج الصفحات»
     book3, _ = _awaiting(Book.Status.ERROR, [Page.Status.ERROR])
     body = editor_client.get(reverse("books:detail", args=[book3.pk])).content.decode()
@@ -1585,7 +1600,7 @@ def test_guides_view_on_a_started_book_and_the_plain_dashboard(editor_client):
     assert (
         menu.count("data-rerun-stage=") == 5 and "حذف الكتاب…" in menu and "data-guides-menu-item" not in menu
     )
-    assert "تحويل إلى كتاب…" in menu and "bk-convert-host" in body
+    assert "تجميع المخطوطة…" in menu and "bk-convert-host" in body
     assert "جُهّزت الصفحات واكتُشفت مناطقها" not in body
 
 
@@ -2382,3 +2397,148 @@ def test_reader_mark_on_tiles_and_thumbs_under_node(editor_client, tmp_path):
         "tiles": [True, False],
         "thumbs": [[True, "صفحة 1 — تم التعرّف"], [False, "صفحة 2 — تم التعرّف · قراءة واحدة"]],
     }
+
+
+# ---------------------------------------------------------------- 7c: tiles lead to review, the stage bar
+
+
+@pytest.mark.django_db
+def test_tiles_and_sheets_lead_to_review_with_the_processing_details_beside(editor_client, client):
+    book, _ = _book([(Page.Status.OCR_DONE, "final"), (Page.Status.LAYOUT_DONE, "provisional")])
+    body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    review = [_optional("review:page", book.pk, n) or f"/books/{book.pk}/review/{n}/" for n in (1, 2)]
+    detail = [reverse("books:page_detail", args=[book.pk, n]) for n in (1, 2)]
+    grid = body[body.index('<div class="page-grid"') : body.index('<p class="bk-empty-filter')]
+    tiles = grid.split('<div class="page-tile')[1:]
+    # the link's address: review once the text is final, else the page detail (a new tab or ⌘-click)
+    assert f'<a class="page-tile-link" href="{review[0]}"' in tiles[0]
+    assert f'<a class="page-tile-link" href="{detail[1]}"' in tiles[1]
+    # on hover (always on touch): «مراجعة» (hidden until the text is final) and «تفاصيل المعالجة» for editors
+    assert (
+        f'class="btn btn-sm page-tile-review" href="{review[0]}" aria-label="مراجعة الصفحة 1">مراجعة</a>'
+        in tiles[0]
+    )
+    assert f'class="btn btn-sm page-tile-review" href="{review[1]}" hidden' in tiles[1]
+    assert (
+        f'class="btn-icon btn-icon-sm page-tile-detail" href="{detail[0]}" title="تفاصيل المعالجة"'
+        in tiles[0]
+    )
+    assert '<use href="#i-sliders"/>' in tiles[0]
+    # the sheet's title leads to review too; «تفاصيل المعالجة» sits in its head
+    sheet = _shell(body, 0)
+    assert f'<a class="sheet-title num" href="{review[0]}">' in sheet
+    assert f'class="btn-icon btn-icon-sm sheet-detail" href="{detail[0]}" title="تفاصيل المعالجة"' in sheet
+    # D33's plain click still opens the viewer; a modifier-click follows the link
+    js = (ROOT / "static" / "src" / "js" / "books.js").read_text(encoding="utf-8")
+    assert "e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;" in js
+    css = (ROOT / "static" / "src" / "components" / "books.css").read_text(encoding="utf-8")
+    assert (
+        ".page-tile:hover .page-tile-actions, .page-tile:focus-within .page-tile-actions { opacity: 1; }"
+        in css
+    )
+    assert "@media (hover: none) { .page-tile-actions { opacity: 1; } }" in css
+    # a proofreader: review, no processing details
+    client.force_login(_user("reader7c", "proofreader"))
+    reader = client.get(reverse("books:detail", args=[book.pk])).content.decode()
+    assert "page-tile-review" in reader and "page-tile-detail" not in reader and "sheet-detail" not in reader
+
+
+DASH_7C = r"""
+const reg = {}; const inits = []; const stores = {}; const toasts = [];
+globalThis.window = globalThis;
+globalThis.document = { hidden: false, addEventListener: (e, fn) => { if (e === 'alpine:init') inits.push(fn); }, querySelector: () => null, getElementById: () => null, activeElement: null };
+globalThis.Alpine = { data: (n, f) => { reg[n] = f; }, store: (n, v) => { if (v !== undefined) stores[n] = v; return stores[n]; } };
+const local = { 'nassakh.bookView': 'grid', 'nassakh.bookView7': 'sheets' };
+globalThis.localStorage = { getItem: (k) => (k in local ? local[k] : null), setItem: (k, v) => { local[k] = String(v); } };
+globalThis.sessionStorage = { getItem: () => null, setItem: () => {} };
+const timers = []; globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; }; globalThis.clearTimeout = () => {};
+let now = 50000; Date.now = () => now;
+const listeners = {}; globalThis.addEventListener = (e, fn) => { listeners[e] = fn; }; globalThis.removeEventListener = () => {};
+const channels = []; globalThis.BroadcastChannel = class { constructor(n) { this.name = n; channels.push(this); } postMessage() {} close() {} };
+const fs = require('fs');
+for (const f of ['keys.js', 'stages.js', 'books.js']) eval(fs.readFileSync(`${process.argv[2]}/${f}`, 'utf8'));
+inits.forEach((fn) => fn());
+const changed = []; window.NassakhStages.changed = (book) => changed.push(book);
+const out = {};
+const cfg = (extra) => Object.assign({ bookId: 7, bookUrl: '/books/7/', progressUrl: '/api/books/7/progress/', status: 'ocr', active: true, total: 8, percent: 38, byStatus: { ocr_done: 3, layout_done: 5 }, stages: [{ key: 'ocr_done', statuses: ['ocr_done', 'reviewed', 'assembled'] }], editorUrls: { layout: '/books/7/layout/' } }, extra || {});
+const d = reg.bookDashboard(cfg());
+// the view per book: this book's own, a book never opened keeps the last one chosen anywhere
+out.view = [d.view, reg.bookDashboard(cfg({ bookId: 8 })).view];
+d.setView('grid');
+out.viewSaved = [local['nassakh.bookView7'], local['nassakh.bookView']];
+// the tile's address (a compact poll entry carries no primary_url)
+const p = (raw) => d.completePage(raw, null);
+out.primary = [p({ id: 1, number: 1, status: 'ocr_done', text_state: 'final' }).primary_url, p({ id: 2, number: 2, status: 'layout_done', text_state: 'provisional' }).primary_url, p({ id: 3, number: 3, status: 'ocr_done', text_state: 'final', is_excluded: true }).primary_url, p({ id: 4, number: 4, status: 'ocr_done', text_state: 'final', primary_url: '/x/' }).primary_url];
+// «?» opens the sheet (the Arabic layout's «؟» too), Esc closes it; the keys behind it wait
+out.keys = [d.keyAction({ key: '?', code: 'Slash', shiftKey: true }, false), d.keyAction({ key: '؟', code: 'Slash', shiftKey: true }, false), d.keyAction({ key: '?', code: 'Slash', shiftKey: true }, true)];
+d.$nextTick = (fn) => fn(); d.$refs = { sheetClose: { focus: () => { out.focused = 'close'; } } };
+d.onKey({ key: '?', code: 'Slash', shiftKey: true, target: { tagName: 'DIV' }, preventDefault() {} });
+const opened = d.sheetOpen;
+d.onKey({ key: 'Escape', target: { tagName: 'DIV' }, preventDefault() {} });
+out.sheet = [opened, d.sheetOpen];
+// D76: the status folded into the stage bar's current step
+out.patch = d.stagePatch;
+d.syncStage(); out.store = stores.stages.live.ocr;
+const idle = reg.bookDashboard(cfg({ active: false, status: 'reviewing' }));
+out.idle = idle.stagePatch;
+const failed = reg.bookDashboard(cfg({ active: false, status: 'error', errorHeadline: 'تعذّرت معالجة صفحة' }));
+out.failed = failed.stagePatch;
+const preparing = reg.bookDashboard(cfg({ guidesMode: true, layoutStage: true, status: 'processing', total: 7, percent: 43, byStatus: { preprocessed: 3, uploaded: 4 } }));
+preparing.syncStage(); out.preparing = [preparing.stagePatch, stores.stages.live.pages];
+// the «الكتاب» block links «عرض التغييرات» to the book page's changes tab
+out.changes = d.changesUrl;
+// the end of a run: the bar asks the server; the channel and the focus refresh the progress once (every 2 s)
+d.stopEffects = () => {}; d.refreshFilmSoon = () => {};
+d.onProcessingEnd(); out.changed = changed.slice();
+const live = reg.bookDashboard(cfg({ active: false, status: 'reviewing' }));
+let polls = 0; live.pollNow = () => { polls += 1; };
+live.bindLive();
+const ch = channels[channels.length - 1];
+ch.onmessage({ data: { type: 'review', book: 9, page: 1 } });
+ch.onmessage({ data: { type: 'review', book: 7, page: 1 } });
+listeners.focus();
+out.live = { polls, trailing: timers.length > 0 };
+now += 2500; listeners.focus();
+out.live.after = polls;
+d.doneToast.count = 8; preparing.doneToast.count = 7;
+out.doneText = [d.doneText, preparing.doneText];
+console.log(JSON.stringify(out));
+"""  # noqa: E501
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_dashboard_view_per_book_the_sheet_key_and_the_stage_bar_fold_under_node(tmp_path):
+    harness = tmp_path / "dash7c.js"
+    harness.write_text(DASH_7C, encoding="utf-8")
+    run = subprocess.run(
+        ["node", str(harness), str(ROOT / "static" / "src" / "js")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert run.returncode == 0, run.stderr[-4000:]
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    assert out["view"] == ["sheets", "grid"] and out["viewSaved"] == ["grid", "grid"]
+    assert out["primary"] == ["/books/7/review/1/", "/books/7/pages/2/", "/books/7/pages/3/", "/x/"]
+    assert (
+        out["keys"] == ["sheet", "sheet", None]
+        and out["sheet"] == [True, False]
+        and out["focused"] == "close"
+    )
+    assert out["patch"] == {
+        "state": "active",
+        "detail": "قيد المعالجة: 3 من 8",
+        "count": "3/8",
+        "percent": 38,
+    }
+    assert out["store"] == out["patch"] and out["idle"] is None
+    assert out["failed"] == {"state": "attention", "detail": "تعذّرت معالجة صفحة"}
+    preparing = {"state": "active", "detail": "قيد التخطيط: 3 من 7", "count": "3/7", "percent": 43}
+    assert out["preparing"] == [preparing, preparing]
+    assert out["changes"] == "/books/7/layout/?tab=changes"
+    assert out["changed"] == [7]
+    assert out["live"] == {"polls": 1, "trailing": True, "after": 2}
+    assert out["doneText"] == [
+        "اكتملت المعالجة · 8 صفحات",
+        "اكتمل التخطيط · 7 صفحات",
+    ]  # D77: the count helper

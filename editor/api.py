@@ -10,7 +10,15 @@ manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, 
 - POST /api/books/<id>/chapters/<cid>/reassemble/     `{replace_edited?}` → 202 run
                                                         (`assembly.services.run_payload`); over an edited text
                                                         without `replace_edited`: 409 `{detail, edited: true}`
-- GET  /api/books/<id>/drift/                         → `{edited, pages, chapters}` (`services.drift_of`, D70)
+- GET  /api/books/<id>/drift/                         → `{edited, pages, reasons, approvals, chapters,
+                                                        chapter_pages}` (`services.drift_of`, D70, D78)
+- GET  /api/books/<id>/review-changes/                → `{drift, plan, stale}` (`services.review_changes`)
+- POST /api/books/<id>/review-changes/                `{pages?} | {fix}` → 202 `{plan_id, status}`; 409
+                                                        `{detail, reassemble: true}` on an unedited text
+- POST /api/books/<id>/review-changes/<pid>/apply/    `{choices, pages, keep_all?}` → the apply's answer; 409
+                                                        `{detail, stale: true, pages}` when the plan is stale
+- POST /api/books/<id>/to-footnote/                   `{block, content}` → `{content, note, removed}` (D74:
+                                                        «تحويل إلى حاشية للعلامة (n)»; nothing is written)
 - POST /api/books/<id>/find-replace/                  `{chapter, query, replacement, match_tashkeel,
                                                         fold_alef, whole_word, replace, version?}`
 - POST /api/books/<id>/convert-digits/                `{chapter, style}` → `{changed, …}`
@@ -72,6 +80,12 @@ def _replace(data: dict) -> bool:
 
 
 def _refused(exc: services.EditorError) -> Response:
+    if isinstance(exc, services.PlanStale):
+        return Response(
+            {"detail": str(exc), "stale": True, "pages": exc.pages}, status=status.HTTP_409_CONFLICT
+        )
+    if isinstance(exc, services.NotEdited):
+        return Response({"detail": str(exc), "reassemble": True}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, services.EditorEdited):
         return Response({"detail": str(exc), "edited": True}, status=status.HTTP_409_CONFLICT)
     if isinstance(exc, services.ChapterConflict):
@@ -139,8 +153,66 @@ def review_drift(request: Request, book_id: int) -> Response:
     drift = services.drift_of(book_id)
     if drift is None:
         _book(book_id)  # 404 for a book that does not exist
-        return Response({"edited": False, "pages": [], "chapters": []})
+        return Response(services.drift_payload(services.NO_DRIFT))
     return Response(drift)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([EditorOrReadOnly])
+def review_changes(request: Request, book_id: int) -> Response:
+    """«تغييرات المراجعة» (D78): the drift and the newest plan (GET); POST starts a plan of the drift pages
+    (`pages` to limit it, `fix` for a «تصحيح في كل الكتاب» batch) and answers 202 `{plan_id, status}`."""
+    book = _book(book_id)
+    if request.method == "GET":
+        return Response(services.review_changes(book))
+    data = _data(request)
+    try:
+        plan = services.plan_review_changes(book, request.user, data.get("pages"), data.get("fix"))
+    except services.EditorError as exc:
+        return _refused(exc)
+    return Response({"plan_id": plan.pk, "status": plan.status}, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def review_changes_apply(request: Request, book_id: int, plan_id: int) -> Response:
+    """Take a plan's changes (`{choices, pages}`), or keep the book's text for them (`keep_all`)."""
+    from assembly.services import _parse_bool
+
+    book = _book(book_id)
+    data = _data(request)
+    try:
+        result = services.apply_review_changes(
+            book,
+            plan_id,
+            data.get("choices"),
+            data.get("pages"),
+            request.user,
+            keep_all=_parse_bool(data.get("keep_all")) is True,
+        )
+    except services.EditorError as exc:
+        return _refused(exc)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def to_footnote(request: Request, book_id: int) -> Response:
+    """«تحويل إلى حاشية للعلامة (n)»: the chapter the book page holds with the paragraph `block` turned into
+    the footnote of its call. Nothing is saved here; the page puts the answer in place (its undo) and
+    saves."""
+    from . import document as doc
+
+    _book(book_id)
+    data = _data(request)
+    try:
+        nodes = doc.clean_nodes(data.get("content"))
+        new_nodes, note = doc.paragraph_to_footnote(nodes, str(data.get("block") or ""))
+    except doc.DocumentError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        {"content": {"type": "doc", "content": new_nodes}, "note": note, "removed": str(data.get("block"))}
+    )
 
 
 @api_view(["POST"])

@@ -1,0 +1,274 @@
+{
+ "POST … while a plan is queued (idempotent)": {
+  "request": {},
+  "status": 202,
+  "response": {
+   "plan_id": 1,
+   "status": "queued"
+  }
+ },
+ "POST /api/books/40/review-changes/ {pages: [2, 3]}": {
+  "request": {
+   "pages": [
+    2,
+    3
+   ]
+  },
+  "status": 202,
+  "response": {
+   "plan_id": 3,
+   "status": "done"
+  }
+ },
+ "POST /api/books/40/review-changes/ {} (all drift pages)": {
+  "request": {},
+  "status": 202,
+  "response": {
+   "plan_id": 5,
+   "status": "done"
+  }
+ },
+ "POST …/apply/ after the text changed (stale version)": {
+  "request": {
+   "choices": {},
+   "pages": [
+    1
+   ]
+  },
+  "status": 409,
+  "response": {
+   "detail": "تغيّر نص الكتاب منذ المقارنة؛ أعد المقارنة.",
+   "stale": true,
+   "pages": []
+  }
+ },
+ "POST …/apply/ with a choice the item does not offer": {
+  "request": {
+   "choices": {
+    "i1": "merged"
+   },
+   "pages": [
+    1
+   ]
+  },
+  "status": 400,
+  "response": {
+   "detail": "اختيار غير معروف لأحد التغييرات."
+  }
+ },
+ "POST …/apply/ as a proofreader": {
+  "request": {
+   "choices": {},
+   "pages": [
+    1
+   ]
+  },
+  "status": 403,
+  "response": {
+   "detail": "هذا الإجراء يتطلب صلاحية محرّر."
+  }
+ },
+ "POST … as a proofreader": {
+  "request": {},
+  "status": 403,
+  "response": {
+   "detail": "هذا الإجراء يتطلب صلاحية محرّر."
+  }
+ },
+ "POST …/apply/ of another book's plan": {
+  "request": {
+   "choices": {},
+   "pages": [
+    1
+   ]
+  },
+  "status": 404,
+  "response": {
+   "detail": "المقارنة غير موجودة."
+  }
+ },
+ "POST …/apply/ of a plan still running": {
+  "request": {
+   "choices": {},
+   "pages": [
+    1
+   ]
+  },
+  "status": 400,
+  "response": {
+   "detail": "لم تكتمل المقارنة بعد."
+  }
+ },
+ "POST …/apply/ {pages: [2]} (one page: its items only; the approval-only pages come along)": {
+  "request": {
+   "choices": {},
+   "pages": [
+    2
+   ]
+  },
+  "status": 200,
+  "response": {
+   "version": 3,
+   "snapshot": 1,
+   "chapters": [
+    {
+     "id": "h40011",
+     "version": "8a2db766789e",
+     "title": "الفصل الأول"
+    }
+   ],
+   "reload": true,
+   "relayout": null,
+   "applied": {
+    "at": "2026-09-26T15:20:00.000000+00:00",
+    "taken": 0,
+    "merged": 1,
+    "kept": 1,
+    "pages": [
+     2,
+     6
+    ],
+    "written": true
+   }
+  }
+ },
+ "undo (the toast's «تراجع»): POST /api/books/40/snapshots/<snapshot>/restore/": {
+  "request": {},
+  "status": 200,
+  "response": {
+   "version": 4,
+   "snapshot": 2,
+   "restored": 1
+  }
+ },
+ "POST …/apply/ {keep_all: true} («الاحتفاظ بنصّي في الكل»: the baseline and the base move, the text is not written)": {
+  "request": {
+   "keep_all": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ]
+  },
+  "status": 200,
+  "response": {
+   "version": 4,
+   "snapshot": 3,
+   "chapters": [
+    {
+     "id": "h40011",
+     "version": "6d822582f9c7",
+     "title": "الفصل الأول"
+    }
+   ],
+   "reload": false,
+   "relayout": null,
+   "applied": {
+    "at": "2026-09-26T15:20:00.000000+00:00",
+    "taken": 0,
+    "merged": 0,
+    "kept": 7,
+    "pages": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "written": false
+   }
+  }
+ },
+ "POST …/apply/ after a page was reviewed again": {
+  "request": {
+   "choices": {},
+   "pages": [
+    1,
+    2
+   ]
+  },
+  "status": 409,
+  "response": {
+   "detail": "تغيّرت الصفحة 2 في المراجعة منذ المقارنة؛ أعد المقارنة.",
+   "stale": true,
+   "pages": [
+    2
+   ]
+  }
+ },
+ "POST /api/books/40/review-changes/<plan_id>/apply/ (the defaults, i3 on «المراجعة»)": {
+  "request": {
+   "choices": {
+    "i3": "theirs"
+   },
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ]
+  },
+  "status": 200,
+  "response": {
+   "version": 6,
+   "snapshot": 5,
+   "chapters": [
+    {
+     "id": "h40011",
+     "version": "9063d0f48d33",
+     "title": "الفصل الأول"
+    }
+   ],
+   "reload": true,
+   "relayout": null,
+   "applied": {
+    "at": "2026-09-26T15:20:00.000000+00:00",
+    "taken": 5,
+    "merged": 1,
+    "kept": 1,
+    "pages": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "written": true
+   }
+  }
+ },
+ "POST … on an unedited manuscript": {
+  "request": {},
+  "status": 409,
+  "response": {
+   "detail": "لم يُحرَّر نص الكتاب بعد؛ أعد التجميع، فلا يضيع شيء.",
+   "reassemble": true
+  }
+ },
+ "POST … before a manuscript exists": {
+  "request": {},
+  "status": 400,
+  "response": {
+   "detail": "لم تُجمَع مخطوطة هذا الكتاب بعد؛ اجمعها أولًا."
+  }
+ },
+ "POST /api/books/40/review-changes/ {fix: <batch>} (after the book page's «استبدال الكل»: the batch's pages, settled where no item is left)": {
+  "request": {
+   "fix": "6c1b9b52-0000-4000-8000-000000000001"
+  },
+  "status": 202,
+  "response": {
+   "plan_id": 10,
+   "status": "done"
+  }
+ }
+}

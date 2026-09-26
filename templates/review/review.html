@@ -6,19 +6,32 @@ Review screen (Phase 3, docs/PHASE3_SPEC.md §4). Context: book, page, prev_url,
 the `reviewScreen` component in static/src/js/review.js; styles in static/src/components/review.css.
 {% endcomment %}
 {% block head_title %}مراجعة · صفحة {{ page.number }} · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}<span class="title-page">مراجعة</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current="review" %}{% endblock %}
 
 {% block header_actions %}
 <div class="rv-bar" x-data="reviewBar">
   <template x-if="b">
     <div class="rv-bar-inner">
-      <a class="btn btn-ghost btn-sm rv-bar-dash" :href="b.dashboardUrl" x-show="b.dashboardUrl">لوحة الكتاب</a>
+      {# D76 (§5.3): review opened from the book page, the manuscript or the export page leads back there («‹ الكتاب») #}
+      <template x-if="b.back">
+        <a class="btn btn-ghost btn-sm rv-bar-back" :href="b.back.url" :title="'العودة إلى ' + b.back.label" :aria-label="'العودة إلى ' + b.back.label" data-back-link>
+          <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
+          <span x-text="b.back.label"></span>
+        </a>
+      </template>
 
+      {# G (§5.8) turns the count into a jump field: a page number, Enter to go, Esc to leave #}
       <div class="rv-pager" role="group" aria-label="التنقّل بين الصفحات">
         <button type="button" class="btn-icon btn-icon-sm" title="الصفحة السابقة (→)" aria-label="الصفحة السابقة" :disabled="!b.hasPrev" @click="act('goPrevPage')">
           <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
         </button>
-        <span class="rv-pager-count meta">صفحة <bdi class="num" x-text="b.number"></bdi> من <bdi class="num" x-text="b.total"></bdi></span>
+        <span class="rv-pager-count meta" x-show="!b.jumping" title="الانتقال إلى صفحة (G)">صفحة <bdi class="num" x-text="b.number"></bdi> من <bdi class="num" x-text="b.total"></bdi></span>
+        <label class="rv-jump" x-show="b.jumping" x-cloak>
+          <span class="sr-only">الانتقال إلى صفحة</span>
+          <input type="text" inputmode="numeric" dir="ltr" class="input rv-jump-input" id="rv-jump" autocomplete="off" :placeholder="b.number + ' / ' + b.total" aria-label="الانتقال إلى صفحة"
+                 @keydown.enter.prevent="act('jumpTo', $el.value); $el.value = ''" @keydown.escape.stop.prevent="$el.value = ''; act('endJump')" @blur="$el.value = ''; act('endJump')">
+        </label>
         <button type="button" class="btn-icon btn-icon-sm" title="الصفحة التالية (←)" aria-label="الصفحة التالية" :disabled="!b.hasNext" @click="act('goNextPage')">
           <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
         </button>
@@ -40,6 +53,19 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
       <button type="button" class="btn-icon rv-help" title="اختصارات لوحة المفاتيح (?)" aria-label="اختصارات لوحة المفاتيح" @click="act('openSheet')"><span aria-hidden="true">?</span></button>
 
+      {# «⋯» (§5.4): the page's technical details, for editors #}
+      <div class="menu-anchor" x-data="{ open: false }" x-show="b.detailUrl" @keydown.escape.window="open = false">
+        <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
+          <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
+        </button>
+        <div class="menu menu-popover rv-bar-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
+          <a class="menu-item" role="menuitem" :href="b.detailUrl" data-detail-link>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+            <span>تفاصيل المعالجة</span>
+          </a>
+        </div>
+      </div>
+
       <template x-if="b.reviewed">
         <span class="rv-reviewed">
           <span class="rv-reviewed-mark" aria-hidden="true"><svg class="icon icon-sm"><use href="#i-check"/></svg></span>
@@ -57,9 +83,10 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
 {% block content %}
 {{ config|json_script:"review-config" }}
-<div class="review-screen" x-data="reviewScreen(JSON.parse(document.getElementById('review-config').textContent))"
+<div class="review-screen" data-rail x-data="reviewScreen(JSON.parse(document.getElementById('review-config').textContent))"
      :class="{ 'is-swapped': swapped, 'is-readonly': !canEdit, 'is-loading': loading }"
      @keydown.window="onKey($event)" @resize.window.debounce.100ms="repositionPop()">
+  <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
 
   {# before Alpine boots: a quiet skeleton, hidden the moment the component mounts #}
   <div class="rv-boot" x-show="false" aria-hidden="true">
@@ -73,8 +100,8 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
     <section class="rv-pane rv-scan-pane" aria-label="صورة الصفحة">
       <div class="rv-toolbar">
         <div class="segmented" role="tablist" aria-label="عرض الصورة">
-          <button type="button" role="tab" :aria-selected="tab === 'display'" :class="{ 'is-selected': tab === 'display' }" @click="setTab('display')">المعالَجة</button>
-          <button type="button" role="tab" :aria-selected="tab === 'scan'" :class="{ 'is-selected': tab === 'scan' }" :disabled="!hasScan" @click="setTab('scan')">الأصل</button>
+          <button type="button" role="tab" :aria-selected="tab === 'display'" :class="{ 'is-selected': tab === 'display' }" @click="setTab('display')" title="الصورة المعالَجة (O)">المعالَجة</button>
+          <button type="button" role="tab" :aria-selected="tab === 'scan'" :class="{ 'is-selected': tab === 'scan' }" :disabled="!hasScan" @click="setTab('scan')" title="صورة الأصل (O)">الأصل</button>
         </div>
         <div class="rv-toolbar-end">
           <div class="rv-zoom" role="group" aria-label="التكبير">
@@ -86,7 +113,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
             <button type="button" :aria-pressed="fit === 'height'" @click="setFit('height')" title="ملاءمة الارتفاع: الصفحة كاملة">الارتفاع</button>
             <button type="button" :aria-pressed="fit === 'width'" @click="setFit('width')" title="ملاءمة العرض: عرض الصفحة كاملًا">العرض</button>
           </div>
-          <button type="button" class="btn-icon btn-icon-sm" :aria-pressed="swapped" title="تبديل جهتَي الصورة والنص" aria-label="تبديل جهتَي الصورة والنص" @click="toggleSwap()">
+          <button type="button" class="btn-icon btn-icon-sm" :aria-pressed="swapped" title="تبديل جهتَي الصورة والنص (V)" aria-label="تبديل جهتَي الصورة والنص" @click="toggleSwap()">
             <svg class="icon" aria-hidden="true"><path d="M7 8h13M17 5l3 3-3 3"/><path d="M17 16H4M7 13l-3 3 3 3"/></svg>
           </button>
         </div>
@@ -135,7 +162,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
           </span>
         </div>
         <div class="rv-toolbar-end">
-          <button type="button" class="btn btn-ghost btn-sm" x-show="ready && lines.length" x-cloak @click="copyPage()" aria-label="نسخ نص الصفحة">
+          <button type="button" class="btn btn-ghost btn-sm" x-show="ready && lines.length" x-cloak @click="copyPage()" aria-label="نسخ نص الصفحة" title="نسخ نص الصفحة (C)">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
             <span>نسخ</span>
           </button>
@@ -153,8 +180,37 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
           <span class="grow">عرض فقط: حسم الكلمات وتعديل الأسطر متاحان للمدقّقين والمحرّرين.</span>
         </div>
 
+        {# D78 (§5.6): on an edited book a review change reaches the book page through «تغييرات المراجعة» #}
+        <p class="rv-edited-note meta" x-show="ready && !after && book.edited" x-cloak data-edited-note>يُحرَّر هذا الكتاب في «الكتاب»؛ تصله تغييرات هذه الصفحة من «تغييرات المراجعة».</p>
+
+        {# D76 (§5.3): after «اعتماد الصفحة». Opened from the book page (the detour) the next page does not slide in: #}
+        {# the pane offers the way back first. With no page left to review, the end panel names the next step. #}
+        <div class="rv-after" x-show="after" x-cloak data-after :data-kind="after ? after.kind : ''">
+          <template x-if="after && after.kind === 'detour'">
+            <div class="rv-after-card" role="status">
+              <p class="rv-after-title"><span class="rv-after-mark" aria-hidden="true"><svg class="icon icon-sm"><use href="#i-check"/></svg></span><span x-text="'اعتُمدت الصفحة ' + after.number + '.'"></span></p>
+              <div class="rv-after-actions">
+                <a class="btn btn-primary btn-sm" :href="after.backUrl" x-ref="afterPrimary" data-after-back>العودة إلى الكتاب</a>
+                <button type="button" class="btn btn-sm" x-show="after.hasNext" @click="leaveAfter(); goNextReview()" data-after-next>الصفحة التالية للمراجعة</button>
+              </div>
+            </div>
+          </template>
+          <template x-if="after && after.kind === 'end'">
+            <div class="rv-after-card rv-end" role="status" data-end-panel>
+              <p class="rv-after-title"><span class="rv-after-mark" aria-hidden="true" x-show="after.done"><svg class="icon icon-sm"><use href="#i-check"/></svg></span><span x-text="after.heading"></span></p>
+              <p class="rv-after-meta meta" x-show="after.summary" x-text="after.summary"></p>
+              <p class="rv-after-step" x-show="after.step"><span class="rv-after-label">الخطوة التالية:</span> <span x-text="after.step"></span></p>
+              <p class="rv-after-text" x-show="after.text" x-text="after.text"></p>
+              <div class="rv-after-actions">
+                <a class="btn btn-primary btn-sm" :href="after.url" x-show="after.url" x-ref="afterPrimary" x-text="after.button" data-end-primary></a>
+                <button type="button" class="btn btn-ghost btn-sm" @click="leaveAfter()" x-text="after.stay" data-end-stay>البقاء في المراجعة</button>
+              </div>
+            </div>
+          </template>
+        </div>
+
         {# D73: one reader (or Tesseract alone): the marks undercount, so every line is read against the scan #}
-        <div class="banner rv-note rv-readers-note" :class="readersInfo && readersInfo.tone === 'danger' ? 'banner-danger' : ''" x-show="ready && !loading && readersInfo" x-cloak role="note" data-readers-banner>
+        <div class="banner rv-note rv-readers-note" :class="readersInfo && readersInfo.tone === 'danger' ? 'banner-danger' : ''" x-show="ready && !loading && !after && readersInfo" x-cloak role="note" data-readers-banner>
           <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
           <span class="grow" x-text="readersInfo ? readersInfo.banner : ''"></span>
         </div>
@@ -163,10 +219,10 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <div class="rv-state rv-state-error empty-state" x-show="isError" x-cloak role="alert">
           <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
           <h3 class="empty-title" x-text="errorHeadline"></h3>
-          <p class="empty-text">لا نصّ للمراجعة حتى تُعاد المرحلة المتعطّلة<span x-show="page.error_from"> (<span x-text="page.error_from"></span>)</span> من لوحة الكتاب.</p>
+          <p class="empty-text">لا نصّ للمراجعة حتى تُعاد المرحلة المتعطّلة<span x-show="page.error_from"> (<span x-text="page.error_from"></span>)</span> في «المعالجة».</p>
           <a class="btn" :href="nav.dashboard_url">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-            <span>فتح لوحة الكتاب لإعادة المرحلة</span>
+            <span>العودة إلى المعالجة</span>
           </a>
         </div>
 
@@ -187,7 +243,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         </div>
 
         {# the lines #}
-        <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading" x-cloak>
+        <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading && !after" x-cloak>
 
           {% comment %}The word popover (D31/D32, D71/D72): one of three kinds (popKind). A word: why it is marked (the reason
           line), its readings with the one in the text marked «● في النص» (Enter confirms it), the correction (the main
@@ -262,6 +318,12 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
                     <span class="rv-act-label">دمج مع السابقة</span>
                     <bdi class="rv-act-preview" x-text="mergePreview(-1)"></bdi>
                     <span class="rv-act-keys"><kbd class="kbd">Alt</kbd><kbd class="kbd">→</kbd></span>
+                  </button>
+                  <div class="rv-pop-sep" aria-hidden="true"></div>
+                  {# D79 (§5.7): the word in every place of the book, one batch, one undo #}
+                  <button type="button" class="rv-act" role="menuitem" @click="openFix()" title="تصحيح الكلمة في كل مواضعها في الكتاب (⌥F)" data-fix-open>
+                    <span class="rv-act-label">تصحيح في كل الكتاب…</span>
+                    <span class="rv-act-keys"><kbd class="kbd">⌥</kbd><kbd class="kbd">F</kbd></span>
                   </button>
                   <div class="rv-pop-sep" aria-hidden="true"></div>
                   <button type="button" class="rv-act rv-act-danger" role="menuitem" @click="deleteWord()" title="حذف الكلمة (⌫)">
@@ -386,7 +448,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
   <nav class="rv-film" aria-label="شريط الصفحات" x-ref="film">
     <div class="rv-film-track" x-show="film.state === 'ready'" x-cloak>
       <template x-for="p in film.items" :key="p.number">
-        <a class="rv-thumb" :href="p.url" :class="{ 'is-current': p.number === page.number, 'is-reviewed': p.is_reviewed, 'is-pending': !p.is_reviewed && p.status !== 'ocr_done' }"
+        <a class="rv-thumb" :href="filmHref(p)" :class="{ 'is-current': p.number === page.number, 'is-reviewed': p.is_reviewed, 'is-pending': !p.is_reviewed && p.status !== 'ocr_done' }"
            :aria-current="p.number === page.number ? 'page' : null" :title="thumbTitle(p)" @click.prevent="goTo(p)">
           <span class="rv-thumb-img" :style="thumbAspect"><img :src="p.thumb_url" alt="" loading="lazy" decoding="async" x-show="p.thumb_url"></span>
           <span class="rv-thumb-num num" x-text="p.number"></span>
@@ -402,13 +464,72 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
     </div>
   </nav>
 
-  {# ------------------------------------------------------------ undo toast (delete) #}
-  <div class="toast rv-toast" x-show="undoToast" x-cloak x-transition.opacity.duration.200ms role="status" aria-live="polite">
-    <span class="grow" x-text="undoToast && undoToast.message"></span>
-    <button type="button" class="btn" @click="undo()">تراجع</button>
+  {# ------------------------------------------------------------ undo toast (a delete, a correction, a fix everywhere) #}
+  {# a correction whose form occurs elsewhere carries the chip «159 موضعًا آخر… · تصحيحها…» (D79); a fix everywhere #}
+  {# names the places it left, and on an edited book leads to the book page's find & replace, pre-filled #}
+  <div class="toast rv-toast" :class="{ 'has-more': undoToast && (undoToast.elsewhere || undoToast.detail || undoToast.link) }" x-show="undoToast" x-cloak x-transition.opacity.duration.200ms role="status" aria-live="polite">
+    <div class="rv-toast-body grow">
+      <span x-text="undoToast && undoToast.message"></span>
+      <span class="rv-toast-detail" x-show="undoToast && undoToast.detail" x-text="undoToast && undoToast.detail"></span>
+      <a class="rv-toast-link" x-show="undoToast && undoToast.link" :href="undoToast && undoToast.link ? undoToast.link.url : null" x-text="undoToast && undoToast.link ? undoToast.link.label : ''" data-find-link></a>
+      <button type="button" class="rv-toast-chip" x-show="undoToast && undoToast.elsewhere" @click="openElsewhere()" data-elsewhere>
+        <span x-text="undoToast && undoToast.elsewhere ? undoToast.elsewhere.text : ''"></span> · <span class="rv-toast-chip-act">تصحيحها…</span>
+      </button>
+    </div>
+    <button type="button" class="btn" @click="undoFromToast()">تراجع</button>
     <button type="button" class="toast-close" aria-label="إغلاق" @click="undoToast = null">
       <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
+  </div>
+
+  {# ------------------------------------------------------------ «تصحيح في كل الكتاب» (D79, §5.7) #}
+  <div class="rv-scrim" x-show="fix.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeFix()">
+    <div class="rv-modal rv-fix" role="dialog" aria-modal="true" aria-labelledby="rv-fix-title" @keydown="onFixKey($event)" @keydown.tab="trapTab($event, $el)" data-fix-sheet>
+      <div class="rv-modal-head">
+        <h2 class="rv-modal-title" id="rv-fix-title">تصحيح في كل الكتاب</h2>
+        <button type="button" class="btn-icon" aria-label="إغلاق" @click="closeFix()">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <div class="rv-fix-words">
+        <label class="rv-fix-to">
+          <span class="sr-only">التصحيح</span>
+          <input class="input" type="text" x-ref="fixTo" x-model="fix.to" dir="auto" autocomplete="off" spellcheck="false" placeholder="التصحيح…" aria-label="التصحيح">
+        </label>
+        <span class="rv-fix-arrow" aria-hidden="true">←</span>
+        <bdi class="rv-fix-from" x-text="'«' + fix.from + '»'"></bdi>
+      </div>
+      <div class="rv-fix-options" role="group" aria-label="خيارات البحث">
+        <label class="check"><input type="checkbox" :checked="fix.options.fold_alef" @change="setFixOption('fold_alef')"><span>توحيد صور الألف</span></label>
+        <label class="check"><input type="checkbox" :checked="fix.options.whole_word" @change="setFixOption('whole_word')"><span>كلمة كاملة</span></label>
+        <label class="check"><input type="checkbox" :checked="fix.options.match_tashkeel" @change="setFixOption('match_tashkeel')"><span>مطابقة التشكيل</span></label>
+      </div>
+      <p class="rv-fix-count meta" aria-live="polite" x-text="fixCountText"></p>
+      <p class="rv-fix-error" role="alert" x-show="fix.error" x-text="fix.error"></p>
+      <div class="rv-fix-list" x-show="fix.loading || fix.results.length">
+        <div class="rv-skeleton rv-fix-skeleton" x-show="fix.loading" aria-hidden="true"><span style="width:84%"></span><span style="width:72%"></span><span style="width:90%"></span></div>
+        <template x-for="p in (fix.loading ? [] : fix.results)" :key="'fp' + p.number">
+          <section class="rv-fix-page">
+            <h3 class="rv-fix-page-head"><span>ص <bdi class="num" x-text="p.number"></bdi></span><span class="meta" x-show="p.approved"> · مُعتمَدة</span></h3>
+            <ul class="rv-fix-rows">
+              <template x-for="o in (p.lines || [])" :key="fixKey(o)">
+                <li class="rv-fix-row" :id="'rv-fix-row-' + fixRowIndex(o)" tabindex="-1" :class="{ 'is-cursor': fixRowIndex(o) === fix.cursor, 'is-off': !picked(o) }" @click="fix.cursor = fixRowIndex(o)">
+                  <input type="checkbox" class="rv-fix-check" :checked="picked(o)" @change="togglePick(o)" :aria-label="'تصحيح الموضع في الصفحة ' + p.number">
+                  <span class="rv-fix-crop" dir="ltr" aria-hidden="true" x-show="cropBox(o, p)" :style="cropBox(o, p)"><span class="rv-fix-word" :style="cropWord(o, p)"></span></span>
+                  <span class="rv-fix-context"><span x-text="o.before ? '…' + o.before + ' ' : '…'"></span><mark x-text="o.word"></mark><span x-text="o.after ? ' ' + o.after + '…' : '…'"></span></span>
+                  <span class="rv-fix-note meta" x-show="fixNote(o)" x-text="fixNote(o)"></span>
+                </li>
+              </template>
+            </ul>
+          </section>
+        </template>
+      </div>
+      <p class="meta rv-fix-more" x-show="fix.truncated">تُعرض أول 2000 موضع؛ ضيّق البحث لترى الباقي.</p>
+      <div class="rv-modal-actions">
+        <button type="button" class="btn" @click="closeFix()">إلغاء</button>
+        <button type="button" class="btn btn-primary btn-sm rv-fix-apply" :disabled="fix.busy || fix.loading || !fixPicked" @click="applyFix()" x-text="fixButton" data-fix-apply>تصحيح</button>
+      </div>
+    </div>
   </div>
 
   {# ------------------------------------------------------------ approve with unresolved words #}
@@ -447,6 +568,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">⌫</kbd></dt><dd>حذف الكلمة؛ على موضع كلمات ناقصة: تجاهل الكلمات المقترحة</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إغلاق القائمة، ويبقى التحديد على الكلمة</dd>
         <dt><kbd class="kbd">⌘↵</kbd></dt><dd>اعتماد الصفحة</dd>
+        <dt><kbd class="kbd">⌥F</kbd></dt><dd>تصحيح في كل الكتاب: الكلمة في كل مواضعها</dd>
         <dt><span class="group-label">في الصفحة</span></dt><dd></dd>
         <dt><span class="meta">نقرة على كلمة</span> / <kbd class="kbd">Space</kbd></dt><dd>قائمة الكلمة: القراءات والتصحيح، وفي «إجراءات أخرى» الدمج والحذف</dd>
         <dt><span class="meta">قائمة السطر «⋯»</span></dt><dd>نوع السطر: محتوى، عنوان رئيسي، عنوان فرعي، شعر، حاشية</dd>
@@ -454,9 +576,13 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <dt><kbd class="kbd">A</kbd></dt><dd>اعتماد الصفحة</dd>
         <dt><kbd class="kbd">E</kbd></dt><dd>تعديل السطر الحالي</dd>
         <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية بانتظار المراجعة</dd>
+        <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة برقمها</dd>
         <dt><kbd class="kbd">←</kbd> / <kbd class="kbd">→</kbd></dt><dd>الصفحة التالية / السابقة</dd>
         <dt><kbd class="kbd">Home</kbd> / <kbd class="kbd">End</kbd></dt><dd>أول صفحة / آخر صفحة</dd>
         <dt><kbd class="kbd">+</kbd> <kbd class="kbd">−</kbd> <kbd class="kbd">0</kbd></dt><dd>تكبير الصورة، تصغيرها، العودة إلى <span x-text="fitLabel"></span></dd>
+        <dt><kbd class="kbd">O</kbd></dt><dd>الصورة المعالَجة / الأصل</dd>
+        <dt><kbd class="kbd">V</kbd></dt><dd>تبديل جهتَي الصورة والنص</dd>
+        <dt><kbd class="kbd">C</kbd></dt><dd>نسخ نص الصفحة</dd>
         <dt><kbd class="kbd">⌥Enter</kbd></dt><dd>إدراج سطر بعد السطر الحالي</dd>
         <dt><kbd class="kbd">⌘Z</kbd></dt><dd>تراجع</dd>
         <dt><kbd class="kbd">Esc</kbd></dt><dd>إلغاء التحرير</dd>

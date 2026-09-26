@@ -18,13 +18,13 @@ Western digits (`assembly.render.ar_count`).
 - `stray_notes` (warn): body paragraphs that look like footnotes left in the text: a paragraph of one
   source page whose text starts with a note marker («(n)», «[n]» with n from 1 to 15, or «*») followed
   by text, at most 80 words, in the run of such paragraphs that ends its page (a run that is not the
-  whole page) → «عرض» (the book page on the first one's chapter, `?chapter=`: the book page does not
-  take a block yet);
+  whole page) → «عرض» (the book page on the first one, `?block=`: it opens on its chapter, lands on its
+  page and lights it, 7c);
 - `missing_text` (warn, D75): pages of the book (those its assembly run included; every page not
   excluded before the first run) with an open suggestion of words a model may have skipped (an open
   `ocr.TextGap`, D72) → «المراجعة»;
 - `review_drift` (warn): pages whose text changed in review after the manuscript was built
-  (`editor.services.review_drift`) → «الكتاب»;
+  (`editor.services.review_drift`) → «تغييرات المراجعة» (`?tab=changes`, D78);
 - `assembly_running` (warn): an assembly of the book is queued or running;
 - `single_reader` (info, D75): pages of the book that one model read (`Page.reading.readers` is `one`,
   or `tesseract` when the page's text is Tesseract's alone; a page read before 7b, `{}`, is not counted)
@@ -76,6 +76,7 @@ REVIEW_LABEL = "المراجعة"
 PROCESSING_LABEL = "المعالجة"
 SHOW_LABEL = "عرض"
 BOOK_LABEL = "الكتاب"
+CHANGES_LABEL = "تغييرات المراجعة"
 DETAILS_LABEL = "بيانات الكتاب"
 FONTS_LABEL = "الخطوط"
 
@@ -345,6 +346,11 @@ def stray_notes(document) -> list[StrayNote]:
     return sorted(found, key=lambda note: note.index)
 
 
+def block_url(book_id: int, block_id: str) -> str:
+    """The book page on a block (`?block=`, 7c): it opens on the block's chapter and lights it."""
+    return f"{layout_url(book_id)}?{urlencode({'block': block_id})}" if block_id else layout_url(book_id)
+
+
 def chapter_url(book_id: int, document, index: int) -> str:
     """The book page on the chapter holding the document's top-level node `index` (`?chapter=`)."""
     from editor import document as doc
@@ -370,7 +376,7 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
     from .preview import stylesheet_for
 
     if manuscript is None:
-        manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
+        manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").defer("base").first()
     if manuscript is None:
         return []
     setup = setup if setup is not None else page_setup(stylesheet_for(book))
@@ -400,7 +406,7 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
     strays = stray_notes(document)
     if strays:
         message = stray_notes_message(len(strays), strays[0].marker, sorted({note.page for note in strays}))
-        show = {"label": SHOW_LABEL, "url": chapter_url(book.pk, document, strays[0].index)}
+        show = {"label": SHOW_LABEL, "url": block_url(book.pk, strays[0].block)}
         rows.append(row("stray_notes", WARN, message, show))
     trust = trust_pages(book, manuscript)
     if trust.missing_text:
@@ -411,7 +417,10 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
         pages = ar_count(len(drift["pages"]), PAGES_OF)
         rows.append(
             row(
-                "review_drift", WARN, f"تغيّر نص {pages} في المراجعة بعد التحرير.", action(BOOK_LABEL, book.pk)
+                "review_drift",
+                WARN,
+                f"تغيّر نص {pages} في المراجعة بعد التحرير.",
+                action(CHANGES_LABEL, book.pk, "changes"),
             )
         )
 

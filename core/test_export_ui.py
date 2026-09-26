@@ -84,10 +84,9 @@ def test_export_page_shell_top_bar_and_config():
     config = _fixture("page")
     body = _render(config)
     assert 'lang="ar" dir="rtl"' in body and "<title>الإخراج · كتابي · نسّاخ</title>" in body
-    assert (
-        '<span class="title-page">الإخراج</span><span class="title-sep" aria-hidden="true">·</span>'
-        '<span class="title-main">كتابي</span>' in body
-    )
+    # D76 (PHASE7 §5.1): the h1 holds the title only; «الإخراج» is the stage bar's current step
+    assert '<h1 class="page-title">كتابي</h1>' in body
+    assert 'data-stage-bar data-rail data-current="export"' in body and "data-export-page data-rail" in body
     assert _json_script(body, "export-config") == config
     assert "x-data=\"exportPage(JSON.parse(document.getElementById('export-config').textContent))\"" in body
     assert (
@@ -95,15 +94,14 @@ def test_export_page_shell_top_bar_and_config():
     )
     assert 'role="status" aria-live="polite" x-text="live"' in body
     assert "src/js/export.js" in body
-    # the top bar: the poll pills, a ghost «الكتاب» back to the book page, «⋯» (الكتاب، المخطوطة | لوحة
-    # الكتاب)
+    # the top bar: the poll pills and «⋯» (الكتاب، المخطوطة); the ghost «الكتاب» and «لوحة الكتاب» are
+    # retired: the stage bar leads to every step (§5.2)
     bar = _between(body, '<div class="lo-bar"', "</header>")
     assert 'x-data="exportBar"' in bar
     assert "تعذّر التحديث · إعادة المحاولة" in bar and "انتهت الجلسة · تسجيل الدخول" in bar
-    assert 'class="btn btn-ghost btn-sm" href="/books/19/layout/"' in bar and "<span>الكتاب</span>" in bar
+    assert "data-back-link" not in bar and "لوحة الكتاب" not in body
     menu = _between(bar, "data-export-menu", "</div>\n    </div>")
     assert menu.index("/books/19/layout/") < menu.index("/books/19/manuscript/")
-    assert menu.index("المخطوطة") < menu.index('class="menu-sep"') < menu.index("لوحة الكتاب")
     assert (
         '@keydown.escape.window="open = false"' in bar
         and '@keydown.arrow-down.prevent="moveIn($el, 1)"' in bar
@@ -141,7 +139,8 @@ def test_readiness_rows_with_their_links():
     assert ":href=\"'#' + levelIcon(r.level)\"" in block and 'x-text="r.message"' in block
     # the link to the fix on the end side, with a mirrored chevron
     assert '<template x-if="r.action && r.action.url">' in block
-    assert '<a class="link ex-fix" :href="r.action.url"><span x-text="r.action.label"></span>' in block
+    # a fix in review carries `from=export`, so review leads back here (D76, §5.3: `fixUrl`)
+    assert '<a class="link ex-fix" :href="fixUrl(r)"><span x-text="r.action.label"></span>' in block
     assert 'class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/>' in block
 
 
@@ -267,7 +266,7 @@ def test_read_only_view_and_the_page_without_a_manuscript():
     # no manuscript: the empty state, the manuscript to open, no component
     body = _render(_fixture("page-empty"))
     assert "لا كتاب للإخراج بعد" in body and "data-export-page" not in body
-    assert "حوّل الكتاب إلى مخطوطة وافتحه في صفحة الكتاب أولًا؛ من هنا يُخرَج بعد ذلك ملف Word." in body
+    assert "اجمع مخطوطة الكتاب أولًا، ثم افتحه في «الكتاب»؛ من هنا تُخرَج بعد ذلك ملفاته." in body
     assert '<a class="btn btn-primary" href="/books/21/manuscript/">فتح المخطوطة</a>' in body
     assert '<use href="#i-download"/>' in body and 'x-data="exportBar"' in body
 
@@ -363,7 +362,9 @@ def test_the_book_page_top_bar_and_menu_lead_to_the_export_page(fake, book):
     menu = _between(body, "data-book-menu", "</template>")
     assert "PDF المعاينة" in menu and "إخراج PDF" not in menu  # the preview's PDF, renamed (§8.2)
     nav = menu[menu.index('class="menu-sep"') :]
-    assert nav.index(f'href="{url}" data-export-menu-item') < nav.index("المخطوطة") < nav.index("لوحة الكتاب")
+    assert (
+        nav.index(f'href="{url}" data-export-menu-item') < nav.index("المخطوطة") and "لوحة الكتاب" not in body
+    )
 
 
 def test_the_book_page_passes_the_tab_asked_for(fake, book):
@@ -388,7 +389,7 @@ def test_the_dashboard_and_the_manuscript_menus_offer_the_export_page(fake, book
     manuscript = client.get(reverse("assembly:manuscript", args=[book.pk])).content.decode()
     item = _between(manuscript, f'href="{url}"', "</a>")
     assert 'x-show="v.hasDocument" data-export-menu-item' in item and "<span>الإخراج</span>" in item
-    assert manuscript.index(f'href="{url}"') < manuscript.index("<span>لوحة الكتاب</span>")
+    assert "لوحة الكتاب" not in manuscript  # D77: retired; the stage bar leads to «المعالجة»
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")

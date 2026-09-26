@@ -18,7 +18,8 @@ class LineRevision(models.Model):
     status fields and the lines' `is_reviewed` values. `undone` marks a revision reverted by undo
     (or made obsolete by a new OCR pass). A `gap` revision records a suggestion decided without a line
     change (`before` / `after` hold the gap's status); `accept_gap` records an `edit` whose `after`
-    carries `{"gap": id}` so undo reopens the gap.
+    carries `{"gap": id}` so undo reopens the gap. A `fix` revision is one line's share of «تصحيح في كل
+    الكتاب» (D79, `review.corrections`): its lines share one `batch` across pages.
     """
 
     class Action(models.TextChoices):
@@ -32,6 +33,7 @@ class LineRevision(models.Model):
         APPROVE = "approve", "اعتماد"
         REOPEN = "reopen", "إعادة فتح"
         GAP = "gap", "نص مقترح"
+        FIX = "fix", "تصحيح في الكتاب"
 
     page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="revisions")
     line = models.ForeignKey(

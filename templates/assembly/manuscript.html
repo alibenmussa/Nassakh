@@ -12,14 +12,13 @@ The document host is x-ignore: the fragment is static markup, hover / focus / cl
 One floating element (.ms-pop) serves the block menu, the seam menu and the footnote: at most one is open.
 {% endcomment %}
 {% block head_title %}المخطوطة · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}<span class="title-page">المخطوطة</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current="manuscript" %}{% endblock %}
 
 {% block header_actions %}
 <div class="ms-bar" x-data="manuscriptBar">
   <template x-if="v">
     <div class="ms-bar-inner">
-      <a class="btn btn-ghost btn-sm ms-bar-dash" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
-
       {# status pill (= rv-save): assembled … ago, assembling, stale, failed #}
       <span class="ms-pill" :class="'is-' + v.pill.state" role="status" aria-live="polite" x-show="v.pill.text">
         <span class="ms-pill-dot" aria-hidden="true"></span>
@@ -36,7 +35,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
       </button>
       <button type="button" class="btn btn-primary btn-sm" x-show="v.primary === 'convert'" @click="v.openConvert()" :aria-expanded="v.convert.open" aria-haspopup="dialog">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
-        <span>تحويل إلى كتاب</span>
+        <span>تجميع المخطوطة</span>
       </button>
       {% endif %}
       <a class="btn btn-primary btn-sm" x-show="v.primary === 'book'" :href="v.bookUrl" data-book-open title="صفحات الكتاب: تنسيقه وتحرير نصّه على صفحاته">
@@ -44,7 +43,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
       </a>
 
-      {# «⋯» menu: the assembly options, re-assemble, the keyboard, the dashboard #}
+      {# «⋯» menu: the assembly options, re-assemble, the keyboard, the export page (the stage bar has every step) #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
         <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
@@ -70,10 +69,6 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-download"/></svg>
             <span>الإخراج</span>
           </a>
-          <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
-            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-            <span>لوحة الكتاب</span>
-          </a>
         </div>
       </div>
 
@@ -87,7 +82,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
 
 {% block content %}
 {{ config|json_script:"manuscript-config" }}
-<div class="ms-screen" data-manuscript x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
+<div class="ms-screen" data-manuscript data-rail x-data="manuscriptView(JSON.parse(document.getElementById('manuscript-config').textContent))"
      :class="{ 'is-assembling': phase === 'assembling', 'has-drawer': drawer.open, 'hide-seams': !seams, 'is-busy': busy, 'is-edited': edited, 'is-reader': !canReview }"
      @keydown.window="onKey($event)" @resize.window.debounce.100ms="onResize()" @scroll.window.passive="onScroll()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
@@ -118,7 +113,11 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
   <div class="ms-banners">
     <div class="banner ms-edited" x-show="edited && !active" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
-      <span class="grow" x-text="editedText"></span>
+      <span class="grow">
+        <span x-text="editedText"></span>
+        {# D78 (§5.6): the pages review changed after the edit are taken on the book page #}
+        <span class="ms-edited-drift" x-show="editedDriftText" data-edited-drift><span x-text="editedDriftText"></span> <a class="link" :href="changesUrl" x-show="changesUrl">عرض التغييرات</a></span>
+      </span>
     </div>
     <div class="banner ms-stale" x-show="stale && !edited" x-cloak>
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
@@ -161,10 +160,10 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
     <p class="ms-convert-error" role="alert" x-show="convert.error" x-text="convert.error"></p>
     <button type="button" class="btn btn-primary" @click="submitConvert()" :disabled="convert.busy">
       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
-      <span>تحويل إلى كتاب</span>
+      <span x-text="NassakhBooks.convertLabel(convert)">تجميع المخطوطة</span>
     </button>
     {% else %}
-    <p class="meta">يبدأ التحويل محرّر الكتاب من لوحة الكتاب أو من هنا.</p>
+    <p class="meta">يجمع المخطوطةَ محرّرُ الكتاب.</p>
     {% endif %}
   </div>
 
@@ -322,7 +321,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
           <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
         </button>
       </div>
-      <a class="btn btn-ghost btn-sm ms-drawer-review" :href="reviewUrl(drawerPage)" x-show="drawerPage">فتح في المراجعة</a>
+      <a class="btn btn-ghost btn-sm ms-drawer-review" :href="reviewUrl(drawerPage, drawer.blockId)" x-show="drawerPage">فتح في المراجعة</a>
       <button type="button" class="btn-icon" x-ref="drawerClose" aria-label="إغلاق" title="إغلاق (Esc)" @click="closeDrawer()">
         <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
       </button>

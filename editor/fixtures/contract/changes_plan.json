@@ -1,0 +1,1744 @@
+{
+ "GET /api/books/40/review-changes/ (no plan yet)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": null,
+  "stale": false
+ },
+ "GET … (queued)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 1,
+   "status": "queued",
+   "status_label": "في الانتظار",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": null,
+   "manuscript_version": 2,
+   "requested": null,
+   "base": null,
+   "pages": [],
+   "approvals": [],
+   "items": [],
+   "counts": {},
+   "applied": null
+  },
+  "stale": false
+ },
+ "GET … (running)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 1,
+   "status": "running",
+   "status_label": "قيد التجميع",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": null,
+   "manuscript_version": 2,
+   "requested": null,
+   "base": null,
+   "pages": [],
+   "approvals": [],
+   "items": [],
+   "counts": {},
+   "applied": null
+  },
+  "stale": false
+ },
+ "GET … (done, a stored base: every kind)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 1,
+   "status": "done",
+   "status_label": "اكتمل",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": "2026-09-26T15:20:00.000000+00:00",
+   "manuscript_version": 2,
+   "requested": null,
+   "base": "stored",
+   "pages": [
+    {
+     "number": 1,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i1"
+     ]
+    },
+    {
+     "number": 2,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i2",
+      "i3"
+     ]
+    },
+    {
+     "number": 3,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i4"
+     ]
+    },
+    {
+     "number": 4,
+     "reason": "added",
+     "reason_label": "صفحة جديدة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i5"
+     ]
+    },
+    {
+     "number": 5,
+     "reason": "removed",
+     "reason_label": "أُخرجت من الكتاب",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i6"
+     ]
+    },
+    {
+     "number": 7,
+     "reason": "processing",
+     "reason_label": "إعادة المعالجة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i7"
+     ]
+    }
+   ],
+   "approvals": [
+    6
+   ],
+   "items": [
+    {
+     "id": "i1",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "كان الشيخ"
+      ],
+      [
+       "del",
+       "فقيها، فاضلا، زاهدا"
+      ],
+      [
+       "ins",
+       "فقيهاً، فاضلاً، زاهداً"
+      ],
+      [
+       "eq",
+       "في الدنيا."
+      ]
+     ],
+     "conflicts": [],
+     "page": 1,
+     "pages": [
+      1
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40012",
+     "blocks": [
+      "p40012"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i2",
+     "kind": "merged",
+     "default": "merged",
+     "chip": "مع تعديلك",
+     "choices": [
+      "merged",
+      "mine",
+      "theirs"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ورحل إلى"
+      ],
+      [
+       "del",
+       "المشرق"
+      ],
+      [
+       "ins",
+       "الشرق"
+      ],
+      [
+       "eq",
+       "فأقام به مدة ثم عاد …"
+      ]
+     ],
+     "conflicts": [],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40021",
+     "blocks": [
+      "p40021"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i3",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "عدّلتَ هذه الكلمات في الكتاب، وغيّرتها المراجعة أيضًا.",
+     "diff": [
+      [
+       "eq",
+       "… كثيرة في الفقه واللغة سنة"
+      ],
+      [
+       "del",
+       "1967."
+      ],
+      [
+       "ins",
+       "1965."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "… الفقه واللغة سنة 1967.",
+       "theirs": "… الفقه واللغة سنة 1965."
+      }
+     ],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [
+      "p40022"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i4",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "حذفتَ هذه الفقرة من الكتاب، وغيّرتها المراجعة.",
+     "diff": [
+      [
+       "ins",
+       "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "",
+       "theirs": "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      }
+     ],
+     "page": 3,
+     "pages": [
+      3
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i5",
+     "kind": "insert",
+     "default": "theirs",
+     "chip": "فقرة جديدة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "ins",
+       "وهذه صفحة لم تدخل الكتاب من قبل."
+      ]
+     ],
+     "conflicts": [],
+     "page": 4,
+     "pages": [
+      4
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i6",
+     "kind": "remove",
+     "default": "theirs",
+     "chip": "تُحذف",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "del",
+       "وهذه صفحة أُخرجت من الكتاب بعد تجميعه."
+      ]
+     ],
+     "conflicts": [],
+     "page": 5,
+     "pages": [
+      5
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40051",
+     "blocks": [
+      "p40051"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i7",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ثم"
+      ],
+      [
+       "del",
+       "ألف"
+      ],
+      [
+       "ins",
+       "ألّف"
+      ],
+      [
+       "eq",
+       "كتابه الكبير في التاريخ."
+      ]
+     ],
+     "conflicts": [],
+     "page": 7,
+     "pages": [
+      7
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40071",
+     "blocks": [
+      "p40071"
+     ],
+     "base": "stored"
+    }
+   ],
+   "counts": {
+    "items": 7,
+    "pages": 6,
+    "take": 2,
+    "merged": 1,
+    "conflict": 2,
+    "choose": 0,
+    "insert": 1,
+    "remove": 1
+   },
+   "applied": null
+  },
+  "stale": false
+ },
+ "GET … (done, a book edited before 7c: no base)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 2,
+   "status": "done",
+   "status_label": "اكتمل",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": "2026-09-26T15:20:00.000000+00:00",
+   "manuscript_version": 2,
+   "requested": null,
+   "base": "none",
+   "pages": [
+    {
+     "number": 1,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i1"
+     ]
+    },
+    {
+     "number": 2,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i2",
+      "i3"
+     ]
+    },
+    {
+     "number": 3,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i4"
+     ]
+    },
+    {
+     "number": 4,
+     "reason": "added",
+     "reason_label": "صفحة جديدة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i5"
+     ]
+    },
+    {
+     "number": 5,
+     "reason": "removed",
+     "reason_label": "أُخرجت من الكتاب",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i6"
+     ]
+    },
+    {
+     "number": 7,
+     "reason": "processing",
+     "reason_label": "إعادة المعالجة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i7"
+     ]
+    }
+   ],
+   "approvals": [
+    6
+   ],
+   "items": [
+    {
+     "id": "i1",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "eq",
+       "كان الشيخ"
+      ],
+      [
+       "del",
+       "فقيها، فاضلا، زاهدا"
+      ],
+      [
+       "ins",
+       "فقيهاً، فاضلاً، زاهداً"
+      ],
+      [
+       "eq",
+       "في الدنيا."
+      ]
+     ],
+     "conflicts": [],
+     "page": 1,
+     "pages": [
+      1
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40012",
+     "blocks": [
+      "p40012"
+     ],
+     "base": "none"
+    },
+    {
+     "id": "i2",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "eq",
+       "ورحل إلى"
+      ],
+      [
+       "del",
+       "المشرق"
+      ],
+      [
+       "ins",
+       "الشرق"
+      ],
+      [
+       "eq",
+       "فأقام به مدة ثم عاد إلى"
+      ],
+      [
+       "del",
+       "بلاده."
+      ],
+      [
+       "ins",
+       "بلده."
+      ]
+     ],
+     "conflicts": [],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40021",
+     "blocks": [
+      "p40021"
+     ],
+     "base": "none"
+    },
+    {
+     "id": "i3",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "eq",
+       "… كثيرة في الفقه واللغة سنة"
+      ],
+      [
+       "del",
+       "1967."
+      ],
+      [
+       "ins",
+       "1965."
+      ]
+     ],
+     "conflicts": [],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [
+      "p40022"
+     ],
+     "base": "none"
+    },
+    {
+     "id": "i4",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "ins",
+       "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      ]
+     ],
+     "conflicts": [],
+     "page": 3,
+     "pages": [
+      3
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "none"
+    },
+    {
+     "id": "i5",
+     "kind": "insert",
+     "default": "theirs",
+     "chip": "فقرة جديدة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "ins",
+       "وهذه صفحة لم تدخل الكتاب من قبل."
+      ]
+     ],
+     "conflicts": [],
+     "page": 4,
+     "pages": [
+      4
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "none"
+    },
+    {
+     "id": "i6",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "del",
+       "وهذه صفحة أُخرجت من الكتاب بعد تجميعه."
+      ]
+     ],
+     "conflicts": [],
+     "page": 5,
+     "pages": [
+      5
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40051",
+     "blocks": [
+      "p40051"
+     ],
+     "base": "none"
+    },
+    {
+     "id": "i7",
+     "kind": "choose",
+     "default": "mine",
+     "chip": "للمقارنة",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+     "diff": [
+      [
+       "eq",
+       "ثم"
+      ],
+      [
+       "del",
+       "ألف"
+      ],
+      [
+       "ins",
+       "ألّف"
+      ],
+      [
+       "eq",
+       "كتابه الكبير في التاريخ."
+      ]
+     ],
+     "conflicts": [],
+     "page": 7,
+     "pages": [
+      7
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40071",
+     "blocks": [
+      "p40071"
+     ],
+     "base": "none"
+    }
+   ],
+   "counts": {
+    "items": 7,
+    "pages": 6,
+    "take": 0,
+    "merged": 0,
+    "conflict": 0,
+    "choose": 6,
+    "insert": 1,
+    "remove": 0
+   },
+   "applied": null
+  },
+  "stale": false
+ },
+ "GET … (error)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 4,
+   "status": "error",
+   "status_label": "خطأ",
+   "error": "تعذّرت المقارنة؛ بقي الكتاب كما هو.",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": "2026-09-26T15:20:00.000000+00:00",
+   "manuscript_version": 2,
+   "requested": null,
+   "base": null,
+   "pages": [],
+   "approvals": [],
+   "items": [],
+   "counts": {},
+   "applied": null
+  },
+  "stale": false
+ },
+ "GET … (done, then the text changed: stale)": {
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "plan": {
+   "id": 5,
+   "status": "done",
+   "status_label": "اكتمل",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": "2026-09-26T15:20:00.000000+00:00",
+   "manuscript_version": 2,
+   "requested": null,
+   "base": "stored",
+   "pages": [
+    {
+     "number": 1,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i1"
+     ]
+    },
+    {
+     "number": 2,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i2",
+      "i3"
+     ]
+    },
+    {
+     "number": 3,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i4"
+     ]
+    },
+    {
+     "number": 4,
+     "reason": "added",
+     "reason_label": "صفحة جديدة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i5"
+     ]
+    },
+    {
+     "number": 5,
+     "reason": "removed",
+     "reason_label": "أُخرجت من الكتاب",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i6"
+     ]
+    },
+    {
+     "number": 7,
+     "reason": "processing",
+     "reason_label": "إعادة المعالجة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i7"
+     ]
+    }
+   ],
+   "approvals": [
+    6
+   ],
+   "items": [
+    {
+     "id": "i1",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "كان الشيخ"
+      ],
+      [
+       "del",
+       "فقيها، فاضلا، زاهدا"
+      ],
+      [
+       "ins",
+       "فقيهاً، فاضلاً، زاهداً"
+      ],
+      [
+       "eq",
+       "في الدنيا."
+      ]
+     ],
+     "conflicts": [],
+     "page": 1,
+     "pages": [
+      1
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40012",
+     "blocks": [
+      "p40012"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i2",
+     "kind": "merged",
+     "default": "merged",
+     "chip": "مع تعديلك",
+     "choices": [
+      "merged",
+      "mine",
+      "theirs"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ورحل إلى"
+      ],
+      [
+       "del",
+       "المشرق"
+      ],
+      [
+       "ins",
+       "الشرق"
+      ],
+      [
+       "eq",
+       "فأقام به مدة ثم عاد …"
+      ]
+     ],
+     "conflicts": [],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40021",
+     "blocks": [
+      "p40021"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i3",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "عدّلتَ هذه الكلمات في الكتاب، وغيّرتها المراجعة أيضًا.",
+     "diff": [
+      [
+       "eq",
+       "… كثيرة في الفقه واللغة سنة"
+      ],
+      [
+       "del",
+       "1967."
+      ],
+      [
+       "ins",
+       "1965."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "… الفقه واللغة سنة 1967.",
+       "theirs": "… الفقه واللغة سنة 1965."
+      }
+     ],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [
+      "p40022"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i4",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "حذفتَ هذه الفقرة من الكتاب، وغيّرتها المراجعة.",
+     "diff": [
+      [
+       "ins",
+       "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "",
+       "theirs": "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      }
+     ],
+     "page": 3,
+     "pages": [
+      3
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i5",
+     "kind": "insert",
+     "default": "theirs",
+     "chip": "فقرة جديدة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "ins",
+       "وهذه صفحة لم تدخل الكتاب من قبل."
+      ]
+     ],
+     "conflicts": [],
+     "page": 4,
+     "pages": [
+      4
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i6",
+     "kind": "remove",
+     "default": "theirs",
+     "chip": "تُحذف",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "del",
+       "وهذه صفحة أُخرجت من الكتاب بعد تجميعه."
+      ]
+     ],
+     "conflicts": [],
+     "page": 5,
+     "pages": [
+      5
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40051",
+     "blocks": [
+      "p40051"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i7",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ثم"
+      ],
+      [
+       "del",
+       "ألف"
+      ],
+      [
+       "ins",
+       "ألّف"
+      ],
+      [
+       "eq",
+       "كتابه الكبير في التاريخ."
+      ]
+     ],
+     "conflicts": [],
+     "page": 7,
+     "pages": [
+      7
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40071",
+     "blocks": [
+      "p40071"
+     ],
+     "base": "stored"
+    }
+   ],
+   "counts": {
+    "items": 7,
+    "pages": 6,
+    "take": 2,
+    "merged": 1,
+    "conflict": 2,
+    "choose": 0,
+    "insert": 1,
+    "remove": 1
+   },
+   "applied": null
+  },
+  "stale": true
+ },
+ "GET … (after an apply)": {
+  "drift": {
+   "edited": true,
+   "pages": [],
+   "reasons": {},
+   "approvals": [],
+   "chapters": [],
+   "chapter_pages": {}
+  },
+  "plan": {
+   "id": 9,
+   "status": "done",
+   "status_label": "اكتمل",
+   "error": "",
+   "created_at": "2026-09-26T15:20:00.000000+00:00",
+   "finished_at": "2026-09-26T15:20:00.000000+00:00",
+   "manuscript_version": 5,
+   "requested": null,
+   "base": "stored",
+   "pages": [
+    {
+     "number": 1,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i1"
+     ]
+    },
+    {
+     "number": 2,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i2",
+      "i3"
+     ]
+    },
+    {
+     "number": 3,
+     "reason": "review",
+     "reason_label": "المراجعة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i4"
+     ]
+    },
+    {
+     "number": 4,
+     "reason": "added",
+     "reason_label": "صفحة جديدة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i5"
+     ]
+    },
+    {
+     "number": 5,
+     "reason": "removed",
+     "reason_label": "أُخرجت من الكتاب",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i6"
+     ]
+    },
+    {
+     "number": 7,
+     "reason": "processing",
+     "reason_label": "إعادة المعالجة",
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "items": [
+      "i7"
+     ]
+    }
+   ],
+   "approvals": [
+    6
+   ],
+   "items": [
+    {
+     "id": "i1",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "كان الشيخ"
+      ],
+      [
+       "del",
+       "فقيها، فاضلا، زاهدا"
+      ],
+      [
+       "ins",
+       "فقيهاً، فاضلاً، زاهداً"
+      ],
+      [
+       "eq",
+       "في الدنيا."
+      ]
+     ],
+     "conflicts": [],
+     "page": 1,
+     "pages": [
+      1
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40012",
+     "blocks": [
+      "p40012"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i2",
+     "kind": "merged",
+     "default": "merged",
+     "chip": "مع تعديلك",
+     "choices": [
+      "merged",
+      "mine",
+      "theirs"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ورحل إلى"
+      ],
+      [
+       "del",
+       "المشرق"
+      ],
+      [
+       "ins",
+       "الشرق"
+      ],
+      [
+       "eq",
+       "فأقام به مدة ثم عاد …"
+      ]
+     ],
+     "conflicts": [],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40021",
+     "blocks": [
+      "p40021"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i3",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "عدّلتَ هذه الكلمات في الكتاب، وغيّرتها المراجعة أيضًا.",
+     "diff": [
+      [
+       "eq",
+       "… كثيرة في الفقه واللغة سنة"
+      ],
+      [
+       "del",
+       "1967."
+      ],
+      [
+       "ins",
+       "1965."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "… الفقه واللغة سنة 1967.",
+       "theirs": "… الفقه واللغة سنة 1965."
+      }
+     ],
+     "page": 2,
+     "pages": [
+      2
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [
+      "p40022"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i4",
+     "kind": "conflict",
+     "default": "mine",
+     "chip": "تعارض",
+     "choices": [
+      "mine",
+      "theirs"
+     ],
+     "ask": true,
+     "help": "حذفتَ هذه الفقرة من الكتاب، وغيّرتها المراجعة.",
+     "diff": [
+      [
+       "ins",
+       "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      ]
+     ],
+     "conflicts": [
+      {
+       "mine": "",
+       "theirs": "وكانت وفاته في طرابلس بعد عودته بسنوات."
+      }
+     ],
+     "page": 3,
+     "pages": [
+      3
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i5",
+     "kind": "insert",
+     "default": "theirs",
+     "chip": "فقرة جديدة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "ins",
+       "وهذه صفحة لم تدخل الكتاب من قبل."
+      ]
+     ],
+     "conflicts": [],
+     "page": 4,
+     "pages": [
+      4
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40022",
+     "blocks": [],
+     "base": "stored"
+    },
+    {
+     "id": "i6",
+     "kind": "remove",
+     "default": "theirs",
+     "chip": "تُحذف",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "del",
+       "وهذه صفحة أُخرجت من الكتاب بعد تجميعه."
+      ]
+     ],
+     "conflicts": [],
+     "page": 5,
+     "pages": [
+      5
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40051",
+     "blocks": [
+      "p40051"
+     ],
+     "base": "stored"
+    },
+    {
+     "id": "i7",
+     "kind": "take",
+     "default": "theirs",
+     "chip": "من المراجعة",
+     "choices": [
+      "theirs",
+      "mine"
+     ],
+     "ask": false,
+     "help": "",
+     "diff": [
+      [
+       "eq",
+       "ثم"
+      ],
+      [
+       "del",
+       "ألف"
+      ],
+      [
+       "ins",
+       "ألّف"
+      ],
+      [
+       "eq",
+       "كتابه الكبير في التاريخ."
+      ]
+     ],
+     "conflicts": [],
+     "page": 7,
+     "pages": [
+      7
+     ],
+     "chapter": "h40011",
+     "chapter_title": "الفصل الأول",
+     "block": "p40071",
+     "blocks": [
+      "p40071"
+     ],
+     "base": "stored"
+    }
+   ],
+   "counts": {
+    "items": 7,
+    "pages": 6,
+    "take": 2,
+    "merged": 1,
+    "conflict": 2,
+    "choose": 0,
+    "insert": 1,
+    "remove": 1
+   },
+   "applied": {
+    "at": "2026-09-26T15:20:00.000000+00:00",
+    "taken": 5,
+    "merged": 1,
+    "kept": 1,
+    "pages": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "written": true
+   }
+  },
+  "stale": true
+ }
+}

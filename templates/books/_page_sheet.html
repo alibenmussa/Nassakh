@@ -4,11 +4,12 @@ for pages ingested after load (books.js clones and patches it). No per-shell Alp
 the head (`patchSheet`) from the poll's changed set; the body mounts from <template id="sheet-body"> only while
 the sheet is near the viewport. In the «التخطيط» mode (PHASE7 §3.12) the head also carries the page's doubts,
 «بضبط خاص», «التلقائي», «تجهيز الصفحة» on an error and «استثناء» / «إعادة إلى الكتاب» (patched by `patchSheetGuides`),
-and the body mounts from <template id="sheet-guides">. Context: t (tile dict or None), book, role, request,
-guides_mode.{% endcomment %}
+and the body mounts from <template id="sheet-guides">. D76 (PHASE7 §5.4): the title's address is the page's
+`primary_url` (review once its text is final, else the page detail); «تفاصيل المعالجة» (editors) opens the page detail.
+Context: t (tile dict or None), book, role, request, guides_mode.{% endcomment %}
 <article class="page-sheet{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"{% if t %} id="sheet-{{ t.number }}" data-page-id="{{ t.id }}" data-number="{{ t.number }}" data-status="{{ t.status }}" data-text="{{ t.text_state }}"{% else %} data-page-id="" data-number="" data-status="" data-text=""{% endif %} style="--sheet-ar: {% if t.width and t.height %}{{ t.width }} / {{ t.height }}{% else %}7 / 10{% endif %}">
   <header class="sheet-head">
-    <a class="sheet-title num" href="{{ t.url }}">صفحة <bdi>{{ t.number }}</bdi></a>
+    <a class="sheet-title num" href="{% firstof t.primary_url t.url %}">صفحة <bdi>{{ t.number }}</bdi></a>
     <span class="status"><span class="dot {{ t.dot|default:'dot-neutral' }}" aria-hidden="true"></span><span class="sheet-status">{{ t.status_label }}</span></span>
     <span class="badge bk-provisional"{% if t.text_state != 'provisional' %} hidden{% endif %}>نص مبدئي</span>
     <span class="meta num sheet-printed"{% if not t.printed_number %} hidden{% endif %}>الرقم المطبوع <bdi>{{ t.printed_number }}</bdi></span>
@@ -41,6 +42,11 @@ guides_mode.{% endcomment %}
     {% endif %}
     <span class="sheet-actions">
       <a class="btn btn-ghost btn-sm sheet-review" href="{{ t.review_url }}"{% if t.text_state != 'final' or t.is_excluded %} hidden{% endif %}>مراجعة</a>
+      {% if not guides_mode %}{% if role == 'admin' or role == 'editor' %}
+      <a class="btn-icon btn-icon-sm sheet-detail" href="{{ t.url }}" title="تفاصيل المعالجة" aria-label="تفاصيل المعالجة">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
+      </a>
+      {% endif %}{% endif %}
       <button type="button" class="btn btn-ghost btn-sm sheet-copy" hidden aria-label="نسخ نص الصفحة {{ t.number }}" title="نسخ نص الصفحة (C)">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg>
         <span>نسخ</span>

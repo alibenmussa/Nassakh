@@ -85,6 +85,7 @@
     footnote: 'تصير الفقرة حاشية',
   };
   const PAGES = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  const PAGES_GEN = ['صفحة واحدة', 'صفحتين', 'صفحات', 'صفحة']; // after «نص»: «تغيّر نص صفحتين»
   const MINUTES = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
   const HOURS = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
   const DAYS = ['يوم', 'يومين', 'أيام', 'يومًا'];
@@ -299,7 +300,7 @@
         seam: { page: 0, from: 0, mode: '', decision: 'auto', text: '', state: '' },
         note: { id: '', number: '', html: '', orphan: false, found: false },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
-        convert: { open: false, busy: false, error: '', label: 'تحويل', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
+        convert: { open: false, busy: false, error: '', label: 'تجميع المخطوطة', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
         busy: false, // an override is on the wire or its run is on: no second post meanwhile
         bookUrl: urls.book || '',
         reveal: false,
@@ -318,6 +319,21 @@
           if (this.active) this.schedulePoll(POLL_MS);
           if (typeof setInterval === 'function') tickTimer = setInterval(() => { this.now = Date.now(); }, TICK_MS);
           this.bindLive();
+          this.landConvert();
+        },
+        // `?convert=1` (review's end panel, §5.3: «تجميع المخطوطة…»): the popover opens, or, before the first run, the
+        // empty state's button takes the focus (its options are on screen already); the address drops the flag.
+        landConvert() {
+          const search = typeof window !== 'undefined' && window.location ? window.location.search || '' : '';
+          if (!/(?:^|[?&])convert=1(?:&|$)/.test(search)) return false;
+          try {
+            const rest = search.replace(/^\?/, '').split('&').filter((kv) => kv && kv !== 'convert=1').join('&');
+            if (typeof history !== 'undefined' && history.replaceState) history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash || ''}`);
+          } catch (_) { /* sandboxed */ }
+          if (!this.canEdit || this.active) return false;
+          if (this.hasDocument) { this.openConvert(); return true; }
+          if (this.$nextTick) this.$nextTick(() => focusEl(q(document, '.ms-empty .btn-primary')));
+          return true;
         },
         destroy() {
           this.stopPolling();
@@ -339,15 +355,19 @@
         // D49: the text was saved from the book page since the last run: it is the book now; the structure
         // tools here would re-assemble over it, so they rest and the book page takes the changes
         get edited() { return Boolean(this.state.edited) && this.hasDocument; },
+        // D78 (PHASE7 §5.6): review's changes after the edit are taken on the book page («تغييرات المراجعة»)
         get editedText() {
-          const n = this.stalePages.length;
-          if (this.state.stale && n) return `حُرِّر نص الكتاب في صفحة الكتاب، ثم تغيّر نص ${arCount(n, PAGES)} في المراجعة: تُراجَع الفصول المتأثرة هناك.`;
-          return 'حُرِّر نص الكتاب في صفحة الكتاب، فهو النص المعتمد الآن: تُغيَّر العناوين ووصل الفقرات هناك.';
+          return 'حُرِّر نص الكتاب في «الكتاب»، فهو النص المعتمد الآن: تُغيَّر العناوين ووصل الفقرات هناك.';
         },
+        get editedDriftText() {
+          const n = this.state.stale ? this.stalePages.length : 0;
+          return n ? `غيّرت المراجعة نص ${arCount(n, PAGES_GEN)} بعد التحرير؛ تُؤخذ من «الكتاب».` : '';
+        },
+        get changesUrl() { return this.bookUrl ? `${this.bookUrl}${this.bookUrl.includes('?') ? '&' : '?'}tab=changes` : ''; },
         get stalePages() { return Array.isArray(this.state.stale_pages) ? this.state.stale_pages : []; },
         get staleText() {
           const n = this.stalePages.length;
-          return n ? `تغيّر نص ${arCount(n, PAGES)} بعد التجميع:` : 'تغيّر النص بعد التجميع.';
+          return n ? `تغيّر نص ${arCount(n, PAGES_GEN)} بعد التجميع:` : 'تغيّر النص بعد التجميع.';
         },
         get errorHeadline() { return (this.run && this.run.error) || 'تعذّر تجميع المخطوطة.'; },
         get stageIndex() { return this.run && this.run.status === 'running' ? STAGE_KEYS.indexOf(this.run.stage) : this.run && this.run.status === 'done' ? STAGE_KEYS.length : -1; },
@@ -376,7 +396,13 @@
           if (this.canEdit && !this.hasDocument) return this.failed ? 'reassemble' : 'convert';
           return '';
         },
-        reviewUrl(n) { return n ? fill(urls.review, n) : ''; },
+        // D76 (§5.3): review opened from here returns here («‹ المخطوطة», `#block-<id>`)
+        reviewUrl(n, block) {
+          if (!n) return '';
+          const url = fill(urls.review, n);
+          const query = `from=manuscript${block && /^[hpn][0-9]+$/.test(block) ? `&block=${block}` : ''}`;
+          return `${url}${url.includes('?') ? '&' : '?'}${query}`;
+        },
 
         // ------------------------------------------------------------ the state poll (700 ms while a run is on)
         applyState(s, opts = {}) {
@@ -438,9 +464,12 @@
           }
           failures = 0;
           this.pollState = 'ok';
+          const wasActive = this.active;
           this.applyState(r.data);
           if (this.active) this.schedulePoll(POLL_MS);
           else this.stopPolling();
+          // D76: a finished assembly moves the stage bar («المخطوطة», and the steps after it)
+          if (wasActive && !this.active && window.NassakhStages) window.NassakhStages.changed(this.bookId);
         },
 
         // ------------------------------------------------------------ live state (D70)
@@ -496,7 +525,7 @@
           this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, s.options || {});
           this.convert.unreviewed = Number(s.unreviewed_pages) || 0;
           this.convert.edited = Boolean(s.edited && s.exists);
-          this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : s.exists ? 'إعادة التجميع' : 'تحويل';
+          this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : s.exists ? 'إعادة التجميع' : 'تجميع المخطوطة';
           this.convert.error = '';
         },
         openConvert() {
@@ -1025,7 +1054,7 @@
             src: attr(block, 'data-src'),
             reviewed: attr(block, 'data-reviewed') !== 'false',
             role: blockRole(block),
-            reviewUrl: this.reviewUrl(pages[0]),
+            reviewUrl: this.reviewUrl(pages[0], id),
             lines: linesOf(block),
             // D74: the paragraph starts with a marker whose call is open on its page (`noteFor`)
             noteFor: attr(block, 'data-note-for'),

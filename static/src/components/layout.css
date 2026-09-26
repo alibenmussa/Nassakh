@@ -8,32 +8,129 @@
    200 ms fades of the toolbar's groups, the pill's pulse, the skeleton shimmer; prefers-reduced-motion drops
    them all. Page geometry is physical (points from the page's top-left); the chrome is logical. */
 @layer components {
-  /* ------------------------------------------------------------ the app's sidebar folds to an icon rail on this page */
-  .app-shell:has(.bp-screen) { grid-template-columns: 56px minmax(0, 1fr); }
-  .app-shell:has(.bp-screen) .sidebar { width: 56px; padding: 14px 8px; align-items: center; overflow: visible; z-index: 32; transition: width 180ms ease-out, box-shadow 180ms ease-out; }
-  .app-shell:has(.bp-screen) .brand { padding: 4px; }
-  .app-shell:has(.bp-screen) .brand-name,
-  .app-shell:has(.bp-screen) .nav-item span,
-  .app-shell:has(.bp-screen) .user-line > .min-w-0,
-  .app-shell:has(.bp-screen) .sidebar-footer .btn span { display: none; }
-  .app-shell:has(.bp-screen) .nav-item { width: 36px; justify-content: center; padding: 0; }
-  .app-shell:has(.bp-screen) .user-line { padding: 4px 0; justify-content: center; }
-  .app-shell:has(.bp-screen) .sidebar-footer { align-self: stretch; align-items: center; }
-  .app-shell:has(.bp-screen) .sidebar-footer .btn { width: 36px; padding: 0; justify-content: center; }
+  /* ------------------------------------------------------------ every book screen folds the app's sidebar to an icon rail
+     (D76, PHASE7_SPEC §5.2: `data-rail` on the stage bar and on the screens' roots). Wide windows only: at 900 px and
+     below the sidebar is the off-canvas drawer of app.css, with its labels. */
   .rail-toggle { display: none; }
-  .app-shell:has(.bp-screen) .rail-toggle { display: inline-grid; }
-  /* expanded: the full sidebar floats over the page (the pages never move) */
-  .app-shell:has(.bp-screen).is-rail-open .sidebar { position: fixed; inset-block: 0; inset-inline-start: 0; width: var(--sidebar-width); align-items: stretch; padding: 14px 12px; box-shadow: var(--shadow-pop); }
-  .app-shell:has(.bp-screen).is-rail-open .brand-name,
-  .app-shell:has(.bp-screen).is-rail-open .nav-item span,
-  .app-shell:has(.bp-screen).is-rail-open .user-line > .min-w-0,
-  .app-shell:has(.bp-screen).is-rail-open .sidebar-footer .btn span { display: revert; }
-  .app-shell:has(.bp-screen).is-rail-open .nav-item { width: auto; justify-content: flex-start; padding: 0 8px; }
-  .app-shell:has(.bp-screen).is-rail-open .user-line { justify-content: flex-start; padding: 4px 8px; }
-  .app-shell:has(.bp-screen).is-rail-open .sidebar-footer { align-items: stretch; }
-  .app-shell:has(.bp-screen).is-rail-open .sidebar-footer .btn { width: 100%; padding: 0 10px; justify-content: flex-start; }
+  @media (min-width: 901px) {
+    .app-shell:has([data-rail]) { grid-template-columns: 56px minmax(0, 1fr); }
+    .app-shell:has([data-rail]) .sidebar { width: 56px; padding: 14px 8px; align-items: center; overflow: visible; z-index: 32; transition: width 180ms ease-out, box-shadow 180ms ease-out; }
+    .app-shell:has([data-rail]) .brand { padding: 4px; }
+    .app-shell:has([data-rail]) .brand-name,
+    .app-shell:has([data-rail]) .nav-item span,
+    .app-shell:has([data-rail]) .user-line > .min-w-0,
+    .app-shell:has([data-rail]) .sidebar-footer .btn span { display: none; }
+    .app-shell:has([data-rail]) .nav-item { width: 36px; justify-content: center; padding: 0; }
+    .app-shell:has([data-rail]) .user-line { padding: 4px 0; justify-content: center; }
+    .app-shell:has([data-rail]) .sidebar-footer { align-self: stretch; align-items: center; }
+    .app-shell:has([data-rail]) .sidebar-footer .btn { width: 36px; padding: 0; justify-content: center; }
+    .app-shell:has([data-rail]) .rail-toggle { display: inline-grid; }
+    /* expanded: the full sidebar floats over the page (the pages never move) */
+    .app-shell:has([data-rail]).is-rail-open .sidebar { position: fixed; inset-block: 0; inset-inline-start: 0; width: var(--sidebar-width); align-items: stretch; padding: 14px 12px; box-shadow: var(--shadow-pop); }
+    .app-shell:has([data-rail]).is-rail-open .brand-name,
+    .app-shell:has([data-rail]).is-rail-open .nav-item span,
+    .app-shell:has([data-rail]).is-rail-open .user-line > .min-w-0,
+    .app-shell:has([data-rail]).is-rail-open .sidebar-footer .btn span { display: revert; }
+    .app-shell:has([data-rail]).is-rail-open .nav-item { width: auto; justify-content: flex-start; padding: 0 8px; }
+    .app-shell:has([data-rail]).is-rail-open .user-line { justify-content: flex-start; padding: 4px 8px; }
+    .app-shell:has([data-rail]).is-rail-open .sidebar-footer { align-items: stretch; }
+    .app-shell:has([data-rail]).is-rail-open .sidebar-footer .btn { width: 100%; padding: 0 10px; justify-content: flex-start; }
+  }
+  /* the book page's chrome is tighter than the other screens' (its title and its pages align on 24 px) */
   .app-shell:has(.bp-screen) .topbar { padding-inline: 24px; }
   .app-shell:has(.bp-screen) .main { padding-inline: 24px; }
+
+  /* ------------------------------------------------------------ the stage bar (D76, PHASE7_SPEC §5.1; _stage_bar.html)
+     In the top bar between the title and the actions: the title keeps at most 26ch (and hides at 900 px and below),
+     the bar takes the room left (the title gives way first) and collapses by its own width (a container query): ≥ 840
+     px every count and the current step's detail, 620–840 every count, 500–620 the current step's count only (six
+     labels with their marks need about 500 px in IBM Plex Sans Arabic at 12.5 px), below one button over a menu. Steps are 28 px, radius 6, 12.5 px / 500 in
+     --text-2; the current one has the --active fill, --text and 600. Marks: done a 12 px ✓ in --success, running a
+     static 7 px accent dot (chrome never loops, D24), out of date a warning dot and a warning label, attention a
+     danger dot, not started a hollow ring, blocked a muted label with no link. Separators are 12 px chevrons. */
+  .topbar:has(.stg) .page-title { flex: 0 4 auto; max-width: 26ch; min-width: 8ch; }
+  .stg { container: stg / inline-size; flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
+  /* in the top bar the steps ask for their room before the title does, and keep one button's room at least */
+  .topbar .stg { flex: 1 1 520px; min-width: 140px; }
+  .stg-list { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+  .stg-item { display: flex; align-items: center; gap: 2px; flex: none; }
+  .stg-sep { width: 12px; height: 12px; flex: none; color: var(--color-text-3); opacity: 0.7; }
+  .stg-step {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .stg-step[href]:hover, .stg-button:hover { background: var(--color-hover); color: var(--color-text); }
+  .stg-step:not([href]):not(button) { cursor: default; }
+  .stg-item.is-current .stg-step, .stg-button { background: var(--color-active); color: var(--color-text); font-weight: 600; }
+  .stg-count { font-size: 11.5px; font-weight: 500; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .stg-item.is-current .stg-count { color: var(--color-text-2); }
+  .stg-mark { display: inline-grid; place-items: center; width: 12px; height: 12px; flex: none; }
+  .stg-mark .icon { width: 12px; height: 12px; stroke-width: 2.2; color: var(--color-success); }
+  .is-active > .stg-step .stg-mark::before, .stg-button.is-active .stg-mark::before, .stg-menu-item.is-active .stg-mark::before,
+  .is-stale > .stg-step .stg-mark::before, .stg-button.is-stale .stg-mark::before, .stg-menu-item.is-stale .stg-mark::before,
+  .is-attention > .stg-step .stg-mark::before, .stg-button.is-attention .stg-mark::before, .stg-menu-item.is-attention .stg-mark::before,
+  .is-todo > .stg-step .stg-mark::before, .stg-button.is-todo .stg-mark::before, .stg-menu-item.is-todo .stg-mark::before,
+  .is-blocked > .stg-step .stg-mark::before, .stg-button.is-blocked .stg-mark::before, .stg-menu-item.is-blocked .stg-mark::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+  }
+  .is-active > .stg-step .stg-mark::before, .stg-button.is-active .stg-mark::before, .stg-menu-item.is-active .stg-mark::before { background: var(--color-accent); }
+  .is-stale > .stg-step .stg-mark::before, .stg-button.is-stale .stg-mark::before, .stg-menu-item.is-stale .stg-mark::before { background: var(--color-warning); }
+  .is-attention > .stg-step .stg-mark::before, .stg-button.is-attention .stg-mark::before, .stg-menu-item.is-attention .stg-mark::before { background: var(--color-danger); }
+  .is-todo > .stg-step .stg-mark::before, .stg-button.is-todo .stg-mark::before, .stg-menu-item.is-todo .stg-mark::before { box-shadow: inset 0 0 0 1.5px var(--color-text-3); }
+  .is-blocked > .stg-step .stg-mark::before, .stg-button.is-blocked .stg-mark::before, .stg-menu-item.is-blocked .stg-mark::before { box-shadow: inset 0 0 0 1.5px var(--color-border-strong); }
+  .stg-item.is-stale .stg-label, .stg-menu-item.is-stale .stg-label { color: var(--color-warning-text); }
+  .stg-item.is-blocked .stg-step, .stg-menu-item.is-blocked { color: var(--color-text-3); }
+  .stg-menu-item.is-blocked { cursor: default; }
+  .stg-menu-item.is-blocked:hover { background: transparent; }
+  /* the dashboard's live progress, folded into the current step (it replaced the status chip and its bar) */
+  .stg-bar { position: absolute; inset-inline: 8px; bottom: 3px; height: 2px; border-radius: 1px; background: var(--color-border); overflow: hidden; }
+  .stg-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width 200ms ease; }
+  .stg-detail { display: none; font-weight: 500; color: var(--color-text-2); }
+  .stg-compact { display: none; }
+  .stg-button { height: 28px; }
+  .stg-menu { min-width: 240px; }
+  .stg-menu-item { gap: 8px; }
+  .stg-menu-item[aria-current="page"] { background: var(--color-active); font-weight: 600; }
+  .stg-menu-detail { margin-inline-start: auto; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12em; }
+  /* wide: the current step says where the book is («17×24 سم · 84 صفحة») in place of its count */
+  @container stg (min-width: 840px) {
+    .stg-item.is-current .stg-detail { display: inline; }
+    .stg-item.is-current.has-detail .stg-count { display: none; }
+  }
+  @container stg (max-width: 620px) {
+    .stg-list { gap: 0; }
+    .stg-item { gap: 0; }
+    .stg-step { padding: 0 6px; gap: 4px; }
+    .stg-sep { width: 10px; height: 10px; }
+    .stg-item:not(.is-current) .stg-count { display: none; }
+  }
+  @container stg (max-width: 500px) {
+    .stg-list { display: none; }
+    .stg-compact { display: inline-flex; }
+  }
+  @media (max-width: 900px) {
+    .topbar:has(.stg) .page-title { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stg-step, .stg-bar > span { transition: none; }
+  }
 
   /* ------------------------------------------------------------ the screen takes the window (= bk-dashboard.is-viewer) */
   .main:has(> .lo-screen) { flex: none; height: calc(100dvh - var(--topbar-height)); min-height: 0; padding-top: 0; padding-bottom: 16px; }
@@ -226,6 +323,8 @@
   .lp-line.is-link:hover .lp-run { text-decoration: underline; text-decoration-color: rgba(37, 99, 235, 0.45); text-underline-offset: 0.2em; }
   .lp-line.is-selected { outline: 1.5px solid var(--color-accent); outline-offset: 3px; border-radius: 2px; }
   .lp-line.is-flash { background: var(--color-accent-soft); box-shadow: 0 0 0 calc(3 * var(--u)) var(--color-accent-soft); animation: lp-flash 1.4s ease-out forwards; }
+  /* D78: the blocks an apply of review's changes rewrote flash once (600 ms; none under reduced motion) */
+  .lp-line.is-applied { animation: lp-applied 600ms ease-out; }
   .f-b { font-family: "nk-body", "nk-latin", serif; }
   .f-h { font-family: "nk-heading", "nk-latin", serif; }
   .f-l { font-family: "nk-latin", serif; }
@@ -363,6 +462,54 @@
   .bp-panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .bp-panel-title { font-size: 13px; font-weight: 600; color: var(--color-text); }
   .bp-empty { margin: 0; font-size: 12px; line-height: 1.6; color: var(--color-text-3); }
+
+  /* ------------------------------------------------------------ «تغييرات المراجعة» (D78, PHASE7 §5.6)
+     Rows per page (a checkbox, «ص N», the chapter, the reason chip, a «⋯» for the page), items with a status dot and
+     its word and a diff snippet (<del> struck through in the danger text on its tint, <ins> underlined on a soft
+     green), «نصّي | المراجعة» for a conflict or a `choose` item; the apply at the foot, the rebuild below it. */
+  .bp-changes { display: flex; flex-direction: column; gap: 10px; }
+  .bp-changes-intro { margin: 0; line-height: 1.6; }
+  .bp-changes-loading { display: flex; flex-direction: column; gap: 8px; }
+  .bp-changes-skel { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--color-border); }
+  .bp-changes-skel span { display: block; height: 9px; border-radius: 4px; background: linear-gradient(90deg, var(--color-bg-muted) 25%, var(--color-bg-subtle) 50%, var(--color-bg-muted) 75%); background-size: 200% 100%; animation: rv-shimmer 1.4s linear infinite; }
+  .bp-changes-skel span:first-child { width: 42%; }
+  .bp-changes-skel span:last-child { width: 88%; }
+  .bp-changes-error, .bp-changes-stale { align-items: center; }
+  .bp-changes-none { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .bp-changes-pages { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .bp-cpage { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--color-border); }
+  .bp-cpage:last-child { border-bottom: 0; }
+  .bp-cpage.is-off .bp-citems { opacity: 0.5; }
+  .bp-cpage-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .bp-cpage-take { margin: 0; flex: none; }
+  .bp-cpage-title { min-width: 0; font-size: 12.5px; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bp-cpage-review { color: inherit; }
+  .bp-cpage-review:hover { color: var(--color-accent-text); text-decoration: underline; }
+  .bp-reason { flex: none; height: 18px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--color-bg-muted); color: var(--color-text-2); font-size: 11px; line-height: 18px; }
+  .bp-reason.is-added { background: var(--color-accent-soft); color: var(--color-accent-text); }
+  .bp-reason.is-removed { background: var(--color-warning-bg); color: var(--color-warning-text); }
+  .bp-cpage-more { margin-inline-start: auto; }
+  .bp-cpage-menu { width: 250px; max-width: 250px; inset-inline-start: auto; inset-inline-end: 0; }
+  .bp-citems { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0 22px 0 0; list-style: none; }
+  [dir="ltr"] .bp-citems { padding: 0 0 0 22px; }
+  .bp-citem { display: flex; flex-direction: column; gap: 5px; }
+  .bp-citem-go { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; padding: 4px 6px; margin-inline: -6px; border-radius: var(--radius-sm); text-align: start; cursor: pointer; }
+  .bp-citem-go:hover { background: var(--color-hover); }
+  .bp-citem-chip { font-size: 11.5px; }
+  .bp-diff { font-size: 12.5px; line-height: 1.7; color: var(--color-text-2); }
+  .bp-diff del { color: var(--color-danger-text); background: var(--color-danger-bg); text-decoration: line-through; text-decoration-thickness: 1px; border-radius: 2px; padding-inline: 1px; }
+  .bp-diff ins { color: var(--color-text); background: rgba(22, 163, 74, 0.1); text-decoration: underline; text-decoration-color: var(--color-success); text-underline-offset: 3px; border-radius: 2px; padding-inline: 1px; }
+  .bp-citem-help { margin: 0; line-height: 1.5; }
+  .bp-citem-ask { display: flex; flex-direction: column; gap: 6px; }
+  .bp-citem-conflicts { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 12px; }
+  .bp-citem-conflicts > div { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; }
+  .bp-citem-conflicts dt { color: var(--color-text-3); }
+  .bp-citem-conflicts dd { margin: 0; color: var(--color-text-2); }
+  .bp-citem-choice { align-self: flex-start; }
+  .bp-changes-foot { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-top: 4px; }
+  .bp-changes-keep, .bp-changes-rebuild { align-self: center; font-size: 12.5px; }
+  .bp-changes-rebuild { color: var(--color-text-2); }
+  .bp-to-note { align-self: flex-start; }
   .bp-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
   /* الفصول: the footprint, the chapters (static rows), the page checks */
@@ -648,6 +795,7 @@
   @keyframes lo-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
   @keyframes lo-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   @keyframes lo-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes lp-applied { from { background-color: var(--color-accent-soft); } to { background-color: transparent; } }
   @keyframes lp-flash { 0%, 55% { background-color: var(--color-accent-soft); box-shadow: 0 0 0 calc(3 * var(--u)) var(--color-accent-soft); } 100% { background-color: transparent; box-shadow: 0 0 0 calc(3 * var(--u)) transparent; } }
   @keyframes ed-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
   @keyframes ed-pop-in-up { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
@@ -663,8 +811,6 @@
     .bp-tb-label { display: none; }
   }
   @media (max-width: 900px) {
-    .app-shell:has(.bp-screen) { grid-template-columns: minmax(0, 1fr); }
-    .app-shell:has(.bp-screen) .sidebar { width: var(--sidebar-width); }
     .lo-toolbar { flex-wrap: wrap; height: auto; min-height: var(--lo-toolbar-h); padding: 6px 16px; margin-inline: -16px; }
     .lo-screen { --lo-gutter: 44px; }
     .lo-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
@@ -678,7 +824,7 @@
     .lo-spread, .lo-stage.is-out-next .lo-spread, .lo-stage.is-out-prev .lo-spread { transition: none; }
     .lo-pill.is-saving .lo-pill-dot, .lo-pill-dot.is-live { animation: none; }
     .lo-sheet.is-skeleton > span, .lp-skeleton > span, .lo-thumb.is-pending .lo-thumb-img, .ed-source-skeleton, .ed-sheet-skeleton, .ed-snap-skeleton span { animation: none; }
-    .lo-diagram-block, .lo-thumb, .lp-line.is-moved, .bp-acc-head .icon, .app-shell:has(.bp-screen) .sidebar { transition: none; }
-    .bp-panel, .ed-pop, .ed-drawer, .lp-line.is-flash { animation: none; }
+    .lo-diagram-block, .lo-thumb, .lp-line.is-moved, .bp-acc-head .icon, .app-shell:has([data-rail]) .sidebar { transition: none; }
+    .bp-panel, .ed-pop, .ed-drawer, .lp-line.is-flash, .lp-line.is-applied, .bp-changes-skel span { animation: none; }
   }
 }

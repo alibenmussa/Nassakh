@@ -118,7 +118,9 @@ def test_book_page_first_paint_before_any_layout(editor):
     book = _book()
     body, config = _page(_logged(editor), book)
     assert "<title>الكتاب · كتاب التنسيق · نسّاخ</title>" in body
-    assert '<span class="title-page">الكتاب</span>' in body
+    # D76 (PHASE7 §5.1): the h1 holds the title only; «الكتاب» is the stage bar's current step, the rail folds
+    assert '<h1 class="page-title">كتاب التنسيق</h1>' in body
+    assert 'data-stage-bar data-rail data-current="book"' in body and "data-book data-rail" in body
     assert config["page"] == "layout" and config["mode"] == "preview" and config["canEdit"] is True
     assert config["initial"]["layout"] is None and config["initial"]["preview"]["status"] == "none"
     assert config["relayoutMs"] == 500 and '@font-face { font-family: "nk-body"' in config["fontCss"]
@@ -135,8 +137,8 @@ def test_book_page_first_paint_before_any_layout(editor):
         assert urls[key], key
     # the root: live pages in both modes, the window's events, the render's faces in a <style>
     assert (
-        "data-book x-data=\"bookPage(JSON.parse(document.getElementById('book-config').textContent))\""
-        in body
+        'data-book data-rail x-data="bookPage('
+        "JSON.parse(document.getElementById('book-config').textContent))\"" in body
     )
     assert "'is-edit': mode === 'edit'" in body and ':data-mode="mode"' in body
     assert '@keydown.window="onKey($event)"' in body and '@beforeunload.window="guardUnload($event)"' in body
@@ -155,9 +157,10 @@ def test_book_page_first_paint_before_any_layout(editor):
         "PDF المعاينة",
         "اختصارات لوحة المفاتيح",
         "المخطوطة",
-        "لوحة الكتاب",
     ):
         assert label in menu, label
+    assert "لوحة الكتاب" not in body  # D77: retired (§5.5); the side panel is «أدوات الكتاب»
+    assert '<aside class="bk-side lo-side bp-side" aria-label="أدوات الكتاب" data-side>' in body
     assert 'x-show="v.driftChapter"' in menu and ':href="v.pdfUrl' in menu
     # the toolbar: «معاينة | تحرير» first, preview's spread and fit, edit's history, style picker, B / I,
     # «حاشية», the scan page marks, the counter, the jump field (preview), the primary «تم» (edit)
@@ -197,7 +200,8 @@ def test_book_page_first_paint_before_any_layout(editor):
         and "data-error-state" in body
         and 'class="bk-turn bk-turn-prev lo-turn"' in body
     )
-    # the one side panel: seven icon tabs in order, each with its icon and name, one panel each
+    # the one side panel: seven icon tabs in order, each with its icon and name, one panel each, and «تغييرات
+    # المراجعة» (D78) shown only while review's changes wait
     side = _between(body, '<aside class="bk-side lo-side bp-side"', "</aside>")
     tabs = re.findall(r'data-tab="(\w+)" title="([^"]+)"', side)
     assert tabs == [
@@ -208,12 +212,23 @@ def test_book_page_first_paint_before_any_layout(editor):
         ("block", "الفقرة"),
         ("source", "الأصل"),
         ("uncertain", "غير المؤكَّدة"),
+        ("changes", "تغييرات المراجعة"),
     ]
     icons = re.findall(
         r'class="bp-tab"[^>]*>\s*<svg class="icon" aria-hidden="true"><use href="#(i-[\w-]+)"/>', side
     )
-    assert icons == ["i-list", "i-pages", "i-search", "i-sliders", "i-pilcrow", "i-image", "i-uncertain"]
-    for key in ("chapters", "pages", "find", "format", "block", "source", "uncertain"):
+    assert icons == [
+        "i-list",
+        "i-pages",
+        "i-search",
+        "i-sliders",
+        "i-pilcrow",
+        "i-image",
+        "i-uncertain",
+        "i-merge",
+    ]
+    assert 'x-show="hasChangesTab" x-cloak>' in _between(side, 'data-tab="changes"', "</button>")
+    for key in ("chapters", "pages", "find", "format", "block", "source", "uncertain", "changes"):
         assert f'data-panel="{key}"' in side and f"x-show=\"tab === '{key}'\"" in side, key
     assert 'x-text="uncertain.count"' in side and "bp-badge is-warn" in side
     # «التنسيق»: six accordions in order, with the book details and the D47 fields
@@ -344,9 +359,10 @@ def test_book_page_embeds_the_first_live_pages_of_a_real_render(editor):
 
 
 def _rule(css: str, selector: str) -> set[str]:
-    """The declarations of every rule with exactly this selector (the minifier reorders them)."""
+    """The declarations of every rule with exactly this selector (the minifier reorders them), also the first
+    rule of a media query."""
     out: set[str] = set()
-    for match in re.finditer(r"(?:^|[}\s])" + re.escape(selector) + r"\{([^{}]*)\}", css):
+    for match in re.finditer(r"(?:^|[{}\s])" + re.escape(selector) + r"\{([^{}]*)\}", css):
         out |= {d.strip() for d in match.group(1).split(";") if d.strip()}
     assert out, selector
     return out
@@ -354,11 +370,12 @@ def _rule(css: str, selector: str) -> set[str]:
 
 def test_compiled_css_draws_live_pages_and_the_panel():
     css = CSS.read_text(encoding="utf-8")
-    # the screen takes the window; the sidebar folds to an icon rail on this page, unfolds over it
+    # the screen takes the window; the sidebar folds to an icon rail on every book screen (`data-rail`, 7c
+    # §5.2), unfolds over it
     assert "height:calc(100dvh - var(--topbar-height))" in _rule(css, ".main:has(>.lo-screen)")
-    assert "grid-template-columns:56px minmax(0,1fr)" in _rule(css, ".app-shell:has(.bp-screen)")
+    assert "grid-template-columns:56px minmax(0,1fr)" in _rule(css, ".app-shell:has([data-rail])")
     assert {"position:fixed", "width:var(--sidebar-width)", "box-shadow:var(--shadow-pop)"} <= _rule(
-        css, ".app-shell:has(.bp-screen).is-rail-open .sidebar"
+        css, ".app-shell:has([data-rail]).is-rail-open .sidebar"
     )
     # a live page: an inline-size container; one point = 100cqw / its width in points; lines placed in points
     assert {
@@ -408,7 +425,9 @@ def test_compiled_css_draws_live_pages_and_the_panel():
     assert "overflow-y:auto" in _rule(css, ".bp-tab-body")
     # reduced motion drops the turns, the fades, the shimmer
     assert "@media (prefers-reduced-motion:reduce)" in css
-    assert "animation:none" in _rule(css, ".bp-panel,.ed-pop,.ed-drawer,.lp-line.is-flash")
+    assert "animation:none" in _rule(
+        css, ".bp-panel,.ed-pop,.ed-drawer,.lp-line.is-flash,.lp-line.is-applied,.bp-changes-skel span"
+    )
     # the old editor page's styles are gone
     assert ".ed-sheet{" not in css and ".ed-toolbar{" not in css
 
@@ -2084,7 +2103,7 @@ def test_book_page_component_under_node(tmp_path):
         "painted": "3",
         "left": "",
         "gets": [],
-        "replaced": "/books/1/layout/#page-3",
+        "replaced": "/books/1/layout/?tab=format#page-3",  # §5.4: the address keeps the tab
     }
     # --- the mode switch: edit loads the chapter under the eyes once, the panel opens «الأصل»; the choice
     # of tab
@@ -2098,7 +2117,7 @@ def test_book_page_component_under_node(tmp_path):
     )
     assert (
         edit["gets"].count("/api/books/1/chapters/h10/") == 1
-        and edit["address"] == "/books/1/layout/?mode=edit#page-2"
+        and edit["address"] == "/books/1/layout/?mode=edit&tab=source#page-2"
     )
     assert (
         out["preview"] == {"mode": "preview", "tab": "format", "stored": ["find", None]}
@@ -2702,7 +2721,7 @@ def test_book_page_round_trip_safety_and_keys_under_node(tmp_path):
     assert out["message"] == {
         "otherBook": 0,
         "gets": 1,
-        "drift": {"edited": True, "pages": [3], "chapters": ["h10"]},
+        "drift": {"edited": True, "pages": [3], "chapters": ["h10"], "reasons": {}, "approvals": []},
         "banner": banner,
         "text": "تغيّر نص صفحة واحدة من هذا الفصل في المراجعة بعد التحرير:",
         "summary": True,
@@ -2753,7 +2772,9 @@ def test_book_page_rebuild_dialog_and_moved_keys_in_the_templates(editor):
     assert dialog.index('x-ref="rebuildCancel"') < dialog.index("استبدال الفصل")
     assert 'class="btn btn-danger"' in dialog and '@click="confirmRebuild()"' in dialog
     assert body.count("إعادة بناء الفصل من المراجعة…") == 2 and "إعادة تجميع الفصل من المراجعة" not in body
-    assert body.count('@click="askReassemble()"') == 2 and "الاحتفاظ بالنص" in body
+    # D78: the banner offers «عرض التغييرات» and «لاحقًا»; the rebuild is the menu's and the tab's second way
+    assert body.count('@click="askReassemble()"') == 2 and "الاحتفاظ بالنص" not in body
+    assert "عرض التغييرات" in body and "لاحقًا" in body
     assert '@focus.window="onWindowFocus()"' in body and '@pageshow.window="onPageShow($event)"' in body
     # D69: the toolbar titles and the sheet name the moved keys, Latin capitals that work on the Arabic layout
     assert body.count('title="صفحة واحدة أو صفحتان (V)"') == 2
@@ -2858,3 +2879,368 @@ console.log(JSON.stringify(result));
     assert out["afterShow"] == 0  # ... without running the undo
     assert out["afterRun"] == 1  # «تراجع» runs it once
     assert out["noAction"] is False and out["hasAction"] is False  # a toast without an undo shows no button
+
+
+# -------------------------------------------------------- 7c: «تغييرات المراجعة», the address, the note
+
+CONTRACT = ROOT / "editor" / "fixtures" / "contract"
+
+
+def _contract_all() -> dict:
+    return {path.name: json.loads(path.read_text(encoding="utf-8")) for path in CONTRACT.glob("*.json")}
+
+
+def _pick(fixture: dict, label: str):
+    return next(v for k, v in fixture.items() if label in k)
+
+
+def _pick_key(fixture: dict, label: str) -> str:
+    return next(k for k in fixture if label in k)
+
+
+CHANGES_SCENARIO = r"""
+const contract = JSON.parse(readFileSync(process.argv[4], 'utf8'));
+const pickOf = (obj, label) => Object.entries(obj).find(([k]) => k.includes(label))[1];
+const DR = Object.assign({ 'review only': { edited: true, pages: [1, 2], reasons: { 1: 'review', 2: 'review' }, approvals: [], chapters: ['h40011'], chapter_pages: { h40011: [1, 2] } } }, contract['drift.json']); const CP = contract['changes_plan.json']; const CR = contract['changes_requests.json'];
+const NOTE = contract['to_footnote.json'];
+const out = {};
+// the server gains the 7c answers: the plan (POST 202, then the GETs in turn), the apply, the note, the restore
+const baseFetch = globalThis.fetch;
+let planGets = []; let planPost = null; let applyAnswer = null; let noteAnswer = null;
+globalThis.fetch = async (url, init = {}) => {
+  const method = init.method || 'GET';
+  const body = init.body ? JSON.parse(init.body) : null;
+  if (url === '/api/books/1/review-changes/') {
+    calls.push([method, url, body]);
+    if (method === 'POST') return reply(planPost.status, planPost.response);
+    return reply(200, planGets.length > 1 ? planGets.shift() : planGets[0]);
+  }
+  if (/^\/api\/books\/1\/review-changes\/\d+\/apply\/$/.test(url)) { calls.push([method, url, body]); return reply(applyAnswer.status, applyAnswer.response); }
+  if (url === '/api/books/1/to-footnote/') { calls.push([method, url, body]); return reply(noteAnswer.status, noteAnswer.response); }
+  if (/^\/api\/books\/1\/snapshots\/\d+\/restore\/$/.test(url)) { calls.push([method, url, body]); return reply(200, pickOf(CR, 'undo').response); }
+  return baseFetch(url, init);
+};
+const posts = () => calls.filter((c) => c[0] === 'POST').map((c) => [c[1], c[2]]);
+const urls = { ...fixture.config.urls, drift: '/api/books/1/drift/', reviewChanges: '/api/books/1/review-changes/', reviewChangesApply: '/api/books/1/review-changes/__pid__/apply/', toFootnote: '/api/books/1/to-footnote/' };
+const toastStore = () => stores.bookToast;
+(async () => {
+  // ---- the banner: book-wide, by reason; «لاحقًا» puts it off until the drift changes
+  const b = mk({ urls, drift: pickOf(DR, 'review only') }); await settle();
+  const banner = (drift) => { b.applyDrift(drift); return b.driftBanner ? [b.driftBanner.kind, b.driftBanner.text, b.driftBanner.pages, b.driftBanner.more] : null; };
+  const drift = (reasons, edited = true) => ({ edited, pages: Object.keys(reasons).map(Number), reasons, approvals: [], chapters: ['h10'] });
+  out.banner = {
+    review: banner(drift({ 1: 'review', 2: 'review' })),
+    processing: banner(drift({ 7: 'processing' })),
+    mixed: banner(drift({ 1: 'review', 2: 'review', 3: 'review', 4: 'added', 5: 'removed', 7: 'processing' })),
+    added: banner({ edited: true, pages: [91, 92, 93], reasons: { 91: 'added', 92: 'added', 93: 'added' }, chapters: [] }),
+    many: banner({ edited: true, pages: [4, 12, 13, 20, 21, 22, 30, 31, 40, 41], reasons: Object.fromEntries([4, 12, 13, 20, 21, 22, 30, 31, 40, 41].map((n) => [n, 'processing'])), chapters: [] }),
+    approvals: banner(pickOf(DR, 'approvals only')),
+    unedited: banner(drift({ 1: 'review' }, false)),
+  };
+  // the contract's drifts: an edited book with content drift is announced; approvals, never
+  out.contractKinds = Object.fromEntries(Object.entries(contract['drift.json']).map(([k, v]) => [k, banner(v) ? banner(v)[0] : null]));
+  b.applyDrift(pickOf(DR, 'review only'));
+  b.putOffBanner();
+  const later = b.driftBanner;
+  b.applyDrift(pickOf(DR, '(every reason)'));
+  out.later = { hidden: later, back: Boolean(b.driftBanner), stored: Object.values(session).includes('1:review,2:review') };
+  drop();
+  // ---- the tab: only with content drift; the address keeps it; opening it posts a plan and polls it
+  const done = pickOf(CP, 'done, a stored base');
+  const c = mk({ urls, drift: pickOf(DR, 'approvals only') }); await settle();
+  out.noTab = { has: c.hasChangesTab, tabs: c.tabs.map((t) => t.key).includes('changes') };
+  c.applyDrift(done.drift);
+  out.tab = { has: c.hasChangesTab, badge: c.tabs.find((t) => t.key === 'changes').badge, count: c.changesCount };
+  planPost = pickOf(CR, '{} (all drift pages)');
+  planGets = [pickOf(CP, '(queued)'), pickOf(CP, '(running)'), done];
+  calls.length = 0; replaced.length = 0;
+  c.setTab('changes'); await settle();
+  out.posting = { post: posts()[0], state: c.changes.state, address: replaced.slice(-1)[0], wait: pending(700).length };
+  await fire(700); await fire(700);
+  out.polled = { gets: calls.filter((x) => x[1] === '/api/books/1/review-changes/' && x[0] === 'GET').length, state: c.changes.state };
+  out.rows = c.changesRows.map((r) => [r.number, r.reason, c.reasonLabel(r), r.chapter_title, r.items.map((it) => [it.id, it.kind, it.chip, c.choiceOf(it), it.ask])]);
+  out.apply = { label: c.changesApplyLabel, count: c.changesApplyCount };
+  // «نصّي | المراجعة» on the conflict i3: «المراجعة»; the apply sends only the choices that differ from the default
+  const i3 = c.changesItems.get('i3');
+  c.setChoice(i3, 'theirs');
+  out.defaultBody = c.applyBody(false);
+  // «خذ ما جاء من المراجعة في هذه الصفحة» / «أبقِ نصّي» per page, and a page left out
+  const row3 = c.changesRows.find((r) => r.number === 3);
+  c.setPageChoice(row3, 'theirs');
+  const pageTheirs = c.choiceOf(c.changesItems.get('i4'));
+  c.setPageChoice(row3, 'mine');
+  out.page = { theirs: pageTheirs, mine: c.choiceOf(c.changesItems.get('i4')) };
+  applyAnswer = pickOf(CR, '(the defaults, i3 on «المراجعة»)');
+  calls.length = 0;
+  const applied = await c.applyChanges(false); await settle();
+  out.applied = { post: posts().find((p) => p[0].includes('/apply/')), chapters: gets().includes('/api/books/1/chapters/'), toast: toastStore().message, has: toastStore().hasAction, version: applied.version, flash: c.appliedBlocks ? [...c.appliedBlocks].sort() : null, stages: typeof window.NassakhStages };
+  calls.length = 0;
+  toastStore().run(); await settle();
+  out.undo = posts().find((p) => p[0].includes('/restore/'));
+  drop();
+  // keep-all: the baseline moves, the text is not written
+  const k = mk({ urls, drift: done.drift }); await settle();
+  planPost = pickOf(CR, '{} (all drift pages)'); planGets = [done];
+  k.setTab('changes'); await settle();
+  applyAnswer = pickOf(CR, 'keep_all');
+  calls.length = 0;
+  await k.applyChanges(true); await settle();
+  out.keep = { post: posts().find((p) => p[0].includes('/apply/')), toast: toastStore().message };
+  drop();
+  // one page only: the other rows unticked
+  const o = mk({ urls, drift: done.drift }); await settle();
+  planPost = pickOf(CR, '{} (all drift pages)'); planGets = [done];
+  o.setTab('changes'); await settle();
+  o.changesRows.filter((r) => r.number !== 2).forEach((r) => o.togglePage(r));
+  applyAnswer = pickOf(CR, '{pages: [2]}');
+  calls.length = 0;
+  await o.applyChanges(false); await settle();
+  out.onePage = posts().find((p) => p[0].includes('/apply/'));
+  drop();
+  // a stale answer (409): the comparison is made again and the choices of the items that remain are kept
+  const s = mk({ urls, drift: done.drift }); await settle();
+  planPost = pickOf(CR, '{} (all drift pages)'); planGets = [done];
+  s.setTab('changes'); await settle();
+  s.setChoice(s.changesItems.get('i3'), 'theirs');
+  applyAnswer = pickOf(CR, 'stale version');
+  calls.length = 0; toasts.length = 0;
+  await s.applyChanges(false); await settle();
+  out.stale = { toast: toasts.slice(-1)[0], replanned: posts().filter((p) => p[0] === '/api/books/1/review-changes/').length, kept: s.choiceOf(s.changesItems.get('i3')) };
+  drop();
+  // a failed plan; a book edited before 7c (every item «للمقارنة», starting on «نصّي»); nothing to take («تم»)
+  const f = mk({ urls, drift: done.drift }); await settle();
+  planPost = pickOf(CR, '{} (all drift pages)'); planGets = [pickOf(CP, '(error)')];
+  f.setTab('changes'); await settle();
+  out.failed = { state: f.changes.state, error: f.changes.error };
+  planGets = [pickOf(CP, 'no base')];
+  await f.planChanges({}); await settle();
+  out.noBase = f.changesRows.flatMap((r) => r.items.map((it) => [it.kind, it.chip, f.choiceOf(it), it.ask, it.help]));
+  const agree = JSON.parse(JSON.stringify(done)); agree.plan.items = []; agree.plan.pages = agree.plan.pages.map((p) => Object.assign(p, { items: [] }));
+  planGets = [agree];
+  await f.planChanges({}); await settle();
+  applyAnswer = pickOf(CR, 'keep_all');
+  calls.length = 0;
+  await f.settleChanges(); await settle();
+  out.agree = { rows: f.changesRows.length, post: posts().find((p) => p[0].includes('/apply/')) };
+  drop();
+  // the text is not edited (409 reassemble): nothing to compare, a re-assembly loses nothing
+  const u = mk({ urls, drift: done.drift }); await settle();
+  planPost = pickOf(CR, 'unedited manuscript');
+  u.setTab('changes'); await settle();
+  out.notEdited = u.changes.notEdited;
+  drop();
+  // ---- the address: `?tab=` survives a landing and a tab switch; `?block=` lands on the paragraph, lit
+  replaced.length = 0;
+  const a = mk({ urls, tab: 'uncertain' }); await settle();
+  a.showPage(3, { instant: true }); await settle();
+  const landed = replaced.slice(-1)[0];
+  a.setTab('find'); const switched = replaced.slice(-1)[0];
+  a.setMode('edit'); await settle(); const edit = replaced.slice(-1)[0];
+  out.address = { landed, switched, edit };
+  drop();
+  const bl = mk({ urls, block: 'p13' }); await settle();
+  out.block = { current: bl.current, flash: bl.flash && bl.flash.block, pending: bl.pendingBlock };
+  drop();
+  // ---- the find prefill (fix everywhere on an edited book): «استبدال الكل», then the batch's pages compared
+  const pf = mk({ urls, tab: 'find', findPrefill: { query: 'برقة', replacement: 'برقه', fix: 'b-1' } }); await settle();
+  out.prefill = { tab: pf.tab, query: pf.find.query, replacement: pf.find.replacement, scope: pf.find.scope };
+  server.find = (body) => reply(200, { matches: [], total: 2, replaced: body.replace ? 2 : 0, snapshot: 5 });
+  planPost = pickOf(CR, '{fix: <batch>}'); planGets = [done];
+  calls.length = 0;
+  await pf.replaceAll(); await settle();
+  out.fixPlan = posts().filter((p) => p[0] === '/api/books/1/review-changes/').map((p) => p[1]);
+  server.find = null;
+  drop();
+  // ---- «تحويل إلى حاشية للعلامة (n)»: the chapter as this page holds it, the answer as one step of its undo
+  const n = mk({ urls, mode: 'edit' }); await settle();
+  n.showPage(3, { instant: true }); await settle();
+  await n.loadChapter('h10'); await settle();
+  noteAnswer = pickOf(NOTE, '(the chapter the book page holds');
+  calls.length = 0;
+  const made = await n.toFootnote('p13'); await settle();
+  const sent = posts().find((p) => p[0] === '/api/books/1/to-footnote/');
+  out.note = { block: sent && sent[1].block, doc: sent && sent[1].content.type, same: sent && JSON.stringify(sent[1].content.content) === JSON.stringify(server.docs.h10), nodes: JSON.stringify(n.ctx().nodes) === JSON.stringify(noteAnswer.response.content.content), put: calls.some((x) => x[0] === 'PUT'), toast: toastStore().message, marker: made && made.note.marker };
+  noteAnswer = pickOf(NOTE, 'no call in the page');
+  n.ctx().nodes = clone(server.docs.h10); // the chapter before the note
+  toasts.length = 0;
+  await n.toFootnote('p13'); await settle();
+  out.noteRefused = toasts.slice(-1)[0];
+  out.marker = [n.noteMarkerOf({ type: 'paragraph', attrs: { noteFor: '3' }, content: [] }), n.noteMarkerOf({ type: 'paragraph', attrs: {}, content: [{ type: 'text', text: '(٢) انظر' }] }), n.noteMarkerOf({ type: 'paragraph', attrs: {}, content: [{ type: 'text', text: 'نص عادي' }] })];
+  drop();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_book_page_review_changes_the_address_and_the_note_under_node(tmp_path):
+    """D78 (§5.6) on the contract: the banner's wording per reason, the tab (post, poll, rows, choices, the
+    apply's body, the toast and its undo, keep-all, one page, a stale answer, a failure, a book with no base,
+    nothing to take), §5.4's addresses (`?tab=`, `?block=`, §5.7's find prefill) and «تحويل إلى حاشية»."""
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    contract = _contract_all()
+    (folder / "contract.json").write_text(json.dumps(contract, ensure_ascii=False))
+    base = COMPONENT_HARNESS.split("\nconst out = {};\n")[0]
+    out = _run_node(
+        folder,
+        "changes.mjs",
+        base + CHANGES_SCENARIO,
+        str(ROOT),
+        str(folder / "fixture.json"),
+        str(folder / "contract.json"),
+    )
+    banner = out["banner"]
+    assert banner["review"] == ["edited", "تغيّر نص صفحتين في المراجعة بعد تحرير الكتاب:", [1, 2], False]
+    assert banner["processing"] == ["edited", "أعادت المعالجة قراءة صفحة واحدة بعد تحرير الكتاب:", [7], False]
+    assert banner["mixed"] == [
+        "edited",
+        "تغيّر نص 6 صفحات بعد تحرير الكتاب: 3 في المراجعة، 1 أعادت المعالجة قراءتها، 1 رُوجعت ولم تدخل الكتاب"
+        " و1 أُخرجت من الكتاب.",
+        [],
+        False,
+    ]
+    assert banner["added"] == ["edited", "رُوجعت 3 صفحات لم تدخل الكتاب بعد:", [91, 92, 93], False]
+    assert banner["many"] == [
+        "edited",
+        "أعادت المعالجة قراءة 10 صفحات بعد تحرير الكتاب:",
+        [4, 12, 13, 20, 21, 22, 30, 31],
+        True,
+    ]
+    assert banner["approvals"] is None  # approvals are never announced
+    assert banner["unedited"] == [
+        "assembled",
+        "تغيّر نص صفحة واحدة في المراجعة بعد التجميع؛ لم يُحرَّر الكتاب بعد، فإعادة التجميع لا تُضيّع شيئًا.",
+        [],
+        False,
+    ]
+    assert out["later"] == {"hidden": None, "back": True, "stored": True}
+    kinds = out["contractKinds"]
+    assert kinds[_pick_key(_contract_all()["drift.json"], "(every reason)")] == "edited"
+    assert kinds[_pick_key(_contract_all()["drift.json"], "approvals only")] is None
+    assert kinds[_pick_key(_contract_all()["drift.json"], "no manuscript")] is None
+    # the tab: only with content drift, its badge the drift's pages; opening it posts and polls every 700 ms
+    requests = _contract_all()["changes_requests.json"]
+    plan_id = _pick(_contract_all()["changes_plan.json"], "done, a stored base")["plan"]["id"]
+    apply_url = f"/api/books/1/review-changes/{plan_id}/apply/"
+    assert out["noTab"] == {"has": False, "tabs": False}
+    assert out["tab"] == {"has": True, "badge": "6", "count": 6}
+    assert out["posting"]["post"] == [
+        "/api/books/1/review-changes/",
+        _pick(requests, "{} (all drift pages)")["request"],
+    ]
+    assert out["posting"]["address"] == "/books/1/layout/?tab=changes#page-2" and out["posting"]["wait"] == 1
+    assert out["polled"] == {"gets": 3, "state": "ready"}
+    plan = _pick(_contract_all()["changes_plan.json"], "done, a stored base")["plan"]
+    items = {it["id"]: it for it in plan["items"]}
+    assert out["rows"] == [
+        [
+            row["number"],
+            row["reason"],
+            row["reason_label"],
+            row["chapter_title"],
+            [
+                [i, items[i]["kind"], items[i]["chip"], items[i]["default"], items[i]["ask"]]
+                for i in row["items"]
+            ],
+        ]
+        for row in plan["pages"]
+    ]
+    labels = {
+        "review": "المراجعة",
+        "processing": "إعادة المعالجة",
+        "added": "صفحة جديدة",
+        "removed": "أُخرجت من الكتاب",
+    }
+    assert all(row[2] == labels[row[1]] for row in out["rows"])  # the chips' words (§5.6)
+    assert out["apply"] == {"label": f"أخذ التغييرات ({len(items)})", "count": len(items)}
+    defaults = _pick(requests, "(the defaults, i3 on «المراجعة»)")
+    assert out["defaultBody"] == defaults["request"]
+    assert out["page"] == {"theirs": "theirs", "mine": "mine"}
+    assert out["applied"]["post"][1] == {"choices": {"i3": "theirs"}, "pages": [1, 2, 3, 4, 5, 7]}
+    assert out["applied"]["post"][0] == apply_url
+    assert out["applied"]["chapters"] is True and out["applied"]["version"] == defaults["response"]["version"]
+    assert out["applied"]["toast"] == "أُخذت تغييرات 6 صفحات من المراجعة" and out["applied"]["has"] is True
+    assert out["applied"]["flash"] and "p40012" in out["applied"]["flash"]
+    assert out["undo"] == [f"/api/books/1/snapshots/{defaults['response']['snapshot']}/restore/", {}]
+    keep = _pick(requests, "keep_all")
+    assert out["keep"] == {
+        "post": [apply_url, keep["request"]],
+        "toast": "بقي نصّك كما هو؛ لن تعود هذه الصفحات إلى التغييرات",
+    }
+    assert out["onePage"] == [
+        apply_url,
+        _pick(requests, "{pages: [2]}")["request"],
+    ]
+    assert out["stale"] == {
+        "toast": "تغيّر النص منذ المقارنة؛ أُعيدت المقارنة.",
+        "replanned": 1,
+        "kept": "theirs",
+    }
+    assert out["failed"] == {"state": "error", "error": "تعذّرت المقارنة؛ بقي الكتاب كما هو."}
+    help_choose = "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر."
+    # a book edited before 7c: every paragraph that differs is «للمقارنة» on «نصّي»; a page new to the book
+    # (`added`) still brings its paragraph in
+    chosen = [item for item in out["noBase"] if item[0] != "insert"]
+    assert len(chosen) == 6 and all(
+        item == ["choose", "للمقارنة", "mine", True, help_choose] for item in chosen
+    )
+    assert [item for item in out["noBase"] if item[0] == "insert"] == [
+        ["insert", "فقرة جديدة", "theirs", False, ""]
+    ]
+    assert out["agree"] == {"rows": 6, "post": [apply_url, keep["request"]]}
+    assert out["notEdited"] == _pick(requests, "unedited manuscript")["response"]["detail"]
+    # §5.4: the address keeps the tab through a landing, a tab switch and edit mode
+    assert out["address"] == {
+        "landed": "/books/1/layout/?tab=uncertain#page-3",
+        "switched": "/books/1/layout/?tab=find#page-3",
+        "edit": "/books/1/layout/?mode=edit&tab=source#page-3",
+    }
+    assert out["block"] == {"current": 2, "flash": "p13", "pending": None}  # p13 starts at the foot of page 2
+    assert out["prefill"] == {"tab": "find", "query": "برقة", "replacement": "برقه", "scope": "book"}
+    assert out["fixPlan"] == [_pick(requests, "{fix: <batch>}")["request"] | {"fix": "b-1"}]
+    note = out["note"]
+    assert note["block"] == "p13" and note["doc"] == "doc" and note["same"] is True
+    assert note["nodes"] is True and note["put"] is True and note["marker"] == "1"
+    assert note["toast"] == "صارت الفقرة حاشية للعلامة (1)"
+    refused = _pick(_contract_all()["to_footnote.json"], "no call in the page")["response"]["detail"]
+    assert out["noteRefused"] == refused
+    assert out["marker"] == ["3", "2", ""]
+
+
+def test_book_page_templates_for_review_changes_and_the_note(editor):
+    body, _config = _page(_logged(editor), _book())
+    banner = _between(body, "data-drift-banner", "data-conflict-banner")
+    assert 'x-show="driftBanner"' in body and "عرض التغييرات" in banner and "لاحقًا" in banner
+    assert "@click=\"setTab('changes')\" data-changes-button" in banner and "إعادة التجميع" in banner
+    menu = _between(body, "data-book-menu", "</template>")
+    assert (
+        "تغييرات المراجعة…" in menu
+        and 'x-show="v.hasChangesTab"' in menu
+        and 'x-text="v.changesCount"' in menu
+    )
+    panel = _between(body, 'data-panel="changes"', "</section>")
+    for needle in (
+        "تُؤخذ فقرات هذه الصفحات وحدها، ويبقى كل ما سواها كما حرّرته. تُحفظ نسخة قبل الأخذ.",
+        "يُقارَن نص الصفحات بنص الكتاب…",
+        "لا فرق في النص؛ المراجعة والكتاب متّفقان في هذه الصفحات.",
+        "خذ ما جاء من المراجعة في هذه الصفحة",
+        "أبقِ نصّي في هذه الصفحة",
+        ">نصّي</button>",
+        ">المراجعة</button>",
+        "الاحتفاظ بنصّي في الكل",
+        "إعادة بناء الفصل من المراجعة…",
+        '<del x-text="part[1]"></del>',
+        '<ins x-text="part[1]"></ins>',
+        'x-text="changesApplyLabel"',
+        ':href="reviewUrl(row.number)"',
+        "إعادة المحاولة",
+    ):
+        assert needle in panel, needle
+    block = _between(body, 'data-panel="block"', "</section>")
+    assert "data-to-footnote" in block and "'تحويل إلى حاشية للعلامة (' + blockInfo.noteFor + ')'" in block
+    assert '<symbol id="i-merge"' in body
+    css = (ROOT / "static" / "src" / "components" / "layout.css").read_text(encoding="utf-8")
+    assert ".lp-line.is-applied { animation: lp-applied 600ms ease-out; }" in css
+    assert ".bp-diff del { color: var(--color-danger-text); background: var(--color-danger-bg);" in css
+    assert ".bp-diff ins {" in css and "text-decoration: underline" in css

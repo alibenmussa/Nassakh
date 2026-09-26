@@ -21,9 +21,18 @@ answer is 409 `{"message", "line"}` with the line as it is now; without them not
 - POST /api/gaps/<id>/accept/       `{text?}` → `{line, gap, counts, page}` (D72)
 - POST /api/gaps/<id>/dismiss/      → `{line, gap, counts, page}`
 - POST /api/pages/<id>/undo/        → review payload
-- POST /api/pages/<id>/approve/     `{force}` → `{status, next_review_url, ...}` | 409
+- POST /api/pages/<id>/approve/     `{force}` → `{status, next_review_url, ..., next_step}` | 409
 - POST /api/pages/<id>/reopen/      → review payload
 - GET  /api/books/<id>/filmstrip/   → `{"pages": services.filmstrip}`
+
+7c (D76, D79; editor/fixtures/contract/): the payload, approve, undo and reopen take review's origin (`from`,
+`at`, `block`: in the query of a GET, in the body of a POST) and answer with it in `nav` and the URLs; the
+answers of resolve and edit carry `elsewhere` (the other occurrences of a corrected form, or null).
+
+- GET  /api/books/<id>/occurrences/?q=&match_tashkeel=&fold_alef=&whole_word= → `corrections.find_occurrences`
+- POST /api/books/<id>/fix-everywhere/ `{from, to, picks: [{line_id, index, t}], …options}` →
+  `corrections.fix_everywhere`
+- POST /api/books/<id>/fix-everywhere/<batch>/undo/ → `corrections.undo_fix` (404 for an unknown batch)
 """
 
 from __future__ import annotations
@@ -38,7 +47,7 @@ from books.models import Book, Page
 from core.permissions import CanReview
 from ocr.models import Line, TextGap
 
-from . import services
+from . import corrections, services
 
 TRUE_VALUES = frozenset({True, "1", "true", "True", "yes", "on"})
 
@@ -83,10 +92,34 @@ def _page(page_id: int) -> Page:
     return get_object_or_404(Page.objects.select_related("book"), pk=page_id)
 
 
+def _origin(values) -> dict | None:
+    """Review's origin from a query string or a body (`services.parse_origin`)."""
+    values = values if hasattr(values, "get") else {}
+    return services.parse_origin(values.get("from"), values.get("at"), values.get("block"))
+
+
+def _token_text(line: Line, index) -> str | None:
+    """The word at `index` of a line as it is now (None for a bad index)."""
+    try:
+        return str((line.tokens or [])[int(str(index))].get("t") or "")
+    except (TypeError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _one_word_change(before: list, after: list) -> tuple[int, str, str] | None:
+    """`(index, old, new)` when an edit changed exactly one word (same word count), else None."""
+    old = [str((t or {}).get("t") or "") for t in before or []]
+    new = [str((t or {}).get("t") or "") for t in after or []]
+    if len(old) != len(new):
+        return None
+    changed = [i for i, (a, b) in enumerate(zip(old, new, strict=True)) if a != b]
+    return (changed[0], old[changed[0]], new[changed[0]]) if len(changed) == 1 else None
+
+
 @api_view(["GET"])
 def page_review(request: Request, page_id: int) -> Response:
-    """The review payload of one page."""
-    return Response(services.review_payload(_page(page_id), request.user))
+    """The review payload of one page (with review's origin from the query string)."""
+    return Response(services.review_payload(_page(page_id), request.user, _origin(request.query_params)))
 
 
 @api_view(["POST"])
@@ -95,6 +128,7 @@ def line_resolve(request: Request, line_id: int) -> Response:
     """Resolve one uncertain word with a reading (`primary | secondary | tess | typed | sug`)."""
     line = _line(line_id)
     data = _data(request)
+    before = _token_text(line, data.get("index"))
     try:
         line = services.resolve_token(
             line,
@@ -107,11 +141,13 @@ def line_resolve(request: Request, line_id: int) -> Response:
     except services.ReviewError as exc:
         return _error(exc)
     page = _page(line.page_id)
+    index = int(str(data.get("index")))
     return Response(
         {
             "line": services.line_item(line),
             "counts": services.mutation_counts(page, line),
             "page": services.page_item(page),
+            "elsewhere": corrections.elsewhere(page.book, before, _token_text(line, index), line.pk, index),
         }
     )
 
@@ -122,12 +158,20 @@ def line_edit(request: Request, line_id: int) -> Response:
     """Replace the text of a whole line."""
     line = _line(line_id)
     data = _data(request)
+    old_tokens = list(line.tokens or [])
     try:
         line = services.edit_line(line, str(data.get("text") or ""), request.user, version=_seen(data, "v"))
     except services.ReviewError as exc:
         return _error(exc)
+    page = _page(line.page_id)
+    change = _one_word_change(old_tokens, line.tokens)
+    elsewhere = corrections.elsewhere(page.book, change[1], change[2], line.pk, change[0]) if change else None
     return Response(
-        {"line": services.line_item(line), "counts": services.mutation_counts(_page(line.page_id), line)}
+        {
+            "line": services.line_item(line),
+            "counts": services.mutation_counts(page, line),
+            "elsewhere": elsewhere,
+        }
     )
 
 
@@ -296,7 +340,7 @@ def gap_dismiss(request: Request, gap_id: int) -> Response:
 def page_undo(request: Request, page_id: int) -> Response:
     """Undo the newest review action of the page; answers the new review payload."""
     try:
-        payload = services.undo_last(_page(page_id), request.user)
+        payload = services.undo_last(_page(page_id), request.user, _origin(_data(request)))
     except services.ReviewError as exc:
         return _error(exc)
     return Response(payload)
@@ -306,10 +350,11 @@ def page_undo(request: Request, page_id: int) -> Response:
 @permission_classes([CanReview])
 def page_approve(request: Request, page_id: int) -> Response:
     """Approve a page (`force: true` approves with unresolved words left)."""
-    raw = _data(request).get("force")
+    data = _data(request)
+    raw = data.get("force")
     force = isinstance(raw, bool | int | float | str) and raw in TRUE_VALUES  # a list or dict is not hashable
     try:
-        result = services.approve_page(_page(page_id), request.user, force=force)
+        result = services.approve_page(_page(page_id), request.user, force=force, origin=_origin(data))
     except services.ReviewError as exc:
         return _error(exc)
     return Response(result)
@@ -323,7 +368,7 @@ def page_reopen(request: Request, page_id: int) -> Response:
         services.reopen_page(_page(page_id), request.user)
     except services.ReviewError as exc:
         return _error(exc)
-    return Response(services.review_payload(_page(page_id), request.user))
+    return Response(services.review_payload(_page(page_id), request.user, _origin(_data(request))))
 
 
 @api_view(["GET"])
@@ -331,3 +376,52 @@ def book_filmstrip(request: Request, book_id: int) -> Response:
     """Thumbnails and review state of every non-excluded page of a book."""
     book = get_object_or_404(Book, pk=book_id)
     return Response({"book_id": book.pk, "pages": services.filmstrip(book)})
+
+
+# ---------------------------------------------------------------- «تصحيح في كل الكتاب» (D79)
+
+
+@api_view(["GET"])
+def book_occurrences(request: Request, book_id: int) -> Response:
+    """Every occurrence of a form in the book's reviewable pages, for the fix-everywhere sheet."""
+    book = get_object_or_404(Book, pk=book_id)
+    params = request.query_params
+    try:
+        found = corrections.find_occurrences(book, params.get("q"), corrections.options_of(params))
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response(found)
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def fix_everywhere(request: Request, book_id: int) -> Response:
+    """Correct the ticked occurrences of a form (one batch, undone in one step)."""
+    book = get_object_or_404(Book, pk=book_id)
+    data = _data(request)
+    try:
+        result = corrections.fix_everywhere(
+            book,
+            data.get("from"),
+            data.get("to"),
+            data.get("picks"),
+            request.user,
+            corrections.options_of(data),
+        )
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([CanReview])
+def fix_everywhere_undo(request: Request, book_id: int, batch: str) -> Response:
+    """Revert a fix batch (lines changed since keep their newer text)."""
+    book = get_object_or_404(Book, pk=book_id)
+    try:
+        result = corrections.undo_fix(book, batch, request.user)
+    except corrections.CorrectionNotFound as exc:
+        return Response({"message": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+    except services.ReviewError as exc:
+        return _error(exc)
+    return Response(result)

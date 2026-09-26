@@ -576,12 +576,13 @@ def run_assembly(run_id: int) -> AssemblyRun | None:
     try:
         book = Book.objects.get(pk=run.book_id)
         options = normalize_settings(book.assembly_settings)
+        read = timezone.now()  # when the pages were read (`included[pk].at`, D78)
         loaded = load_book(book)
         result = pipeline.assemble(
             loaded.pages, options, book_meta(book, run), lambda key: _set_stage(run, key)
         )
         _set_stage(run, "save")
-        _save(run, book, options, loaded, result, started)
+        _save(run, book, options, loaded, result, started, read)
         _render_pages(run, book)
     except Exception as exc:  # noqa: BLE001 - reported on the run, the old manuscript stays
         log.exception("assembly run %s of book %s failed", run.pk, run.book_id)
@@ -616,15 +617,20 @@ def _save(
     loaded: LoadedBook,
     result: pipeline.Result,
     started: float,
+    read: datetime | None = None,
 ) -> None:
-    """The save step of `run_assembly` (one transaction)."""
+    """The save step of `run_assembly` (one transaction). Each page of `included` records when it was read
+    (`at`, D78: a review revision after it is a review change); an edited text's base goes (the new text is
+    the assembly itself) and its snapshot keeps it."""
     included_ids = set(result.pages)
     pages = [page for page in loaded.pages if page.id in included_ids]
+    stamp = (read or timezone.now()).isoformat()
     included = {
         str(page.id): {
             "number": page.number,
             "reviewed": page.reviewed,
             "sig": loaded.signatures.get(page.id, EMPTY_SIGNATURE),
+            "at": stamp,
         }
         for page in pages
     }
@@ -650,6 +656,7 @@ def _save(
                 ManuscriptSnapshot.objects.create(
                     manuscript=manuscript,
                     document=manuscript.document,
+                    base=manuscript.base if edited else None,
                     version=manuscript.version,
                     label=(
                         f"النص المحرَّر قبل إعادة التجميع · الإصدار {manuscript.version}"
@@ -664,6 +671,7 @@ def _save(
                 )
                 prune_snapshots(manuscript)
                 manuscript.document = document
+                manuscript.base = None  # D78: an assembled text is its own base until the next edit
                 manuscript.version += 1
                 manuscript.origin = Manuscript.Origin.ASSEMBLY
                 manuscript.run = run
@@ -728,6 +736,42 @@ def page_rows(book: Book) -> list[tuple[int, int, str]]:
     return list(book.pages.filter(is_excluded=False).values_list("id", "number", "status"))
 
 
+ADDED, REMOVED, CONTENT, APPROVAL = "added", "removed", "content", "approval"
+# Revisions that change a page's lines (a drift page with one after it was read changed in review, D78)
+NOT_LINE_CHANGES: tuple[str, ...] = ("approve", "reopen", "gap")
+
+
+def _classify(included: dict, rows, options: Settings) -> dict[int, tuple[str, int | None]]:
+    """Page number → `(kind, page id)` of every page changed since the run that built the manuscript: `added`
+    (eligible now, not read then), `removed` (read then, not eligible now: excluded, or not reviewed any
+    more with unreviewed pages left out), `content` (its content signature moved: a line edited, inserted,
+    deleted or re-roled after it was read) or `approval` (only its reviewed flag moved). One query for the
+    signatures (of every page the run read that is still eligible)."""
+    allowed = eligible_statuses(options)
+    eligible = {pk: (number, status) for pk, number, status in rows if status in allowed}
+    known: dict[int, dict] = {}
+    for key, info in (included or {}).items():
+        if str(key).isdigit() and isinstance(info, dict):
+            known[int(key)] = info
+    out: dict[int, tuple[str, int | None]] = {}
+    common: list[int] = []
+    for pk, (number, status) in eligible.items():
+        info = known.get(pk)
+        if info is None:
+            out[number] = (ADDED, pk)
+            continue
+        if bool(info.get("reviewed")) != (status in pipeline.REVIEWED_STATUSES):
+            out[number] = (APPROVAL, pk)
+        common.append(pk)
+    for pk, info in known.items():
+        if pk not in eligible and isinstance(info.get("number"), int):
+            out[info["number"]] = (REMOVED, pk)
+    for pk, signature in page_signatures(common).items():
+        if signature != known[pk].get("sig"):
+            out[eligible[pk][0]] = (CONTENT, pk)
+    return out
+
+
 def page_changes(included: dict, rows, options: Settings) -> tuple[list[int], list[int]]:
     """`(stale, drift)`: the numbers of the pages changed since the run that built the manuscript, two ways.
 
@@ -741,33 +785,9 @@ def page_changes(included: dict, rows, options: Settings) -> tuple[list[int], li
 
     One query for the signatures (of every page the run read that is still eligible).
     """
-    allowed = eligible_statuses(options)
-    eligible = {pk: (number, status) for pk, number, status in rows if status in allowed}
-    known: dict[int, dict] = {}
-    for key, info in (included or {}).items():
-        if str(key).isdigit() and isinstance(info, dict):
-            known[int(key)] = info
-    stale: set[int] = set()
-    drift: set[int] = set()
-    common: list[int] = []
-    for pk, (number, status) in eligible.items():
-        info = known.get(pk)
-        if info is None:
-            stale.add(number)
-            drift.add(number)
-            continue
-        if bool(info.get("reviewed")) != (status in pipeline.REVIEWED_STATUSES):
-            stale.add(number)
-        common.append(pk)
-    for pk, info in known.items():
-        if pk not in eligible and isinstance(info.get("number"), int):
-            stale.add(info["number"])
-            drift.add(info["number"])
-    for pk, signature in page_signatures(common).items():
-        if signature != known[pk].get("sig"):
-            stale.add(eligible[pk][0])
-            drift.add(eligible[pk][0])
-    return sorted(stale), sorted(drift)
+    changes = _classify(included, rows, options)
+    stale = sorted(changes)
+    return stale, [number for number in stale if changes[number][0] != APPROVAL]
 
 
 def stale_pages(included: dict, rows, options: Settings) -> list[int]:
@@ -780,6 +800,59 @@ def drift_pages(included: dict, rows, options: Settings) -> list[int]:
     """`stale_pages` minus the approval-only pages (D70, `page_changes`' second list): the review drift of
     an edited manuscript. One query for the signatures."""
     return page_changes(included, rows, options)[1]
+
+
+def read_at(info: dict, finished_at: datetime | None) -> datetime | None:
+    """When the run read a page: its `included` entry's `at` (ISO, D78), else the run's `finished_at` (entries
+    written before 7c)."""
+    stamp = info.get("at") if isinstance(info, dict) else None
+    if isinstance(stamp, str) and stamp:
+        try:
+            value = datetime.fromisoformat(stamp)
+        except ValueError:
+            value = None
+        if value is not None:
+            return value if not timezone.is_naive(value) else timezone.make_aware(value, UTC)
+    return finished_at
+
+
+def stale_reasons(included: dict, rows, options: Settings, finished_at: datetime | None = None) -> dict:
+    """`stale_pages`' sibling (D78): `{pages, reasons, approvals}` — `pages` the content drift
+    (`drift_pages`), `reasons` page number (a string key) → `review` (a line-changing `LineRevision`
+    created after the page was read, undone ones included: an undo is a change too), `processing` (the
+    lines changed with no such revision: a re-run, the numbers pass), `added` or `removed` (the page's
+    eligibility changed), and
+    `approvals` the pages whose only change is the reviewed flag. The time a page was read is its entry's
+    `at`, else `finished_at` (the run's). One query for the signatures, one more for the revisions when a
+    page's lines changed."""
+    from review.models import LineRevision  # other app: lazy import
+
+    changes = _classify(included, rows, options)
+    known = {int(k): v for k, v in (included or {}).items() if str(k).isdigit() and isinstance(v, dict)}
+    content = {pk: number for number, (kind, pk) in changes.items() if kind == CONTENT and pk is not None}
+    last: dict[int, datetime] = {}
+    if content:
+        revisions = (
+            LineRevision.objects.filter(page_id__in=list(content))
+            .exclude(action__in=NOT_LINE_CHANGES)
+            .values("page_id")
+            .annotate(last=Max("created_at"))
+        )
+        last = {row["page_id"]: row["last"] for row in revisions}
+    reasons: dict[str, str] = {}
+    for number, (kind, pk) in sorted(changes.items()):
+        if kind == APPROVAL:
+            continue
+        if kind == CONTENT:
+            seen = read_at(known.get(pk, {}), finished_at)
+            newest = last.get(pk)
+            kind = "review" if newest is not None and (seen is None or newest > seen) else "processing"
+        reasons[str(number)] = kind
+    return {
+        "pages": sorted(int(n) for n in reasons),
+        "reasons": reasons,
+        "approvals": sorted(number for number, (kind, _pk) in changes.items() if kind == APPROVAL),
+    }
 
 
 def _run_info(run: AssemblyRun | None) -> dict | None:
@@ -917,7 +990,7 @@ def live_reviewed(book: Book) -> dict[int, bool]:
 def manuscript_payload(book: Book) -> dict | None:
     """`{document, warnings, stats, seams, version, reviewed}` of the book's manuscript (None before the first
     run). `reviewed` is `live_reviewed` (page number → reviewed now) for the amber mark. Two queries."""
-    manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
+    manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").defer("base").first()
     if manuscript is None:
         return None
     document = manuscript.document or {}

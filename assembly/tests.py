@@ -1849,10 +1849,12 @@ def test_start_assembly_runs_eagerly_end_to_end(editor):
     assert "ترويسة" not in all_text and "١٢" not in all_text  # running header and page number left out
     assert run.stats["pages_included"] == 2 and run.stats["joins"] == 1 and run.stats["footnotes"] == 1
     assert {w["code"] for w in run.warnings} >= {"page_unreviewed", "uncertain_words"}
+    at = run.included[str(one.pk)]["at"]  # D78: when the pages were read (before the run finished)
     assert run.included == {
-        str(one.pk): {"number": 1, "reviewed": True, "sig": run.included[str(one.pk)]["sig"]},
-        str(two.pk): {"number": 2, "reviewed": False, "sig": run.included[str(two.pk)]["sig"]},
+        str(one.pk): {"number": 1, "reviewed": True, "sig": run.included[str(one.pk)]["sig"], "at": at},
+        str(two.pk): {"number": 2, "reviewed": False, "sig": run.included[str(two.pk)]["sig"], "at": at},
     }
+    assert __import__("datetime").datetime.fromisoformat(at) <= run.finished_at
     one.refresh_from_db()
     two.refresh_from_db()
     assert one.status == Page.Status.ASSEMBLED and two.status == Page.Status.OCR_DONE  # D36

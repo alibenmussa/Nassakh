@@ -1109,10 +1109,21 @@ def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> di
         "readers": _readers(page),
         "is_reviewed": page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED),
         "review_url": reverse("review:page", args=[page.book_id, page.number]),
+        # D76: the tile's link — review once the page's text is final (and the page is in the book), else
+        # the page detail; the compact tile has no URLs (the grid derives it from `text_state`)
+        "primary_url": primary_url(page),
         # Image size for the stacked view's aspect-ratio placeholders (cleaned image first, then the scan).
         "width": (preprocess.output_width if preprocess else 0) or page.width,
         "height": (preprocess.output_height if preprocess else 0) or page.height,
     }
+
+
+def primary_url(page: Page) -> str:
+    """Where a page's tile leads (D76): review when its text is final and it is not excluded, else the page
+    detail («تفاصيل المعالجة»)."""
+    if page.text_state == Page.TextState.FINAL and not page.is_excluded:
+        return reverse("review:page", args=[page.book_id, page.number])
+    return reverse("books:page_detail", args=[page.book_id, page.number])
 
 
 def _compact_tile(page: Page, sequence_issue: str, failed: bool, retry_stage: str) -> dict:
@@ -1229,6 +1240,7 @@ def page_url_templates(book: Book) -> dict[str, str]:
 
 
 GUIDES_VIEW = "guides"  # `?view=guides`: the «التخطيط» mode on a book whose «المعالجة» started
+GUIDES_VIEW_QUERY = f"view={GUIDES_VIEW}"
 
 
 def start_action(book: Book, guides_mode: bool) -> str:
@@ -1340,6 +1352,9 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
         "guidesMode": guides_mode,
         "layoutStage": layout_stage,
         "rerun": rerun,
+        # the stage bar (D76): the dashboard is «التخطيط» in its mode, «المعالجة» otherwise
+        "stageBar": book_stages(book, "pages" if guides_mode else "ocr"),
+        "stageBarUrl": reverse("api:book_stages", args=[book.pk]),
     }
     context: dict = {"guides_mode": guides_mode, "layout_stage": layout_stage, "start_action": ""}
     if guides_mode:
@@ -1383,6 +1398,7 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
         "layout": progress["layout"],
         "editor_urls": config["editorUrls"],
         "config": config,
+        "stage_steps": config["stageBar"],
         **context,
     }
 
@@ -1793,3 +1809,350 @@ def book_text(book: Book) -> dict:
     parts = [_clean_text(final or provisional or "") for final, provisional in rows]
     parts = [part for part in parts if part]
     return {"text": "\n\n".join(parts), "pages": len(parts)}
+
+
+# ====================================================================== the stage bar (D76, PHASE7_SPEC §5.1)
+
+STAGE_KEYS: tuple[str, ...] = ("pages", "ocr", "review", "manuscript", "book", "export")
+STAGE_NAMES: dict[str, str] = {
+    "pages": "التخطيط",
+    "ocr": "المعالجة",
+    "review": "المراجعة",
+    "manuscript": "المخطوطة",
+    "book": "الكتاب",
+    "export": "الإخراج",
+}
+STATE_WORDS: dict[str, str] = {  # the visually hidden words of each state («(مكتملة)» …)
+    "todo": "لم تبدأ",
+    "active": "جارية",
+    "done": "مكتملة",
+    "stale": "أقدم من النص",
+    "attention": "تحتاج انتباهًا",
+    "blocked": "غير متاحة بعد",
+}
+PAGES_NOUN = ("صفحة واحدة", "صفحتان", "صفحات", "صفحة")
+PAGES_OF = ("صفحة واحدة", "صفحتين", "صفحات", "صفحة")  # after a noun («نص صفحتين»)
+CHAPTERS_NOUN = ("فصل واحد", "فصلان", "فصول", "فصلًا")
+MINUTES = ("دقيقة", "دقيقتين", "دقائق", "دقيقة")
+HOURS = ("ساعة", "ساعتين", "ساعات", "ساعة")
+DAYS = ("يوم", "يومين", "أيام", "يومًا")
+EXPORT_NAMES: dict[str, str] = {"docx": "Word", "print_pdf": "PDF", "screen_pdf": "PDF", "epub": "EPUB"}
+_READ = frozenset({Page.Status.OCR_DONE, Page.Status.REVIEWED, Page.Status.ASSEMBLED})
+_APPROVED = frozenset({Page.Status.REVIEWED, Page.Status.ASSEMBLED})
+
+
+def _count(n: int, forms: tuple[str, str, str, str]) -> str:
+    from assembly.render import ar_count  # other app: lazy import
+
+    return ar_count(n, forms)
+
+
+def relative_time(when, now=None) -> str:
+    """«قبل لحظات», «قبل 5 دقائق», «قبل ساعتين», «قبل 3 أيام», then «في 2026-08-01» (as the manuscript's
+    `relativeTime`); '' without a time."""
+    if when is None:
+        return ""
+    seconds = max(0, round(((now or timezone.now()) - when).total_seconds()))
+    if seconds < 45:
+        return "قبل لحظات"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"قبل {_count(max(1, minutes), MINUTES)}"
+    hours = round(minutes / 60)
+    if hours < 24:
+        return f"قبل {_count(hours, HOURS)}"
+    days = round(hours / 24)
+    if days < 30:
+        return f"قبل {_count(days, DAYS)}"
+    return f"في {when.date().isoformat()}"
+
+
+class StageFacts:
+    """What the stage bar and review's next step read about a book, in a fixed number of queries: the pages'
+    counts (one query), the manuscript state (`assembly.services.manuscript_state`, up to three), the book's
+    trim and page count (two, three with no live layout) and the exports (one)."""
+
+    def __init__(self, book: Book):
+        from assembly.services import manuscript_state  # other apps: lazy imports
+        from editor.models import TRIM_PRESETS, StyleSheet
+        from publishing.models import Export, LiveLayout, PreviewRender
+
+        self.book = book
+        rows = list(book.pages.filter(is_excluded=False).values_list("id", "number", "status", "error_from"))
+        self.rows = rows
+        self.total = len(rows)
+        statuses = [status for _pk, _n, status, _from in rows]
+        self.uploaded = statuses.count(Page.Status.UPLOADED)
+        layout_errors = [
+            n
+            for _pk, n, status, where in rows
+            if status == Page.Status.ERROR and (book.awaits_ocr_start or where == "preprocess")
+        ]
+        self.layout_errors = len(layout_errors)
+        self.ocr_errors = statuses.count(Page.Status.ERROR) - self.layout_errors
+        self.read = sum(1 for status in statuses if status in _READ)
+        self.reviewed = sum(1 for status in statuses if status in _APPROVED)
+        pending = sorted(n for _pk, n, status, _from in rows if status == Page.Status.OCR_DONE)
+        self.pending = pending
+        self.processing = sum(
+            1
+            for status in statuses
+            if status in (Page.Status.UPLOADED, Page.Status.PREPROCESSED, Page.Status.LAYOUT_DONE)
+        )
+        self.first_page = min((n for _pk, n, _s, _f in rows), default=None)
+        self.manuscript = manuscript_state(book, [(pk, n, status) for pk, n, status, _from in rows])
+        self.trim_label = ""
+        self.page_count = None
+        if self.manuscript.get("exists"):
+            sheet = (
+                StyleSheet.objects.filter(book_id=book.pk).only("id", "trim", "width_mm", "height_mm").first()
+            )
+            sheet = sheet or StyleSheet()
+            self.trim_label = (
+                TRIM_PRESETS[sheet.trim][0]
+                if sheet.trim in TRIM_PRESETS
+                else f"{sheet.width_mm:g}×{sheet.height_mm:g} مم"
+            )
+            live = LiveLayout.objects.filter(book_id=book.pk).only("page_count", "revision").first()
+            if live is not None and live.revision:
+                self.page_count = live.page_count
+            else:
+                render = (
+                    PreviewRender.objects.filter(book_id=book.pk, scope="book", status="done")
+                    .only("page_count")
+                    .order_by("-created_at", "-id")
+                    .first()
+                )
+                self.page_count = render.page_count if render is not None else None
+        self.exports = (
+            list(
+                Export.objects.filter(book_id=book.pk)
+                .exclude(status=Export.Status.CANCELLED)
+                .order_by("-created_at", "-id")
+                .values("format", "status", "manuscript_version", "finished_at", "error")[:60]
+            )
+            if self.manuscript.get("exists")
+            else []
+        )
+
+
+def _step(key: str, url: str | None, state: str, detail: str, hint: str, count: str | None = None) -> dict:
+    return {
+        "key": key,
+        "label": STAGE_NAMES[key],
+        "url": url if state != "blocked" else None,
+        "state": state,
+        "state_label": STATE_WORDS[state],
+        "detail": detail,
+        "hint": hint,
+        "count": count,
+        "current": False,
+    }
+
+
+def _pages_step(facts: StageFacts) -> dict:
+    book = facts.book
+    dashboard = reverse("books:detail", args=[book.pk])
+    url = dashboard if book.awaits_ocr_start else f"{dashboard}?{GUIDES_VIEW_QUERY}"
+    if not facts.total:
+        if book.status == Book.Status.ERROR:
+            return _step(
+                "pages", dashboard, "attention", "تعذّر استخراج الصفحات", _headline(book.error_message)
+            )
+        if book.status == Book.Status.PROCESSING:
+            return _step("pages", dashboard, "active", "تُستخرج الصفحات…", "تُستخرج صفحات الملف وتُجهَّز.")
+        return _step("pages", dashboard, "todo", "لم تُستخرج الصفحات بعد", "تبدأ باستخراج صفحات الملف.")
+    if facts.layout_errors:
+        return _step(
+            "pages",
+            url,
+            "attention",
+            f"تعذّر تجهيز {_count(facts.layout_errors, PAGES_OF)}",
+            "أعد تجهيز الصفحات التي تعذّر تجهيزها أو استثنِها.",
+        )
+    if facts.uploaded:
+        prepared = facts.total - facts.uploaded
+        return _step(
+            "pages",
+            url,
+            "active",
+            f"قيد التخطيط: {prepared} من {facts.total}",
+            "تُجهَّز الصفحات وتُكشف مناطقها.",
+            f"{prepared}/{facts.total}",
+        )
+    hint = "اكتمل التخطيط؛ اضغط «بدء المعالجة»." if book.awaits_ocr_start else "صفحات الكتاب ومناطقها."
+    return _step("pages", url, "done", f"تم التخطيط · {_count(facts.total, PAGES_NOUN)}", hint)
+
+
+def _ocr_step(facts: StageFacts) -> dict:
+    url = reverse("books:detail", args=[facts.book.pk])
+    if facts.book.awaits_ocr_start or not facts.total:
+        return _step("ocr", url, "todo", "بانتظار «بدء المعالجة»", "تبدأ المعالجة بعد التخطيط.")
+    if facts.ocr_errors:
+        return _step(
+            "ocr",
+            url,
+            "attention",
+            f"تعذّرت معالجة {_count(facts.ocr_errors, PAGES_OF)}",
+            "أعد تشغيل الصفحات التي تعذّرت معالجتها من «تحتاج انتباهًا».",
+        )
+    if facts.read == facts.total:
+        return _step(
+            "ocr",
+            url,
+            "done",
+            f"عولجت {_count(facts.total, PAGES_NOUN)}",
+            "تعرّف النموذجان على نص كل الصفحات.",
+        )
+    return _step(
+        "ocr",
+        url,
+        "active",
+        f"قيد المعالجة: {facts.read} من {facts.total}",
+        "يُتعرّف على نص الصفحات.",
+        f"{facts.read}/{facts.total}",
+    )
+
+
+def _review_step(facts: StageFacts) -> dict:
+    book = facts.book
+    blocked = "تبدأ المراجعة حين تنتهي معالجة أول صفحة"
+    if not facts.read:
+        return _step("review", None, "blocked", blocked, f"{blocked}.")
+    if facts.pending:
+        url = reverse("review:next", args=[book.pk])
+        hint = f"الصفحة التالية للمراجعة: {facts.pending[0]}"
+    else:
+        url = reverse("review:page", args=[book.pk, facts.first_page])
+        hint = "رُوجعت كل صفحات الكتاب." if facts.reviewed == facts.total else "لا صفحة بانتظار المراجعة الآن."
+    count = f"{facts.reviewed}/{facts.total}"
+    if facts.reviewed == facts.total:
+        return _step("review", url, "done", f"رُوجعت {_count(facts.total, PAGES_NOUN)}", hint, count)
+    state = "active" if facts.reviewed else "todo"
+    detail = f"رُوجعت {facts.reviewed} من {_count(facts.total, PAGES_NOUN)}"
+    return _step("review", url, state, detail, hint, count)
+
+
+def _manuscript_step(facts: StageFacts) -> dict:
+    state = facts.manuscript
+    url = reverse("assembly:manuscript", args=[facts.book.pk])
+    run = state.get("run") or {}
+    if state.get("active"):
+        return _step("manuscript", url, "active", "يجري التجميع…", "تُجمَع الصفحات في المخطوطة.")
+    if run.get("status") == "error":
+        return _step("manuscript", url, "attention", "تعذّر التجميع", run.get("error") or "")
+    if not state.get("exists"):
+        return _step(
+            "manuscript",
+            url,
+            "todo",
+            "لم تُجمَع المخطوطة بعد",
+            "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ.",
+        )
+    if state.get("edited"):
+        return _step(
+            "manuscript",
+            url,
+            "done",
+            "النص يُحرَّر الآن في «الكتاب»",
+            "حُرِّر النص في «الكتاب»؛ تصله تغييرات المراجعة من «تغييرات المراجعة».",
+        )
+    if state.get("stale"):
+        hint = "أعد التجميع؛ لم يُحرَّر الكتاب بعد، فلا يضيع شيء."
+        drift = state.get("drift_pages") or []
+        if drift:
+            return _step(
+                "manuscript", url, "stale", f"تغيّر نص {_count(len(drift), PAGES_OF)} بعد التجميع", hint
+            )
+        approved = state.get("stale_pages") or []
+        return _step(
+            "manuscript", url, "stale", f"اعتُمدت {_count(len(approved), PAGES_NOUN)} بعد التجميع", hint
+        )
+    chapters = int((state.get("stats") or {}).get("chapters") or 0)
+    detail = f"جُمعت: {_count(chapters, CHAPTERS_NOUN)}" if chapters else "جُمعت المخطوطة"
+    return _step("manuscript", url, "done", detail, "المخطوطة محدَّثة.")
+
+
+def _book_step(facts: StageFacts) -> dict:
+    state = facts.manuscript
+    url = reverse("editor:layout", args=[facts.book.pk])
+    if not state.get("exists"):
+        text = "يُفتح الكتاب بعد تجميع المخطوطة"
+        return _step("book", None, "blocked", text, f"{text}.")
+    drift = state.get("drift_pages") or []
+    if state.get("edited") and drift:
+        return _step(
+            "book",
+            f"{url}?tab=changes",
+            "stale",
+            f"تغيّر نص {_count(len(drift), PAGES_OF)} في المراجعة بعد تحرير الكتاب",
+            "خذ التغييرات من «تغييرات المراجعة».",
+        )
+    if facts.page_count:
+        return _step(
+            "book",
+            url,
+            "done",
+            f"{facts.trim_label} · {_count(facts.page_count, PAGES_NOUN)}",
+            f"الكتاب بقطع {facts.trim_label}.",
+        )
+    return _step("book", url, "todo", "لم تُرتَّب الصفحات بعد", "افتح الكتاب لتنسيقه وترتيب صفحاته.")
+
+
+def _formats(rows: list[dict]) -> str:
+    names = []
+    for key in ("docx", "print_pdf", "screen_pdf", "epub"):
+        if any(row["format"] == key for row in rows) and EXPORT_NAMES[key] not in names:
+            names.append(EXPORT_NAMES[key])
+    return " و".join(names)
+
+
+def _export_step(facts: StageFacts) -> dict:
+    state = facts.manuscript
+    url = reverse("publishing:export", args=[facts.book.pk])
+    if not state.get("exists"):
+        text = "يُتاح الإخراج بعد تجميع المخطوطة"
+        return _step("export", None, "blocked", text, f"{text}.")
+    rows = facts.exports
+    active = [row for row in rows if row["status"] in ("queued", "running")]
+    if active:
+        return _step("export", url, "active", f"يُخرَج {_formats(active)}…", "يُخرَج الملف الآن.")
+    if rows and rows[0]["status"] == "error":
+        return _step("export", url, "attention", "تعذّر آخر إخراج", _headline(rows[0]["error"]))
+    newest: dict[str, dict] = {}
+    for row in rows:
+        if row["status"] == "done":
+            newest.setdefault(row["format"], row)
+    current = [row for row in newest.values() if row["manuscript_version"] == state.get("version")]
+    if current:
+        when = max((row["finished_at"] for row in current if row["finished_at"]), default=None)
+        detail = f"{_formats(current)} · {relative_time(when)}" if when else _formats(current)
+        return _step("export", url, "done", detail, "ملفات الكتاب محدَّثة.")
+    if newest:
+        return _step("export", url, "stale", "تغيّر النص بعد آخر ملف", "أعد الإخراج ليحمل الملف النص الأخير.")
+    return _step("export", url, "todo", "لم يُخرَج ملف بعد", "أخرج الكتاب Word أو PDF أو EPUB.")
+
+
+def book_stages(book: Book, current: str | None = None, facts: StageFacts | None = None) -> list[dict]:
+    """The stage bar of a book's screens (D76): six steps `{key, label, url, state, state_label, detail,
+    hint, count, current}` in the order of `STAGE_KEYS` (editor/fixtures/contract/stages.json and its
+    index.json give every state). `current` is the step of the screen shown (the dashboard passes `pages` in
+    the «التخطيط» mode, else `ocr`). At most eight queries (`StageFacts`), whatever the book's size."""
+    facts = facts if facts is not None else StageFacts(book)
+    steps = [
+        _pages_step(facts),
+        _ocr_step(facts),
+        _review_step(facts),
+        _manuscript_step(facts),
+        _book_step(facts),
+        _export_step(facts),
+    ]
+    for step in steps:
+        step["current"] = step["key"] == current
+    return steps
+
+
+def stages_payload(book: Book, current: str | None = None) -> dict:
+    """`api:book_stages`: `{book, current, steps}`; an unknown `current` is null."""
+    current = current if current in STAGE_KEYS else None
+    return {"book": book.pk, "current": current, "steps": book_stages(book, current)}

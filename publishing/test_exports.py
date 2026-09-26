@@ -645,7 +645,10 @@ def test_review_drift_and_a_running_assembly(book, monkeypatch):
     AssemblyRun.objects.create(book=book, status="running")
     found = rows_of(book)
     assert found["review_drift"][0]["message"] == "تغيّر نص 4 صفحات في المراجعة بعد التحرير."
-    assert found["review_drift"][0]["action"] == {"label": "الكتاب", "url": f"/books/{book.pk}/layout/"}
+    assert found["review_drift"][0]["action"] == {  # D78: the book page's «تغييرات المراجعة» tab
+        "label": "تغييرات المراجعة",
+        "url": f"/books/{book.pk}/layout/?tab=changes",
+    }
     assert found["assembly_running"][0] == {
         "code": "assembly_running",
         "level": "warn",
@@ -1025,8 +1028,8 @@ def test_stray_notes_are_page_end_paragraphs_that_start_with_a_note_marker(book)
     assert row["level"] == "warn" and row["message"] == (
         "فقرتان في أواخر صفحاتهما تبدآن بعلامة حاشية مثل «(1)» ولم تُربَطا حاشيةً: ص 5، 9."
     )
-    # the book page cannot open a block yet: the link opens the first one's chapter
-    assert row["action"] == {"label": "عرض", "url": f"/books/{book.pk}/layout/?chapter=h1"}
+    # the book page opens on the first one's block (`?block=`, 7c): its chapter, its page, lit
+    assert row["action"] == {"label": "عرض", "url": f"/books/{book.pk}/layout/?block=n1"}
 
 
 def test_note_markers():

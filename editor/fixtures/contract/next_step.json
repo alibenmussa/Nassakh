@@ -1,0 +1,108 @@
+{
+ "variants": {
+  "assemble": {
+   "state": "assemble",
+   "heading": "رُوجعت كل الصفحات",
+   "summary": "3 صفحات · حُسمت كلمة واحدة",
+   "title": "تجميع المخطوطة",
+   "text": "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ، تتحقّق من بنيته قبل الكتاب.",
+   "button": "تجميع المخطوطة…",
+   "url": "/books/47/manuscript/?convert=1",
+   "stay": "البقاء في المراجعة"
+  },
+  "last_page (the current page is the only one left)": {
+   "state": "assemble",
+   "heading": "هذه آخر صفحة بانتظار المراجعة",
+   "summary": "صفحتان · حُسمت كلمة واحدة",
+   "title": "تجميع المخطوطة",
+   "text": "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ، تتحقّق من بنيته قبل الكتاب.",
+   "button": "تجميع المخطوطة…",
+   "url": "/books/47/manuscript/?convert=1",
+   "stay": "البقاء في المراجعة"
+  },
+  "book": {
+   "state": "book",
+   "heading": "رُوجعت كل الصفحات",
+   "summary": "3 صفحات · حُسمت كلمة واحدة",
+   "title": "الكتاب",
+   "text": "المخطوطة محدَّثة؛ نسّق الكتاب وحرّره على صفحاته.",
+   "button": "فتح الكتاب",
+   "url": "/books/47/layout/",
+   "stay": "البقاء في المراجعة"
+  },
+  "reassemble": {
+   "state": "reassemble",
+   "heading": "رُوجعت كل الصفحات",
+   "summary": "3 صفحات · حُسمت كلمة واحدة",
+   "title": "إعادة التجميع",
+   "text": "تغيّر نص صفحتين في المراجعة بعد التجميع؛ لم يُحرَّر الكتاب بعد، فإعادة التجميع لا تُضيّع شيئًا.",
+   "button": "إعادة التجميع",
+   "url": "/books/47/manuscript/",
+   "stay": "البقاء في المراجعة"
+  },
+  "changes": {
+   "state": "changes",
+   "heading": "رُوجعت كل الصفحات",
+   "summary": "3 صفحات · حُسمت كلمة واحدة",
+   "title": "أخذ التغييرات إلى الكتاب",
+   "text": "غيّرت المراجعة نص صفحتين من الكتاب المحرَّر؛ تُؤخذ فقراتهما وحدها.",
+   "button": "عرض التغييرات في الكتاب",
+   "url": "/books/47/layout/?tab=changes",
+   "stay": "البقاء في المراجعة"
+  },
+  "processing": {
+   "state": "processing",
+   "heading": "رُوجعت كل الصفحات الجاهزة",
+   "summary": "3 صفحات · حُسمت كلمة واحدة",
+   "title": "المعالجة",
+   "text": "لا صفحات بانتظار المراجعة الآن؛ ما زالت 3 صفحات قيد المعالجة.",
+   "button": "العودة إلى المعالجة",
+   "url": "/books/47/",
+   "stay": "البقاء في المراجعة"
+  }
+ },
+ "review_payload": {
+  "next_step (another page waits for review)": null
+ },
+ "approve": {
+  "POST /api/pages/4006/approve/ {force: false} (a next page)": {
+   "request": {
+    "force": false
+   },
+   "status": 200,
+   "response": {
+    "status": "reviewed",
+    "next_review_url": "/books/40/review/7/",
+    "next_payload_url": "/api/pages/4007/review/",
+    "next_number": 7,
+    "dashboard_url": "/books/40/",
+    "next_step": null
+   }
+  },
+  "POST /api/pages/4007/approve/ {force: false, from: book, at: 12} (the last page)": {
+   "request": {
+    "force": false,
+    "from": "book",
+    "at": 12
+   },
+   "status": 200,
+   "response": {
+    "status": "reviewed",
+    "next_review_url": "/books/40/review/next/?after=7&from=book&at=12",
+    "next_payload_url": null,
+    "next_number": null,
+    "dashboard_url": "/books/40/",
+    "next_step": {
+     "state": "book",
+     "heading": "رُوجعت كل الصفحات",
+     "summary": "6 صفحات",
+     "title": "الكتاب",
+     "text": "المخطوطة محدَّثة؛ نسّق الكتاب وحرّره على صفحاته.",
+     "button": "فتح الكتاب",
+     "url": "/books/40/layout/",
+     "stay": "البقاء في المراجعة"
+    }
+   }
+  }
+ }
+}

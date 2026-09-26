@@ -11,29 +11,16 @@ _guides_side.html, _sheet_guides.html; `bookGuides` in static/src/js/processing.
 today's.{% endcomment %}
 {% block head_title %}{{ book.title }} · نسّاخ{% endblock %}
 {% block title %}{{ book.title }}{% endblock %}
+{# D76 (§5.1): «التخطيط» is the current step in the mode, else «المعالجة»; the status chip and its bar fold into it #}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current=guides_mode|yesno:"pages,ocr" %}{% endblock %}
 
 {% block header_actions %}
 {% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'books:start_ocr' book.pk as start_ocr_action %}
 <div class="bk-bar" x-data>
-  <a class="btn btn-ghost btn-sm" href="{% url 'books:list' %}">
-    <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-    <span>كل الكتب</span>
-  </a>
   <template x-if="$store.book && $store.book.dash">
     <div class="bk-bar" x-data="{ get d() { return $store.book.dash; } }">
-      <span class="bk-status" :class="{ 'is-active': d.active }">
-        <span class="dot" :class="d.active ? 'dot-accent' : d.dot" aria-hidden="true"></span>
-        <span x-text="d.statusText"></span>
-      </span>
-      {% if guides_mode %}
-      <div class="progress bk-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="d.percent" aria-label="نسبة الصفحات المُجهَّزة" x-show="d.showBar">
-        <div class="progress-fill" :class="d.barClass" :style="`width:${d.percent}%`"></div>
-      </div>
-      {% else %}
-      <div class="progress bk-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="d.percent" aria-label="نسبة إتمام المعالجة" x-show="d.nPages > 0">
-        <div class="progress-fill" :class="d.barClass" :style="`width:${d.percent}%`"></div>
-      </div>
-      {% endif %}
+      {# the status is the stage bar's current step now (its count, its bar, its words for a screen reader) #}
+      <span class="sr-only" role="status" x-text="d.statusText"></span>
       <button type="button" class="bk-poll" x-show="d.pollState === 'error'" x-cloak @click="d.pollNow()" title="إعادة محاولة التحديث الآن">
         <span class="dot" aria-hidden="true"></span><span>تعذّر التحديث · إعادة المحاولة</span>
       </button>
@@ -93,7 +80,7 @@ today's.{% endcomment %}
       {% if role == 'admin' or role == 'editor' %}
       <button type="button" class="btn btn-primary" x-show="d.primary === 'convert'" @click="d.openConvert()" :aria-expanded="d.convert.open" aria-haspopup="dialog" title="تجميع صفحات الكتاب في مخطوطة واحدة">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
-        <span>تحويل إلى كتاب</span>
+        <span>تجميع المخطوطة</span>
       </button>
       <button type="button" class="btn btn-primary" x-show="d.primary === 'reassemble'" @click="d.reassemble()" :disabled="d.convert.busy" title="إعادة تجميع المخطوطة بعد تغيّر النص">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
@@ -154,7 +141,7 @@ today's.{% endcomment %}
           {% if role == 'admin' or role == 'editor' %}
           <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openConvert()">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-play"/></svg>
-            <span>تحويل إلى كتاب…</span>
+            <span>تجميع المخطوطة…</span>
           </button>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
@@ -180,6 +167,11 @@ today's.{% endcomment %}
           <div class="menu-sep" role="separator"></div>
           {% endif %}
           {% endif %}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openSheet()" data-keys-menu-item>
+            <span class="bk-menu-glyph" aria-hidden="true">?</span>
+            <span>اختصارات لوحة المفاتيح</span>
+          </button>
+          <div class="menu-sep" role="separator"></div>
           <a class="menu-item" role="menuitem" href="{% url 'books:list' %}">
             <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
             <span>كل الكتب</span>
@@ -197,7 +189,7 @@ today's.{% endcomment %}
 {% block content %}
 {{ config|json_script:"dashboard-config" }}
 {% optional_url 'api:book_sheets' book.pk as sheets_url %}{% optional_url 'review:next' book.pk as review_next_url %}{% optional_url 'api:book_text' book.pk as book_text_url %}{% optional_url 'api:book_filmstrip' book.pk as filmstrip_url %}{% optional_url 'books:delete' book.pk as delete_action %}
-<div class="bk-dashboard{% if guides_mode %} is-guides{% endif %}{% if tiles %} has-pages{% endif %}{% if progress.active %} is-active{% endif %}" data-book-dashboard :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0, 'is-active': active }"
+<div class="bk-dashboard{% if guides_mode %} is-guides{% endif %}{% if tiles %} has-pages{% endif %}{% if progress.active %} is-active{% endif %}" data-book-dashboard data-rail :class="{ 'is-viewer': view === 'sheets' && nPages > 0, 'has-pages': nPages > 0, 'is-active': active }"
      x-data="bookDashboard(Object.assign(JSON.parse(document.getElementById('dashboard-config').textContent), { sheetsUrl: '{{ sheets_url|escapejs }}', filmstripUrl: '{{ filmstrip_url|escapejs }}', reviewNextUrl: '{{ review_next_url|escapejs }}', bookTextUrl: '{{ book_text_url|escapejs }}', bookUrl: '{% url 'books:detail' book.pk %}', canEdit: {% if role == 'admin' or role == 'editor' %}true{% else %}false{% endif %}, bookId: {{ book.pk }} }))"
      @keydown.window="onKey($event)">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
@@ -369,7 +361,7 @@ today's.{% endcomment %}
           <span class="status bk-manuscript-line"><span class="dot" :class="manuscriptDot" aria-hidden="true"></span><span x-text="manuscriptLine"></span></span>
           <a class="link bk-manuscript-open" :href="manuscriptUrl" x-show="hasManuscript && manuscriptUrl">فتح المخطوطة</a>
           {% if role == 'admin' or role == 'editor' %}
-          <button type="button" class="link bk-manuscript-convert" x-show="!hasManuscript && allReviewed" @click="openConvert()">تحويل إلى كتاب…</button>
+          <button type="button" class="link bk-manuscript-convert" x-show="!hasManuscript && allReviewed" @click="openConvert()">تجميع المخطوطة…</button>
           {% endif %}
         </div>
         {# Phase 5 (PHASE5_SPEC §5, §9): the book's physical form — trim and page count from the newest render, the review drift after editing (D41), the book page #}
@@ -377,6 +369,8 @@ today's.{% endcomment %}
           <div class="bk-side-head"><span>الكتاب</span></div>
           <span class="status bk-book-line"><span class="dot" :class="bookDot" aria-hidden="true"></span><span x-text="bookLine"></span></span>
           <span class="status bk-book-drift" x-show="driftLine" x-cloak><span class="dot dot-warning" aria-hidden="true"></span><span x-text="driftLine"></span></span>
+          {# D78 (§5.6): the changed paragraphs are taken on the book page, in «تغييرات المراجعة» #}
+          <a class="link bk-book-changes" :href="changesUrl" x-show="driftLine && changesUrl" x-cloak data-changes-link>عرض التغييرات</a>
           <a class="link bk-book-open" :href="layoutUrl" x-show="layoutUrl" data-book-link>فتح الكتاب</a>
         </div>
         <details class="bk-attention" x-show="attention.length > 0"{% if not attention %} x-cloak{% endif %}>
@@ -450,13 +444,42 @@ today's.{% endcomment %}
   {% else %}
   {# the end-of-processing toast (§6) #}
   <div class="toast bk-toast" role="status" aria-live="polite" x-show="doneToast.visible" x-cloak x-transition.opacity.duration.200ms>
-    <span class="grow">اكتملت المعالجة · <bdi class="num" x-text="doneToast.count"></bdi> صفحة</span>
+    <span class="grow" x-text="doneText">اكتملت المعالجة</span>
     <a class="btn" x-show="doneToast.url" :href="doneToast.url">ابدأ المراجعة</a>
     <button type="button" class="toast-close" aria-label="إغلاق" @click="doneToast.visible = false">
       <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
     </button>
   </div>
   {% endif %}
+
+  {# the shortcut sheet (§5.8): «?», or «⋯» «اختصارات لوحة المفاتيح»; letters by their place, the Arabic layout too #}
+  <div class="rv-scrim bk-scrim" x-show="sheetOpen" x-cloak x-transition.opacity.duration.150ms @click.self="closeSheet()">
+    <div class="rv-modal rv-shortcuts bk-shortcuts" role="dialog" aria-modal="true" aria-labelledby="bk-sheet-title" @keydown.tab="trapTab($event, $el)" data-keys-sheet>
+      <div class="rv-modal-head">
+        <h2 class="rv-modal-title" id="bk-sheet-title">اختصارات لوحة المفاتيح</h2>
+        <button type="button" class="btn-icon" x-ref="sheetClose" aria-label="إغلاق" @click="closeSheet()">
+          <svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <dl class="rv-keys">
+        <dt><kbd class="kbd">V</kbd></dt><dd>الصفحات / الشبكة</dd>
+        <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة برقمها</dd>
+        <dt><kbd class="kbd">←</kbd> / <kbd class="kbd">→</kbd></dt><dd>الصفحة التالية / السابقة</dd>
+        <dt><kbd class="kbd">Home</kbd> / <kbd class="kbd">End</kbd></dt><dd>أول صفحة / آخر صفحة</dd>
+        {% if guides_mode %}
+        <dt><kbd class="kbd">↑</kbd> / <kbd class="kbd">↓</kbd></dt><dd>تحريك الخط المحدَّد على الصفحة</dd>
+        <dt><span class="meta">⌥ مع السحب</span></dt><dd>سحب الخط حرًّا دون التقاطه بين الأسطر</dd>
+        {% else %}
+        <dt><kbd class="kbd">N</kbd></dt><dd>الصفحة التالية للمراجعة</dd>
+        <dt><kbd class="kbd">C</kbd></dt><dd>نسخ نص الصفحة المعروضة</dd>
+        <dt><kbd class="kbd">↑</kbd> / <kbd class="kbd">↓</kbd></dt><dd>السطر التالي / السابق في نص الصفحة</dd>
+        {% endif %}
+        <dt><kbd class="kbd">Esc</kbd></dt><dd>إلغاء المرشّح</dd>
+        <dt><kbd class="kbd">?</kbd></dt><dd>هذه القائمة</dd>
+      </dl>
+      <p class="meta mt-3">تعمل الاختصارات بلوحة المفاتيح العربية أيضًا: المفتاح نفسه في مكانه.</p>
+    </div>
+  </div>
 
   {% if role == 'admin' or role == 'editor' %}
   {# dialogs (§3.13, the rv-modal look of «نسخة محفوظة»): focus on the safe button, Esc cancels #}

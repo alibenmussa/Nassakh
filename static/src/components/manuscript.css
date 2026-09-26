@@ -548,9 +548,6 @@
   @keyframes ms-drawer-in-ltr { from { transform: translateX(-100%); } to { transform: none; } }
 
   /* ------------------------------------------------------------ responsive + reduced motion (§4.2) */
-  @media (max-width: 1180px) {
-    .ms-bar-dash { display: none; }
-  }
   @media (max-width: 1100px) {
     .ms-screen { --ms-side-w: clamp(180px, 15vw, 220px); }
     .ms-counts { display: none; }

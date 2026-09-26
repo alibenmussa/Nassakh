@@ -148,7 +148,14 @@
 
       // ------------------------------------------------------------ modes
       get editing() { return this.mode === 'edit'; },
-      addressQuery() { return this.mode === 'edit' ? '?mode=edit' : ''; },
+      // §5.4: the address keeps the view — `?mode=edit&tab=source`, `?tab=format` — so a copied link opens on it;
+      // `?chapter=`, `?block=` and the find prefill are dropped once the page has landed
+      addressQuery() {
+        const parts = [];
+        if (this.mode === 'edit') parts.push('mode=edit');
+        if (this.tab) parts.push(`tab=${this.tab}`);
+        return parts.length ? `?${parts.join('&')}` : '';
+      },
       setMode(mode) {
         const next = mode === 'edit' ? 'edit' : 'preview';
         if (next === this.mode) return false;
@@ -663,6 +670,7 @@
           marks: this.mode === 'edit' && this.pageMarks ? (block) => this.marksOf(block) : null,
           selected: this.selected ? this.selected.block : null,
           flash: this.flash && this.flash.n === n ? this.flash : null,
+          applied: this.appliedBlocks || null, // D78: the blocks an apply of review's changes rewrote, lit once
         };
       },
       // A separator (or another block without text) chosen: outlined; Delete removes it, the style picker

@@ -1,0 +1,647 @@
+{
+ "steps": {
+  "pages": {
+   "todo": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "لم تُستخرج الصفحات بعد",
+    "hint": "تبدأ باستخراج صفحات الملف.",
+    "count": null,
+    "current": false
+   },
+   "extracting": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "تُستخرج الصفحات…",
+    "hint": "تُستخرج صفحات الملف وتُجهَّز.",
+    "count": null,
+    "current": false
+   },
+   "active": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "قيد التخطيط: 3 من 7",
+    "hint": "تُجهَّز الصفحات وتُكشف مناطقها.",
+    "count": "3/7",
+    "current": false
+   },
+   "done": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "تم التخطيط · 7 صفحات",
+    "hint": "اكتمل التخطيط؛ اضغط «بدء المعالجة».",
+    "count": null,
+    "current": false
+   },
+   "done_started": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/?view=guides",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "تم التخطيط · 8 صفحات",
+    "hint": "صفحات الكتاب ومناطقها.",
+    "count": null,
+    "current": false
+   },
+   "attention": {
+    "key": "pages",
+    "label": "التخطيط",
+    "url": "/books/41/",
+    "state": "attention",
+    "state_label": "تحتاج انتباهًا",
+    "detail": "تعذّر تجهيز صفحة واحدة",
+    "hint": "أعد تجهيز الصفحات التي تعذّر تجهيزها أو استثنِها.",
+    "count": null,
+    "current": false
+   }
+  },
+  "ocr": {
+   "todo": {
+    "key": "ocr",
+    "label": "المعالجة",
+    "url": "/books/41/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "بانتظار «بدء المعالجة»",
+    "hint": "تبدأ المعالجة بعد التخطيط.",
+    "count": null,
+    "current": false
+   },
+   "active": {
+    "key": "ocr",
+    "label": "المعالجة",
+    "url": "/books/41/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "قيد المعالجة: 3 من 8",
+    "hint": "يُتعرّف على نص الصفحات.",
+    "count": "3/8",
+    "current": false
+   },
+   "done": {
+    "key": "ocr",
+    "label": "المعالجة",
+    "url": "/books/41/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "عولجت 8 صفحات",
+    "hint": "تعرّف النموذجان على نص كل الصفحات.",
+    "count": null,
+    "current": false
+   },
+   "attention": {
+    "key": "ocr",
+    "label": "المعالجة",
+    "url": "/books/41/",
+    "state": "attention",
+    "state_label": "تحتاج انتباهًا",
+    "detail": "تعذّرت معالجة صفحة واحدة",
+    "hint": "أعد تشغيل الصفحات التي تعذّرت معالجتها من «تحتاج انتباهًا».",
+    "count": null,
+    "current": false
+   }
+  },
+  "review": {
+   "blocked": {
+    "key": "review",
+    "label": "المراجعة",
+    "url": null,
+    "state": "blocked",
+    "state_label": "غير متاحة بعد",
+    "detail": "تبدأ المراجعة حين تنتهي معالجة أول صفحة",
+    "hint": "تبدأ المراجعة حين تنتهي معالجة أول صفحة.",
+    "count": null,
+    "current": false
+   },
+   "todo": {
+    "key": "review",
+    "label": "المراجعة",
+    "url": "/books/41/review/next/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "رُوجعت 0 من 8 صفحات",
+    "hint": "الصفحة التالية للمراجعة: 1",
+    "count": "0/8",
+    "current": false
+   },
+   "active": {
+    "key": "review",
+    "label": "المراجعة",
+    "url": "/books/41/review/next/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "رُوجعت 6 من 8 صفحات",
+    "hint": "الصفحة التالية للمراجعة: 7",
+    "count": "6/8",
+    "current": false
+   },
+   "done": {
+    "key": "review",
+    "label": "المراجعة",
+    "url": "/books/41/review/1/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "رُوجعت 8 صفحات",
+    "hint": "رُوجعت كل صفحات الكتاب.",
+    "count": "8/8",
+    "current": false
+   }
+  },
+  "manuscript": {
+   "todo": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "لم تُجمَع المخطوطة بعد",
+    "hint": "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ.",
+    "count": null,
+    "current": false
+   },
+   "active": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "يجري التجميع…",
+    "hint": "تُجمَع الصفحات في المخطوطة.",
+    "count": null,
+    "current": false
+   },
+   "done": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "جُمعت: فصلان",
+    "hint": "المخطوطة محدَّثة.",
+    "count": null,
+    "current": false
+   },
+   "done_edited": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "النص يُحرَّر الآن في «الكتاب»",
+    "hint": "حُرِّر النص في «الكتاب»؛ تصله تغييرات المراجعة من «تغييرات المراجعة».",
+    "count": null,
+    "current": false
+   },
+   "stale": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "stale",
+    "state_label": "أقدم من النص",
+    "detail": "تغيّر نص صفحتين بعد التجميع",
+    "hint": "أعد التجميع؛ لم يُحرَّر الكتاب بعد، فلا يضيع شيء.",
+    "count": null,
+    "current": false
+   },
+   "stale_approvals": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "stale",
+    "state_label": "أقدم من النص",
+    "detail": "اعتُمدت صفحتان بعد التجميع",
+    "hint": "أعد التجميع؛ لم يُحرَّر الكتاب بعد، فلا يضيع شيء.",
+    "count": null,
+    "current": false
+   },
+   "attention": {
+    "key": "manuscript",
+    "label": "المخطوطة",
+    "url": "/books/41/manuscript/",
+    "state": "attention",
+    "state_label": "تحتاج انتباهًا",
+    "detail": "تعذّر التجميع",
+    "hint": "تعذّر تجميع المخطوطة؛ بقيت المخطوطة السابقة كما هي. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.",
+    "count": null,
+    "current": false
+   }
+  },
+  "book": {
+   "blocked": {
+    "key": "book",
+    "label": "الكتاب",
+    "url": null,
+    "state": "blocked",
+    "state_label": "غير متاحة بعد",
+    "detail": "يُفتح الكتاب بعد تجميع المخطوطة",
+    "hint": "يُفتح الكتاب بعد تجميع المخطوطة.",
+    "count": null,
+    "current": false
+   },
+   "todo": {
+    "key": "book",
+    "label": "الكتاب",
+    "url": "/books/41/layout/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "لم تُرتَّب الصفحات بعد",
+    "hint": "افتح الكتاب لتنسيقه وترتيب صفحاته.",
+    "count": null,
+    "current": false
+   },
+   "done": {
+    "key": "book",
+    "label": "الكتاب",
+    "url": "/books/41/layout/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "17×24 سم · 84 صفحة",
+    "hint": "الكتاب بقطع 17×24 سم.",
+    "count": null,
+    "current": false
+   },
+   "stale": {
+    "key": "book",
+    "label": "الكتاب",
+    "url": "/books/41/layout/?tab=changes",
+    "state": "stale",
+    "state_label": "أقدم من النص",
+    "detail": "تغيّر نص صفحتين في المراجعة بعد تحرير الكتاب",
+    "hint": "خذ التغييرات من «تغييرات المراجعة».",
+    "count": null,
+    "current": false
+   }
+  },
+  "export": {
+   "blocked": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": null,
+    "state": "blocked",
+    "state_label": "غير متاحة بعد",
+    "detail": "يُتاح الإخراج بعد تجميع المخطوطة",
+    "hint": "يُتاح الإخراج بعد تجميع المخطوطة.",
+    "count": null,
+    "current": false
+   },
+   "todo": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": "/books/41/export/",
+    "state": "todo",
+    "state_label": "لم تبدأ",
+    "detail": "لم يُخرَج ملف بعد",
+    "hint": "أخرج الكتاب Word أو PDF أو EPUB.",
+    "count": null,
+    "current": false
+   },
+   "active": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": "/books/41/export/",
+    "state": "active",
+    "state_label": "جارية",
+    "detail": "يُخرَج Word…",
+    "hint": "يُخرَج الملف الآن.",
+    "count": null,
+    "current": false
+   },
+   "done": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": "/books/41/export/",
+    "state": "done",
+    "state_label": "مكتملة",
+    "detail": "Word وPDF · قبل ساعتين",
+    "hint": "ملفات الكتاب محدَّثة.",
+    "count": null,
+    "current": false
+   },
+   "stale": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": "/books/41/export/",
+    "state": "stale",
+    "state_label": "أقدم من النص",
+    "detail": "تغيّر النص بعد آخر ملف",
+    "hint": "أعد الإخراج ليحمل الملف النص الأخير.",
+    "count": null,
+    "current": false
+   },
+   "attention": {
+    "key": "export",
+    "label": "الإخراج",
+    "url": "/books/41/export/",
+    "state": "attention",
+    "state_label": "تحتاج انتباهًا",
+    "detail": "تعذّر آخر إخراج",
+    "hint": "تعذّر إخراج الملف. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.",
+    "count": null,
+    "current": false
+   }
+  }
+ },
+ "responses": {
+  "GET /api/books/41/stages/?current=pages (the «التخطيط» mode, preparing)": {
+   "book": 41,
+   "current": "pages",
+   "steps": [
+    {
+     "key": "pages",
+     "label": "التخطيط",
+     "url": "/books/41/",
+     "state": "active",
+     "state_label": "جارية",
+     "detail": "قيد التخطيط: 3 من 7",
+     "hint": "تُجهَّز الصفحات وتُكشف مناطقها.",
+     "count": "3/7",
+     "current": true
+    },
+    {
+     "key": "ocr",
+     "label": "المعالجة",
+     "url": "/books/41/",
+     "state": "todo",
+     "state_label": "لم تبدأ",
+     "detail": "بانتظار «بدء المعالجة»",
+     "hint": "تبدأ المعالجة بعد التخطيط.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "review",
+     "label": "المراجعة",
+     "url": null,
+     "state": "blocked",
+     "state_label": "غير متاحة بعد",
+     "detail": "تبدأ المراجعة حين تنتهي معالجة أول صفحة",
+     "hint": "تبدأ المراجعة حين تنتهي معالجة أول صفحة.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "manuscript",
+     "label": "المخطوطة",
+     "url": "/books/41/manuscript/",
+     "state": "todo",
+     "state_label": "لم تبدأ",
+     "detail": "لم تُجمَع المخطوطة بعد",
+     "hint": "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "book",
+     "label": "الكتاب",
+     "url": null,
+     "state": "blocked",
+     "state_label": "غير متاحة بعد",
+     "detail": "يُفتح الكتاب بعد تجميع المخطوطة",
+     "hint": "يُفتح الكتاب بعد تجميع المخطوطة.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "export",
+     "label": "الإخراج",
+     "url": null,
+     "state": "blocked",
+     "state_label": "غير متاحة بعد",
+     "detail": "يُتاح الإخراج بعد تجميع المخطوطة",
+     "hint": "يُتاح الإخراج بعد تجميع المخطوطة.",
+     "count": null,
+     "current": false
+    }
+   ]
+  },
+  "GET /api/books/41/stages/?current=review (reviewing)": {
+   "book": 41,
+   "current": "review",
+   "steps": [
+    {
+     "key": "pages",
+     "label": "التخطيط",
+     "url": "/books/41/?view=guides",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "تم التخطيط · 8 صفحات",
+     "hint": "صفحات الكتاب ومناطقها.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "ocr",
+     "label": "المعالجة",
+     "url": "/books/41/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "عولجت 8 صفحات",
+     "hint": "تعرّف النموذجان على نص كل الصفحات.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "review",
+     "label": "المراجعة",
+     "url": "/books/41/review/next/",
+     "state": "active",
+     "state_label": "جارية",
+     "detail": "رُوجعت 6 من 8 صفحات",
+     "hint": "الصفحة التالية للمراجعة: 7",
+     "count": "6/8",
+     "current": true
+    },
+    {
+     "key": "manuscript",
+     "label": "المخطوطة",
+     "url": "/books/41/manuscript/",
+     "state": "todo",
+     "state_label": "لم تبدأ",
+     "detail": "لم تُجمَع المخطوطة بعد",
+     "hint": "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "book",
+     "label": "الكتاب",
+     "url": null,
+     "state": "blocked",
+     "state_label": "غير متاحة بعد",
+     "detail": "يُفتح الكتاب بعد تجميع المخطوطة",
+     "hint": "يُفتح الكتاب بعد تجميع المخطوطة.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "export",
+     "label": "الإخراج",
+     "url": null,
+     "state": "blocked",
+     "state_label": "غير متاحة بعد",
+     "detail": "يُتاح الإخراج بعد تجميع المخطوطة",
+     "hint": "يُتاح الإخراج بعد تجميع المخطوطة.",
+     "count": null,
+     "current": false
+    }
+   ]
+  },
+  "GET /api/books/41/stages/?current=book (edited, with drift)": {
+   "book": 41,
+   "current": "book",
+   "steps": [
+    {
+     "key": "pages",
+     "label": "التخطيط",
+     "url": "/books/41/?view=guides",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "تم التخطيط · 8 صفحات",
+     "hint": "صفحات الكتاب ومناطقها.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "ocr",
+     "label": "المعالجة",
+     "url": "/books/41/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "عولجت 8 صفحات",
+     "hint": "تعرّف النموذجان على نص كل الصفحات.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "review",
+     "label": "المراجعة",
+     "url": "/books/41/review/1/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "رُوجعت 8 صفحات",
+     "hint": "رُوجعت كل صفحات الكتاب.",
+     "count": "8/8",
+     "current": false
+    },
+    {
+     "key": "manuscript",
+     "label": "المخطوطة",
+     "url": "/books/41/manuscript/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "النص يُحرَّر الآن في «الكتاب»",
+     "hint": "حُرِّر النص في «الكتاب»؛ تصله تغييرات المراجعة من «تغييرات المراجعة».",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "book",
+     "label": "الكتاب",
+     "url": "/books/41/layout/?tab=changes",
+     "state": "stale",
+     "state_label": "أقدم من النص",
+     "detail": "تغيّر نص صفحتين في المراجعة بعد تحرير الكتاب",
+     "hint": "خذ التغييرات من «تغييرات المراجعة».",
+     "count": null,
+     "current": true
+    },
+    {
+     "key": "export",
+     "label": "الإخراج",
+     "url": "/books/41/export/",
+     "state": "stale",
+     "state_label": "أقدم من النص",
+     "detail": "تغيّر النص بعد آخر ملف",
+     "hint": "أعد الإخراج ليحمل الملف النص الأخير.",
+     "count": null,
+     "current": false
+    }
+   ]
+  },
+  "GET /api/books/41/stages/?current=export (exported)": {
+   "book": 41,
+   "current": "export",
+   "steps": [
+    {
+     "key": "pages",
+     "label": "التخطيط",
+     "url": "/books/41/?view=guides",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "تم التخطيط · 8 صفحات",
+     "hint": "صفحات الكتاب ومناطقها.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "ocr",
+     "label": "المعالجة",
+     "url": "/books/41/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "عولجت 8 صفحات",
+     "hint": "تعرّف النموذجان على نص كل الصفحات.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "review",
+     "label": "المراجعة",
+     "url": "/books/41/review/1/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "رُوجعت 8 صفحات",
+     "hint": "رُوجعت كل صفحات الكتاب.",
+     "count": "8/8",
+     "current": false
+    },
+    {
+     "key": "manuscript",
+     "label": "المخطوطة",
+     "url": "/books/41/manuscript/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "جُمعت: فصلان",
+     "hint": "المخطوطة محدَّثة.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "book",
+     "label": "الكتاب",
+     "url": "/books/41/layout/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "17×24 سم · 84 صفحة",
+     "hint": "الكتاب بقطع 17×24 سم.",
+     "count": null,
+     "current": false
+    },
+    {
+     "key": "export",
+     "label": "الإخراج",
+     "url": "/books/41/export/",
+     "state": "done",
+     "state_label": "مكتملة",
+     "detail": "Word وPDF · قبل ساعتين",
+     "hint": "ملفات الكتاب محدَّثة.",
+     "count": null,
+     "current": true
+    }
+   ]
+  }
+ }
+}

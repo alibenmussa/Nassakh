@@ -2,6 +2,8 @@
 {% load nassakh %}
 {% block head_title %}صفحة {{ page.number }} · {{ book.title }} · نسّاخ{% endblock %}
 {% block title %}<span class="title-page num">صفحة {{ page.number }}</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{# D76: the page's technical details belong to «التخطيط» before the start, else to «المعالجة» #}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current=book.awaits_ocr_start|yesno:"pages,ocr" %}{% endblock %}
 
 {% block header_actions %}
   <nav class="pager" aria-label="التنقّل بين الصفحات">
@@ -23,7 +25,6 @@
     <span class="btn btn-sm" aria-disabled="true"><span>التالية</span><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg></span>
     {% endif %}
   </nav>
-  <a class="btn btn-ghost btn-sm" href="{% url 'books:detail' book.pk %}">لوحة الكتاب</a>
   {% optional_url 'review:page' book.pk page.number as review_url %}
   {% if review_url and not page.is_excluded %}
   <a class="btn btn-sm{% if page.status == 'ocr_done' or page.status == 'reviewed' %} btn-primary{% endif %}" href="{{ review_url }}"{% if page.status != 'ocr_done' and page.status != 'reviewed' %} title="تتوافر المراجعة بعد التعرّف على النص"{% endif %}>
@@ -37,7 +38,7 @@
 {{ viewer|json_script:"viewer-config" }}
 {{ page_state|json_script:"page-state" }}
 {% stage_labels as all_stage_labels %}{{ all_stage_labels|json_script:"page-stage-labels" }}
-<div class="detail-layout" x-data="pageDetail(JSON.parse(document.getElementById('viewer-config').textContent))" @keydown.window="onKey($event)" @nassakh:page-updated.window="onPageUpdated($event.detail)" @nassakh:page-state.window="onPageState($event.detail)">
+<div class="detail-layout" data-rail x-data="pageDetail(JSON.parse(document.getElementById('viewer-config').textContent))" @keydown.window="onKey($event)" @nassakh:page-updated.window="onPageUpdated($event.detail)" @nassakh:page-state.window="onPageState($event.detail)">
 
   {# ------------------------------------------------------------ image panel #}
   <section class="viewer" aria-label="صورة الصفحة">

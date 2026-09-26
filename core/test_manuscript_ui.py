@@ -150,14 +150,17 @@ def test_manuscript_view_never_assembled_shows_the_empty_state_with_options(edit
     assert "تُوصل الفقرات عبر الصفحات" in body
     assert body.count('role="radiogroup"') >= 1 and "حسب الفصل" in body and "حسب الكتاب" in body
     assert "تضمين الصفحات غير المُراجَعة" in body and "حذف التطويل" in body
-    assert '@click="submitConvert()"' in body and "تحويل إلى كتاب" in body
+    assert '@click="submitConvert()"' in body and "تجميع المخطوطة" in body and "تحويل إلى كتاب" not in body
+    assert (
+        'x-text="NassakhBooks.convertLabel(convert)"' in body
+    )  # D35: the button counts the unreviewed pages
     # the document host is empty, the layout cloaked; the top bar has the popover for editors
     assert '<div class="ms-host" x-ignore data-ms-host></div>' in body and "<article" not in body
     assert 'class="menu ms-convert"' in body and "manuscriptBar" in body and "src/js/manuscript.js" in body
     # a proofreader sees no options and no convert: the editor starts the conversion; the seam menu offers
     # the review link only
     body = _view(_logged(proofreader), f.book)
-    assert "يبدأ التحويل محرّر الكتاب" in body and 'class="menu ms-convert"' not in body
+    assert "يجمع المخطوطةَ محرّرُ الكتاب." in body and 'class="menu ms-convert"' not in body
     assert "chooseSeam(" not in body and "فتح الصفحة" in body
     assert "v.primary === 'convert'" not in body and "v.primary === 'book'" in body
     assert "نسخ نص المخطوطة" not in body and "copyText" not in body  # D49: the book is exported, never copied
@@ -295,7 +298,11 @@ def test_manuscript_view_ready_renders_the_document_the_panel_and_the_chrome(edi
     assert _json_script(body, "manuscript-config")["urls"]["book"] == reverse(
         "editor:layout", args=[f.book.pk]
     )
-    assert "خيارات التجميع…" in body and "نسخ نص المخطوطة" not in body and "لوحة الكتاب" in body
+    assert "خيارات التجميع…" in body and "نسخ نص المخطوطة" not in body and "لوحة الكتاب" not in body
+    assert (
+        'data-stage-bar data-rail data-current="manuscript"' in body
+        and 'class="ms-screen" data-manuscript data-rail' in body
+    )
     assert "حذف الترويسات المتكرّرة" in body
     assert 'x-text="v.pill.text"' in body and "اختصارات لوحة المفاتيح" in body
     # the fragment endpoint serves the same parts on its own
@@ -344,11 +351,11 @@ def test_dashboard_carries_the_manuscript_primary_menu_popover_and_side_block(ed
     body = _logged(editor).get(reverse("books:detail", args=[f.book.pk])).content.decode()
     for state in ("convert", "reassemble", "manuscript"):
         assert f"x-show=\"d.primary === '{state}'\"" in body, state
-    assert "تحويل إلى كتاب" in body and "إعادة التجميع" in body and "فتح المخطوطة" in body
+    assert "تجميع المخطوطة" in body and "إعادة التجميع" in body and "فتح المخطوطة" in body
     menu = body[
         body.index('class="menu menu-popover bk-menu"') : body.index("</template>", body.index("bk-menu"))
     ]
-    assert "تحويل إلى كتاب…" in menu and "فتح المخطوطة" in menu and "نسخ نص الكتاب" in menu
+    assert "تجميع المخطوطة…" in menu and "فتح المخطوطة" in menu and "نسخ نص الكتاب" in menu
     assert 'class="bk-convert-host"' in body and 'class="menu ms-convert" role="dialog"' in body
     assert 'x-text="ms.convert.unreviewed"' in body and '@click="ms.submitConvert()"' in body
     side = body[body.index('<aside class="bk-side"') :]
@@ -358,7 +365,7 @@ def test_dashboard_carries_the_manuscript_primary_menu_popover_and_side_block(ed
         < side.index('class="bk-manuscript"')
         < side.index("bk-attention")
     )
-    assert 'x-text="manuscriptLine"' in side and "فتح المخطوطة" in side and "تحويل إلى كتاب…" in side
+    assert 'x-text="manuscriptLine"' in side and "فتح المخطوطة" in side and "تجميع المخطوطة…" in side
     config = _json_script(body, "dashboard-config")
     assert config["manuscript"]["exists"] is False and config["manuscriptUrls"]["page"].endswith(
         "/manuscript/"
@@ -1040,6 +1047,9 @@ const ids = (root) => root.querySelectorAll('.ms-block').map((b) => b.getAttribu
   // ---- D49: a text edited on the book page: the tools rest, the replacement is confirmed in the popover
   const ed = make(Object.assign({}, fixture.state_v1, { edited: true }), fixture.fragment_v1); await flush(); calls.length = 0;
   const seamBefore = posts().length;
+  // D78 (PHASE7 §5.6): review's changes after the edit are named, and taken on the book page
+  const edStale = make(Object.assign({}, fixture.state_v1, { edited: true, stale: true, stale_pages: [2, 4, 5] }), fixture.fragment_v1); await flush();
+  out.editedDrift = { text: edStale.c.editedDriftText, url: edStale.c.changesUrl, none: ed.c.editedDriftText };
   out.edited = { edited: ed.c.edited, primary: ed.c.primary, pill: ed.c.pill, text: ed.c.editedText, screen: ed.c.$el ? 1 : 0,
     seam: await ed.c.postSeam(2, 'split'), dismiss: await ed.c.dismissSuggestion('p40'), role: await ed.c.setRole('p40', 'heading'), posts: posts().length - seamBefore };
   ed.c.reassemble();
@@ -1356,7 +1366,7 @@ def test_manuscript_component_under_node(tmp_path):
         "src": "3",
         "role": "body",
         "reviewed": False,
-        "reviewUrl": "/books/1/review/3/",
+        "reviewUrl": "/books/1/review/3/?from=manuscript&block=p40",  # D76: review leads back here
         "lines": [40],
     }
     # near the bottom (p80 at 560: below would end at 874 > 792) the menu flips above the «⋯»
@@ -1529,11 +1539,11 @@ def test_manuscript_component_under_node(tmp_path):
     }
     assert out["stale"] == {
         "stale": True,
-        "text": "تغيّر نص صفحتان بعد التجميع:",
+        "text": "تغيّر نص صفحتين بعد التجميع:",  # the genitive after «نص»
         "pages": [2, 4],
         "pill": {"state": "warn", "text": "تغيّر النص بعد التجميع"},
         "primary": "reassemble",
-        "url": "/books/1/review/4/",
+        "url": "/books/1/review/4/?from=manuscript",  # D76: review leads back here
     }
     # a proofreader may open the seam menu (the review link) but never posts an override
     assert out["proofreader"] == {
@@ -1552,7 +1562,7 @@ def test_manuscript_component_under_node(tmp_path):
             "strip_running_heads": True,
         },
         "unreviewed": 2,
-        "label": "تحويل",
+        "label": "تجميع المخطوطة",
         "phase": "empty",
         "primary": "convert",
     }
@@ -1575,7 +1585,12 @@ def test_manuscript_component_under_node(tmp_path):
     edited = out["edited"]
     assert edited["edited"] is True and edited["primary"] == "book"
     assert edited["pill"] == {"state": "saved", "text": "حُرِّر في صفحة الكتاب"}
-    assert edited["text"].startswith("حُرِّر نص الكتاب في صفحة الكتاب")
+    assert edited["text"].startswith("حُرِّر نص الكتاب في «الكتاب»")
+    assert out["editedDrift"] == {
+        "text": "غيّرت المراجعة نص 3 صفحات بعد التحرير؛ تُؤخذ من «الكتاب».",
+        "url": "/books/1/layout/?tab=changes",
+        "none": "",
+    }
     assert edited["seam"] is False and edited["dismiss"] is False and edited["role"] is False
     assert edited["posts"] == 0
     assert out["editedReassemble"] == {
@@ -1663,7 +1678,7 @@ def test_dashboard_manuscript_logic_under_node(tmp_path):
             "strip_tatweel": True,
             "strip_running_heads": True,
         },
-        "label": "تحويل",
+        "label": "تجميع المخطوطة",
     }
     assert out["submitted"]["call"] == [
         "POST",

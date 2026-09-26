@@ -1,0 +1,439 @@
+{
+ "POST /api/books/40/to-footnote/ (the chapter the book page holds, and the paragraph)": {
+  "request": {
+   "block": "p40013",
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً (1) في الدنيا."
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40013",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40013
+       ],
+       "reviewed": true,
+       "noteFor": "1"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "(1) انظر ترجمته في الأعلام."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "status": 200,
+  "response": {
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً"
+       },
+       {
+        "type": "footnote",
+        "attrs": {
+         "id": "n40013",
+         "number": 1,
+         "marker": "1",
+         "sourcePage": 1,
+         "sourceLineIds": [
+          40013
+         ],
+         "orphan": false
+        },
+        "content": [
+         {
+          "type": "text",
+          "text": "انظر ترجمته في الأعلام."
+         }
+        ]
+       },
+       {
+        "type": "text",
+        "text": " في الدنيا."
+       }
+      ]
+     }
+    ]
+   },
+   "note": {
+    "id": "n40013",
+    "marker": "1",
+    "block": "p40012"
+   },
+   "removed": "p40013"
+  }
+ },
+ "… no call in the page or the chapter": {
+  "request": {
+   "block": "p40013",
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً في الدنيا."
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40013",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40013
+       ],
+       "reviewed": true,
+       "noteFor": "1"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "(1) انظر ترجمته في الأعلام."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "status": 400,
+  "response": {
+   "detail": "لم تُعثر على العلامة (1) في نص الصفحة 1؛ ضع المؤشّر موضعها ثم اختر «حاشية» (⌘⇧F)."
+  }
+ },
+ "… a paragraph that starts with no marker": {
+  "request": {
+   "block": "p40012",
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً (1) في الدنيا."
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40013",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40013
+       ],
+       "reviewed": true,
+       "noteFor": "1"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "(1) انظر ترجمته في الأعلام."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "status": 400,
+  "response": {
+   "detail": "لا تبدأ هذه الفقرة بعلامة حاشية مثل «(1)»."
+  }
+ },
+ "… a block that is not in the chapter": {
+  "request": {
+   "block": "p999",
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً (1) في الدنيا."
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40013",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40013
+       ],
+       "reviewed": true,
+       "noteFor": "1"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "(1) انظر ترجمته في الأعلام."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "status": 400,
+  "response": {
+   "detail": "الفقرة غير موجودة في هذا الفصل."
+  }
+ },
+ "… as a proofreader": {
+  "request": {
+   "block": "p40013",
+   "content": {
+    "type": "doc",
+    "content": [
+     {
+      "type": "heading",
+      "attrs": {
+       "level": 1,
+       "id": "h40011",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40011
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "الفصل الأول"
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40012",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40012
+       ],
+       "reviewed": true
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "كان الشيخ فقيهاً (1) في الدنيا."
+       }
+      ]
+     },
+     {
+      "type": "paragraph",
+      "attrs": {
+       "id": "p40013",
+       "sourcePages": [
+        1
+       ],
+       "sourceLineIds": [
+        40013
+       ],
+       "reviewed": true,
+       "noteFor": "1"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": "(1) انظر ترجمته في الأعلام."
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "status": 403,
+  "response": {
+   "detail": "هذا الإجراء يتطلب صلاحية محرّر."
+  }
+ }
+}

@@ -209,6 +209,7 @@
     if (o.below && o.below(line, i)) cls.push('is-below');
     if (o.selected && line.block === o.selected) cls.push('is-selected');
     if (o.flash && line.block === o.flash.block && (o.flash.i === undefined || o.flash.i === i)) cls.push('is-flash');
+    if (o.applied && o.applied.has(line.block)) cls.push('is-applied');
     const style = `--x:${num(line.x)};--y:${num(line.y)};--w:${num(line.w)};--h:${num(line.h)};--fs:${num(lead.size_pt || 13)}`;
     const plain = o.plain ? o.plain(line.block) : undefined;
     const decos = o.decos ? o.decos(line.block) : null;

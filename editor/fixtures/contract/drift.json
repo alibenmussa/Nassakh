@@ -1,0 +1,93 @@
+{
+ "approvals only (never announced)": {
+  "edited": true,
+  "pages": [],
+  "reasons": {},
+  "approvals": [
+   6
+  ],
+  "chapters": [],
+  "chapter_pages": {}
+ },
+ "processing only (a machine pass rewrote the lines)": {
+  "edited": true,
+  "pages": [
+   7
+  ],
+  "reasons": {
+   "7": "processing"
+  },
+  "approvals": [
+   6
+  ],
+  "chapters": [
+   "h40011"
+  ],
+  "chapter_pages": {
+   "h40011": [
+    7
+   ]
+  }
+ },
+ "GET /api/books/40/drift/ (every reason)": {
+  "edited": true,
+  "pages": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   7
+  ],
+  "reasons": {
+   "1": "review",
+   "2": "review",
+   "3": "review",
+   "4": "added",
+   "5": "removed",
+   "7": "processing"
+  },
+  "approvals": [
+   6
+  ],
+  "chapters": [
+   "h40011"
+  ],
+  "chapter_pages": {
+   "h40011": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ]
+  }
+ },
+ "an unedited manuscript (the banner offers «إعادة التجميع»)": {
+  "edited": false,
+  "pages": [
+   1
+  ],
+  "reasons": {
+   "1": "review"
+  },
+  "approvals": [],
+  "chapters": [
+   "h44011"
+  ],
+  "chapter_pages": {
+   "h44011": [
+    1
+   ]
+  }
+ },
+ "no manuscript": {
+  "edited": false,
+  "pages": [],
+  "reasons": {},
+  "approvals": [],
+  "chapters": [],
+  "chapter_pages": {}
+ }
+}

@@ -64,7 +64,10 @@ def book_detail(request: HttpRequest, book_id: int) -> HttpResponse:
 def page_detail(request: HttpRequest, book_id: int, number: int) -> HttpResponse:
     """One page: image tabs with region overlay, preprocessing and text panels, runs, re-run menu."""
     page = get_object_or_404(Page.objects.select_related("book"), book_id=book_id, number=number)
-    return render(request, "books/page_detail.html", services.page_detail_context(page))
+    context = services.page_detail_context(page)
+    current = "pages" if page.book.awaits_ocr_start else "ocr"  # as page_detail.html's stage bar include
+    context["stage_steps"] = services.book_stages(page.book, current)  # the stage bar (D76)
+    return render(request, "books/page_detail.html", context)
 
 
 @role_required("editor")

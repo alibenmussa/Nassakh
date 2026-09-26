@@ -52,6 +52,8 @@
   <symbol id="i-book-open" viewBox="0 0 24 24"><path d="M3.5 5.5h5A3.5 3.5 0 0 1 12 9v10.5a2.5 2.5 0 0 0-2.5-2.5h-6z"/><path d="M20.5 5.5h-5A3.5 3.5 0 0 0 12 9v10.5a2.5 2.5 0 0 1 2.5-2.5h6z"/></symbol>
   <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  {# «تغييرات المراجعة» (D78): review's text joining the book's #}
+  <symbol id="i-merge" viewBox="0 0 24 24"><path d="M7 4v4.5a4.5 4.5 0 0 0 4.5 4.5H19"/><path d="M7 20v-3.5A4.5 4.5 0 0 1 11.5 12"/><path d="M15.5 9.5L19 13l-3.5 3.5"/></symbol>
 </svg>
 
 {% block body %}
@@ -62,7 +64,7 @@
       <span class="brand-mark" aria-hidden="true">ن</span>
       <span class="brand-name">نسّاخ</span>
     </a>
-    {# a page that needs the room (the book page) folds this sidebar into an icon rail; the button unfolds it over the page #}
+    {# a book screen (`data-rail`: the stage bar and the screens' roots, D76) folds this sidebar into an icon rail; the button unfolds it over the page #}
     <button type="button" class="btn-icon rail-toggle" @click="railOpen = !railOpen" :aria-expanded="railOpen ? 'true' : 'false'" :title="railOpen ? 'طيّ القائمة' : 'إظهار القائمة'" aria-label="القائمة">
       <svg class="icon icon-mirror" aria-hidden="true"><use href="#i-sidebar"/></svg>
     </button>
@@ -104,6 +106,8 @@
         <svg class="icon" aria-hidden="true"><use href="#i-menu"/></svg>
       </button>
       <h1 class="page-title">{% block title %}{% endblock %}</h1>
+      {# D76 (PHASE7_SPEC §5.1): a book screen's stage bar (templates/partials/_stage_bar.html) between the title and the actions #}
+      {% block stagebar %}{% endblock %}
       <div class="topbar-actions">{% block header_actions %}{% endblock %}</div>
     </header>
 
@@ -157,6 +161,7 @@
 <script src="{% static 'src/js/ui.js' %}"></script>
 <script src="{% static 'src/js/keys.js' %}"></script>
 <script src="{% static 'src/js/decode.js' %}"></script>
+<script src="{% static 'src/js/stages.js' %}"></script>
 <script src="{% static 'src/js/books.js' %}"></script>
 <script src="{% static 'src/js/processing.js' %}"></script>
 <script src="{% static 'src/js/ocr.js' %}"></script>

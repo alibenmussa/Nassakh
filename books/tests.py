@@ -2391,3 +2391,303 @@ def test_the_tile_says_how_the_page_was_read():
     assert labels == []
     pages[1].attention_flags = ["single_reader"]
     assert services.page_tile(pages[1])["flag_labels"] == ["قراءة واحدة"]
+
+
+# ====================================================================== 7c: the stage bar (D76), the tile
+
+CONTRACT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "editor", "fixtures", "contract")
+STAGE_BOOK = 41
+
+
+def contract_fixture(name: str):
+    with open(os.path.join(CONTRACT_DIR, name), encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_contract(name: str, content) -> None:
+    """Rewrite a 7c contract file from live answers (`NASSAKH_WRITE_CONTRACT_FIXTURES=1`)."""
+    if os.environ.get("NASSAKH_WRITE_CONTRACT_FIXTURES"):
+        with open(os.path.join(CONTRACT_DIR, name), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(content, ensure_ascii=False, indent=1) + "\n")
+
+
+def stage_book(statuses=(), *, awaits=False, status=Book.Status.REVIEWING, error_from="ocr") -> Book:
+    """Book 41 «كتاب المراحل» with one page per status (`error` pages failed at `error_from`)."""
+    from assembly.models import AssemblyRun
+    from editor.models import Manuscript
+    from publishing.models import Export, LiveLayout
+
+    for model in (Export, LiveLayout, Manuscript, AssemblyRun):
+        model.objects.filter(book_id=STAGE_BOOK).delete()
+    Book.objects.filter(pk=STAGE_BOOK).delete()
+    book = Book.objects.create(pk=STAGE_BOOK, title="كتاب المراحل", status=status, awaits_ocr_start=awaits)
+    for number, page_status in enumerate(statuses, start=1):
+        Page.objects.create(
+            book=book,
+            number=number,
+            source_index=number - 1,
+            status=page_status,
+            error_from=error_from if page_status == Page.Status.ERROR else "",
+        )
+    return book
+
+
+def with_manuscript(book: Book, *, edited=False, drift=(), approvals=(), version=3, chapters=2):
+    """A manuscript built from the book's pages as they are, `drift` pages with another signature and
+    `approvals` pages with the other reviewed flag."""
+    from assembly.models import AssemblyRun
+    from assembly.services import page_signatures
+    from editor.models import Manuscript
+
+    pages = list(book.pages.order_by("number"))
+    sigs = page_signatures([page.pk for page in pages])
+    included = {}
+    for page in pages:
+        reviewed = page.status in (Page.Status.REVIEWED, Page.Status.ASSEMBLED)
+        included[str(page.pk)] = {
+            "number": page.number,
+            "reviewed": (not reviewed) if page.number in approvals else reviewed,
+            "sig": "9:changed" if page.number in drift else sigs[page.pk],
+        }
+    run = AssemblyRun.objects.create(
+        book=book, status="done", included=included, stats={"chapters": chapters}, finished_at=timezone.now()
+    )
+    return Manuscript.objects.create(
+        book=book,
+        document={"type": "doc", "content": []},
+        version=version,
+        origin="editor" if edited else "assembly",
+        run=run,
+    )
+
+
+R8 = [Page.Status.REVIEWED] * 8
+
+
+def _exports(book, *rows):
+    from publishing.models import Export
+
+    now = timezone.now()
+    for fmt, status, version, hours in rows:
+        Export.objects.create(
+            book=book,
+            format=fmt,
+            status=status,
+            manuscript_version=version,
+            finished_at=now - timezone.timedelta(hours=hours) if status in ("done", "error") else None,
+            error="تعذّر إخراج الملف. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.\nValueError: x"
+            if status == "error"
+            else "",
+        )
+
+
+def _layout(book, pages=84):
+    from publishing.models import LiveLayout
+
+    LiveLayout.objects.create(book=book, revision=1, page_count=pages)
+
+
+def _run(book, status):
+    from assembly.models import AssemblyRun
+    from assembly.services import RUN_ERROR
+
+    AssemblyRun.objects.create(
+        book=book,
+        status=status,
+        error=f"{RUN_ERROR}\nX" if status == "error" else "",
+    )
+
+
+def _stage_cases():
+    """Every state of every step: `{step: {state: builder}}` (each builder leaves book 41 in that state)."""
+    PRE, UP, LAY, READ, ERR = (
+        Page.Status.PREPROCESSED,
+        Page.Status.UPLOADED,
+        Page.Status.LAYOUT_DONE,
+        Page.Status.OCR_DONE,
+        Page.Status.ERROR,
+    )
+    return {
+        "pages": {
+            "todo": lambda: stage_book(status=Book.Status.UPLOADED, awaits=True),
+            "extracting": lambda: stage_book(status=Book.Status.PROCESSING, awaits=True),
+            "active": lambda: stage_book(
+                [PRE, PRE, PRE, UP, UP, UP, UP], awaits=True, status=Book.Status.PROCESSING
+            ),
+            "done": lambda: stage_book([PRE] * 7, awaits=True, status=Book.Status.NEEDS_GUIDES),
+            "done_started": lambda: stage_book([READ] * 8),
+            "attention": lambda: stage_book(
+                [PRE] * 6 + [ERR], awaits=True, status=Book.Status.PROCESSING, error_from="preprocess"
+            ),
+        },
+        "ocr": {
+            "todo": lambda: stage_book([PRE] * 7, awaits=True, status=Book.Status.NEEDS_GUIDES),
+            "active": lambda: stage_book([READ] * 3 + [LAY] * 5, status=Book.Status.OCR),
+            "done": lambda: stage_book([READ] * 8),
+            "attention": lambda: stage_book([READ] * 7 + [ERR]),
+        },
+        "review": {
+            "blocked": lambda: stage_book([LAY] * 8, status=Book.Status.OCR),
+            "todo": lambda: stage_book([READ] * 8),
+            "active": lambda: stage_book(R8[:6] + [READ, READ]),
+            "done": lambda: stage_book(R8),
+        },
+        "manuscript": {
+            "todo": lambda: stage_book(R8),
+            "active": lambda: _run(stage_book(R8), "queued"),
+            "done": lambda: with_manuscript(stage_book(R8)),
+            "done_edited": lambda: with_manuscript(stage_book(R8), edited=True),
+            "stale": lambda: with_manuscript(stage_book(R8), drift=(3, 4)),
+            "stale_approvals": lambda: with_manuscript(stage_book(R8), approvals=(3, 4)),
+            "attention": lambda: (
+                with_manuscript(stage_book(R8)),
+                _run(Book.objects.get(pk=STAGE_BOOK), "error"),
+            ),
+        },
+        "book": {
+            "blocked": lambda: stage_book(R8),
+            "todo": lambda: with_manuscript(stage_book(R8)),
+            "done": lambda: _layout(with_manuscript(stage_book(R8)).book),
+            "stale": lambda: _layout(with_manuscript(stage_book(R8), edited=True, drift=(3, 4)).book),
+        },
+        "export": {
+            "blocked": lambda: stage_book(R8),
+            "todo": lambda: with_manuscript(stage_book(R8)),
+            "active": lambda: _exports(with_manuscript(stage_book(R8)).book, ("docx", "running", None, 0)),
+            "done": lambda: _exports(
+                with_manuscript(stage_book(R8)).book, ("print_pdf", "done", 3, 3), ("docx", "done", 3, 2)
+            ),
+            "stale": lambda: _exports(with_manuscript(stage_book(R8)).book, ("docx", "done", 2, 5)),
+            "attention": lambda: _exports(
+                with_manuscript(stage_book(R8)).book, ("docx", "done", 3, 5), ("docx", "error", 3, 1)
+            ),
+        },
+    }
+
+
+def _step_of(key: str) -> dict:
+    book = Book.objects.get(pk=STAGE_BOOK)
+    return next(step for step in services.book_stages(book) if step["key"] == key)
+
+
+def stages_contract(client) -> dict:
+    steps: dict = {}
+    for key, states in _stage_cases().items():
+        steps[key] = {}
+        for state, build in states.items():
+            build()
+            steps[key][state] = _step_of(key)
+    responses = {}
+
+    def answer(label, current):
+        response = client.get(reverse("api:book_stages", args=[STAGE_BOOK]) + f"?current={current}")
+        assert response.status_code == 200
+        responses[label] = response.json()
+
+    cases = _stage_cases()
+    cases["pages"]["active"]()
+    answer("GET /api/books/41/stages/?current=pages (the «التخطيط» mode, preparing)", "pages")
+    cases["review"]["active"]()
+    answer("GET /api/books/41/stages/?current=review (reviewing)", "review")
+    book = with_manuscript(stage_book(R8), edited=True, drift=(3, 4)).book
+    _layout(book)
+    _exports(book, ("docx", "done", 2, 5))
+    answer("GET /api/books/41/stages/?current=book (edited, with drift)", "book")
+    cases["export"]["done"]()
+    _layout(Book.objects.get(pk=STAGE_BOOK))
+    answer("GET /api/books/41/stages/?current=export (exported)", "export")
+    return {"steps": steps, "responses": responses}
+
+
+def test_stage_payloads_equal_the_contract(editor_client):
+    contract = stages_contract(editor_client)
+    write_contract("stages.json", contract)
+    assert contract == contract_fixture("stages.json")
+    index = contract_fixture("index.json")
+    assert "stages.json" in index["files"] and "tile.json" in index["files"]
+
+
+def test_every_step_has_its_states_and_blocked_steps_have_no_link():
+    seen = {}
+    for key, states in _stage_cases().items():
+        for state, build in states.items():
+            build()
+            step = _step_of(key)
+            assert step["state"] == ("active" if state == "extracting" else state.split("_")[0]), (key, state)
+            assert (step["url"] is None) == (step["state"] == "blocked"), (key, state)
+            assert step["state_label"] == services.STATE_WORDS[step["state"]]
+            seen.setdefault(key, set()).add(step["state"])
+    assert seen == {
+        "pages": {"todo", "active", "done", "attention"},
+        "ocr": {"todo", "active", "done", "attention"},
+        "review": {"blocked", "todo", "active", "done"},
+        "manuscript": {"todo", "active", "done", "stale", "attention"},
+        "book": {"blocked", "todo", "done", "stale"},
+        "export": {"blocked", "todo", "active", "done", "stale"} | {"attention"},
+    }
+
+
+def test_the_stage_bar_marks_the_current_step_and_links_the_guides_view_after_the_start(editor_client):
+    stage_book([Page.Status.OCR_DONE] * 8)
+    book = Book.objects.get(pk=STAGE_BOOK)
+    steps = services.book_stages(book, "review")
+    assert [s["key"] for s in steps] == list(services.STAGE_KEYS)
+    assert [s["label"] for s in steps] == ["التخطيط", "المعالجة", "المراجعة", "المخطوطة", "الكتاب", "الإخراج"]
+    assert [s["current"] for s in steps] == [False, False, True, False, False, False]
+    assert steps[0]["url"] == f"/books/{STAGE_BOOK}/?view=guides"
+    assert steps[2]["url"] == f"/books/{STAGE_BOOK}/review/next/"
+    unknown = editor_client.get(reverse("api:book_stages", args=[STAGE_BOOK]) + "?current=zz").json()
+    assert unknown["current"] is None and not any(step["current"] for step in unknown["steps"])
+    assert editor_client.get(reverse("api:book_stages", args=[10**6])).status_code == 404
+
+
+@pytest.mark.parametrize("pages", [3, 30])
+def test_the_stage_bar_costs_at_most_eight_queries(pages, django_assert_max_num_queries):
+    """§8.4 gate 3: the stage bar's data in ≤ 8 queries, whatever the book's size."""
+    book = stage_book([Page.Status.REVIEWED] * pages)
+    with_manuscript(book, edited=True, drift=(2,))
+    _exports(book, ("docx", "done", 3, 2), ("epub", "done", 2, 4))
+    book = Book.objects.get(pk=STAGE_BOOK)
+    with django_assert_max_num_queries(8):
+        steps = services.book_stages(book, "book")
+    assert [s["state"] for s in steps] == ["done", "done", "done", "done", "stale", "done"]
+    stage_book([Page.Status.REVIEWED] * pages)
+    with_manuscript(Book.objects.get(pk=STAGE_BOOK))
+    book = Book.objects.get(pk=STAGE_BOOK)
+    with django_assert_max_num_queries(8):  # no live layout: the newest render is read instead
+        services.book_stages(book)
+
+
+def test_the_tile_leads_to_review_once_the_text_is_final():
+    book, pages = _book_with_pages(3, status=Page.Status.OCR_DONE)
+    Page.objects.filter(pk=pages[0].pk).update(text_state=Page.TextState.FINAL)
+    Page.objects.filter(pk=pages[1].pk).update(text_state=Page.TextState.FINAL, is_excluded=True)
+    tiles = {tile["number"]: tile for tile in services.page_tiles(book)}
+    assert tiles[1]["primary_url"] == f"/books/{book.pk}/review/1/"
+    assert tiles[2]["primary_url"] == f"/books/{book.pk}/pages/2/"  # excluded
+    assert tiles[3]["primary_url"] == f"/books/{book.pk}/pages/3/"  # no final text yet
+    assert "primary_url" not in services.page_tiles(book, compact=True)[0]
+
+
+def test_tile_contract():
+    book = Book.objects.create(pk=40, title="رحلة النص", status=Book.Status.REVIEWING)
+    final = Page.objects.create(book=book, number=1, source_index=0, text_state=Page.TextState.FINAL)
+    busy = Page.objects.create(book=book, number=8, source_index=7)
+    out = Page.objects.create(
+        book=book, number=5, source_index=4, text_state=Page.TextState.FINAL, is_excluded=True
+    )
+    pick = ("primary_url", "url", "review_url")
+
+    def keys(page):
+        return {key: services.page_tile(page)[key] for key in pick}
+
+    contract = {
+        "page_tile (full): the new key": {
+            "a page with final text": keys(final),
+            "a page still processing (no final text)": keys(busy),
+            "an excluded page": keys(out),
+        },
+        "compact tile (the poll)": contract_fixture("tile.json")["compact tile (the poll)"],
+    }
+    write_contract("tile.json", contract)
+    assert contract == contract_fixture("tile.json")

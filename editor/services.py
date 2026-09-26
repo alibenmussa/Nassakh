@@ -38,7 +38,7 @@ MAX_MATCHES = 5000
 MAX_LABEL = 200
 SNAPSHOTS_LISTED = 100
 
-NO_MANUSCRIPT = "لم يُجمَّع هذا الكتاب بعد؛ حوّله إلى كتاب أولًا."
+NO_MANUSCRIPT = "لم تُجمَع مخطوطة هذا الكتاب بعد؛ اجمعها أولًا."
 NO_CHAPTER = "الفصل غير موجود؛ ربما تغيّر تقسيم الفصول. أعد تحميل قائمة الفصول."
 CONFLICT = "تغيّر هذا الفصل في نافذة أخرى."
 REASSEMBLY_ERROR = "تعذّرت إعادة تجميع الفصل؛ بقي الفصل كما هو. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم."
@@ -111,13 +111,20 @@ def _check_chapter_id(chapter_id) -> str:
 chapters_of = doc.chapters_of
 
 
-def manuscript_of(book: Book, *, lock: bool = False, with_run: bool = False) -> Manuscript:
-    """The book's manuscript (`EditorNotFound` before the first assembly); `lock` inside a transaction."""
+def manuscript_of(
+    book: Book, *, lock: bool = False, with_run: bool = False, with_base: bool = False
+) -> Manuscript:
+    """The book's manuscript (`EditorNotFound` before the first assembly); `lock` inside a transaction.
+
+    Its `base` (D78, as large as the document) is deferred unless `with_base`: the autosave locks the row
+    every 1.5 s and never reads it (`_mark_edited` only writes it)."""
     rows = Manuscript.objects.filter(book_id=book.pk)
     if with_run:
         rows = rows.select_related("run")
-    if lock:
-        rows = rows.select_for_update()
+    if not with_base:
+        rows = rows.defer("base")
+    if lock:  # the manuscript's row only: PostgreSQL refuses FOR UPDATE on the nullable side of a join
+        rows = rows.select_for_update(of=("self",))
     manuscript = rows.first()
     if manuscript is None:
         raise EditorNotFound(NO_MANUSCRIPT)
@@ -283,11 +290,14 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
         end = chapter.start + len(nodes)
         formed = [c for c in doc.chapters_of(new_document) if c.start < end and c.end > chapter.start]
         if changed:
+            fields = _mark_edited(manuscript)
             manuscript.document = new_document
             manuscript.version += 1
             manuscript.origin = Manuscript.Origin.EDITOR
             manuscript.updated_by = _user_or_none(user)
-            manuscript.save(update_fields=["document", "version", "origin", "updated_by", "updated_at"])
+            manuscript.save(
+                update_fields=[*fields, "document", "version", "origin", "updated_by", "updated_at"]
+            )
     relayout = _schedule(book, formed[0].id if formed else None, manuscript.version) if changed else None
     summary = [
         {"id": c.id, "version": doc.chapter_version(c.nodes(new_document)), "title": c.title} for c in formed
@@ -306,12 +316,33 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
     }
 
 
-def _write(manuscript: Manuscript, document: dict, user) -> None:
+_KEEP = object()  # `_write`: the base follows `_mark_edited`
+
+
+def _mark_edited(manuscript: Manuscript) -> list[str]:
+    """Before the first edit of an assembled text, keep that text as the manuscript's base (D78): the
+    assembled document every later edit descends from. Every editor write calls it first (`save_chapter`,
+    `_write`: find & replace, digits, the uncertain words); a text already edited keeps its base (an edit
+    never rewrites it). Returns the fields to save with the write (`["base"]` or none)."""
+    if manuscript.origin != Manuscript.Origin.ASSEMBLY:
+        return []
+    manuscript.base = copy.deepcopy(manuscript.document or {})
+    return ["base"]
+
+
+def _write(manuscript: Manuscript, document: dict, user, base=_KEEP) -> None:
+    """Write an edited document (version + 1, origin editor); the base as `_mark_edited` keeps it, or `base`
+    when given (a restore puts the snapshot's back)."""
+    if base is _KEEP:
+        fields = _mark_edited(manuscript)
+    else:
+        manuscript.base = base
+        fields = ["base"]
     manuscript.document = document
     manuscript.version += 1
     manuscript.origin = Manuscript.Origin.EDITOR
     manuscript.updated_by = _user_or_none(user)
-    manuscript.save(update_fields=["document", "version", "origin", "updated_by", "updated_at"])
+    manuscript.save(update_fields=[*fields, "document", "version", "origin", "updated_by", "updated_at"])
 
 
 # ====================================================================== snapshots
@@ -343,10 +374,19 @@ def prune_edit_snapshots(manuscript: Manuscript, keep: int = EDIT_SNAPSHOTS_KEPT
     return len(old)
 
 
-def _take(manuscript: Manuscript, label: str, reason: str, user) -> ManuscriptSnapshot:
+def _take(
+    manuscript: Manuscript, label: str, reason: str, user, run_id: int | None = None
+) -> ManuscriptSnapshot:
+    """Save a copy of the document and its base (D78). `run_id` stamps the copy's `attrs.runId`, so a
+    restore puts that run back as the baseline (an apply of review changes moves the baseline without
+    writing the document)."""
+    document = copy.deepcopy(manuscript.document or {})
+    if run_id is not None and isinstance(document, dict):
+        document["attrs"] = {**(document.get("attrs") or {}), "runId": run_id}
     snapshot = ManuscriptSnapshot.objects.create(
         manuscript=manuscript,
-        document=copy.deepcopy(manuscript.document or {}),
+        document=document,
+        base=copy.deepcopy(manuscript.base),
         version=manuscript.version,
         label=label[:MAX_LABEL],
         reason=reason,
@@ -373,7 +413,7 @@ def snapshot(book: Book, label: str = "", reason: str = "manual", user=None) -> 
 def snapshots(book: Book) -> list[dict]:
     """The manuscript's snapshots, newest first (without their documents)."""
     manuscript = manuscript_of(book)
-    rows = manuscript.snapshots.select_related("created_by").defer("document")[:SNAPSHOTS_LISTED]
+    rows = manuscript.snapshots.select_related("created_by").defer("document", "base")[:SNAPSHOTS_LISTED]
     return [_snapshot_dict(row, manuscript.version) for row in rows]
 
 
@@ -382,7 +422,10 @@ def restore(book: Book, snapshot_id, user=None) -> dict:
 
     Returns `{version (the manuscript's), snapshot (the one taken before), restored}`. The manuscript's
     run follows the restored document's `runId` when that run still exists, so drift is measured against
-    what the restored text was built from.
+    what the restored text was built from. The base (D78) is the snapshot's; a snapshot taken before 7c has
+    none (its pages merge as without a base), except one taken before a re-assembly, whose text was not
+    edited and is its own base. The current document never becomes the base (review changes made since
+    would be lost).
     """
     from assembly.models import AssemblyRun
 
@@ -391,7 +434,7 @@ def restore(book: Book, snapshot_id, user=None) -> dict:
     except (TypeError, ValueError):
         raise EditorNotFound("النسخة غير موجودة.") from None
     with transaction.atomic():
-        manuscript = manuscript_of(book, lock=True)
+        manuscript = manuscript_of(book, lock=True, with_base=True)
         chosen = manuscript.snapshots.filter(pk=snapshot_pk).first()
         if chosen is None:
             raise EditorNotFound("النسخة غير موجودة.")
@@ -409,7 +452,10 @@ def restore(book: Book, snapshot_id, user=None) -> dict:
         ):
             manuscript.run_id = run_id
             manuscript.save(update_fields=["run"])
-        _write(manuscript, document, user)
+        base = copy.deepcopy(chosen.base)
+        if base is None and chosen.reason == ManuscriptSnapshot.Reason.REASSEMBLY:
+            base = copy.deepcopy(chosen.document or {})
+        _write(manuscript, document, user, base=base)
     _schedule(book, None, manuscript.version)
     return {"version": manuscript.version, "snapshot": before.pk, "restored": chosen.pk}
 
@@ -574,25 +620,37 @@ def _chapters_of_page(chapters: list[tuple[str, list[int]]], page: int) -> list[
     return [chapters[0][0]] if chapters else []
 
 
+NO_DRIFT: dict = {"edited": False, "pages": [], "reasons": {}, "approvals": [], "chapters": {}}
+
+
 def review_drift(book: Book, manuscript: Manuscript | None = None, chapters=None) -> dict:
-    """Pages whose text changed in review since the manuscript was built (D41), and the chapters they fall
-    in: `{edited, pages: [n…], chapters: {chapter id: [n…]}}`. The manuscript's staleness against the pages
-    its run read, without the approval-only pages (`assembly.services.drift_pages`, D70: approving a page
-    whose lines did not change is not a change of its text); a chapter re-assembly moves that baseline for
-    its pages. A page where one chapter ends and the next begins is listed under both (the change may be in
-    either). Three queries (the manuscript with its run, the page rows, the signatures)."""
+    """Pages whose text changed since the manuscript was built (D41), classified (D78), and the chapters they
+    fall in: `{edited, pages: [n…], reasons: {"n": review | processing | added | removed}, approvals: [n…],
+    chapters: {chapter id: [n…]}}`.
+
+    `pages` is the content drift against the pages the manuscript's run read (`assembly.services.
+    stale_reasons`, D70: approving a page whose lines did not change is not a change of its text; those
+    pages are `approvals`, never announced, absorbed by the next apply). `review`: a line-changing review
+    revision after the page was read (undone ones too); `processing`: the lines changed with none (a
+    re-run, the numbers pass); `added` / `removed`: the page came into the book or left it. A chapter
+    re-assembly and an apply move the baseline of their pages. A page where one chapter ends and the next
+    begins is listed under both. Three queries (the manuscript with its run, the page rows, the signatures),
+    a fourth for the revisions when a page's lines changed."""
     from assembly.pipeline import normalize_settings
-    from assembly.services import drift_pages, page_rows
+    from assembly.services import page_rows, stale_reasons
 
     if manuscript is None:
-        manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
+        manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").defer("base").first()
     if manuscript is None:
-        return {"edited": False, "pages": [], "chapters": {}}
+        return copy.deepcopy(NO_DRIFT)
     edited = manuscript.origin == Manuscript.Origin.EDITOR
     run = manuscript.run
     if run is None:
-        return {"edited": edited, "pages": [], "chapters": {}}
-    pages = drift_pages(run.included, page_rows(book), normalize_settings(book.assembly_settings))
+        return {**copy.deepcopy(NO_DRIFT), "edited": edited}
+    classified = stale_reasons(
+        run.included, page_rows(book), normalize_settings(book.assembly_settings), finished_at=run.finished_at
+    )
+    pages = classified["pages"]
     document = manuscript.document or {}
     slices = chapters if chapters is not None else doc.chapters_of(document)
     spans = [(chapter.id, doc.chapter_pages(chapter.nodes(document))) for chapter in slices]
@@ -600,18 +658,38 @@ def review_drift(book: Book, manuscript: Manuscript | None = None, chapters=None
     for page in pages:
         for chapter_id in _chapters_of_page(spans, page):
             by_chapter.setdefault(chapter_id, []).append(page)
-    return {"edited": edited, "pages": pages, "chapters": by_chapter}
+    return {
+        "edited": edited,
+        "pages": pages,
+        "reasons": classified["reasons"],
+        "approvals": classified["approvals"],
+        "chapters": by_chapter,
+    }
+
+
+def drift_payload(drift: dict) -> dict:
+    """`review_drift` as the book page reads it (`api:review_drift`, `config.drift`): `chapters` the ids with
+    drift (as in 7a), `chapter_pages` the pages of each (the 7c contract, editor/fixtures/contract/)."""
+    return {
+        "edited": drift["edited"],
+        "pages": list(drift["pages"]),
+        "reasons": dict(drift.get("reasons") or {}),
+        "approvals": list(drift.get("approvals") or []),
+        "chapters": sorted(drift["chapters"]),
+        "chapter_pages": {key: list(value) for key, value in sorted(drift["chapters"].items())},
+    }
 
 
 def drift_of(book_id: int) -> dict | None:
-    """The live review drift of the book page (D70, `api:review_drift`): `{edited, pages: [n…], chapters:
-    [ids]}`, or None when the book has no manuscript. The book comes with the manuscript and its run, so
-    three queries in all (`review_drift`)."""
-    manuscript = Manuscript.objects.filter(book_id=book_id).select_related("run", "book").first()
+    """The live review drift of the book page (D70, `api:review_drift`): `drift_payload`, or None when the
+    book has no manuscript. The book comes with the manuscript and its run, so three queries in all (a
+    fourth when a page's lines changed: `review_drift`)."""
+    manuscript = (
+        Manuscript.objects.filter(book_id=book_id).select_related("run", "book").defer("base").first()
+    )
     if manuscript is None:
         return None
-    drift = review_drift(manuscript.book, manuscript)
-    return {"edited": drift["edited"], "pages": drift["pages"], "chapters": sorted(drift["chapters"])}
+    return drift_payload(review_drift(manuscript.book, manuscript))
 
 
 # ====================================================================== chapter re-assembly (D41)
@@ -755,6 +833,7 @@ def run_chapter_reassembly(run_id: int):
     try:
         book = Book.objects.get(pk=run.book_id)
         options = pipeline.normalize_settings(book.assembly_settings)
+        read = timezone.now()
         loaded = assembly_services.load_book(book)
 
         def stage(key: str) -> None:
@@ -762,7 +841,7 @@ def run_chapter_reassembly(run_id: int):
 
         result = pipeline.assemble(loaded.pages, options, assembly_services.book_meta(book, run), stage)
         stage("save")
-        _save_chapter_run(run, book, chapter_id, loaded, result, started)
+        _save_chapter_run(run, book, chapter_id, loaded, result, started, read)
     except Exception as exc:  # noqa: BLE001 - reported on the run, the manuscript stays
         if isinstance(exc, EditorError):  # a refusal (chapter gone, superseded), not a crash
             log.warning("chapter re-assembly %s of book %s refused: %s", run.pk, run.book_id, exc)
@@ -781,13 +860,16 @@ def run_chapter_reassembly(run_id: int):
     return run
 
 
-def _save_chapter_run(run, book: Book, chapter_id: str, loaded, result, started: float) -> None:
+def _save_chapter_run(run, book: Book, chapter_id: str, loaded, result, started: float, read=None) -> None:
     from assembly.services import EMPTY_SIGNATURE, page_signatures
 
+    from . import merge
+
     finished = timezone.now()
+    stamp = (read or finished).isoformat()
     with transaction.atomic():
         Book.objects.select_for_update().filter(pk=book.pk).first()
-        manuscript = manuscript_of(book, lock=True)
+        manuscript = manuscript_of(book, lock=True, with_base=True)
         if manuscript.run_id is not None and manuscript.run_id > run.pk:
             # a full assembly queued after this run saved first: it read every page again
             raise EditorError(SUPERSEDED)
@@ -827,6 +909,7 @@ def _save_chapter_run(run, book: Book, chapter_id: str, loaded, result, started:
                     "number": page.number,
                     "reviewed": page.reviewed,
                     "sig": loaded.signatures.get(page.id, EMPTY_SIGNATURE),
+                    "at": stamp,
                 }
         old_warnings = [
             w for w in (base.warnings if base is not None else []) or [] if w.get("page") not in pages
@@ -834,11 +917,20 @@ def _save_chapter_run(run, book: Book, chapter_id: str, loaded, result, started:
         new_warnings = [w for w in result.warnings if w.get("page") in pages]
         stats = dict(base.stats or {}) if base is not None else dict(result.stats)
         stats.update(doc.document_stats(new_document))
+        fields = ["document", "version", "run", "updated_by", "updated_at"]
+        if manuscript.origin == Manuscript.Origin.EDITOR:
+            # D78: the rebuilt chapter now is the fresh text, so its pages' base is too (a book edited before
+            # 7c: the fresh text, with the other drift pages recorded as not known)
+            drift = review_drift(book, manuscript)["pages"]
+            manuscript.base = merge.splice_base(
+                manuscript.base, result.document, pages, unknown=set(drift) - pages
+            )
+            fields.append("base")
         manuscript.document = new_document
         manuscript.version += 1
         manuscript.run = run
         manuscript.updated_by = run.created_by
-        manuscript.save(update_fields=["document", "version", "run", "updated_by", "updated_at"])
+        manuscript.save(update_fields=fields)
         reviewed = [
             page.id for page in loaded.pages if page.number in pages and page.status == Page.Status.REVIEWED
         ]
@@ -872,6 +964,533 @@ def _save_chapter_run(run, book: Book, chapter_id: str, loaded, result, started:
             ]
         )
     _schedule(book, chapter_id, manuscript.version)
+
+
+# ====================================================================== review changes, page by page (D78)
+
+PLAN_ERROR = "تعذّرت المقارنة؛ بقي الكتاب كما هو."
+PLAN_ABANDONED = "توقّفت المقارنة قبل أن تكتمل؛ أعد المحاولة."
+NOT_EDITED = "لم يُحرَّر نص الكتاب بعد؛ أعد التجميع، فلا يضيع شيء."
+PLAN_MISSING = "المقارنة غير موجودة."
+PLAN_NOT_READY = "لم تكتمل المقارنة بعد."
+BAD_CHOICE = "اختيار غير معروف لأحد التغييرات."
+BAD_PAGES = "أرقام الصفحات غير صالحة."
+NO_PAGES_TAKEN = "لم تُحدَّد صفحة من صفحات المقارنة."
+BAD_BATCH = "لا تصحيح بهذا المعرّف في هذا الكتاب."
+STALE_VERSION = "تغيّر نص الكتاب منذ المقارنة؛ أعد المقارنة."
+REASON_LABELS: dict[str, str] = {
+    "review": "المراجعة",
+    "processing": "إعادة المعالجة",
+    "added": "صفحة جديدة",
+    "removed": "أُخرجت من الكتاب",
+}
+MAX_PLAN_PAGES = 5000
+_RE_BATCH = re.compile(r"[0-9a-fA-F-]{32,36}")
+
+
+class PlanStale(EditorError):
+    """The text or a planned page changed since the plan (API 409 `{detail, stale: true, pages}`)."""
+
+    def __init__(self, message: str, pages=()):
+        super().__init__(message)
+        self.pages = sorted(pages)
+
+
+class NotEdited(EditorError):
+    """Review changes asked for on a text never edited: a plain re-assembly loses nothing (API 409
+    `{detail, reassemble: true}`)."""
+
+    def __init__(self):
+        super().__init__(NOT_EDITED)
+
+
+def _stale_pages_message(pages: list[int]) -> str:
+    if len(pages) == 1:
+        return f"تغيّرت الصفحة {pages[0]} في المراجعة منذ المقارنة؛ أعد المقارنة."
+    return f"تغيّرت الصفحات {'، '.join(str(n) for n in pages)} في المراجعة منذ المقارنة؛ أعد المقارنة."
+
+
+def _page_numbers(values) -> list[int] | None:
+    """Posted page numbers (ints or digit strings), sorted and unique; None when not given."""
+    if values is None:
+        return None
+    if not isinstance(values, list | tuple) or len(values) > MAX_PLAN_PAGES:
+        raise EditorError(BAD_PAGES)
+    out: set[int] = set()
+    for value in values:
+        if isinstance(value, bool) or not str(value).strip().isdigit():
+            raise EditorError(BAD_PAGES)
+        out.add(int(str(value).strip()))
+    return sorted(out)
+
+
+def _batch_pages(book: Book, batch) -> list[int]:
+    """The page numbers of a «تصحيح في كل الكتاب» batch (D79) of this book."""
+    from review.models import LineRevision
+
+    if not isinstance(batch, str) or not _RE_BATCH.fullmatch(batch):
+        raise EditorNotFound(BAD_BATCH)
+    numbers = sorted(
+        set(
+            LineRevision.objects.filter(page__book_id=book.pk, batch=batch).values_list(
+                "page__number", flat=True
+            )
+        )
+    )
+    if not numbers:
+        raise EditorNotFound(BAD_BATCH)
+    return numbers
+
+
+def plan_review_changes(book: Book, user, pages=None, fix=None):
+    """Start comparing review changes with the edited book (D78); returns the `ChangesPlan` (queued, or done
+    when the task ran at once).
+
+    `pages` limits the plan to those pages (default: every drift page); `fix`, a «تصحيح في كل الكتاب» batch
+    (D79), plans the batch's pages and settles at once those left with no item (their baseline moves: the
+    book text now agrees with review). Refused (400) before a manuscript exists and with `NotEdited` (409)
+    when the text was never edited. Idempotent: while a plan of the book is queued or running it is returned.
+    The task (`editor.tasks.plan_review_changes`, default queue) runs the pipeline in memory; the manuscript
+    is not touched."""
+    from .models import ChangesPlan
+
+    manuscript = Manuscript.objects.filter(book_id=book.pk).only("id", "version", "origin").first()
+    if manuscript is None:
+        raise EditorError(NO_MANUSCRIPT)
+    if manuscript.origin != Manuscript.Origin.EDITOR:
+        raise NotEdited()
+    settle = fix not in (None, "")
+    wanted = _batch_pages(book, str(fix)) if settle else _page_numbers(pages)
+    with transaction.atomic():
+        Book.objects.select_for_update().filter(pk=book.pk).first()
+        active = list(
+            ChangesPlan.objects.filter(book_id=book.pk, status__in=ChangesPlan.ACTIVE).defer("results")
+        )
+        lost = [
+            plan.pk
+            for plan in active
+            if plan.created_at and timezone.now() - plan.created_at > _abandoned_after()
+        ]
+        if lost:
+            ChangesPlan.objects.filter(pk__in=lost).update(
+                status=ChangesPlan.Status.ERROR, error=PLAN_ABANDONED, finished_at=timezone.now()
+            )
+        live = [plan for plan in active if plan.pk not in lost]
+        if live:
+            return live[0]
+        plan = ChangesPlan.objects.create(
+            book_id=book.pk,
+            manuscript_version=manuscript.version,
+            status=ChangesPlan.Status.QUEUED,
+            pages=wanted,
+            results={"settle": settle},
+            created_by=_user_or_none(user),
+        )
+        kept = list(
+            ChangesPlan.objects.filter(book_id=book.pk)
+            .order_by("-created_at", "-id")
+            .values_list("id", flat=True)[ChangesPlan.PLANS_KEPT :]
+        )
+        if kept:
+            ChangesPlan.objects.filter(pk__in=kept).exclude(status__in=ChangesPlan.ACTIVE).delete()
+    from .tasks import plan_review_changes as task
+
+    try:
+        result = task.delay(plan.pk)
+    except Exception as exc:  # noqa: BLE001 - reported on the plan
+        log.exception("review changes plan %s of book %s could not be enqueued", plan.pk, book.pk)
+        from assembly.services import ENQUEUE_ERROR
+
+        ChangesPlan.objects.filter(pk=plan.pk, status="queued").update(
+            status="error",
+            error=f"{ENQUEUE_ERROR}\n{type(exc).__name__}: {exc}"[:4000],
+            finished_at=timezone.now(),
+        )
+    else:
+        task_id = getattr(result, "id", "") or ""
+        if task_id:
+            ChangesPlan.objects.filter(pk=plan.pk, task_id="").update(task_id=task_id[:64])
+    return ChangesPlan.objects.defer("results").get(pk=plan.pk)
+
+
+def compute_plan(book: Book, manuscript: Manuscript, wanted: list[int] | None = None) -> tuple[dict, dict]:
+    """The comparison itself, in memory (the task's and `manage.py review_changes`'s): the pipeline on the
+    book as it is now, the classified drift, then `editor.merge.plan` of the manuscript, its base (stored,
+    else none) and the fresh text over the drift pages (those in `wanted`, when given). Returns `(plan,
+    results)`:
+    what the book page reads (the page rows with their reasons, the items, the counts, the approval-only
+    pages, the planned pages' signatures `sigs`) and what only an apply reads (the result nodes, the fresh
+    document, the planned lines, warnings and seams). Writes nothing."""
+    from assembly import pipeline
+    from assembly import services as assembly_services
+
+    from . import merge
+
+    options = pipeline.normalize_settings(book.assembly_settings)
+    read = timezone.now()
+    loaded = assembly_services.load_book(book)
+    result = pipeline.assemble(loaded.pages, options, assembly_services.book_meta(book))
+    run = manuscript.run
+    rows = [(page.id, page.number, page.status) for page in loaded.pages]
+    classified = (
+        assembly_services.stale_reasons(run.included, rows, options, finished_at=run.finished_at)
+        if run is not None
+        else {"pages": [], "reasons": {}, "approvals": []}
+    )
+    chosen = set(wanted) if wanted is not None else None
+    pages = [n for n in classified["pages"] if chosen is None or n in chosen]
+    reasons = {n: classified["reasons"][str(n)] for n in pages}
+    lines = {line.id: (page.number, line.order) for page in loaded.pages for line in page.lines}
+    document = manuscript.document or {}
+    items = merge.plan(
+        document,
+        manuscript.base,
+        result.document,
+        pages,
+        added=[n for n, reason in reasons.items() if reason == "added"],
+        lines=lines,
+    )
+    chapters = doc.chapters_of(document)
+    spans = [(chapter.id, doc.chapter_pages(chapter.nodes(document))) for chapter in chapters]
+    titles = {chapter.id: chapter.title for chapter in chapters}
+    page_rows = []
+    for number in pages:
+        owners = _chapters_of_page(spans, number)
+        page_rows.append(
+            {
+                "number": number,
+                "reason": reasons[number],
+                "reason_label": REASON_LABELS[reasons[number]],
+                "chapter": owners[0] if owners else None,
+                "chapter_title": titles.get(owners[0], "") if owners else "",
+                "items": [item["id"] for item in items if item["page"] == number],
+            }
+        )
+    moved = set(pages) | set(classified["approvals"])
+    included = set(result.pages)
+    sigs = {
+        str(page.id): {
+            "number": page.number,
+            "reviewed": page.reviewed,
+            "sig": loaded.signatures.get(page.id, assembly_services.EMPTY_SIGNATURE),
+            "at": read.isoformat(),
+        }
+        for page in loaded.pages
+        if page.number in moved and page.id in included
+    }
+    counts = {"items": len(items), "pages": len(pages)}
+    counts.update({kind: sum(1 for item in items if item["kind"] == kind) for kind in merge.DEFAULTS})
+    data = {
+        "base": "stored" if manuscript.base is not None else "none",
+        "pages": page_rows,
+        "approvals": list(classified["approvals"]),
+        "items": [{k: v for k, v in item.items() if k != "work"} for item in items],
+        "counts": counts,
+        "applied": None,
+        "sigs": sigs,
+    }
+    results = {
+        "items": {item["id"]: item["work"] for item in items},
+        "fresh": result.document,
+        "lines": {str(k): list(v) for k, v in lines.items() if v[0] in moved},
+        "warnings": [w for w in result.warnings if isinstance(w, dict) and w.get("page") in moved],
+        "seams": [w for w in result.seams if isinstance(w, dict) and w.get("page") in moved],
+    }
+    return data, results
+
+
+def run_changes_plan(plan_id: int):
+    """Run a queued plan (the task's job): `compute_plan` for the plan's pages, stored on the plan; a plan of
+    a batch (`settle`) then applies «نصّي» to the pages left with no item (and the approval-only pages), so
+    their baseline moves. Any failure → error with an Arabic headline, the manuscript untouched. A plan
+    that is not queued any more is left alone."""
+    from .models import ChangesPlan
+
+    plan = ChangesPlan.objects.filter(pk=plan_id).first()
+    if plan is None or plan.status != ChangesPlan.Status.QUEUED:
+        return plan
+    if not ChangesPlan.objects.filter(pk=plan.pk, status="queued").update(status="running"):
+        plan.refresh_from_db()
+        return plan
+    try:
+        book = Book.objects.get(pk=plan.book_id)
+        manuscript = manuscript_of(book, with_run=True, with_base=True)
+        data, results = compute_plan(book, manuscript, plan.pages)
+        results = {**(plan.results or {}), **results}
+        ChangesPlan.objects.filter(pk=plan.pk).update(
+            status=ChangesPlan.Status.DONE,
+            manuscript_version=manuscript.version,
+            plan=data,
+            results=results,
+            error="",
+            finished_at=timezone.now(),
+        )
+        empty = [row["number"] for row in data["pages"] if not row["items"]]
+        if results.get("settle") and (empty or data["approvals"]):
+            try:
+                apply_review_changes(book, plan.pk, {}, empty, plan.created_by, keep_all=True, snapshot=False)
+            except EditorError as exc:  # the text moved meanwhile: the pages stay in «تغييرات المراجعة»
+                log.info("review changes plan %s of book %s not settled: %s", plan.pk, book.pk, exc)
+    except Exception as exc:  # noqa: BLE001 - reported on the plan, the manuscript stays
+        log.exception("review changes plan %s of book %s failed", plan.pk, plan.book_id)
+        ChangesPlan.objects.filter(pk=plan.pk).update(
+            status=ChangesPlan.Status.ERROR,
+            error=f"{PLAN_ERROR}\n{type(exc).__name__}: {exc}"[:4000],
+            finished_at=timezone.now(),
+        )
+    plan.refresh_from_db()
+    return plan
+
+
+def plan_payload(plan) -> dict:
+    """A plan as the book page reads it (editor/fixtures/contract/changes_plan.json): `{id, status,
+    status_label, error (the headline), created_at, finished_at, manuscript_version, requested, base, pages,
+    approvals, items, counts, applied}`."""
+    data = plan.plan if isinstance(plan.plan, dict) else {}
+    error = (plan.error or "").splitlines()
+    return {
+        "id": plan.pk,
+        "status": plan.status,
+        "status_label": plan.get_status_display(),
+        "error": error[0] if error and plan.status == "error" else "",
+        "created_at": plan.created_at.isoformat() if plan.created_at else None,
+        "finished_at": plan.finished_at.isoformat() if plan.finished_at else None,
+        "manuscript_version": plan.manuscript_version,
+        "requested": plan.pages,
+        "base": data.get("base"),
+        "pages": list(data.get("pages") or []),
+        "approvals": list(data.get("approvals") or []),
+        "items": list(data.get("items") or []),
+        "counts": dict(data.get("counts") or {}),
+        "applied": data.get("applied"),
+    }
+
+
+def _moved_since(sigs: dict) -> list[int]:
+    """The planned pages whose signature or reviewed flag moved since the plan (two queries)."""
+    from assembly.pipeline import REVIEWED_STATUSES
+    from assembly.services import page_signatures
+
+    ids = [int(pk) for pk in sigs if str(pk).isdigit()]
+    if not ids:
+        return []
+    now = page_signatures(ids)
+    statuses = dict(Page.objects.filter(pk__in=ids).values_list("pk", "status"))
+    moved = []
+    for pk in ids:
+        info = sigs[str(pk)]
+        if now.get(pk) != info.get("sig") or (statuses.get(pk) in REVIEWED_STATUSES) != bool(
+            info.get("reviewed")
+        ):
+            moved.append(int(info.get("number")))
+    return sorted(moved)
+
+
+def review_changes(book: Book) -> dict:
+    """`api:review_changes`: `{drift, plan, stale}` — the live drift (`drift_payload`), the newest plan
+    (`plan_payload`, or None) and whether it is out of date (the manuscript's version, or a planned page's
+    lines or approval, moved since: plan again). The plan's server-side results are never loaded."""
+    from .models import ChangesPlan
+
+    drift = drift_payload(review_drift(book))
+    plan = ChangesPlan.objects.filter(book_id=book.pk).defer("results").order_by("-created_at", "-id").first()
+    if plan is None:
+        return {"drift": drift, "plan": None, "stale": False}
+    stale = False
+    if plan.status == ChangesPlan.Status.DONE:
+        version = Manuscript.objects.filter(book_id=book.pk).values_list("version", flat=True).first()
+        stale = version != plan.manuscript_version or bool(_moved_since((plan.plan or {}).get("sigs") or {}))
+    return {"drift": drift, "plan": plan_payload(plan), "stale": stale}
+
+
+def _pages_label(pages: list[int]) -> str:
+    return "، ".join(str(n) for n in pages[:8]) + ("…" if len(pages) > 8 else "")
+
+
+def apply_review_changes(
+    book: Book,
+    plan_id,
+    choices,
+    pages,
+    user,
+    keep_all: bool = False,
+    snapshot: bool = True,
+) -> dict:
+    """Take a plan's changes into the edited book (D78), in one transaction on the locked book and
+    manuscript.
+
+    `pages` are the page rows taken now (None: all of them); an item applies when its `page` is one of
+    them, with its choice from `choices` (item id → theirs | mine | merged; its `default` when left out;
+    every choice `mine` with `keep_all`). The approval-only pages come along. Steps: the plan must be fresh
+    (`PlanStale`, 409: the manuscript's version, or a page taken whose lines or approval moved); an `edit`
+    snapshot «قبل أخذ تغييرات المراجعة · ص …» with the base and the baseline (unless `snapshot` is false);
+    `merge.apply` and the document written (version + 1) only when an item changes it; the base moved over
+    the pages taken (`merge.splice_base`); one `done` `AssemblyRun` (`settings.scope = "changes"`) whose
+    `included` is the manuscript run's with the pages taken at their planned signatures, the warnings and
+    seams of those pages the fresh ones, `stats.applied`; D36 for the reviewed pages still at the planned
+    signature; the focus chapter's re-layout (D47). Returns `{version, snapshot, chapters: [{id, version,
+    title}], reload, relayout, applied: {at, taken, merged, kept, pages, written}}`."""
+    from assembly.models import AssemblyRun
+    from assembly.pipeline import REVIEWED_STATUSES, normalize_settings
+
+    from . import merge
+    from .models import ChangesPlan
+
+    try:
+        plan_pk = int(str(plan_id))
+    except (TypeError, ValueError):
+        raise EditorNotFound(PLAN_MISSING) from None
+    asked = _page_numbers(pages)
+    if choices is not None and not isinstance(choices, dict):
+        raise EditorError(BAD_CHOICE)
+    choices = {str(k): v for k, v in (choices or {}).items()}
+    now = timezone.now()
+    with transaction.atomic():
+        Book.objects.select_for_update().filter(pk=book.pk).first()
+        plan = ChangesPlan.objects.filter(pk=plan_pk, book_id=book.pk).first()
+        if plan is None:
+            raise EditorNotFound(PLAN_MISSING)
+        if plan.status != ChangesPlan.Status.DONE:
+            raise EditorError(PLAN_NOT_READY)
+        manuscript = manuscript_of(book, lock=True, with_run=True, with_base=True)
+        if manuscript.version != plan.manuscript_version:
+            raise PlanStale(STALE_VERSION)
+        data, results = plan.plan or {}, plan.results or {}
+        rows = [row["number"] for row in data.get("pages") or []]
+        taken = set(rows) if asked is None else set(rows) & set(asked)
+        if asked is not None and not taken:
+            raise EditorError(NO_PAGES_TAKEN)  # an explicit page list that names none of the plan's pages
+        approvals = set(data.get("approvals") or [])
+        moved = taken | approvals
+        sigs = {pk: info for pk, info in (data.get("sigs") or {}).items() if info.get("number") in moved}
+        changed = _moved_since(sigs)
+        if changed:
+            raise PlanStale(_stale_pages_message(changed), changed)
+        work = results.get("items") or {}
+        items, final = [], {}
+        for item in data.get("items") or []:
+            if item.get("page") not in taken:
+                continue
+            choice = merge.MINE if keep_all else choices.get(item["id"], item["default"])
+            if choice not in item["choices"]:
+                raise EditorError(BAD_CHOICE)
+            final[item["id"]] = choice
+            items.append({**item, "work": work.get(item["id"]) or {}})
+        reviewed = set(
+            Page.objects.filter(book_id=book.pk, is_excluded=False, status__in=REVIEWED_STATUSES).values_list(
+                "number", flat=True
+            )
+        )
+        document = manuscript.document or {}
+        new_document, stats = merge.apply(document, items, final, approvals=approvals, reviewed=reviewed)
+        taken_pages = sorted(moved)
+        taken_snapshot = None
+        if snapshot:
+            label = f"قبل أخذ تغييرات المراجعة · ص {_pages_label(sorted(taken) or taken_pages)}"
+            if not stats["written"]:
+                label = f"قبل الاحتفاظ بنصّي · ص {_pages_label(sorted(taken) or taken_pages)}"
+            taken_snapshot = _take(
+                manuscript, label, ManuscriptSnapshot.Reason.EDIT, user, run_id=manuscript.run_id
+            )
+        fresh = results.get("fresh") or {}
+        lines = {int(k): tuple(v) for k, v in (results.get("lines") or {}).items()}
+        if manuscript.base is None:
+            unknown = set(review_drift(book, manuscript)["pages"]) - moved
+            new_base = merge.splice_base(None, fresh, moved, unknown=unknown, lines=lines)
+        else:
+            new_base = merge.splice_base(manuscript.base, fresh, moved, lines=lines)
+        base_run = manuscript.run
+        included = dict(base_run.included or {}) if base_run is not None else {}
+        for key, info in list(included.items()):
+            if isinstance(info, dict) and info.get("number") in moved and key not in sigs:
+                del included[key]  # a page taken out of the book (`removed`)
+        for key, info in sigs.items():
+            included[str(key)] = dict(info)
+        old_warnings = [
+            w for w in (base_run.warnings if base_run is not None else []) or [] if w.get("page") not in moved
+        ]
+        new_warnings = [w for w in results.get("warnings") or [] if w.get("page") in moved]
+        applied = {
+            "at": now.isoformat(),
+            "taken": stats["taken"],
+            "merged": stats["merged"],
+            "kept": stats["kept"],
+            "pages": taken_pages,
+            "written": stats["written"],
+        }
+        run_stats = dict(base_run.stats or {}) if base_run is not None else {}
+        run = AssemblyRun.objects.create(
+            book_id=book.pk,
+            status=AssemblyRun.Status.DONE,
+            stage="save",
+            settings={
+                **normalize_settings(book.assembly_settings).as_dict(),
+                "scope": "changes",
+                "plan": plan.pk,
+            },
+            included=included,
+            warnings=sorted(
+                [*old_warnings, *new_warnings], key=lambda w: -1 if w.get("page") is None else w["page"]
+            ),
+            created_by=_user_or_none(user),
+            finished_at=now,
+        )
+        fields = ["base", "run", "updated_by", "updated_at"]
+        if stats["written"]:
+            attrs = dict(new_document.get("attrs") or {})
+            seams = [
+                s for s in attrs.get("seams") or [] if isinstance(s, dict) and s.get("page") not in moved
+            ]
+            attrs["seams"] = sorted(
+                [*seams, *(results.get("seams") or [])], key=lambda s: int(s.get("page") or 0)
+            )
+            attrs["runId"] = run.pk
+            new_document["attrs"] = attrs
+            manuscript.document = new_document
+            manuscript.version += 1
+            fields += ["document", "version"]
+        manuscript.base = new_base
+        manuscript.run = run
+        manuscript.updated_by = _user_or_none(user)
+        manuscript.save(update_fields=fields)
+        run_stats.update(doc.document_stats(manuscript.document or {}))
+        run_stats["applied"] = applied
+        AssemblyRun.objects.filter(pk=run.pk).update(stats=run_stats)
+        from assembly.services import page_signatures
+
+        ready = [int(pk) for pk, info in sigs.items() if info.get("reviewed")]
+        current = page_signatures(ready)
+        settled = [pk for pk in ready if current.get(pk) == sigs[str(pk)]["sig"]]
+        if settled:
+            Page.objects.filter(pk__in=settled, status=Page.Status.REVIEWED).update(
+                status=Page.Status.ASSEMBLED
+            )
+        Book.objects.get(pk=book.pk).refresh_status()
+        data = dict(data)
+        data["applied"] = applied
+        ChangesPlan.objects.filter(pk=plan.pk).update(plan=data)
+    final_document = manuscript.document or {}
+    chapters = doc.chapters_of(final_document)
+    relayout = None
+    if stats["written"]:
+        focus = None
+        changed_ids = set(stats["changed"])
+        for chapter in chapters:
+            if doc.all_ids(chapter.nodes(final_document)) & changed_ids:
+                focus = chapter.id
+                break
+        relayout = _schedule(book, focus, manuscript.version)
+    return {
+        "version": manuscript.version,
+        "snapshot": taken_snapshot.pk if taken_snapshot is not None else None,
+        "chapters": [
+            {"id": c.id, "version": doc.chapter_version(c.nodes(final_document)), "title": c.title}
+            for c in chapters
+        ],
+        "reload": stats["written"],
+        "relayout": relayout,
+        "applied": applied,
+    }
 
 
 # ====================================================================== stylesheet
@@ -1133,6 +1752,7 @@ def editor_state(book: Book, manuscript_state: dict) -> dict:
 
 
 CHAPTER_SLOT = "__cid__"
+PLAN_SLOT = "__pid__"
 
 
 def editor_urls(book: Book) -> dict:
@@ -1170,6 +1790,13 @@ def editor_urls(book: Book) -> dict:
         "uncertainAccept": reverse("api:uncertain_accept", args=[book.pk]),
         "uncertainChoose": reverse("api:uncertain_choose", args=[book.pk]),
         "uncertainType": reverse("api:uncertain_type", args=[book.pk]),
+        # 7c: «تغييرات المراجعة» (D78), «تحويل إلى حاشية» (D74) and the stage bar (D76)
+        "reviewChanges": reverse("api:review_changes", args=[book.pk]),
+        "reviewChangesApply": reverse("api:review_changes_apply", args=[book.pk, 0]).replace(
+            "/0/", f"/{PLAN_SLOT}/"
+        ),
+        "toFootnote": reverse("api:to_footnote", args=[book.pk]),
+        "stages": reverse("api:book_stages", args=[book.pk]),
     }
 
 
@@ -1177,7 +1804,31 @@ AUTOSAVE_MS = 1500
 RELAYOUT_MS = 500  # the pause after typing on a live page before the chapter is saved and re-laid-out
 MODES: tuple[str, ...] = ("preview", "edit")
 # the side panel's tabs (`static/src/js/book/panel.js` TABS): `?tab=` opens the book page on one of them
-PANEL_TABS: tuple[str, ...] = ("chapters", "pages", "find", "format", "block", "source", "uncertain")
+PANEL_TABS: tuple[str, ...] = (
+    "chapters",
+    "pages",
+    "find",
+    "format",
+    "block",
+    "source",
+    "uncertain",
+    "changes",
+)
+_RE_BLOCK = re.compile(r"[hpn][0-9]+(?:-[0-9]+)?|e[0-9]+")
+
+
+def _find_prefill(find: dict | None) -> dict | None:
+    """The book page's find & replace, filled in from review (`?q=&r=&fix=`, D79); None without a query."""
+    find = find if isinstance(find, dict) else {}
+    query = " ".join(str(find.get("q") or "").split())[:MAX_QUERY]
+    if not query:
+        return None
+    batch = str(find.get("fix") or "")
+    return {
+        "query": query,
+        "replacement": " ".join(str(find.get("r") or "").split())[:MAX_QUERY],
+        "fix": batch if _RE_BATCH.fullmatch(batch) else None,
+    }
 
 
 def _faces(sheet: StyleSheet) -> dict:
@@ -1205,6 +1856,8 @@ def page_config(
     page: str = "editor",
     mode: str | None = None,
     tab: str | None = None,
+    block: str | None = None,
+    find: dict | None = None,
 ) -> dict:
     """What the book page (`bookLayout`, D47) and the old editor page start from: the book, the chapter to
     open (the requested one when it exists, else the first), the chapters' order, whether the user may
@@ -1214,7 +1867,10 @@ def page_config(
     words, pages, drift: `chapter_summaries`), the review drift, the uncertain words' count, the browser
     `@font-face` rules of the live pages (`fontCss`), the pause before a re-layout (`relayoutMs`) and
     `tab`, the panel tab asked for with `?tab=` (one of `PANEL_TABS`, else None: the panel opens the tab
-    remembered for the mode; the export page's readiness links use it, PHASE6_SPEC §6.5)."""
+    remembered for the mode; the export page's readiness links use it, PHASE6_SPEC §6.5). 7c: `block`, the
+    block asked for with `?block=` when it is in the document (the page opens on its chapter, lands on its
+    page and lights it), and `findPrefill` `{query, replacement, fix}` for `?tab=find&q=&r=&fix=` (review's
+    «تصحيح في كل الكتاب» on an edited book, D79), else None."""
     from books.services import page_url_templates
     from core.decorators import ROLE_EDITOR, has_role
 
@@ -1226,6 +1882,14 @@ def page_config(
     document = manuscript.document if manuscript is not None else {}
     chapters = doc.chapters_of(document)
     ids = [chapter.id for chapter in chapters]
+    landing = None
+    if isinstance(block, str) and _RE_BLOCK.fullmatch(block):
+        for chapter in chapters:
+            if block in doc.all_ids(chapter.nodes(document)):
+                landing = block
+                if chapter_id not in ids:
+                    chapter_id = chapter.id
+                break
     current = chapter_id if chapter_id in ids else (ids[0] if ids else None)
     sheet = stylesheet_for(book)
     extra: dict = {}
@@ -1234,17 +1898,13 @@ def page_config(
 
         from .uncertain import count as uncertain_count
 
-        drift = (
-            review_drift(book) if manuscript is not None else {"edited": False, "pages": [], "chapters": {}}
-        )
+        drift = review_drift(book) if manuscript is not None else copy.deepcopy(NO_DRIFT)
         extra = {
             "mode": mode if mode in MODES else "preview",
             "chapterSummaries": chapter_summaries(book) if manuscript is not None else [],
-            "drift": {
-                "edited": drift["edited"],
-                "pages": drift["pages"],
-                "chapters": sorted(drift["chapters"]),
-            },
+            "drift": drift_payload(drift),
+            "block": landing,
+            "findPrefill": _find_prefill(find) if tab == "find" else None,
             "uncertainCount": uncertain_count(document) if manuscript is not None else 0,
             "fontCss": browser_font_css(resolve(sheet.body_font, sheet.latin_font, sheet.heading_font)),
             "relayoutMs": RELAYOUT_MS,

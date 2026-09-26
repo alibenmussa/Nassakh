@@ -16,6 +16,7 @@ from django.http import FileResponse, Http404, HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, render
 
 from books.models import Book
+from books.services import book_stages
 
 from . import exports
 from .exporters import FORMATS
@@ -27,7 +28,9 @@ def export_page(request: HttpRequest, book_id: int) -> HttpResponse:
     """The export page: readiness, one block per format, the history."""
     book = get_object_or_404(Book, pk=book_id)
     config = exports.page_payload(book, request.user)
-    return render(request, "publishing/export.html", {"book": book, "config": config})
+    stage_steps = book_stages(book, "export")  # the stage bar (D76)
+    context = {"book": book, "config": config, "stage_steps": stage_steps}
+    return render(request, "publishing/export.html", context)
 
 
 @login_required

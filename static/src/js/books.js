@@ -89,7 +89,27 @@
     });
   }
 
-  window.NassakhBooks = Object.assign(window.NassakhBooks || {}, { arCount, PAGE_FORMS, PAGE_FORMS_GEN, pdfPageCount, rangeLine, compactBands, KIND_CODES });
+  // «تجميع المخطوطة» (D77, PHASE7 §5.5, owner question 3): the convert popover's button, shared by the dashboard and
+  // the manuscript view (`convert` = {label, edited, unreviewed, options}). D35 stays: unreviewed pages are in by
+  // default, and the button says how many («تجميع مع 5 صفحات غير مُراجَعة»); a re-assembly and the replacement of
+  // an edited text keep their own words.
+  const CONVERT = 'تجميع المخطوطة';
+  function convertLabel(convert) {
+    const c = convert || {};
+    const n = Number(c.unreviewed) || 0;
+    if (c.label !== CONVERT || !n || !(c.options && c.options.include_unreviewed)) return c.label || CONVERT;
+    return `تجميع مع ${arCount(n, PAGE_FORMS_GEN)} ${n === 2 ? 'غير مُراجَعتين' : 'غير مُراجَعة'}`;
+  }
+  // Unchecked: «تُترك 5 صفحات لم تُراجَع بعد، وتُضاف حين تُراجَع.» ('' with nothing left out)
+  function convertLeftOut(convert) {
+    const c = convert || {};
+    const n = Number(c.unreviewed) || 0;
+    if (!n || (c.options && c.options.include_unreviewed)) return '';
+    if (n === 2) return 'تُترك صفحتان لم تُراجَعا بعد، وتُضافان حين تُراجَعان.';
+    return `تُترك ${arCount(n, PAGE_FORMS)} لم تُراجَع بعد، وتُضاف حين تُراجَع.`;
+  }
+
+  window.NassakhBooks = Object.assign(window.NassakhBooks || {}, { arCount, PAGE_FORMS, PAGE_FORMS_GEN, pdfPageCount, rangeLine, compactBands, KIND_CODES, CONVERT, convertLabel, convertLeftOut });
 })();
 
 document.addEventListener('alpine:init', () => {
@@ -183,6 +203,7 @@ document.addEventListener('alpine:init', () => {
   const SCROLL_SAVE_MS = 1200; // the grid saves its scroll this long after it stops
   const DONE_TOAST_MS = 8000;
   const PULSE_MS = 500;
+  const LIVE_MS = 2000; // D76: a refresh the channel or the focus asks for, at most once every 2 s
   const STAGE_PERCENT = { uploaded: 12, preprocessed: 46, layout_done: 72, ocr_done: 100, reviewed: 100, assembled: 100 };
   const DONE_STATUSES = ['ocr_done', 'reviewed', 'assembled'];
   const REVIEWED_STATUSES = ['reviewed', 'assembled'];
@@ -329,6 +350,10 @@ document.addEventListener('alpine:init', () => {
     let resizeTimer = null;
     let doneTimer = null;
     let pulseTimer = null;
+    let liveChannel = null; // D76: review's saves in another tab
+    let liveFocus = null;
+    let liveAt = 0;
+    let liveTimer = null;
     const bookUrl = String(cfg.bookUrl || '');
     const urls = Object.assign(
       { page: `${bookUrl}pages/__n__/`, review: `${bookUrl}review/__n__/`, rerun: `${bookUrl}pages/__n__/rerun/`, exclude: `${bookUrl}pages/__n__/exclude/` },
@@ -385,10 +410,12 @@ document.addEventListener('alpine:init', () => {
     editor: cfg.editor || null, // Phase 5: {edited, version, drift_pages} (D41), refreshed by the poll
     layout: cfg.layout || null, // Phase 5: {trim, trim_label, page_count, rendering, rendered_at}, refreshed by the poll
     editorUrls: cfg.editorUrls || {}, // editor.services.editor_urls: layout (the book page), chapters, …
-    convert: { open: false, busy: false, error: '', label: 'تحويل', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
+    convert: { open: false, busy: false, error: '', label: 'تجميع المخطوطة', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
     stageMap: Object.fromEntries((cfg.stages || []).map((s) => [s.key, s.statuses])),
-    // the mode opens on the grid (never remembered), except that a #sheet-N address opens the viewer (§3.12)
-    view: guidesMode ? (hashPage() ? 'sheets' : 'grid') : readLocal(VIEW_KEY, 'sheets') === 'grid' ? 'grid' : 'sheets',
+    // the mode opens on the grid (never remembered), except that a #sheet-N address opens the viewer (§3.12); outside
+    // it the view is remembered per book (D76, §5.4), a book never opened keeping the last one chosen anywhere
+    view: guidesMode ? (hashPage() ? 'sheets' : 'grid') : readLocal(VIEW_KEY + (cfg.bookId || ''), readLocal(VIEW_KEY, 'sheets')) === 'grid' ? 'grid' : 'sheets',
+    sheetOpen: false, // the shortcut sheet (§5.8)
     filter: 'all',
     follow: readLocal(FOLLOW_KEY, '0') === '1',
     counts: guidesMode ? { all: 0, doubt: 0, override: 0 } : { all: 0, processing: 0, review: 0, attention: 0, reviewed: 0 },
@@ -430,6 +457,8 @@ document.addEventListener('alpine:init', () => {
       if (typeof Alpine.store === 'function' && Alpine.store('book')) Alpine.store('book').dash = this;
       if (this.active) this.schedule(POLL_INTERVAL);
       if (this.$watch) this.$watch('view', () => this.onViewChange());
+      this.syncStage();
+      this.bindLive();
       if (guidesMode) this.fetchGuides(); // the whole book once; then only the pages the poll reports as changed
     },
     destroy() {
@@ -447,6 +476,52 @@ document.addEventListener('alpine:init', () => {
       if (nearObserver) { nearObserver.disconnect(); farObserver.disconnect(); }
       if (tileObserver) tileObserver.disconnect();
       if (typeof Alpine.store === 'function' && Alpine.store('book')) Alpine.store('book').dash = null;
+      if (liveChannel) { try { liveChannel.close(); } catch (e) { /* closed */ } liveChannel = null; }
+      if (liveFocus && typeof window !== 'undefined' && window.removeEventListener) window.removeEventListener('focus', liveFocus);
+    },
+
+    // ------------------------------------------------------------ D76 (§5.1, §5.4): the stage bar, kept live
+    // The status folds into the stage bar's current step («التخطيط» in the mode, else «المعالجة»): while pages are
+    // prepared or read the step runs with the poll's count and bar; an error needs attention; otherwise the
+    // server's step shows. A finished run asks the bar for the server's steps (`NassakhStages.changed`).
+    syncStage() {
+      let store = null;
+      try { store = typeof Alpine.store === 'function' ? Alpine.store('stages') : null; } catch (e) { store = null; }
+      if (store && typeof store.set === 'function') store.set(guidesMode ? 'pages' : 'ocr', this.stagePatch);
+    },
+    get stagePatch() {
+      const total = this.total || this.nPages;
+      if (this.status === 'error') return { state: 'attention', detail: this.errorHeadline || this.statusLabel || 'حدث خطأ أثناء المعالجة.' };
+      if (!this.active || !total) return null;
+      if (this.layoutStage) { const n = this.preparedCount; return { state: 'active', detail: `قيد التخطيط: ${n} من ${total}`, count: `${n}/${total}`, percent: this.percent }; }
+      if (guidesMode) return null; // a started book in the mode: its «التخطيط» is done, the bar says so
+      const n = this.done;
+      return { state: 'active', detail: `قيد المعالجة: ${n} من ${total}`, count: `${n}/${total}`, percent: this.percent };
+    },
+    // Review saves in another tab (BroadcastChannel 'nassakh') and the window's focus refresh the progress once,
+    // so the «الكتاب» block's drift line stays live without a poll (a running book polls anyway).
+    bindLive() {
+      if (typeof window === 'undefined') return;
+      try {
+        if (typeof BroadcastChannel === 'function') {
+          liveChannel = new BroadcastChannel('nassakh');
+          if (typeof liveChannel.unref === 'function') liveChannel.unref(); // Node (the tests)
+          liveChannel.onmessage = (e) => { const m = e && e.data; if (m && Number(m.book) === Number(cfg.bookId)) this.refreshLive(); };
+        }
+      } catch (e) { liveChannel = null; }
+      liveFocus = () => this.refreshLive();
+      if (window.addEventListener) window.addEventListener('focus', liveFocus);
+    },
+    refreshLive() {
+      if (this.active || this.stopped || !this.progressUrl) return false; // the poll runs already (or stopped for good)
+      const wait = liveAt + LIVE_MS - Date.now();
+      if (wait > 0) {
+        if (!liveTimer) liveTimer = setTimeout(() => { liveTimer = null; this.refreshLive(); }, wait);
+        return false;
+      }
+      liveAt = Date.now();
+      this.pollNow();
+      return true;
     },
 
     // ------------------------------------------------------------ page records
@@ -461,6 +536,8 @@ document.addEventListener('alpine:init', () => {
       p.review_url = p.review_url || fill(urls.review, n);
       p.rerun_url = p.rerun_url || fill(urls.rerun, n);
       p.exclude_url = p.exclude_url || fill(urls.exclude, n);
+      // D76 (§5.4): where the tile and the sheet title lead: review once the text is final, else the page detail
+      p.primary_url = raw.primary_url || (p.text_state === 'final' && !p.is_excluded ? p.review_url : p.url);
       if (!(p.n_flags > 0)) p.flag_labels = [];
       else if (!Array.isArray(p.flag_labels)) p.flag_labels = before && Array.isArray(before.flag_labels) ? before.flag_labels : [];
       if (!p.error) { p.error_headline = ''; p.retry_stage = ''; p.retry_label = ''; }
@@ -583,6 +660,7 @@ document.addEventListener('alpine:init', () => {
       }
       // the mode's bands and doubts follow the pages that changed (a page prepared, failed or re-included)
       if (guidesMode) this.queueGuides([...added, ...changed.map((c) => c.after)].filter((p) => p.status !== 'uploaded').map((p) => p.number));
+      this.syncStage();
       if (wasActive && !this.active) this.onProcessingEnd();
       else if (this.active && this.follow && changed.length) this.followChanged(changed);
       this.ensureSheet(this.current); // safety net: the page on screen never stays without its data
@@ -590,6 +668,7 @@ document.addEventListener('alpine:init', () => {
     // The first poll with active false after an active one: effects stop, chrome follows, one toast, no reload.
     onProcessingEnd() {
       this.stopEffects();
+      if (window.NassakhStages) window.NassakhStages.changed(cfg.bookId); // the bar: the step is done now
       this.refreshFilmSoon(0);
       if (guidesMode) {
         this.fetchGuides(); // the stats line and every page's bands, once the pages are prepared
@@ -730,9 +809,9 @@ document.addEventListener('alpine:init', () => {
       this.setFilter('doubt');
       if (this.view === 'sheets') { const first = this.visibleNumbers()[0]; if (first) this.showPage(first, { instant: true, manual: true }); }
     },
-    // the end-of-preparation toast: «اكتمل التخطيط · 7 صفحات»
+    // the end toasts: «اكتمل التخطيط · 7 صفحات» (the mode), «اكتملت المعالجة · 8 صفحات» (D77: the count helper)
     get doneText() {
-      return `اكتمل التخطيط · ${arCount(this.doneToast.count, PAGE_FORMS)}`;
+      return `${guidesMode ? 'اكتمل التخطيط' : 'اكتملت المعالجة'} · ${arCount(this.doneToast.count, PAGE_FORMS)}`;
     },
     get emptyTitle() {
       return this.status === 'processing' ? 'تُستخرج الصفحات الآن' : 'لم تُستخرج الصفحات بعد';
@@ -755,6 +834,19 @@ document.addEventListener('alpine:init', () => {
     },
     closeDialog() {
       this.dialog = { kind: '', stage: '', label: '' };
+    },
+    // ---- the shortcut sheet (§5.8): «?», or «⋯» «اختصارات لوحة المفاتيح»; the focus returns where it was
+    openSheet() {
+      this.sheetReturn = typeof document !== 'undefined' ? document.activeElement : null;
+      this.sheetOpen = true;
+      if (this.$nextTick) this.$nextTick(() => { const el = this.$refs && this.$refs.sheetClose; if (el && el.focus) el.focus(); });
+    },
+    closeSheet() {
+      if (!this.sheetOpen) return;
+      this.sheetOpen = false;
+      const el = this.sheetReturn;
+      this.sheetReturn = null;
+      if (el && el.focus && this.$nextTick) this.$nextTick(() => el.focus());
     },
     // Tab stays inside the open dialog (= review.js trapTab).
     trapTab(ev, root) {
@@ -903,12 +995,16 @@ document.addEventListener('alpine:init', () => {
       const pages = this.edited && this.editor.drift_pages ? this.editor.drift_pages.length : 0;
       return pages ? `تغيّر نص ${arCount(pages, PAGE_FORMS)} في المراجعة بعد التحرير` : '';
     },
-    // the «الكتاب» block: «17×24 سم · 412 صفحة», «17×24 سم · يُحسب…», «17×24 سم · لم تُخرَج صفحاته بعد»
+    // D78 (§5.6): «عرض التغييرات» takes the changed paragraphs on the book page, in «تغييرات المراجعة»
+    get changesUrl() {
+      return this.layoutUrl ? `${this.layoutUrl}${this.layoutUrl.includes('?') ? '&' : '?'}tab=changes` : '';
+    },
+    // the «الكتاب» block: «17×24 سم · 412 صفحة», «17×24 سم · يُحسب…», «17×24 سم · لم تُرتَّب صفحاته بعد»
     get bookLine() {
       const l = this.layout || {};
       const trim = l.trim_label || '';
       const count = Number(l.page_count) || 0;
-      const state = l.rendering && !count ? 'يُحسب…' : count ? arCount(count, PAGE_FORMS) : 'لم تُخرَج صفحاته بعد';
+      const state = l.rendering && !count ? 'يُحسب…' : count ? arCount(count, PAGE_FORMS) : 'لم تُرتَّب صفحاته بعد';
       return trim ? `${trim} · ${state}` : state;
     },
     get bookDot() {
@@ -923,7 +1019,7 @@ document.addEventListener('alpine:init', () => {
       this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, m.options || {});
       this.convert.unreviewed = Number(m.unreviewed_pages) || 0;
       this.convert.edited = Boolean(m.exists && (m.edited || this.edited));
-      this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : m.exists ? 'إعادة التجميع' : 'تحويل';
+      this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : m.exists ? 'إعادة التجميع' : 'تجميع المخطوطة';
       this.convert.error = '';
       this.convert.open = true;
     },
@@ -983,7 +1079,7 @@ document.addEventListener('alpine:init', () => {
     // ------------------------------------------------------------ views, filters, follow
     setView(view) {
       this.view = view === 'grid' ? 'grid' : 'sheets';
-      if (!guidesMode) writeLocal(VIEW_KEY, this.view); // the mode always opens on the grid
+      if (!guidesMode) { writeLocal(VIEW_KEY + (cfg.bookId || ''), this.view); writeLocal(VIEW_KEY, this.view); } // the mode always opens on the grid
     },
     toggleView() {
       this.setView(this.view === 'grid' ? 'sheets' : 'grid');
@@ -1082,12 +1178,15 @@ document.addEventListener('alpine:init', () => {
       if (field && field.focus) { field.focus(); if (field.select) field.select(); }
     },
     // Keyboard map (§8.8), RTL-aware; never fires inside a field. Pure enough for the tests: returns the action.
-    // Letters by physical key (D69, NassakhKeys): G, V (the view, was 1 / 2), and outside the mode N and C.
+    // Letters by physical key (D69, NassakhKeys): G, V (the view, was 1 / 2), and outside the mode N and C; «?» the
+    // shortcut sheet (§5.8).
     keyAction(e, inField) {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || keyComposing(e)) return null;
       const k = e.key;
       if (k === 'Escape') return inField ? 'blur' : 'clearFilter';
       if (inField) return null;
+      const K = window.NassakhKeys;
+      if (K && typeof K.is === 'function' ? K.is(e, '?') : k === '?' || k === '؟') return 'sheet';
       const letter = keyLetter(e);
       if (letter === 'g') return 'jump';
       if (letter === 'v') return 'toggleView';
@@ -1106,6 +1205,7 @@ document.addEventListener('alpine:init', () => {
         if (e.key === 'Escape') { e.preventDefault(); this.closeDialog(); }
         return;
       }
+      if (this.sheetOpen) { if (e.key === 'Escape') { e.preventDefault(); this.closeSheet(); } return; }
       const t = e.target;
       const inField = Boolean(t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable));
       const action = this.keyAction(e, inField);
@@ -1118,6 +1218,7 @@ document.addEventListener('alpine:init', () => {
         return;
       }
       if (action === 'jump') { e.preventDefault(); this.focusJump(); return; }
+      if (action === 'sheet') { e.preventDefault(); this.openSheet(); return; }
       if (action === 'nextReview') { if (this.nextReviewUrl) window.location.assign(this.nextReviewUrl); return; }
       if (action === 'toggleView') { this.toggleView(); return; }
       if (action === 'nextSheet' || action === 'prevSheet') { e.preventDefault(); this.stepSheet(action === 'nextSheet' ? 1 : -1); return; }
@@ -1627,7 +1728,9 @@ document.addEventListener('alpine:init', () => {
       const ar = this.aspectOf(p);
       if (el.style.getPropertyValue('--sheet-ar') !== ar) el.style.setProperty('--sheet-ar', ar);
       const title = q(el, '.sheet-title');
-      if (title) { title.setAttribute('href', p.url || '#'); setText(q(title, 'bdi'), p.number); }
+      if (title) { title.setAttribute('href', p.primary_url || p.url || '#'); setText(q(title, 'bdi'), p.number); }
+      const detail = q(el, '.sheet-detail');
+      if (detail) { detail.setAttribute('href', p.url || '#'); detail.setAttribute('aria-label', `تفاصيل المعالجة للصفحة ${p.number}`); }
       const dot = q(el, '.sheet-head .dot');
       if (dot) dot.className = `dot ${p.dot || 'dot-neutral'}`;
       setText(q(el, '.sheet-status'), p.status_label || '');
@@ -1680,7 +1783,7 @@ document.addEventListener('alpine:init', () => {
       el.classList.toggle('is-error', Boolean(p.error));
       const link = q(el, '.page-tile-link');
       if (link) {
-        link.setAttribute('href', p.url || '#');
+        link.setAttribute('href', p.primary_url || p.url || '#');
         link.setAttribute('title', `الصفحة ${p.number} — ${p.status_label || ''}`);
         link.setAttribute('aria-label', `الصفحة ${p.number} — ${p.status_label || ''}`);
       }
@@ -1703,6 +1806,10 @@ document.addEventListener('alpine:init', () => {
       const flag = q(el, '.page-tile-flag');
       if (flag) { setHidden(flag, !(p.n_flags > 0)); flag.setAttribute('title', (p.flag_labels || []).join('، ')); setText(q(flag, '.tile-nflags'), p.n_flags || 0); }
       setHidden(q(el, '.page-tile-excluded'), !p.is_excluded);
+      const review = q(el, '.page-tile-review');
+      if (review) { review.setAttribute('href', p.review_url || '#'); review.setAttribute('aria-label', `مراجعة الصفحة ${p.number}`); setHidden(review, !(p.text_state === 'final' && !p.is_excluded)); }
+      const detail = q(el, '.page-tile-detail');
+      if (detail) { detail.setAttribute('href', p.url || '#'); detail.setAttribute('aria-label', `تفاصيل المعالجة للصفحة ${p.number}`); }
       setHidden(q(el, '.tile-mark-check'), !p.is_reviewed);
       const count = q(el, '.tile-mark-count');
       if (count) { setHidden(count, p.is_reviewed || !(p.n_unresolved > 0)); setText(count, p.n_unresolved || 0); count.setAttribute('title', `علامات لم تُحسم: ${p.n_unresolved || 0}`); }

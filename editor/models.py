@@ -2,6 +2,8 @@
 
 Phase 4 writes the manuscript from assembly; Phase 5 adds the editor that saves it one chapter at a time
 (`origin = editor`, D40–D41) and the stylesheet that gives the book its physical form (PHASE5_SPEC §2).
+Phase 7c (D78) keeps the assembled text an edited manuscript descends from (`base`) and the plans of the
+page-by-page merge of review changes (`ChangesPlan`, PHASE7_SPEC §5.6).
 """
 
 from __future__ import annotations
@@ -16,7 +18,14 @@ from .document import ChapterSlice, chapters_of
 
 
 class Manuscript(models.Model):
-    """The current document of a book; `version` grows by one on every save."""
+    """The current document of a book; `version` grows by one on every save.
+
+    `base` (D78) is the assembled document the current text descends from: written once, by the first edit
+    of an assembled text (`editor.services._mark_edited`), cleared by a whole-book assembly, moved page by
+    page by each apply of review changes (`editor.merge.splice_base`) and put back from a snapshot on
+    restore. Null for a text never edited, and for books edited before 7c. It doubles the row's size, so
+    the hot paths (the autosave's lock, the dashboard's state) defer it.
+    """
 
     class Origin(models.TextChoices):
         ASSEMBLY = "assembly", "التجميع"
@@ -26,6 +35,7 @@ class Manuscript(models.Model):
         Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="manuscript"
     )
     document = models.JSONField("المستند", default=dict, blank=True)
+    base = models.JSONField("أصل التحرير", null=True, blank=True)
     version = models.PositiveIntegerField("الإصدار", default=0)
     origin = models.CharField("المصدر", max_length=10, choices=Origin.choices, default=Origin.ASSEMBLY)
     run = models.ForeignKey(
@@ -60,7 +70,8 @@ class Manuscript(models.Model):
 
 
 class ManuscriptSnapshot(models.Model):
-    """A saved copy of a manuscript document (before a re-assembly, or taken by hand)."""
+    """A saved copy of a manuscript document (before a re-assembly, or taken by hand), with the manuscript's
+    `base` at that moment (D78; null for snapshots taken before 7c): restore puts both back."""
 
     class Reason(models.TextChoices):
         REASSEMBLY = "reassembly", "قبل إعادة التجميع"
@@ -74,6 +85,7 @@ class ManuscriptSnapshot(models.Model):
         Manuscript, verbose_name="المخطوطة", on_delete=models.CASCADE, related_name="snapshots"
     )
     document = models.JSONField("المستند", default=dict, blank=True)
+    base = models.JSONField("أصل التحرير", null=True, blank=True)
     version = models.PositiveIntegerField("الإصدار", default=0)
     label = models.CharField("الوصف", max_length=200, blank=True)
     reason = models.CharField("السبب", max_length=12, choices=Reason.choices, default=Reason.MANUAL)
@@ -94,6 +106,69 @@ class ManuscriptSnapshot(models.Model):
 
     def __str__(self) -> str:
         return f"snapshot v{self.version} of manuscript {self.manuscript_id}"
+
+
+class ChangesPlan(models.Model):
+    """One comparison of review changes with an edited book (D78, PHASE7_SPEC §5.6): the task
+    `editor.tasks.plan_review_changes` fills it, «تغييرات المراجعة» shows it, and an apply takes it.
+
+    `pages` are the pages asked for (null: every drift page); `plan` is what the book page reads (`{base,
+    pages, approvals, items, counts, applied}`, the items without their result nodes); `results` what an
+    apply needs and the client never sees (the items' result nodes and M indexes, the fresh blocks and the
+    planned pages' signatures, warnings and seams). Plans never live on `AssemblyRun`, so a plan is never
+    mistaken for an assembly (readiness, the chapter rebuild's refusal). At most one plan per book is queued
+    or running (a partial unique constraint); the newest `PLANS_KEPT` per book are kept.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "في الانتظار"
+        RUNNING = "running", "قيد التجميع"
+        DONE = "done", "اكتمل"
+        ERROR = "error", "خطأ"
+
+    ACTIVE = (Status.QUEUED, Status.RUNNING)
+    PLANS_KEPT = 5
+
+    book = models.ForeignKey(
+        Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="changes_plans"
+    )
+    manuscript_version = models.PositiveIntegerField("إصدار المخطوطة", default=0)
+    status = models.CharField("الحالة", max_length=10, choices=Status.choices, default=Status.QUEUED)
+    pages = models.JSONField("الصفحات المطلوبة", null=True, blank=True)
+    plan = models.JSONField("المقارنة", default=dict, blank=True)
+    results = models.JSONField("نتائج المقارنة", default=dict, blank=True)
+    error = models.TextField("الخطأ", blank=True)
+    task_id = models.CharField("معرّف المهمة", max_length=64, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="طلبها",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    created_at = models.DateTimeField("أُنشئت في", auto_now_add=True)
+    finished_at = models.DateTimeField("انتهت في", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "مقارنة تغييرات المراجعة"
+        verbose_name_plural = "مقارنات تغييرات المراجعة"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["book"],
+                condition=models.Q(status__in=["queued", "running"]),
+                name="changes_plan_one_active_per_book",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"changes plan {self.pk} of book {self.book_id} ({self.status})"
+
+    @property
+    def is_active(self) -> bool:
+        """True while the plan waits in the queue or runs."""
+        return self.status in self.ACTIVE
 
 
 # ====================================================================== the book's stylesheet

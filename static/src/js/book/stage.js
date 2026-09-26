@@ -35,7 +35,7 @@
   const SPREAD_KEY = 'nassakh.book.spread';
   const PAGE_KEY = 'nassakh.book.page.'; // the page shown, per book (session)
   const PAGE_FORMS = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
-  const RENDER_ERROR = 'تعذّر إخراج صفحات الكتاب.';
+  const RENDER_ERROR = 'تعذّر ترتيب صفحات الكتاب.';
   const SKELETON = '<div class="lp-skeleton" aria-hidden="true"><span class="lp-sk-title"></span><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span></div>';
 
   const isActive = (p) => Boolean(p && (ACTIVE.includes(p.status) || p.rendering));
@@ -342,7 +342,7 @@
         try {
           const r = await U.api(urls.preview, { method: 'POST', body: { scope: 'book' } });
           if (r.ok && r.data) this.applyPreview(r.data);
-          if (!r.ok) U.toast('تعذّر طلب الإخراج. حاول مرة أخرى.');
+          if (!r.ok) U.toast('تعذّر طلب ترتيب الصفحات. حاول مرة أخرى.');
           if (this.relayout.state === 'error' && typeof this.requestRelayout === 'function' && this.focusChapter) this.requestRelayout(this.focusChapter);
           this.schedule(POLL_MS);
           return r.ok;
@@ -464,7 +464,7 @@
       // the quiet pill: re-laying out, the book render, a failure with the retry, stale
       get renderPill() {
         if (this.relayout.state === 'running') return { state: 'saving', text: 'تُرتَّب الصفحات…', action: '' };
-        if (isActive(this.book)) return { state: 'saving', text: 'يُخرَج الكتاب…', action: '' };
+        if (isActive(this.book)) return { state: 'saving', text: 'تُرتَّب صفحات الكتاب…', action: '' };
         if (this.errorText) return this.pages.length ? { state: 'error', text: 'تعذّر تحديث الصفحات · إعادة المحاولة', action: 'retry' } : { state: '', text: '', action: '' };
         if (this.stale && this.pages.length) return { state: 'warn', text: 'الصفحات أقدم من النص', action: this.canEdit ? 'retry' : '' };
         return { state: '', text: '', action: '' };

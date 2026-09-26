@@ -1,0 +1,305 @@
+{
+ "take": {
+  "id": "i1",
+  "kind": "take",
+  "default": "theirs",
+  "chip": "من المراجعة",
+  "choices": [
+   "theirs",
+   "mine"
+  ],
+  "ask": false,
+  "help": "",
+  "diff": [
+   [
+    "eq",
+    "كان الشيخ"
+   ],
+   [
+    "del",
+    "فقيها، فاضلا، زاهدا"
+   ],
+   [
+    "ins",
+    "فقيهاً، فاضلاً، زاهداً"
+   ],
+   [
+    "eq",
+    "في الدنيا."
+   ]
+  ],
+  "conflicts": [],
+  "page": 1,
+  "pages": [
+   1
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40012",
+  "blocks": [
+   "p40012"
+  ],
+  "base": "stored"
+ },
+ "merged": {
+  "id": "i2",
+  "kind": "merged",
+  "default": "merged",
+  "chip": "مع تعديلك",
+  "choices": [
+   "merged",
+   "mine",
+   "theirs"
+  ],
+  "ask": false,
+  "help": "",
+  "diff": [
+   [
+    "eq",
+    "ورحل إلى"
+   ],
+   [
+    "del",
+    "المشرق"
+   ],
+   [
+    "ins",
+    "الشرق"
+   ],
+   [
+    "eq",
+    "فأقام به مدة ثم عاد …"
+   ]
+  ],
+  "conflicts": [],
+  "page": 2,
+  "pages": [
+   2
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40021",
+  "blocks": [
+   "p40021"
+  ],
+  "base": "stored"
+ },
+ "conflict": {
+  "id": "i3",
+  "kind": "conflict",
+  "default": "mine",
+  "chip": "تعارض",
+  "choices": [
+   "mine",
+   "theirs"
+  ],
+  "ask": true,
+  "help": "عدّلتَ هذه الكلمات في الكتاب، وغيّرتها المراجعة أيضًا.",
+  "diff": [
+   [
+    "eq",
+    "… كثيرة في الفقه واللغة سنة"
+   ],
+   [
+    "del",
+    "1967."
+   ],
+   [
+    "ins",
+    "1965."
+   ]
+  ],
+  "conflicts": [
+   {
+    "mine": "… الفقه واللغة سنة 1967.",
+    "theirs": "… الفقه واللغة سنة 1965."
+   }
+  ],
+  "page": 2,
+  "pages": [
+   2
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40022",
+  "blocks": [
+   "p40022"
+  ],
+  "base": "stored"
+ },
+ "conflict_deleted": {
+  "id": "i4",
+  "kind": "conflict",
+  "default": "mine",
+  "chip": "تعارض",
+  "choices": [
+   "mine",
+   "theirs"
+  ],
+  "ask": true,
+  "help": "حذفتَ هذه الفقرة من الكتاب، وغيّرتها المراجعة.",
+  "diff": [
+   [
+    "ins",
+    "وكانت وفاته في طرابلس بعد عودته بسنوات."
+   ]
+  ],
+  "conflicts": [
+   {
+    "mine": "",
+    "theirs": "وكانت وفاته في طرابلس بعد عودته بسنوات."
+   }
+  ],
+  "page": 3,
+  "pages": [
+   3
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40022",
+  "blocks": [],
+  "base": "stored"
+ },
+ "insert": {
+  "id": "i5",
+  "kind": "insert",
+  "default": "theirs",
+  "chip": "فقرة جديدة",
+  "choices": [
+   "theirs",
+   "mine"
+  ],
+  "ask": false,
+  "help": "",
+  "diff": [
+   [
+    "ins",
+    "وهذه صفحة لم تدخل الكتاب من قبل."
+   ]
+  ],
+  "conflicts": [],
+  "page": 4,
+  "pages": [
+   4
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40022",
+  "blocks": [],
+  "base": "stored"
+ },
+ "remove": {
+  "id": "i6",
+  "kind": "remove",
+  "default": "theirs",
+  "chip": "تُحذف",
+  "choices": [
+   "theirs",
+   "mine"
+  ],
+  "ask": false,
+  "help": "",
+  "diff": [
+   [
+    "del",
+    "وهذه صفحة أُخرجت من الكتاب بعد تجميعه."
+   ]
+  ],
+  "conflicts": [],
+  "page": 5,
+  "pages": [
+   5
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40051",
+  "blocks": [
+   "p40051"
+  ],
+  "base": "stored"
+ },
+ "take_processing": {
+  "id": "i7",
+  "kind": "take",
+  "default": "theirs",
+  "chip": "من المراجعة",
+  "choices": [
+   "theirs",
+   "mine"
+  ],
+  "ask": false,
+  "help": "",
+  "diff": [
+   [
+    "eq",
+    "ثم"
+   ],
+   [
+    "del",
+    "ألف"
+   ],
+   [
+    "ins",
+    "ألّف"
+   ],
+   [
+    "eq",
+    "كتابه الكبير في التاريخ."
+   ]
+  ],
+  "conflicts": [],
+  "page": 7,
+  "pages": [
+   7
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40071",
+  "blocks": [
+   "p40071"
+  ],
+  "base": "stored"
+ },
+ "choose": {
+  "id": "i1",
+  "kind": "choose",
+  "default": "mine",
+  "chip": "للمقارنة",
+  "choices": [
+   "mine",
+   "theirs"
+  ],
+  "ask": true,
+  "help": "لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.",
+  "diff": [
+   [
+    "eq",
+    "كان الشيخ"
+   ],
+   [
+    "del",
+    "فقيها، فاضلا، زاهدا"
+   ],
+   [
+    "ins",
+    "فقيهاً، فاضلاً، زاهداً"
+   ],
+   [
+    "eq",
+    "في الدنيا."
+   ]
+  ],
+  "conflicts": [],
+  "page": 1,
+  "pages": [
+   1
+  ],
+  "chapter": "h40011",
+  "chapter_title": "الفصل الأول",
+  "block": "p40012",
+  "blocks": [
+   "p40012"
+  ],
+  "base": "none"
+ }
+}

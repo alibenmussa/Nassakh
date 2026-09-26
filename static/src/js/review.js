@@ -48,6 +48,22 @@
     { value: 'footnote', label: 'حاشية' },
   ];
   const MARKS = ['علامة واحدة', 'علامتان', 'علامات', 'علامة'];
+  const PAGES = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  const PAGES_IN = ['صفحة واحدة', 'صفحتين', 'صفحات', 'صفحة']; // after «في»: «في صفحتين»
+  const PLACES = ['موضع واحد', 'موضعان', 'مواضع', 'موضعًا'];
+  const PLACES_OBJ = ['موضع واحد', 'موضعين', 'مواضع', 'موضعًا']; // as an object: «تصحيح موضعين»
+  // D79 (§5.7): a word's core (edge punctuation aside), as the book is searched for it
+  const core = (word) => String(word || '').replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  const CROP_H = 30; // the height of an occurrence's crop in the fix sheet (px)
+  // The end of review (§5.3): the next step, as `next_step.state` names it. The server sends the sentences with the
+  // numbers in them (`heading`, `summary`, `title`, `text`, `button`, `url`); these stand in for a field it leaves out.
+  const NEXT_STEPS = {
+    assemble: { step: 'تجميع المخطوطة', text: 'تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ، تتحقّق من بنيته قبل الكتاب.', button: 'تجميع المخطوطة…' },
+    reassemble: { step: 'إعادة التجميع', text: 'تغيّر نص صفحات بعد التجميع، ولم يُحرَّر الكتاب بعد؛ فإعادة التجميع لا تُضيّع شيئًا.', button: 'إعادة التجميع' },
+    changes: { step: 'أخذ التغييرات إلى الكتاب', text: 'غيّرت المراجعة نص صفحات من الكتاب المحرَّر؛ تُؤخذ فقراتها وحدها.', button: 'عرض التغييرات في الكتاب' },
+    book: { step: 'الكتاب', text: 'المخطوطة محدَّثة؛ نسّق الكتاب وحرّره على صفحاته.', button: 'فتح الكتاب' },
+    processing: { heading: 'رُوجعت كل الصفحات الجاهزة', step: 'المعالجة', text: 'لا صفحات بانتظار المراجعة الآن؛ ما زالت صفحات قيد المعالجة.', button: 'العودة إلى المعالجة' },
+  };
   const OPEN_WORDS = ['كلمة غير محسومة', 'كلمتان غير محسومتين', 'كلمات غير محسومة', 'كلمة غير محسومة'];
   // D73: how a page was read, when it was not read by both models (`page.reading.readers`): the review header's
   // pill and banner, and the filmstrip's half-disc.
@@ -164,6 +180,8 @@
     } catch (_) { /* no channel (an old browser, a sandbox) */ }
   }
 
+  // D76: the stage bar (stages.js) hears that this book moved on (an approval, a fix everywhere)
+  const stagesChanged = (book) => { try { if (window.NassakhStages) window.NassakhStages.changed(book); } catch (_) { /* no bar */ } };
   const fill = (template, id) => String(template || '').replace(/__(id|group)__/, String(id));
   const plainToken = (word) => ({ t: word, alt: null, tess: null, conf: 'high', digit: isDigits(word), bbox: null, res: 'typed' });
   const splitWords = (text) => String(text || '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -185,9 +203,10 @@
   //   word mode (the menu open on an editable word): 1–9 choose reading n, a digit beyond the readings and any
   //     other printable character (Latin or Arabic, ؟ and − too) start the correction with that character (on a
   //     gap: the words to insert; a group's menu has no correction);
-  //   page mode (the menu closed): A approve, E edit the line, N the next page to review, ? the sheet, + − 0
-  //     zoom, Space opens the focused word's menu, a digit still chooses a reading of a focused word; other
-  //     letters do nothing, so no correction starts by accident.
+  //   page mode (the menu closed): A approve, E edit the line, N the next page to review, G jump to a page, O
+  //     the processed image or the original, V swap the sides, C copy the page's text, ? the sheet, + − 0 zoom,
+  //     Space opens the focused word's menu, a digit still chooses a reading of a focused word; other letters do
+  //     nothing, so no correction starts by accident. ⌥F in word mode: «تصحيح في كل الكتاب» (D79).
   // In both: ← → PageDown PageUp Home End turn pages, Enter accepts (the reading in the text, a group kept, a
   // gap's words inserted), Tab / ⇧Tab move through the words, groups and gaps, ⌥← / ⌥→ merge the focused word
   // with the next / previous one (D31, RTL: the next word is on the left), ⌫ deletes it (a gap: dismissed), ⌘Z
@@ -203,6 +222,8 @@
     if (K.mod(ev)) return K.letter(ev, 'mod') === 'z' ? 'undo' : null;
     if (k === 'Tab') return c.inFlow ? (ev.shiftKey ? 'prev' : 'next') : null;
     if (k === 'Enter') return ev.altKey ? 'insert' : (c.focused ? 'accept' : null);
+    // ⌥F (§5.8, D79): the focused word everywhere in the book, from its menu (word mode)
+    if (ev.altKey && c.focused && c.open && !c.gap && !c.group && K.letter(ev, 'alt') === 'f') return 'fixEverywhere';
     if (ev.altKey) {
       if (c.focused && !c.gap && k === 'ArrowLeft') return 'mergeNext';
       if (c.focused && !c.gap && k === 'ArrowRight') return 'mergePrev';
@@ -230,6 +251,11 @@
     if (letter === 'a') return 'approve';
     if (letter === 'e') return 'edit';
     if (letter === 'n') return 'nextReview';
+    // §5.8: G the pager's jump field, O «المعالَجة / الأصل», V the sides swapped, C the page's text copied
+    if (letter === 'g') return 'jump';
+    if (letter === 'o') return 'toggleScan';
+    if (letter === 'v') return 'swap';
+    if (letter === 'c') return 'copy';
     return null;
   }
 
@@ -274,6 +300,14 @@
       actionSeq: 0,       // counts requests; only the newest one may offer an undo toast
       gen: 0,             // page generation: a page swap bumps it so late responses of the old page are dropped
       undoToast: null,
+      // ---- where review leads (D76, §5.3)
+      after: null,        // the lines pane after an approval: {kind: 'detour', number, backUrl, hasNext} | {kind: 'end', …}
+      arrived: false,     // this page came in by approval's auto-advance and nothing was saved on it yet (the N rule)
+      jumping: false,     // G: the pager is a jump field
+      nextStep: null,     // review_payload.next_step (approve's answer brings a fresher one)
+      // «تصحيح في كل الكتاب» (D79, §5.7): the sheet, api:book_occurrences and api:fix_everywhere
+      fix: { open: false, from: '', to: '', options: { fold_alef: true, whole_word: true, match_tashkeel: false }, loading: false, error: '', results: [], total: 0, pages: 0, truncated: false, picks: {}, cursor: 0, busy: false },
+      liveMessage: '',
       // ---- page
       shown: 0,           // animated resolved counter
       dialog: { open: false, count: 0, words: 0, suggested: 0, gaps: 0 }, // suggested: open groups and gaps (D73)
@@ -341,6 +375,7 @@
         if (data.nav) this.nav = data.nav;
         if (data.urls) this.urls = data.urls;
         if (data.can_edit !== undefined) this.canEdit = Boolean(data.can_edit);
+        if (data.next_step !== undefined) this.nextStep = data.next_step || null;
         if (data.counts) this.setCounts(data.counts); else this.recount();
         this.syncBar();
       },
@@ -438,6 +473,9 @@
             error: this.isError,
             statusLabel: this.page.status_label || '',
             dashboardUrl: this.nav.dashboard_url || '',
+            back: this.back,
+            detailUrl: this.detailUrl,
+            jumping: this.jumping,
             hasPrev: Boolean(this.nav.prev_url),
             hasNext: Boolean(this.nav.next_url),
             loading: this.loading,
@@ -447,6 +485,39 @@
       },
 
       // ------------------------------------------------------------ derived
+      // D76 (§5.3): where review was opened from (`nav.back` = {label, url}, from `?from=`), else nothing
+      get back() {
+        const b = this.nav && this.nav.back;
+        return b && b.url ? { label: b.label || 'الكتاب', url: b.url, from: b.from || '' } : null;
+      },
+      // opened from the book page (`nav.detour`, `from=book`): approval stays on the page and offers the way back
+      get fromBook() {
+        if (this.nav && this.nav.detour !== undefined) return Boolean(this.nav.detour);
+        const b = this.nav && this.nav.back;
+        return Boolean(b && b.from === 'book');
+      },
+      // the origin as a query string (`nav.origin.query`, «from=book&at=12»): client-built review URLs carry it, so a
+      // page swap keeps the way back ('' when review was opened with no origin)
+      get originQuery() { const o = this.nav && this.nav.origin; return (o && o.query) || ''; },
+      // …and as the approve body's fields (its next_review_url then carries it)
+      get originBody() {
+        const o = (this.nav && this.nav.origin) || {};
+        const out = {};
+        ['from', 'at', 'block'].forEach((k) => { if (o[k] !== undefined && o[k] !== null && o[k] !== '') out[k] = o[k]; });
+        return out;
+      },
+      withOrigin(url) {
+        const q = this.originQuery;
+        if (!url || !q || /[?&]from=/.test(url)) return url;
+        const [path, hash] = String(url).split('#');
+        return `${path}${path.includes('?') ? '&' : '?'}${q}${hash !== undefined ? `#${hash}` : ''}`;
+      },
+      // «تفاصيل المعالجة» (§5.4): the page detail, for editors (`nav.detail_url`; the dashboard's address otherwise)
+      get detailUrl() {
+        if (this.nav && this.nav.detail_url !== undefined) return this.nav.detail_url || '';
+        if (!this.canEdit || !this.nav || !this.nav.dashboard_url || !this.page.number) return '';
+        return `${String(this.nav.dashboard_url).replace(/\/?$/, '/')}pages/${this.page.number}/`;
+      },
       get isError() { return this.page.status === 'error'; },
       get isPending() { return !this.isError && this.page.text_state !== 'final'; },
       get ready() { return !this.isError && !this.isPending; },
@@ -984,10 +1055,11 @@
         const body = { index: ref.index, choice, t: before.t }; // t: the word as seen, so a stale tab gets a 409
         if (choice === 'typed') body.text = value;
         return this.request(() => api(fill(this.urls.resolve, line.id), { method: 'POST', body }), {
-          apply: (data) => {
+          apply: (data, seq) => {
             if (data.line) this.replaceLine(data.line);
             this.applyApiCounts(data.counts, this.lineById(line.id));
             if (data.page) Object.assign(this.page, data.page);
+            this.offerElsewhere(data.elsewhere, seq);
           },
           rollback: () => {
             const l = this.lineById(line.id);
@@ -1424,9 +1496,10 @@
         this.hotLine = line.id;
 
         return this.request(() => api(fill(this.urls.edit, line.id), { method: 'POST', body: { text, v: this.versionOf(line) } }), {
-          apply: (data) => {
+          apply: (data, seq) => {
             if (data.line) this.replaceLine(data.line);
             this.applyApiCounts(data.counts, this.lineById(line.id));
+            this.offerElsewhere(data.elsewhere, seq);
           },
           rollback: () => {
             const i = this.lines.findIndex((l) => l.id === line.id);
@@ -1515,12 +1588,20 @@
 
       // Offer «تراجع» for the action that just landed. `seq` is that request's number: when a later action has
       // been sent since, the newest revision is no longer this one and the offer would undo the wrong thing.
-      showUndoToast(message, seq) {
+      // `extra`: {elsewhere} (the chip «159 موضعًا آخر… · تصحيحها…»), {batch, detail, link} (a fix everywhere: its
+      // «تراجع» undoes the batch, `link` the edited book's pre-filled find & replace)
+      showUndoToast(message, seq, extra) {
         if (seq !== undefined && seq !== this.actionSeq) return;
         try { const shared = Alpine.store('toast'); if (shared && shared.hide) shared.hide(); } catch (_) { /* no store */ }
         clearTimeout(this.undoTimer);
-        this.undoToast = { message };
+        this.undoToast = Object.assign({ message }, extra || {});
         this.undoTimer = setTimeout(() => { this.undoToast = null; }, UNDO_TOAST_MS);
+      },
+      // the toast's «تراجع»: a fix everywhere undoes its batch, anything else the page's newest revision
+      undoFromToast() {
+        const t = this.undoToast;
+        if (t && t.batch) return this.undoFix(t.batch);
+        return this.undo();
       },
 
       dismissUndo() {
@@ -1551,6 +1632,7 @@
         const seq = ++this.actionSeq;
         const where = { type: 'review', book: this.book.id || this.page.book_id || null, page: this.page.number };
         this.dismissUndo(); // a newer action makes the undo offer stale
+        this.arrived = false; // the page is touched: N moves on from it again
         this.save.pending += 1;
         this.save.state = 'saving';
         this.syncBar();
@@ -1618,7 +1700,7 @@
         this.dialog.open = false;
         this.approving = true;
         this.closePop();
-        return this.request(() => api(this.urls.approve, { method: 'POST', body: { force: Boolean(force) } }), {
+        return this.request(() => api(this.urls.approve, { method: 'POST', body: Object.assign({ force: Boolean(force) }, this.originBody) }), {
           apply: (data) => {
             this.approving = false;
             this.page.status = data.status || 'reviewed';
@@ -1626,7 +1708,9 @@
             this.page.status_label = 'مُراجَعة';
             this.book.reviewed_pages = (Number(this.book.reviewed_pages) || 0) + 1;
             this.markFilm({ is_reviewed: true, status: this.page.status });
+            if (data.next_step !== undefined) this.nextStep = data.next_step || null;
             this.syncBar();
+            stagesChanged(this.book.id || this.page.book_id); // the stage bar: «المراجعة» counted one more page
             this.celebrate(data);
           },
           onFail: (res) => {
@@ -1667,19 +1751,73 @@
         return `بقيت ${arCount(d.count, MARKS)}: ${parts.join(' و')}. ${ask}`;
       },
 
-      // Stamp (400 ms), then the next page needing review slides in from the reading direction.
+      // Stamp (400 ms), then the next page needing review slides in from the reading direction (marked `arrived`,
+      // the N rule). Opened from the book page, the page stays and the pane offers the way back (the detour, §5.3);
+      // with no page left to review the end panel names the next step.
       celebrate(data) {
         const d = data || {};
         this.stamp = true;
+        const number = this.page.number;
         const after = () => {
           this.stamp = false;
+          // the server knows best: a next step means no page is left (the filmstrip may be older)
+          if (d.next_step) { this.showEnd(d.next_step); return; }
           const item = d.next_payload_url ? null : this.nextFromFilm();
           const payloadUrl = d.next_payload_url || this.payloadUrlFor(item && item.id);
-          if (payloadUrl) { this.swapTo(payloadUrl, d.next_review_url, this.turnDir(item)); return; }
-          this.toast('لا صفحات بانتظار المراجعة');
+          if (!payloadUrl) { this.showEnd(d.next_step); return; }
+          if (this.fromBook && this.back) { this.showDetour(number, true); return; }
+          this.swapTo(payloadUrl, d.next_review_url, this.turnDir(item), { arrived: true });
         };
         if (this.reduced || !hasDOM) after(); else setTimeout(after, 800);
       },
+
+      // ---- after an approval (D76, §5.3): the detour and the end panel, in the lines pane
+      showDetour(number, hasNext) {
+        this.after = { kind: 'detour', number, backUrl: this.back ? this.back.url : this.nav.dashboard_url, hasNext: Boolean(hasNext) };
+        this.liveMessage = `اعتُمدت الصفحة ${number}.`;
+        this.focusAfter();
+      },
+      // `step` = next_step (approve's answer, else the payload's); the words come from NEXT_STEPS when the server
+      // sends only its key.
+      showEnd(step) {
+        this.after = this.endPanel(step === undefined ? this.nextStep : step);
+        this.liveMessage = this.after.heading;
+        this.focusAfter();
+      },
+      // next_step = {state, heading, summary, title, text, button, url, stay} (the contract's words, with the numbers);
+      // NEXT_STEPS stands in for a field it leaves out. The ✓ shows once this page is reviewed (N on the last page
+      // still waiting reads «هذه آخر صفحة بانتظار المراجعة» without it).
+      endPanel(raw) {
+        const s = raw || {};
+        const given = s.state || s.key;
+        const key = NEXT_STEPS[given] ? given : (s.url ? 'book' : 'processing');
+        const words = NEXT_STEPS[key];
+        const total = Number(this.book.total_pages) || 0;
+        const summary = s.summary !== undefined ? String(s.summary || '') : total ? arCount(total, PAGES) : '';
+        return {
+          kind: 'end',
+          key,
+          done: this.isReviewed,
+          heading: String(s.heading || words.heading || 'رُوجعت كل الصفحات'),
+          summary,
+          step: String(s.title || words.step || ''),
+          text: String(s.text || words.text || ''),
+          button: String(s.button || words.button || ''),
+          url: String(s.url || (key === 'processing' ? this.nav.dashboard_url || '' : '')),
+          stay: String(s.stay || 'البقاء في المراجعة'),
+        };
+      },
+      focusAfter() {
+        this.closePop();
+        this.focus = null;
+        if (!hasDOM) return;
+        this.tick(() => {
+          const el = (this.$refs && this.$refs.afterPrimary) || document.querySelector('[data-after] .btn-primary');
+          if (el && el.focus) el.focus({ preventScroll: true });
+        });
+      },
+      leaveAfter() { this.after = null; this.liveMessage = ''; },
+
 
       reopen() {
         if (!this.canEdit || !this.isReviewed || this.loading) return Promise.resolve(false);
@@ -1714,23 +1852,27 @@
       // Reading direction of a turn to `item`: 1 forward (also when unknown), -1 back to an earlier page.
       turnDir(item) { return item && item.number < this.page.number ? -1 : 1; },
 
+      // another page's payload, asked with the origin (its nav then leads back to the same place)
       payloadUrlFor(id) {
         if (!id || !this.urls.payload) return null;
-        return String(this.urls.payload).replace(/\/pages\/\d+\//, `/pages/${id}/`);
+        return this.withOrigin(String(this.urls.payload).replace(/\/pages\/\d+\//, `/pages/${id}/`));
       },
 
+      // The address of page `number`, with this address's query (`?from=book&at=12` survives a page swap, §5.3).
       pageUrlFor(number) {
         const item = this.film.items.find((p) => p.number === number);
-        if (item && item.url) return item.url;
+        if (item && item.url) return this.filmHref(item);
         if (!hasDOM) return null;
         return window.location.pathname.replace(/\/\d+\/?$/, `/${number}/`) + window.location.search;
       },
+      filmHref(p) { return this.withOrigin((p && p.url) || ''); },
 
       // Fetch another page's payload and swap it in without a reload (old page leaves toward the end
       // side, the new one arrives from the start of the reading direction); the URL follows.
       // `dir`: 1 turns forward (the default), -1 back to an earlier page (the motion is mirrored).
-      async swapTo(payloadUrl, fallbackUrl, dir) {
+      async swapTo(payloadUrl, fallbackUrl, dir, opts) {
         if (!payloadUrl) return false;
+        const arrived = Boolean(opts && opts.arrived);
         const back = dir < 0;
         this.loading = true;
         this.slide = this.reduced || !hasDOM ? '' : (back ? 'out-back' : 'out');
@@ -1750,6 +1892,9 @@
           this.focus = null; this.hot = null; this.hotLine = null; this.closePop();
           this.edit = null; this.insert = null; this.menuFor = null; this.dialog.open = false; this.dismissUndo();
           this.range = { anchor: null, ids: [] };
+          this.after = null;
+          this.jumping = false;
+          this.arrived = arrived;
           if (this.save.failed.length) {
             // their retries target lines of the page being left: say so instead of keeping a chip that lies
             this.save.failed = [];
@@ -1814,12 +1959,45 @@
         return true;
       },
 
+      // N: the next page waiting for review. The N rule (§5.3): on a page approval brought in, untouched and still
+      // to review, N says so and stays (N right after A never skips a page). With none left, the end panel.
       goNextReview() {
+        if (this.arrived && this.ready && !this.isReviewed && !this.loading) { this.toast('هذه هي الصفحة التالية للمراجعة'); return; }
         const item = this.nextFromFilm();
         const payloadUrl = this.payloadUrlFor(item && item.id);
-        if (payloadUrl) { this.swapTo(payloadUrl, this.nav.next_review_url, this.turnDir(item)); return; }
+        if (payloadUrl) { this.leaveAfter(); this.swapTo(payloadUrl, this.nav.next_review_url, this.turnDir(item)); return; }
+        if (this.film.state === 'ready') {
+          if (this.ready && !this.isReviewed) { this.toast('هذه آخر صفحة بانتظار المراجعة'); return; }
+          this.showEnd();
+          return;
+        }
         if (this.nav.next_review_url && hasDOM) window.location.assign(this.nav.next_review_url);
         else this.toast('لا صفحات بانتظار المراجعة');
+      },
+
+      // ---- G: the pager becomes a jump field (a page number in any digits; Enter goes, Esc leaves)
+      startJump() {
+        this.jumping = true;
+        this.syncBar();
+        if (!hasDOM) return;
+        this.tick(() => { const el = document.getElementById('rv-jump'); if (el && el.focus) { el.focus(); if (el.select) el.select(); } });
+      },
+      endJump() { if (!this.jumping) return; this.jumping = false; this.syncBar(); },
+      jumpTo(value) {
+        const digits = String(value || '').replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660)).replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/\D/g, '');
+        const n = digits ? parseInt(digits, 10) : NaN;
+        this.endJump();
+        const item = Number.isFinite(n) ? this.film.items.find((p) => p.number === n) : null;
+        if (!item) { this.toast('لا صفحة بهذا الرقم'); return false; }
+        if (n !== this.page.number) { this.leaveAfter(); this.goTo(item); }
+        return true;
+      },
+      // O: «المعالَجة / الأصل»
+      toggleScan() {
+        if (this.tab === 'scan') { this.setTab('display'); return true; }
+        if (!this.hasScan) { this.toast('لا صورة أصلية لهذه الصفحة'); return false; }
+        this.setTab('scan');
+        return true;
       },
 
       // «صفحة 3 · 3 علامات · قراءة واحدة»: the open items (words, groups and gaps, D73) and a single reader.
@@ -2147,6 +2325,205 @@
         return false;
       },
 
+      // ------------------------------------------------------------ «تصحيح في كل الكتاب» (D79, §5.7; no learning)
+      // One correction over every occurrence in the book: the sheet lists them with their crops (api:book_occurrences),
+      // a click or Space ticks them (the forms a reviewer confirmed as they are, and running heads, start unticked),
+      // Enter or the button corrects the ticked ones in one batch (api:fix_everywhere), and the toast's «تراجع» undoes
+      // the batch. On an edited book the toast leads to the book page's find & replace, pre-filled.
+      bookUrl(path) { return `/api/books/${this.book.id || this.page.book_id}/${path}`; },
+      get fixUrls() {
+        const u = this.urls || {};
+        return {
+          occurrences: u.occurrences || this.bookUrl('occurrences/'),
+          apply: u.fix_everywhere || this.bookUrl('fix-everywhere/'),
+          undo: u.fix_everywhere_undo || this.bookUrl('fix-everywhere/__batch__/undo/'),
+        };
+      },
+      // ⌥F or «إجراءات أخرى»: the focused word; its correction when one is typed (or it was corrected already)
+      openFix(from, to) {
+        if (!this.canEdit) return false;
+        const tok = this.focused;
+        let a = from;
+        let b = to;
+        if (a === undefined) {
+          if (!tok) return false;
+          const typed = this.pop.typing ? this.pop.typed.trim() : '';
+          a = tok.orig && tok.res === 'typed' && !typed ? tok.orig : tok.t;
+          b = typed || (tok.orig && tok.res === 'typed' ? tok.t : '');
+        }
+        this.closePop();
+        this.fixReturn = hasDOM ? document.activeElement : null;
+        this.fix = Object.assign({}, this.fix, { open: true, from: core(a), to: core(b), error: '', results: [], total: 0, pages: 0, picks: {}, cursor: 0, busy: false });
+        this.tick(() => { const el = this.$refs && this.$refs.fixTo; if (el && el.focus) { el.focus(); if (el.select) el.select(); } });
+        return this.loadOccurrences();
+      },
+      closeFix() {
+        if (!this.fix.open) return;
+        this.fix.open = false;
+        const el = this.fixReturn;
+        this.fixReturn = null;
+        if (el && el.focus) this.tick(() => el.focus());
+      },
+      // `?q=&fold_alef=&whole_word=&match_tashkeel=` (the book page's FindOptions)
+      occurrencesUrl() {
+        const f = this.fix;
+        const flag = (v) => (v ? '1' : '0');
+        const url = this.fixUrls.occurrences;
+        return `${url}${url.includes('?') ? '&' : '?'}q=${encodeURIComponent(f.from)}&fold_alef=${flag(f.options.fold_alef)}&whole_word=${flag(f.options.whole_word)}&match_tashkeel=${flag(f.options.match_tashkeel)}`;
+      },
+      async loadOccurrences() {
+        const f = this.fix;
+        if (!f.from) { f.error = 'اكتب الكلمة التي تريد تصحيحها.'; return false; }
+        const gen = (this.fixGen = (this.fixGen || 0) + 1);
+        f.loading = true;
+        f.error = '';
+        const res = await api(this.occurrencesUrl());
+        if (gen !== this.fixGen) return false; // options changed meanwhile
+        f.loading = false;
+        if (!res.ok || !res.data) { f.error = res.message; f.results = []; f.total = 0; f.pages = 0; return false; }
+        const d = res.data;
+        f.results = Array.isArray(d.results) ? d.results : [];
+        f.total = Number(d.total) || 0;
+        f.pages = Number(d.pages) || f.results.length;
+        f.truncated = Boolean(d.truncated);
+        const picks = {};
+        f.results.forEach((p) => (p.lines || []).forEach((o) => { picks[this.fixKey(o)] = o.pick !== false; }));
+        f.picks = picks;
+        f.cursor = 0;
+        return true;
+      },
+      setFixOption(name) { this.fix.options[name] = !this.fix.options[name]; return this.loadOccurrences(); },
+      fixKey(o) { return `${o.line_id}:${o.index}`; },
+      picked(o) { return Boolean(this.fix.picks[this.fixKey(o)]); },
+      togglePick(o) { const k = this.fixKey(o); this.fix.picks = Object.assign({}, this.fix.picks, { [k]: !this.fix.picks[k] }); },
+      // every occurrence in book order, each with its page (the keyboard's cursor walks them)
+      get fixRows() {
+        const rows = [];
+        this.fix.results.forEach((p) => (p.lines || []).forEach((o) => rows.push(Object.assign({ number: p.number, image: p.image, approved: p.approved }, o))));
+        return rows;
+      },
+      fixRowIndex(o) { return this.fixRows.findIndex((r) => this.fixKey(r) === this.fixKey(o)); },
+      get fixPicked() { return this.fixRows.filter((o) => this.picked(o)).length; },
+      // «160 موضعًا في 51 صفحة · المحدَّد 158»
+      get fixCountText() {
+        const f = this.fix;
+        if (f.loading) return 'يُبحث في الكتاب…';
+        if (!f.total) return f.from ? `لا مواضع لـ«${f.from}» في الكتاب` : '';
+        return `${arCount(f.total, PLACES)} في ${arCount(f.pages, PAGES_IN)} · المحدَّد ${this.fixPicked}`;
+      },
+      get fixButton() { const n = this.fixPicked; return n ? `تصحيح ${arCount(n, PLACES_OBJ)}` : 'تصحيح'; },
+      // why a row starts unticked: a running head, or a form a reviewer confirmed as it is
+      fixNote(o) {
+        if (o.head) return 'ترويسة لا تدخل الكتاب';
+        if (o.res === 'primary' || o.res === 'typed') return 'أكّدها المراجع كما هي';
+        return '';
+      },
+      // the word on its line, cut from the review image: the crop is CROP_H px high around the word
+      fixCrop(o, p) {
+        const img = o.image || (p && p.image) || {};
+        const line = Array.isArray(o.line_bbox) && o.line_bbox.length === 4 ? o.line_bbox : o.bbox;
+        const word = Array.isArray(o.bbox) && o.bbox.length === 4 ? o.bbox : null;
+        if (!img.url || !line || !word || !img.width) return null;
+        const h = Math.max(1, line[3] - line[1]);
+        const pad = h * 2.5;
+        const x0 = Math.max(line[0], word[0] - pad);
+        const x1 = Math.min(line[2], word[2] + pad);
+        const k = CROP_H / h;
+        const r = (v) => Math.round(v * 10) / 10;
+        return {
+          box: `width:${r((x1 - x0) * k)}px;height:${CROP_H}px;background-image:url("${String(img.url).replace(/"/g, '%22')}");background-size:${r(img.width * k)}px auto;background-position:${r(-x0 * k)}px ${r(-line[1] * k)}px`,
+          word: `left:${r((word[0] - x0) * k)}px;width:${r((word[2] - word[0]) * k)}px`,
+        };
+      },
+      cropBox(o, p) { const c = this.fixCrop(o, p); return c ? c.box : ''; },
+      cropWord(o, p) { const c = this.fixCrop(o, p); return c ? c.word : ''; },
+      // ↑ ↓ move, Space ticks, Enter corrects; Enter in the correction field corrects too
+      onFixKey(ev) {
+        const k = ev.key;
+        const tag = String((ev.target && ev.target.tagName) || '').toLowerCase();
+        const inText = tag === 'input' && ev.target.type !== 'checkbox';
+        if (k === 'Escape') { ev.preventDefault(); this.closeFix(); return; }
+        if (k === 'Enter' && !ev.shiftKey) {
+          if (tag === 'button' || tag === 'a') return; // «إلغاء» and the button keep their own Enter
+          ev.preventDefault();
+          this.applyFix();
+          return;
+        }
+        if (inText) return;
+        const rows = this.fixRows;
+        if (!rows.length) return;
+        if (k === 'ArrowDown' || k === 'ArrowUp') {
+          ev.preventDefault();
+          this.fix.cursor = clamp(this.fix.cursor + (k === 'ArrowDown' ? 1 : -1), 0, rows.length - 1);
+          this.tick(() => { const el = hasDOM && document.getElementById(`rv-fix-row-${this.fix.cursor}`); if (el && el.focus) el.focus(); });
+        } else if (k === ' ' && tag !== 'button' && tag !== 'input' && tag !== 'label') {
+          // a focused checkbox toggles itself; Space elsewhere in the list ticks the row under the cursor
+          ev.preventDefault();
+          this.togglePick(rows[this.fix.cursor]);
+        }
+      },
+      async applyFix() {
+        const f = this.fix;
+        const to = f.to.replace(/\s+/g, ' ').trim();
+        if (f.busy || f.loading) return false;
+        if (!to) { f.error = 'اكتب التصحيح أولًا.'; return false; }
+        if (to === f.from) { f.error = 'التصحيح مطابق للكلمة نفسها.'; return false; }
+        const picks = this.fixRows.filter((o) => this.picked(o)).map((o) => ({ line_id: o.line_id, index: o.index, t: o.word }));
+        if (!picks.length) { f.error = 'لم يُحدَّد موضع للتصحيح.'; return false; }
+        f.busy = true;
+        f.error = '';
+        const res = await api(this.fixUrls.apply, { method: 'POST', body: { from: f.from, to, picks } });
+        f.busy = false;
+        if (!res.ok || !res.data) { f.error = res.message; return false; }
+        const d = res.data;
+        this.closeFix();
+        this.afterFix(d.pages);
+        const skipped = Array.isArray(d.skipped) ? d.skipped.length : 0;
+        const link = d.edited && d.find_url ? { label: `وفي نص الكتاب: استبدال «${f.from}» بـ«${to}»…`, url: d.find_url } : null;
+        this.showUndoToast(d.message || `صُحّح ${arCount(d.applied, PLACES)}`, undefined, { batch: d.batch, detail: skipped ? this.skippedText(skipped) : '', link });
+        return d;
+      },
+      // «وتُرك موضعان تغيّرا منذ فتح القائمة»
+      skippedText(n) {
+        if (n === 1) return 'وتُرك موضع واحد تغيّر منذ فتح القائمة';
+        if (n === 2) return 'وتُرك موضعان تغيّرا منذ فتح القائمة';
+        return `وتُرك ${arCount(n, PLACES)} تغيّرت منذ فتح القائمة`;
+      },
+      async undoFix(batch) {
+        if (!batch || !this.canEdit) return false;
+        this.dismissUndo();
+        const res = await api(fill(this.fixUrls.undo.replace('__batch__', '__id__'), batch), { method: 'POST' });
+        if (!res.ok || !res.data) { this.toast(res.message); return false; }
+        this.afterFix(res.data.pages);
+        this.toast(res.data.message || 'أُعيدت المواضع كما كانت');
+        return res.data;
+      },
+      // A batch touched other pages (and maybe this one): this page again, the filmstrip, the stage bar, other tabs.
+      async afterFix(pages) {
+        const book = this.book.id || this.page.book_id;
+        announce({ type: 'review', book, pages: Array.isArray(pages) ? pages : [] });
+        stagesChanged(book);
+        this.film.state = 'idle';
+        this.loadFilm();
+        if (!Array.isArray(pages) || pages.includes(this.page.number)) {
+          const gen = this.gen;
+          const res = await api(this.urls.payload);
+          if (gen === this.gen && res.ok && res.data && res.data.page) { this.focus = null; this.apply(res.data); this.pulse(); }
+        }
+      },
+      // After a correction: the chip «159 موضعًا آخر بالشكل نفسه في الكتاب · تصحيحها…» under the undo toast.
+      offerElsewhere(elsewhere, seq) {
+        if (!elsewhere || !(Number(elsewhere.count) > 0) || !this.canEdit) return;
+        const text = elsewhere.text || `${arCount(elsewhere.count, ['موضع آخر', 'موضعان آخران', 'مواضع أخرى', 'موضعًا آخر'])} بالشكل نفسه في الكتاب`;
+        this.showUndoToast('صُحّحت الكلمة', seq, { elsewhere: { from: elsewhere.from, to: elsewhere.to, text } });
+      },
+      openElsewhere() {
+        const e = this.undoToast && this.undoToast.elsewhere;
+        if (!e) return false;
+        this.dismissUndo();
+        return this.openFix(e.from, e.to);
+      },
+
       // ------------------------------------------------------------ modals
       openSheet() {
         this.sheetReturn = hasDOM ? document.activeElement : null;
@@ -2176,6 +2553,7 @@
       // Esc closes the top-most layer only.
       closeTop() {
         if (this.menuFor != null) { this.menuFor = null; return; }
+        if (this.after && !this.pop.open) { this.leaveAfter(); return; } // «البقاء في المراجعة»
         if (this.pop.more) { this.closeMore(true); return; }
         if (this.pop.typing) {
           // readings above the input: Esc returns to them; a correction-only popover (a confident word) just
@@ -2203,6 +2581,7 @@
         const target = ev.target || {};
         const tag = String(target.tagName || '').toLowerCase();
         const inField = tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable === true;
+        if (this.fix.open) return; // the fix sheet takes its own keys (onFixKey)
         if (this.sheetOpen) { if (ev.key === 'Escape') { ev.preventDefault(); this.closeSheet(); } return; }
         if (this.dialog.open) { if (ev.key === 'Escape') { ev.preventDefault(); this.dialog.open = false; } return; }
         // Buttons and links keep their own keys (Enter / Space activate them, nothing deletes a word from
@@ -2271,6 +2650,11 @@
           case 'zoomOut': stop(); this.zoomOut(); break;
           case 'zoomReset': stop(); this.zoomReset(); break;
           case 'sheet': stop(); this.openSheet(); break;
+          case 'jump': stop(); this.startJump(); break;
+          case 'toggleScan': stop(); this.toggleScan(); break;
+          case 'swap': stop(); this.toggleSwap(); break;
+          case 'copy': stop(); this.copyPage(); break;
+          case 'fixEverywhere': stop(); this.openFix(); break;
           default: {
             const reading = /^choose([1-9])$/.exec(action);
             if (reading) { stop(); this.chooseNth(Number(reading[1])); }

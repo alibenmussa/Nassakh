@@ -6,6 +6,7 @@
 - GET /api/books/<id>/text/      → `services.book_text` (copy the clean text of the whole book)
 - GET /api/books/<id>/sheets/?from=<n>&to=<n>[&guides=1] → `services.book_sheets` (stacked view, ≤ 40
   pages; `guides=1` adds each page's «التخطيط» block and skips the lines)
+- GET /api/books/<id>/stages/[?current=<key>] → `services.stages_payload` (the stage bar, D76; ≤ 8 queries)
 """
 
 from django.shortcuts import get_object_or_404
@@ -50,3 +51,11 @@ def book_sheets(request: Request, book_id: int) -> Response:
         return Response({"message": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     guides = request.query_params.get("guides") in ("1", "true")
     return Response(services.book_sheets(book, first, last, guides=guides))
+
+
+@api_view(["GET"])
+def book_stages(request: Request, book_id: int) -> Response:
+    """The stage bar's six steps (`?current=` the screen's step): the screens refresh it after an approval, an
+    assembly, an apply and an export."""
+    book = get_object_or_404(Book, pk=book_id)
+    return Response(services.stages_payload(book, request.query_params.get("current")))

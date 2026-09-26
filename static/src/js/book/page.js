@@ -60,8 +60,8 @@
     hasDOM,
     api,
     csrfToken,
-    // `__n__` / `__cid__` / `__sid__` / `__rid__` in a URL template
-    fill: (template, value) => String(template || '').replace(/__(n|cid|sid|rid)__/, String(value)),
+    // `__n__` / `__cid__` / `__sid__` / `__rid__` / `__pid__` (a changes plan) in a URL template
+    fill: (template, value) => String(template || '').replace(/__(n|cid|sid|rid|pid)__/, String(value)),
     reduced() {
       try { return Boolean(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (_) { return false; }
     },

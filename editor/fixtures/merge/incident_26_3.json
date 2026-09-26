@@ -1,0 +1,1304 @@
+{
+ "about": "Book 26, page 3: the UX-test incident (run 41, snapshot 39), built read-only from the dev database by a scratch builder (PHASE7_SPEC §8.4 gate 2). The merge of this page gives exactly one item, a take.",
+ "book": 26,
+ "page": 3,
+ "run": 41,
+ "snapshot": 39,
+ "reverted": [
+  {
+   "action": "approve",
+   "line": null
+  },
+  {
+   "action": "resolve",
+   "line": 5427
+  }
+ ],
+ "base": {
+  "type": "doc",
+  "attrs": {
+   "bookId": 26,
+   "footnoteNumbering": "page",
+   "digitStyle": "western"
+  },
+  "content": [
+   {
+    "type": "title",
+    "attrs": {
+     "text": "أيسر الشروح على متن الآجرومية (ص 87–94) — تجربة UX",
+     "author": ""
+    }
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5446",
+     "sourcePages": [
+      2,
+      3
+     ],
+     "sourceLineIds": [
+      5446,
+      5423
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "فالمفرد؛ نحو: زيدٌ قائِمٌ، ونحو: *(مُحَمَّدٌ رَسُولُ اللهِ)* [الفتح: "
+     },
+     {
+      "type": "text",
+      "text": "29]",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "، ونحو: *(اللهُ "
+     },
+     {
+      "type": "text",
+      "text": "الضَّكمَدُ)*",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "[الإخلاص",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": ": "
+     },
+     {
+      "type": "text",
+      "text": "2]",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "، ونحو: الدنيا متاع،"
+     },
+     {
+      "type": "pageBreak",
+      "attrs": {
+       "page": 3,
+       "printed": ""
+      }
+     },
+     {
+      "type": "text",
+      "text": " الحق أبلج، الباطل لجلج؛ أي: مضطرب."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5424",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5424
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وكقول الشاعر:"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5425",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5425,
+      5426
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "دُخُولُكَ مِنْ بَابِ الهوى إنْ أَرَدْتَهُ يَسِيرٌ وَلكِنَّ الخُرُوجَ عَسِيْرُ "
+     },
+     {
+      "type": "text",
+      "text": "و",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "الخبر",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الجملة أنواع:"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5427",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5427,
+      5428,
+      5429
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "1",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – جملة فعلية؛ نحو: الفَلَكُ يدورُ – الشمسُ تجري – القَمَرُ "
+     },
+     {
+      "type": "text",
+      "text": "بزعَ",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – النجمُ هوى – السَّقف خَرَّ – الجدارُ "
+     },
+     {
+      "type": "text",
+      "text": "انقضِّ",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – الدُّرُّ سقطَ – القولُ وَقِعَ."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5430",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5430,
+      5431,
+      5432,
+      5433
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "2",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – جملة اسمية؛ نحو: زِيدٌ جاريته ذاهبةٌ؛ زِيدٌ: مبتدا. جاريته"
+     },
+     {
+      "type": "text",
+      "text": ":",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " مبتدا ثانٍ"
+     },
+     {
+      "type": "text",
+      "text": "،",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " ذاهبةٌ: خبر "
+     },
+     {
+      "type": "text",
+      "text": "المبتدا",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "الثاني،",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "وكلٌّ",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "من",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " المبتدا الثاني وخبره: خبر للمبتدا الأول؛ في محل رفع، ونحو: الشيخُ حرضُه شديدٌ – خديجةُ بنتُها فاطمةُ – الخائنون هم الخائبون"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5434",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5434,
+      5435,
+      5436
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": ". "
+     },
+     {
+      "type": "text",
+      "text": "2–",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الظرف؛ نحو: زَيْدٌ عندَك – الكتاب فوقك – الخير أمامَك. "
+     },
+     {
+      "type": "text",
+      "text": "4–",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الجار والمجرور: الأمرُ إليك – السَّلامُ عليك – البركةُ فيك – هذا لك – هذا له … وهكذا."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5437",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5437
+     ],
+     "reviewed": false,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وكل من الظرف والجار والمجرور يسميه النحاة: شبه جملة."
+     }
+    ]
+   }
+  ]
+ },
+ "mine": {
+  "type": "doc",
+  "attrs": {
+   "bookId": 26,
+   "digitStyle": "western",
+   "footnoteNumbering": "page"
+  },
+  "content": [
+   {
+    "type": "title",
+    "attrs": {
+     "text": "أيسر الشروح على متن الآجرومية (ص 87–94) — تجربة UX",
+     "author": ""
+    }
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5446",
+     "reviewed": false,
+     "sourcePages": [
+      2,
+      3
+     ],
+     "sourceLineIds": [
+      5446,
+      5423
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "فالمفرد؛ نحو: زيدٌ قائِمٌ، ونحو: *(مُحَمَّدٌ رَسُولُ اللهِ)* [الفتح: ",
+      "type": "text"
+     },
+     {
+      "text": "29]",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": "، ونحو: *(اللهُ ",
+      "type": "text"
+     },
+     {
+      "text": "الضَّكمَدُ)*",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ",
+      "type": "text"
+     },
+     {
+      "text": "[الإخلاص",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": ": ",
+      "type": "text"
+     },
+     {
+      "text": "2]",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": "، ونحو: الدنيا متاع،",
+      "type": "text"
+     },
+     {
+      "type": "pageBreak",
+      "attrs": {
+       "page": 3,
+       "printed": ""
+      }
+     },
+     {
+      "text": " الحق أبلج، الباطل لجلج؛ أي: مضطرب.",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5424",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5424
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "وكقول الشاعر:",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5425",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5425,
+      5426
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "دُخُولُكَ مِنْ بَابِ الهوى إنْ أَرَدْتَهُ يَسِيرٌ وَلكِنَّ الخُرُوجَ عَسِيْرُ ",
+      "type": "text"
+     },
+     {
+      "text": "و",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ",
+      "type": "text"
+     },
+     {
+      "text": "الخبر",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " الجملة أنواع:",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5427",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5427,
+      5428,
+      5429
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "1",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " – جملة فعلية؛ نحو: الفَلَكُ يدورُ – الشمسُ تجري – القَمَرُ ",
+      "type": "text"
+     },
+     {
+      "text": "بزعَ",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " – النجمُ هوى – السَّقف خَرَّ – الجدارُ ",
+      "type": "text"
+     },
+     {
+      "text": "انقضِّ",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " – الدُّرُّ سقطَ – القولُ وَقِعَ.",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5430",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5430,
+      5431,
+      5432,
+      5433
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "2",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " – جملة اسمية؛ نحو: زِيدٌ جاريته ذاهبةٌ؛ زِيدٌ: مبتدا. جاريته",
+      "type": "text"
+     },
+     {
+      "text": ":",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " مبتدا ثانٍ",
+      "type": "text"
+     },
+     {
+      "text": "،",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ذاهبةٌ: خبر ",
+      "type": "text"
+     },
+     {
+      "text": "المبتدا",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ",
+      "type": "text"
+     },
+     {
+      "text": "الثاني،",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ",
+      "type": "text"
+     },
+     {
+      "text": "وكلٌّ",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " ",
+      "type": "text"
+     },
+     {
+      "text": "من",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " المبتدا الثاني وخبره: خبر للمبتدا الأول؛ في محل رفع، ونحو: الشيخُ حرضُه شديدٌ – خديجةُ بنتُها فاطمةُ – الخائنون هم الخائبون",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5434",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5434,
+      5435,
+      5436
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": ". ",
+      "type": "text"
+     },
+     {
+      "text": "2–",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " الظرف؛ نحو: زَيْدٌ عندَك – الكتاب فوقك – الخير أمامَك. ",
+      "type": "text"
+     },
+     {
+      "text": "4–",
+      "type": "text",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "text": " الجار والمجرور: الأمرُ إليك – السَّلامُ عليك – البركةُ فيك – هذا لك – هذا له … وهكذا.",
+      "type": "text"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5437",
+     "reviewed": false,
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5437
+     ],
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "text": "وكل من الظرف والجار والمجرور يسميه النحاة: شبه جملة.",
+      "type": "text"
+     }
+    ]
+   }
+  ]
+ },
+ "fresh": {
+  "type": "doc",
+  "attrs": {
+   "bookId": 26,
+   "footnoteNumbering": "page",
+   "digitStyle": "western"
+  },
+  "content": [
+   {
+    "type": "title",
+    "attrs": {
+     "text": "أيسر الشروح على متن الآجرومية (ص 87–94) — تجربة UX",
+     "author": ""
+    }
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5446",
+     "sourcePages": [
+      2,
+      3
+     ],
+     "sourceLineIds": [
+      5446,
+      5423
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "فالمفرد؛ نحو: زيدٌ قائِمٌ، ونحو: *(مُحَمَّدٌ رَسُولُ اللهِ)* [الفتح: "
+     },
+     {
+      "type": "text",
+      "text": "29]",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "، ونحو: *(اللهُ "
+     },
+     {
+      "type": "text",
+      "text": "الضَّكمَدُ)*",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "[الإخلاص",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": ": "
+     },
+     {
+      "type": "text",
+      "text": "2]",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": "، ونحو: الدنيا متاع،"
+     },
+     {
+      "type": "pageBreak",
+      "attrs": {
+       "page": 3,
+       "printed": ""
+      }
+     },
+     {
+      "type": "text",
+      "text": " الحق أبلج، الباطل لجلج؛ أي: مضطرب."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5424",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5424
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وكقول الشاعر:"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5425",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5425,
+      5426
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "دُخُولُكَ مِنْ بَابِ الهوى إنْ أَرَدْتَهُ يَسِيرٌ وَلكِنَّ الخُرُوجَ عَسِيْرُ "
+     },
+     {
+      "type": "text",
+      "text": "و",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "الخبر",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الجملة أنواع:"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5427",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5427,
+      5428,
+      5429
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "1",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – جملة فعلية؛ نحو: الفَلَكُ يدورُ – الشمسُ تجري – القَمَرُ بزغَ – النجمُ هوى – السَّقف خَرَّ – الجدارُ "
+     },
+     {
+      "type": "text",
+      "text": "انقضِّ",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – الدُّرُّ سقطَ – القولُ وَقِعَ."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5430",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5430,
+      5431,
+      5432,
+      5433
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "2",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " – جملة اسمية؛ نحو: زِيدٌ جاريته ذاهبةٌ؛ زِيدٌ: مبتدا. جاريته"
+     },
+     {
+      "type": "text",
+      "text": ":",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " مبتدا ثانٍ"
+     },
+     {
+      "type": "text",
+      "text": "،",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " ذاهبةٌ: خبر "
+     },
+     {
+      "type": "text",
+      "text": "المبتدا",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "الثاني،",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "وكلٌّ",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " "
+     },
+     {
+      "type": "text",
+      "text": "من",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " المبتدا الثاني وخبره: خبر للمبتدا الأول؛ في محل رفع، ونحو: الشيخُ حرضُه شديدٌ – خديجةُ بنتُها فاطمةُ – الخائنون هم الخائبون"
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5434",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5434,
+      5435,
+      5436
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": ". "
+     },
+     {
+      "type": "text",
+      "text": "2–",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الظرف؛ نحو: زَيْدٌ عندَك – الكتاب فوقك – الخير أمامَك. "
+     },
+     {
+      "type": "text",
+      "text": "4–",
+      "marks": [
+       {
+        "type": "uncertain"
+       }
+      ]
+     },
+     {
+      "type": "text",
+      "text": " الجار والمجرور: الأمرُ إليك – السَّلامُ عليك – البركةُ فيك – هذا لك – هذا له … وهكذا."
+     }
+    ]
+   },
+   {
+    "type": "paragraph",
+    "attrs": {
+     "id": "p5437",
+     "sourcePages": [
+      3
+     ],
+     "sourceLineIds": [
+      5437
+     ],
+     "reviewed": true,
+     "suggestedRole": null
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "وكل من الظرف والجار والمجرور يسميه النحاة: شبه جملة."
+     }
+    ]
+   }
+  ]
+ },
+ "lines": {
+  "5423": [
+   3,
+   0
+  ],
+  "5424": [
+   3,
+   1
+  ],
+  "5425": [
+   3,
+   2
+  ],
+  "5426": [
+   3,
+   3
+  ],
+  "5427": [
+   3,
+   4
+  ],
+  "5428": [
+   3,
+   5
+  ],
+  "5429": [
+   3,
+   6
+  ],
+  "5430": [
+   3,
+   7
+  ],
+  "5431": [
+   3,
+   8
+  ],
+  "5432": [
+   3,
+   9
+  ],
+  "5433": [
+   3,
+   10
+  ],
+  "5434": [
+   3,
+   11
+  ],
+  "5435": [
+   3,
+   12
+  ],
+  "5436": [
+   3,
+   13
+  ],
+  "5437": [
+   3,
+   14
+  ]
+ },
+ "expect": {
+  "items": [
+   {
+    "kind": "take",
+    "page": 3,
+    "diff": [
+     [
+      "eq",
+      "… – الشمسُ تجري – القَمَرُ"
+     ],
+     [
+      "del",
+      "بزعَ"
+     ],
+     [
+      "ins",
+      "بزغَ"
+     ],
+     [
+      "eq",
+      "– النجمُ هوى – السَّقف …"
+     ]
+    ]
+   }
+  ]
+ }
+}

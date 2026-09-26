@@ -32,4 +32,11 @@ api_urlpatterns = [
     path("lines/<int:line_id>/role/", api.line_role, name="line_role"),
     path("lines/<int:line_id>/delete-word/", api.line_delete_word, name="line_delete_word"),
     path("books/<int:book_id>/filmstrip/", api.book_filmstrip, name="book_filmstrip"),
+    path("books/<int:book_id>/occurrences/", api.book_occurrences, name="book_occurrences"),
+    path("books/<int:book_id>/fix-everywhere/", api.fix_everywhere, name="fix_everywhere"),
+    path(
+        "books/<int:book_id>/fix-everywhere/<str:batch>/undo/",
+        api.fix_everywhere_undo,
+        name="fix_everywhere_undo",
+    ),
 ]

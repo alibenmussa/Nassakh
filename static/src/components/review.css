@@ -555,6 +555,40 @@
   .rv-keys { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 16px; align-items: center; margin: 4px 0 0; }
   .rv-keys dt { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
   .rv-keys dd { margin: 0; font-size: 13px; color: var(--color-text-2); }
+  /* the undo toast's second line: the places a fix left, the edited book's find & replace, the chip «… · تصحيحها…» */
+  .rv-toast-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .rv-toast-detail { font-size: 12px; color: rgba(255, 255, 255, 0.72); }
+  .rv-toast-link { font-size: 12px; color: #fff; text-decoration: underline; text-underline-offset: 2px; }
+  .rv-toast-chip { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: var(--radius-pill); background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.86); font-size: 12px; cursor: pointer; }
+  .rv-toast-chip:hover { background: rgba(255, 255, 255, 0.2); color: #fff; }
+  .rv-toast-chip-act { font-weight: 600; color: #fff; }
+
+  /* «تصحيح في كل الكتاب» (D79, PHASE7 §5.7): the correction, the options, the count, the places with their crops */
+  .rv-fix { max-width: 640px; }
+  .rv-fix-words { display: flex; align-items: center; gap: 10px; }
+  .rv-fix-to { flex: 1 1 auto; min-width: 0; }
+  .rv-fix-arrow { color: var(--color-text-3); }
+  .rv-fix-from { font-size: 14px; font-weight: 500; color: var(--color-text-2); white-space: nowrap; }
+  .rv-fix-options { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+  .rv-fix-options .check { font-size: 12.5px; color: var(--color-text-2); }
+  .rv-fix-count { margin: 0; }
+  .rv-fix-error { margin: 0; font-size: 12.5px; color: var(--color-danger-text); }
+  .rv-fix-list { display: flex; flex-direction: column; gap: 10px; max-height: 46dvh; overflow-y: auto; overscroll-behavior: contain; margin-inline: -20px; padding: 2px 20px; border-block: 1px solid var(--color-border); }
+  .rv-fix-skeleton { padding: 10px 0; }
+  .rv-fix-page { display: flex; flex-direction: column; gap: 2px; padding-block: 8px 2px; }
+  .rv-fix-page-head { font-size: 12px; font-weight: 600; color: var(--color-text-2); }
+  .rv-fix-rows { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .rv-fix-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); grid-template-areas: "check crop text" "check crop note"; align-items: center; gap: 0 10px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: default; }
+  .rv-fix-row:hover { background: var(--color-hover); }
+  .rv-fix-row.is-cursor, .rv-fix-row:focus-visible { background: var(--color-accent-soft); outline: none; }
+  .rv-fix-row.is-off .rv-fix-context, .rv-fix-row.is-off .rv-fix-crop { opacity: 0.55; }
+  .rv-fix-check { grid-area: check; margin: 0; }
+  .rv-fix-crop { grid-area: crop; position: relative; display: block; max-width: 180px; border-radius: var(--radius-xs); background-color: #fff; background-repeat: no-repeat; box-shadow: inset 0 0 0 1px rgba(16, 16, 20, 0.08); overflow: hidden; }
+  .rv-fix-word { position: absolute; inset-block: 2px; border-radius: 2px; background: rgba(217, 119, 6, 0.16); box-shadow: inset 0 -2px 0 var(--color-warning); }
+  .rv-fix-context { grid-area: text; min-width: 0; font-size: 13px; line-height: 1.6; color: var(--color-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rv-fix-context mark { background: var(--color-warning-bg); color: var(--color-text); font-weight: 500; }
+  .rv-fix-note { grid-area: note; }
+  .rv-fix-more { margin: 0; }
 
   /* ------------------------------------------------------------ keyframes */
   @keyframes rv-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
@@ -579,9 +613,31 @@
   @keyframes rv-stamp-in { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
   @keyframes rv-draw { to { stroke-dashoffset: 0; } }
 
+  /* ------------------------------------------------------------ where review leads (D76, PHASE7_SPEC §5.3) */
+  /* the top bar: «‹ الكتاب» back where review was opened; G turns the pager's count into a jump field; «⋯» */
+  .rv-bar-back { flex: none; }
+  .rv-jump { display: inline-flex; min-width: 96px; justify-content: center; }
+  .rv-jump-input { width: 88px; height: 26px; padding: 0 8px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rv-bar-menu { width: 220px; max-width: 220px; inset-inline-start: auto; inset-inline-end: 0; }
+  .rv-bar-menu .menu-item .icon { color: var(--color-text-3); }
+  /* an edited book: its review changes reach the book page through «تغييرات المراجعة» (D78) */
+  .rv-edited-note { margin: 0 0 12px; padding-inline-start: 10px; border-inline-start: 2px solid var(--color-border-strong); color: var(--color-text-2); }
+  /* after «اعتماد الصفحة»: the detour (opened from the book page) and the end of review, in place of the lines */
+  .rv-after { display: flex; justify-content: center; padding: 48px 0 24px; }
+  .rv-after-card { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 420px; text-align: center; animation: rv-after-in 200ms ease-out both; }
+  .rv-after-title { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--color-text); }
+  .rv-after-mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: var(--radius-pill); background: var(--color-success); color: #fff; }
+  .rv-after-mark .icon { width: 12px; height: 12px; stroke-width: 2.4; }
+  .rv-after-meta { margin: 0; }
+  .rv-after-step { margin: 6px 0 0; font-size: 13px; color: var(--color-text); }
+  .rv-after-label { color: var(--color-text-3); }
+  .rv-after-text { margin: 0; font-size: 13px; line-height: 1.6; color: var(--color-text-2); }
+  .rv-after-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+  @keyframes rv-after-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
   /* ------------------------------------------------------------ responsive */
   @media (max-width: 1180px) {
-    .rv-bar-dash, .rv-progress-text { display: none; }
+    .rv-progress-text, .rv-bar-back span { display: none; }
     .rv-pager-count { min-width: 0; }
   }
   @media (max-width: 900px) {

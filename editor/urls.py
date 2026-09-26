@@ -25,6 +25,13 @@ api_urlpatterns = [
         name="chapter_reassemble",
     ),
     path("books/<int:book_id>/drift/", api.review_drift, name="review_drift"),
+    path("books/<int:book_id>/review-changes/", api.review_changes, name="review_changes"),
+    path(
+        "books/<int:book_id>/review-changes/<int:plan_id>/apply/",
+        api.review_changes_apply,
+        name="review_changes_apply",
+    ),
+    path("books/<int:book_id>/to-footnote/", api.to_footnote, name="to_footnote"),
     path("books/<int:book_id>/find-replace/", api.find_replace, name="find_replace"),
     path("books/<int:book_id>/convert-digits/", api.convert_digits, name="convert_digits"),
     path("books/<int:book_id>/snapshots/", api.snapshots, name="snapshots"),

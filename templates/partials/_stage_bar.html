@@ -1,0 +1,55 @@
+{% comment %}The stage bar (PHASE7_SPEC §5.1, D76): the book's six steps in the top bar of every book screen, between the
+title and the screen's actions (base.html's `stagebar` block). A `<nav>` of an ordered list: each step links to its
+screen; its state is drawn (✓ done, an accent dot running, a warning dot and a warning label out of date, a danger
+dot needing attention, a hollow ring not started, a muted label with no link blocked) and written out for a screen
+reader; the screen shown is `aria-current="page"`, the step's hint is its title. The bar collapses by its own width
+(a container query in layout.css `stg-`): every count and the current step's detail, then the counts, then the
+current step's count only, then one button «المراجعة 6/8 ▾» over a menu of the six (with every detail). `stageBar`
+(static/src/js/stages.js) refreshes it on `nassakh:stages`, on the `nassakh` channel, on visibility and on a return
+from the back-forward cache; there is no poll.
+Context: book, current (the screen's step: pages, ocr, review, manuscript, book, export) and, when the view has them,
+stage_steps (`books.services.book_stages(book, current)`; not `stages`, the dashboard's pipeline counters), embedded
+as `stage-steps`; without them the bar fetches `api:book_stages` once. `data-rail` folds the app's sidebar into its
+icon rail on every book screen (layout.css).{% endcomment %}
+{% load nassakh %}{% optional_url 'api:book_stages' book.pk as stages_url %}
+{% if stage_steps %}{{ stage_steps|json_script:"stage-steps" }}{% endif %}
+<nav class="stg" aria-label="مراحل الكتاب" data-stage-bar data-rail data-current="{{ current }}"
+     x-data="stageBar({ book: {{ book.pk }}, current: '{{ current|escapejs }}', url: '{{ stages_url|escapejs }}', steps: document.getElementById('stage-steps') ? JSON.parse(document.getElementById('stage-steps').textContent) : [] })"
+     @keydown.escape="closeMenu(true)">
+  <ol class="stg-list">
+    <template x-for="(s, i) in shown" :key="s.key">
+      <li class="stg-item" :class="stepClass(s)" :data-step="s.key">
+        <svg class="icon stg-sep icon-mirror" aria-hidden="true" x-show="i > 0"><use href="#i-chevron-end"/></svg>
+        {# a blocked step has no href: no link, no focus, never a dead end #}
+        <a class="stg-step" :href="href(s)" :aria-current="s.current ? 'page' : null" :aria-disabled="s.state === 'blocked' ? 'true' : null" :title="title(s)">
+          <span class="stg-mark" aria-hidden="true"><svg class="icon" x-show="s.state === 'done'"><use href="#i-check"/></svg></span>
+          <span class="stg-label" x-text="s.label"></span>
+          <bdi class="stg-count num" x-show="count(s)" x-text="count(s)" aria-hidden="true"></bdi>
+          <span class="stg-detail" x-show="s.current && s.detail" x-text="s.detail" aria-hidden="true"></span>
+          <span class="sr-only" x-text="' ' + stateWord(s) + (s.detail ? '، ' + s.detail : '')"></span>
+          <span class="stg-bar" x-show="s.percent !== undefined" aria-hidden="true"><span :style="barStyle(s)"></span></span>
+        </a>
+      </li>
+    </template>
+  </ol>
+
+  {# the narrowest bar: the current step on one button, the six in a menu #}
+  <div class="stg-compact menu-anchor">
+    <button type="button" class="stg-step stg-button" x-ref="stgButton" :class="here ? 'is-' + here.state : ''" @click="toggleMenu()" :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu" :title="here ? title(here) : ''">
+      <span class="stg-mark" aria-hidden="true"><svg class="icon" x-show="here && here.state === 'done'"><use href="#i-check"/></svg></span>
+      <span class="stg-label" x-text="compactLabel"></span>
+      <span class="sr-only" x-text="here ? ' ' + stateWord(here) : ''"></span>
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+    </button>
+    <div class="menu menu-popover stg-menu" role="menu" aria-label="مراحل الكتاب" x-show="menuOpen" x-cloak @click.outside="closeMenu()" x-transition.opacity.duration.120ms>
+      <template x-for="s in shown" :key="'m' + s.key">
+        <a class="menu-item stg-menu-item" role="menuitem" :class="stepClass(s)" :href="href(s)" :aria-current="s.current ? 'page' : null" :aria-disabled="s.state === 'blocked' ? 'true' : null" :title="title(s)">
+          <span class="stg-mark" aria-hidden="true"><svg class="icon" x-show="s.state === 'done'"><use href="#i-check"/></svg></span>
+          <span class="stg-label" x-text="s.label"></span>
+          <span class="sr-only" x-text="' ' + stateWord(s)"></span>
+          <span class="meta stg-menu-detail" x-text="s.detail"></span>
+        </a>
+      </template>
+    </div>
+  </div>
+</nav>

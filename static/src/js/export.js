@@ -484,7 +484,16 @@
         } else {
           this.say(`أُلغي إخراج ${f.label}`);
         }
+        // D76: the stage bar's «الإخراج» (a current file, or the last export failed)
+        if (typeof window !== 'undefined' && window.NassakhStages) window.NassakhStages.changed(this.book && this.book.id);
         this.refresh();
+      },
+      // A fix that opens review leads back here (D76, PHASE7 §5.3: `from=export`, «‹ الإخراج»).
+      fixUrl(r) {
+        const url = (r && r.action && r.action.url) || '';
+        if (!/\/review\//.test(url) || /[?&]from=/.test(url)) return url;
+        const [path, hash] = url.split('#');
+        return `${path}${path.includes('?') ? '&' : '?'}from=export${hash !== undefined ? `#${hash}` : ''}`;
       },
       schedule(key, ms) {
         clearTimeout(timers[key]);

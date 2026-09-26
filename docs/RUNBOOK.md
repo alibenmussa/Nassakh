@@ -734,7 +734,151 @@ looped reading (that start now counts as a second reading); `tesseract`: a regio
 - The contracts are in `review/fixtures/trust/` and `assembly/fixtures/trust/` (read `index.json` first).
   `NASSAKH_WRITE_TRUST_FIXTURES=1` or `NK_WRITE_TRUST_FIXTURES=1` rewrites them from the live payloads.
 
-## 16. Troubleshooting
+## 16. Phase 7c — the stage bar, review's origin, the page-by-page merge, fix everywhere
+
+Spec `docs/PHASE7_SPEC.md` §5, decisions D76–D79.
+
+**Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`editor.0005_base_changes_plan`:
+`Manuscript.base`, `ManuscriptSnapshot.base` and the table `editor_changesplan`; `review.0005_revision_fix`: the action
+«تصحيح في الكتاب»; `publishing.0004_preview_running_label`: the label «قيد الترتيب»; no data change), then start both
+workers and the web server again. `static/dist/` is built. Until the migration runs, the screens that read a manuscript
+fail with `column editor_manuscript.base does not exist`. A default worker started before 7c does not know
+`editor.tasks.plan_review_changes`, so «تغييرات المراجعة» would wait. Every manuscript starts with no base: the books
+edited before 7c are the «للمقارنة» books below until their first apply or keep-all records one.
+
+**The stage bar (D76).** Every book screen (the dashboard, `?view=guides`, a page's details, review, the manuscript, the
+book page, the export page) shows the book's six steps in its top bar: «التخطيط ‹ المعالجة ‹ المراجعة ‹ المخطوطة ‹
+الكتاب ‹ الإخراج». Each step links to its screen, and a blocked step has no link.
+- Marks: ✓ done, an accent dot running, a warning dot and label when older than the text, a danger dot when it needs
+  attention, a hollow ring not started. A screen reader hears the state in words.
+- `books.services.book_stages(book, current)` builds it in at most 8 queries (`StageFacts`). Every book view passes it
+  as `stage_steps`, and `GET /api/books/<id>/stages/?current=` refreshes it on the window event `nassakh:stages`, on the
+  `nassakh` channel, on a return to the tab and on `pageshow`. There is no poll. The dashboard's status chip and bar are
+  its current step now.
+- The bar collapses by its own width: the current step's detail from 840 px, the counts down to 620 px, then the current
+  step's count only, and below 500 px one button («المراجعة 6/8 ▾») over a menu of the six.
+- Every book screen folds the sidebar into the icon rail (`data-rail`, wider than 900 px). «لوحة الكتاب» and the
+  dashboard's «كل الكتب» are gone; the rail's «الكتب» stays.
+
+**Review's origin, the detour, the end (D76).**
+- Review reads `?from=book|manuscript|export`, with `&at=<page>` from the book page and `&block=<id>` from the manuscript.
+  Its first link reads «‹ الكتاب» / «‹ المخطوطة» / «‹ الإخراج» (`nav.back`), and every page swap keeps the origin.
+- From the book page, approval stays on the page: «اعتُمدت الصفحة 12.», then «العودة إلى الكتاب» and «الصفحة التالية
+  للمراجعة».
+- When no page is left, the end panel «رُوجعت كل الصفحات» names the next step (`next_step`):
+  - «تجميع المخطوطة…» opens the manuscript's popover (`?convert=1`);
+  - «إعادة التجميع» when the manuscript is stale and not edited;
+  - «عرض التغييرات في الكتاب» (`layout/?tab=changes`) when the edited book drifts;
+  - «فتح الكتاب» when it is fresh;
+  - «العودة إلى المعالجة» while pages are still being read.
+- The N rule: a page that arrived by approval's auto-advance and is untouched says «هذه هي الصفحة التالية للمراجعة»
+  instead of skipping.
+- Keys: G jumps to a page, O shows the original scan, V swaps the sides, C copies the page's text, and ⌥F opens «تصحيح
+  في كل الكتاب». On the dashboard, «?» (and «⋯» → «اختصارات لوحة المفاتيح») lists its keys.
+- An edited book's review shows «يُحرَّر هذا الكتاب في «الكتاب»؛ تصله تغييرات هذه الصفحة من «تغييرات المراجعة».».
+- Tiles lead to review (`primary_url`: review when the page's text is final and the page is not excluded, else the
+  page's details). A plain click still opens the viewer, and a new tab or a modifier-click opens review. The hover
+  actions are «مراجعة» and «تفاصيل المعالجة» (editors). The dashboard remembers its view and filter per book.
+
+**Names (D77).** «تحويل إلى كتاب» is «تجميع المخطوطة»; WeasyPrint's pagination is «ترتيب الصفحات» («تُرتَّب صفحات
+الكتاب…», «لم تُرتَّب الصفحات…», `PreviewRender` «قيد الترتيب»); «الإخراج» means files only. `core/test_stage_bar.py` fails
+when «لوحة الكتاب», «تحويل إلى كتاب», «ضبط الأدلة» or pagination called «إخراج» come back in a template or a script. D35
+stays: with unreviewed pages included the convert button reads «تجميع مع 5 صفحات غير مُراجَعة».
+
+**«تغييرات المراجعة»: the page-by-page merge (D78).**
+- **The base.** `Manuscript.base` is the assembled text the edited text descends from. The first editor write copies the
+  document into it (`_mark_edited`: the chapter autosave, find & replace, digits, uncertain words), and later edits never
+  rewrite it. A whole-book assembly clears it, each apply moves it over the pages taken (`merge.splice_base`), and a
+  restore takes the snapshot's (`ManuscriptSnapshot.base`; none for snapshots older than 7c).
+- **Drift, with reasons.** `editor.services.review_drift` answers `{edited, pages, reasons, approvals, chapters,
+  chapter_pages}`:
+  - `review`: a line-changing revision after the page was read (`AssemblyRun.included[pk].at`), undone ones too;
+  - `processing`: the page was read again;
+  - `added` / `removed`: it entered or left the book.
+
+  Approvals alone are never announced. The book page's banner words each reason («تغيّر نص صفحتين في المراجعة بعد تحرير
+  الكتاب: 12، 13.») and offers «عرض التغييرات» · «لاحقًا» (hidden until the drift changes).
+- **The plan.** The tab «تغييرات المراجعة» (`?tab=changes`, «⋯» «تغييرات المراجعة…») posts a plan, and the default worker
+  runs `editor.tasks.plan_review_changes`. The task runs the pipeline in memory and `editor.merge.plan` over mine (the
+  book), the base and the fresh text of the drift pages. The tab polls every 700 ms. Nothing is written until an apply.
+  Each paragraph that differs is one item:
+
+  | Item | When | Starts on |
+  |---|---|---|
+  | «من المراجعة» (`take`) | only review changed it | review's |
+  | «مع تعديلك» (`merged`) | both changed it, in different words | both |
+  | «تعارض» (`conflict`) | both changed the same words, or one deleted what the other changed | «نصّي» |
+  | «للمقارنة» (`choose`) | no base (edited before 7c) and the texts differ | «نصّي» |
+  | «فقرة جديدة» / «تُحذف» | a paragraph review added / dropped | review's |
+
+  A paragraph only you changed, or one whose merged result is your text already, is not an item. Conflicts and
+  «للمقارنة» offer «نصّي | المراجعة», and each page row has its checkbox and «⋯».
+- **Apply.** «أخذ التغييرات (3)» takes the ticked pages in one transaction (`apply_review_changes`):
+  - an `edit` snapshot «قبل أخذ تغييرات المراجعة · ص 12، 13» with the base;
+  - the document is written once (version + 1) and the base moved;
+  - one `done` `AssemblyRun` (`settings.scope = "changes"`) is the new baseline;
+  - reviewed pages at the planned signature become `assembled` (D36), and the focus chapter is laid out again.
+
+  The changed paragraphs flash, and the toast's «تراجع» restores the snapshot, its base and its baseline.
+  «الاحتفاظ بنصّي في الكل» (and «تم» when there is no difference) moves only the baseline and the base: no version bump,
+  no 409 in an open editor. A page reviewed again after the plan, or a text saved since, answers 409 «تغيّر النص منذ
+  المقارنة؛ أُعيدت المقارنة.», and the tab plans again, keeping the choices. «إعادة بناء الفصل من المراجعة…» (D41) stays
+  as the tab's secondary action.
+- **Books edited before 7c.** They have no base, so their drift pages come up «للمقارنة» on «نصّي». On the dev copy that
+  was book 19 with 147 items over 70 pages, and book 24 with 105 over 8 pages (every line id changed). Taking only some
+  pages records the rest in the new base's `attrs.unknownPages`, so they stay «للمقارنة» next time and are never
+  swallowed.
+- **Other entry points.** The dashboard's «الكتاب» line, the readiness row «تغييرات المراجعة» (`?tab=changes`), the
+  manuscript's edited banner, the convert popover's warning, and review's end panel all lead to the tab.
+- **The book page's addresses.** `?tab=<tab>` is kept on a landing and on a tab switch. `?block=<id>` lands on the
+  paragraph and lights it (readiness's stray notes use it now). `?tab=find&q=&r=&fix=<batch>` opens find & replace
+  filled in.
+- **«تحويل إلى حاشية للعلامة (n)»** (the «الفقرة» tab, D74 for edited books) finds the paragraph's call on its page, else
+  in its chapter, and makes the paragraph that call's footnote; the chapter's undo applies. With no call it answers «لم
+  تُعثر على العلامة (1) في نص الصفحة 3؛ …».
+- **A dev command.** `manage.py review_changes <book> [--pages 3,5] [--dry-run] [--json]` prints the plan. `--dry-run`
+  stores nothing. Without it the plan is stored, so the book page's tab shows it. It never applies.
+
+**«تصحيح في كل الكتاب» (D79, no learning).**
+- In review, the word menu's «إجراءات أخرى» or ⌥F opens the sheet. It lists every occurrence of the form in the book's
+  reviewable pages, with the scan crop and the context.
+- Options: «توحيد صور الألف», «كلمة كاملة» (on by default) and «مطابقة التشكيل».
+- A form a reviewer confirmed as it is, and a line dropped as a running head, start unticked. ↑ ↓ move, Space ticks,
+  Enter corrects.
+- Each ticked token that still reads the form becomes the correction (`res = "typed"`, `orig` kept), with one
+  `LineRevision(action="fix")` per line, all in one `batch`. A token changed meanwhile is skipped and counted.
+- Approved pages stay approved, and an `assembled` page goes back to `reviewed`. The toast's «تراجع» reverts the
+  batch, except lines changed since.
+- After a correction whose word occurs elsewhere, a chip under the toast offers the rest: «159 موضعًا آخر بالشكل نفسه في
+  الكتاب · تصحيحها…».
+- **An edited book.** The toast adds «وفي نص الكتاب: …», which opens the book page's find & replace filled in. After
+  «استبدال الكل» there, the book page plans the batch's pages (`{fix: batch}`). Pages where the book now agrees with
+  review settle at once, and the rest wait in «تغييرات المراجعة».
+- On the dev copy («السعودي» → «المسعودي», book 19): 160 occurrences in 51 pages, 140 ticked (20 running heads left
+  out), 140 corrected in 50 pages, and undo reverted 140. After the book side's «استبدال الكل» (143 replacements), 41
+  pages settled. 9 stayed as «تعارض», because the legacy book text reads «السعودي ،», with a space before the comma.
+
+**Endpoints** (under `/api/`, names in the `api` namespace):
+
+| Method | URL | Name | Body → answer |
+|---|---|---|---|
+| GET | `books/<id>/stages/?current=` | `book_stages` | → `{book, current, steps: [{key, label, url, state, state_label, detail, hint, count, current}]}` |
+| GET | `books/<id>/drift/` | `review_drift` | → `{edited, pages, reasons, approvals, chapters, chapter_pages}` |
+| GET | `books/<id>/review-changes/` | `review_changes` | → `{drift, plan, stale}` (the newest plan) |
+| POST | `books/<id>/review-changes/` | `review_changes` | `{pages?}` or `{fix: batch}` → 202 `{plan_id, status}`; 409 `{reassemble: true}` on a text never edited |
+| POST | `books/<id>/review-changes/<plan>/apply/` | `review_changes_apply` | `{choices: {itemId: theirs \| mine \| merged}, pages}` or `{keep_all: true, pages}` → `{version, snapshot, chapters, reload, relayout, applied}`; 409 `{stale: true}` |
+| POST | `books/<id>/to-footnote/` | `to_footnote` | `{content, block}` → `{content, note, removed}` (saves nothing) |
+| GET | `books/<id>/occurrences/?q=&fold_alef=&whole_word=&match_tashkeel=` | `book_occurrences` | → `{query, options, total, pages, picked, truncated, results}` |
+| POST | `books/<id>/fix-everywhere/` | `fix_everywhere` | `{from, to, picks: [{line_id, index, t}]}` → `{batch, applied, skipped, pages, edited, find_url, message}` |
+| POST | `books/<id>/fix-everywhere/<batch>/undo/` | `fix_everywhere_undo` | → `{batch, reverted, kept, pages, message}` |
+
+- The review payload gains `nav.back`, `nav.origin`, `nav.detour`, `next_step`, `book.edited` and the fix URLs.
+  Approve, undo and reopen take the origin in their body, and approve's answer carries `next_step` when no page is next.
+- Resolve and edit answer `elsewhere`. The book page's config gains `block`, `findPrefill` and the changes URLs.
+- The contracts are in `editor/fixtures/contract/` (read `index.json` first), and `NASSAKH_WRITE_CONTRACT_FIXTURES=1`
+  rewrites them. The two incidents of the UX test are `editor/fixtures/merge/incident_23_8.json` and `incident_26_3.json`.
+
+## 17. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -752,6 +896,14 @@ looped reading (that start now counts as a second reading); `tesseract`: a regio
 | `null value in column "reading" of relation "books_page" violates not-null constraint` on an upload | a worker started before 7b: stop both workers and start them again (§15) |
 | `relation "ocr_textgap" does not exist` or `column review_linerevision.batch does not exist` | the database is older than Phase 7b: stop the workers, `make migrate`, start them again (§15) |
 | `rebuild_lines`: «The manuscript of book(s) … was edited on the book page» | by design: an edited book is left alone. `--include-edited` rebuilds it anyway, and the round trip then offers the changes |
+| `column editor_manuscript.base does not exist` or `relation "editor_changesplan" does not exist` | the database is older than Phase 7c: stop the workers, `make migrate`, start them again (§16) |
+| «تغييرات المراجعة» stays on «يُقارَن نص الصفحات…» | the default worker was started before 7c and does not know `editor.tasks.plan_review_changes`: restart `make worker`. A plan queued for 30 minutes is closed with «توقّفت المقارنة قبل أن تكتمل؛ أعد المحاولة.» |
+| `FOR UPDATE cannot be applied to the nullable side of an outer join` on «أخذ التغييرات» | code older than this build: `editor.services.manuscript_of` locks only the manuscript's row (`select_for_update(of=("self",))`); SQLite in the tests cannot show it |
+| many «للمقارنة» items on a book | the book was edited before 7c and has no base: compare and choose, or «الاحتفاظ بنصّي في الكل», which records the base so later changes come as «من المراجعة» (§16) |
+| after a fix everywhere and its «تراجع», the banner lists its pages | page signatures follow the lines' last change, and undone revisions count as `review`: open «تغييرات المراجعة», which finds no difference, and press «تم» |
+| pages stay in «تغييرات المراجعة» after the book side's «استبدال الكل» | the book's text differs from review at the same word (a legacy «السعودي ،»): each is a «تعارض»; choose «نصّي» or «المراجعة» |
+| 409 «تغيّر النص منذ المقارنة؛ أُعيدت المقارنة.» | a planned page was reviewed again, or the text was saved after the plan: the tab plans again and keeps the choices |
+| the stage bar is one button («المراجعة 6/8 ▾») | it collapses by its own width (below 500 px of room, e.g. review's top bar on a narrow window): the menu holds the six steps |
 | an amber word whose text is not Qari v0.3's reading | the vote (D71): Tesseract backed Qari v0.2, whose reading is «● في النص»; Enter confirms it. `WORD_CHOOSER=none` turns the vote off (restart the workers) |
 | «قراءة واحدة» on a page | one model read a region (a looped Qari v0.2, or a fallback): the flags there are fewer than the errors, so compare every line with the scan |
 | a PDF copied from Preview or Safari reads «ال» for «لا» | by design (owner question 1): the text layer is written for Chrome, Firefox and poppler; copy from Chrome |

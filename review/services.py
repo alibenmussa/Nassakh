@@ -27,8 +27,10 @@ reverts the batch at once.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime
+from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -103,6 +105,14 @@ TOKEN_KEYS: tuple[str, ...] = (
     "ins",
     "sug",
 )
+
+
+# Review's origin (D76, PHASE7_SPEC §5.3): where the reviewer came from, and the link back there.
+ORIGINS: dict[str, str] = {"book": "الكتاب", "manuscript": "المخطوطة", "export": "الإخراج"}
+_RE_ORIGIN_BLOCK = re.compile(r"[hpn][0-9]+")
+# Line-changing actions (a drift page with one after it was read changed in review: `assembly.services.
+# stale_reasons`, D78); approve / reopen / gap change no line.
+LINE_ACTIONS: tuple[str, ...] = ("resolve", "edit", "insert", "delete", "merge", "drop_word", "role", "fix")
 
 
 class ReviewError(Exception):
@@ -556,10 +566,136 @@ def review_neighbours(page: Page) -> tuple[Page | None, Page | None]:
     return previous, following
 
 
-def review_payload(page: Page, user) -> dict:
+def parse_origin(source, at=None, block=None) -> dict | None:
+    """Review's origin from `?from=&at=&block=` (D76): `{from, at, block, query}`, or None when `from` is not
+    one of `ORIGINS`. `at` (the book page's page) must be a positive int and `block` a block id (`[hpn]n`);
+    anything else is dropped. `query` is the origin as a query string (review URLs carry it)."""
+    if not isinstance(source, str) or source not in ORIGINS:
+        return None
+    number = None
+    if isinstance(at, int) and not isinstance(at, bool):
+        number = at if at > 0 else None
+    elif isinstance(at, str) and at.isascii() and at.isdigit():
+        number = int(at) or None
+    block_id = block if isinstance(block, str) and _RE_ORIGIN_BLOCK.fullmatch(block) else None
+    params = {"from": source}
+    if number is not None:
+        params["at"] = number
+    if block_id is not None:
+        params["block"] = block_id
+    return {"from": source, "at": number, "block": block_id, "query": urlencode(params)}
+
+
+def with_origin(url: str | None, origin: dict | None) -> str | None:
+    """`url` with the origin's query appended (unchanged without an origin)."""
+    if not url or not origin:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{origin['query']}"
+
+
+def origin_back(book_id: int, origin: dict | None) -> dict | None:
+    """The top bar's link back (`nav.back`): «الكتاب» → the book page on its page (`#page-<at>`),
+    «المخطوطة» → the manuscript on its block (`#block-<id>`), «الإخراج» → the export page."""
+    if not origin:
+        return None
+    source = origin["from"]
+    if source == "book":
+        url = reverse("editor:layout", args=[book_id]) + (f"#page-{origin['at']}" if origin["at"] else "")
+    elif source == "manuscript":
+        url = reverse("assembly:manuscript", args=[book_id]) + (
+            f"#block-{origin['block']}" if origin["block"] else ""
+        )
+    else:
+        url = reverse("publishing:export", args=[book_id])
+    return {"from": source, "label": ORIGINS[source], "url": url}
+
+
+RESOLVED_WORDS = ("كلمة واحدة", "كلمتين", "كلمات", "كلمة")
+NEXT_ASSEMBLE = "تُجمَع الصفحات في نص واحد متّصل: فصول وفقرات وحواشٍ، تتحقّق من بنيته قبل الكتاب."
+
+
+def next_step(book: Book, current: Page | None = None, facts=None) -> dict | None:
+    """The end-of-review panel (D76, §5.3): what comes after review, from the stage bar's facts
+    (`books.services.StageFacts`); None while a page other than `current` waits for review (N or approval
+    has somewhere to go). `{state, heading, summary, title, text, button, url, stay}` with `state` one of
+    `processing` (pages still being read), `assemble` (no manuscript), `reassemble` (out of date, not
+    edited), `changes` (edited, with content drift) and `book` (fresh). Nine queries at most."""
+    from books.services import PAGES_NOUN, PAGES_OF, StageFacts  # other app: lazy import
+
+    facts = facts if facts is not None else StageFacts(book)
+    others = [n for n in facts.pending if current is None or n != current.number]
+    if others:
+        return None
+    resolved = LineRevision.objects.filter(
+        page__book_id=book.pk, action=LineRevision.Action.RESOLVE, undone=False
+    ).count()
+    summary = ar_count(facts.reviewed, PAGES_NOUN)
+    if resolved:
+        summary = f"{summary} · حُسمت {ar_count(resolved, RESOLVED_WORDS)}"
+    if facts.reviewed == facts.total:
+        heading = "رُوجعت كل الصفحات"
+    elif current is not None and facts.pending == [current.number]:
+        heading = "هذه آخر صفحة بانتظار المراجعة"
+    else:
+        heading = "رُوجعت كل الصفحات الجاهزة"
+    state = facts.manuscript
+    manuscript_url = reverse("assembly:manuscript", args=[book.pk])
+    layout_url = reverse("editor:layout", args=[book.pk])
+    drift = state.get("drift_pages") or []
+    if facts.processing:
+        step = (
+            "processing",
+            "المعالجة",
+            f"لا صفحات بانتظار المراجعة الآن؛ ما زالت {ar_count(facts.processing, PAGES_NOUN)} قيد المعالجة.",
+            "العودة إلى المعالجة",
+            reverse("books:detail", args=[book.pk]),
+        )
+    elif not state.get("exists"):
+        step = ("assemble", "تجميع المخطوطة", NEXT_ASSEMBLE, "تجميع المخطوطة…", f"{manuscript_url}?convert=1")
+    elif state.get("edited") and drift:
+        theirs = "فقراتهما" if len(drift) == 2 else "فقراتها"
+        step = (
+            "changes",
+            "أخذ التغييرات إلى الكتاب",
+            f"غيّرت المراجعة نص {ar_count(len(drift), PAGES_OF)} من الكتاب المحرَّر؛ تُؤخذ {theirs} وحدها.",
+            "عرض التغييرات في الكتاب",
+            f"{layout_url}?tab=changes",
+        )
+    elif not state.get("edited") and state.get("stale"):
+        changed = len(drift) or len(state.get("stale_pages") or [])
+        step = (
+            "reassemble",
+            "إعادة التجميع",
+            f"تغيّر نص {ar_count(changed, PAGES_OF)} في المراجعة بعد التجميع؛ لم يُحرَّر الكتاب بعد، "
+            "فإعادة التجميع لا تُضيّع شيئًا.",
+            "إعادة التجميع",
+            manuscript_url,
+        )
+    else:
+        step = ("book", "الكتاب", "المخطوطة محدَّثة؛ نسّق الكتاب وحرّره على صفحاته.", "فتح الكتاب", layout_url)
+    key, title, text, button, url = step
+    return {
+        "state": key,
+        "heading": heading,
+        "summary": summary,
+        "title": title,
+        "text": text,
+        "button": button,
+        "url": url,
+        "stay": "البقاء في المراجعة",
+    }
+
+
+def review_payload(page: Page, user, origin: dict | None = None, facts=None) -> dict:
     """Everything the review screen needs for one page (PHASE3_SPEC §4 shape; 7b's additions:
-    `review/fixtures/trust/index.json`)."""
+    `review/fixtures/trust/index.json`; 7c's: `nav.back`, `nav.origin`, `nav.detour` for the origin
+    (`parse_origin`) and `next_step`, editor/fixtures/contract/; `facts`, the stage bar's
+    `books.services.StageFacts` when the caller has them); `book.edited`: the book's text is edited on the
+    book page, so a page's changes reach it through «تغييرات المراجعة» (D78)."""
+    from books.services import StageFacts  # other app: lazy import
+
     book = page.book
+    facts = facts if facts is not None else StageFacts(book)
     summary = book_review_summary(book)
     pre = _preprocess_of(page)
     lines = list(_page_lines(page).prefetch_related("gaps"))
@@ -578,6 +714,7 @@ def review_payload(page: Page, user) -> dict:
             "total_pages": Page.objects.filter(book_id=book.pk).count(),
             "reviewed_pages": summary["reviewed"],
             "unresolved_total": summary["unresolved_total"],
+            "edited": bool(facts.manuscript.get("edited")),
         },
         "image": {
             "display_url": display,
@@ -596,11 +733,15 @@ def review_payload(page: Page, user) -> dict:
             "secondary": ENGINE_LABELS.get(secondary, secondary),
         },
         "nav": {
-            "prev_url": review_url(previous) if previous else None,
-            "next_url": review_url(following) if following else None,
-            "next_review_url": next_review_url(book.pk, page.number),
+            "prev_url": with_origin(review_url(previous), origin) if previous else None,
+            "next_url": with_origin(review_url(following), origin) if following else None,
+            "next_review_url": with_origin(next_review_url(book.pk, page.number), origin),
             "dashboard_url": reverse("books:detail", args=[book.pk]),
+            "back": origin_back(book.pk, origin),
+            "origin": origin,
+            "detour": bool(origin and origin["from"] == "book"),
         },
+        "next_step": next_step(book, page, facts),
         "urls": {
             "payload": reverse("api:page_review", args=[page.pk]),
             "resolve": _id_template("line_resolve", "line_id"),
@@ -618,6 +759,10 @@ def review_payload(page: Page, user) -> dict:
             "gap_accept": _id_template("gap_accept", "gap_id"),
             "gap_dismiss": _id_template("gap_dismiss", "gap_id"),
             "roles": reverse("api:page_roles", args=[page.pk]),
+            # «تصحيح في كل الكتاب» (D79): the sheet's list, the correction and its undo (`__batch__`)
+            "occurrences": reverse("api:book_occurrences", args=[book.pk]),
+            "fix_everywhere": reverse("api:fix_everywhere", args=[book.pk]),
+            "fix_everywhere_undo": reverse("api:fix_everywhere_undo", args=[book.pk, "__batch__"]),
         },
         "can_edit": can_review(user)
         and page.status in REVIEWABLE_STATUSES
@@ -1312,6 +1457,7 @@ def _undo_one(page: Page, revision: LineRevision) -> None:
         LineRevision.Action.MERGE,
         LineRevision.Action.DROP_WORD,
         LineRevision.Action.ROLE,
+        LineRevision.Action.FIX,
     ):
         _restore_content(page, revision)
     elif action == LineRevision.Action.INSERT:
@@ -1327,7 +1473,7 @@ def _undo_one(page: Page, revision: LineRevision) -> None:
 
 
 @transaction.atomic
-def undo_last(page: Page, user=None) -> dict:
+def undo_last(page: Page, user=None, origin: dict | None = None) -> dict:
     """Revert the newest action of the page that is not undone yet and mark its revisions undone.
 
     Resolve / edit restore the line's previous text and tokens, an insert is removed, a deleted
@@ -1355,29 +1501,34 @@ def undo_last(page: Page, user=None) -> dict:
     if action in (LineRevision.Action.APPROVE, LineRevision.Action.REOPEN):
         _refresh_book(page)
     page.refresh_from_db()
-    return review_payload(page, user)
+    return review_payload(page, user, origin)
 
 
 # ====================================================================== approve / reopen
 
 
-def _next_after(page: Page) -> dict:
-    """Where to go after `page` was approved: the next page's review / payload URLs (None when none)."""
+def _next_after(page: Page, origin: dict | None = None) -> dict:
+    """Where to go after `page` was approved: the next page's review / payload URLs (None when none) and,
+    when no page is next, the end-of-review panel (`next_step`, D76); the URLs carry the origin."""
     book = Book.objects.get(pk=page.book_id)
     following = next_page_to_review(book, after_number=page.number)
     return {
         # Always a URL: the next page's review screen, or `review:next`, which redirects to the
         # dashboard with «لا صفحات بانتظار المراجعة» when nothing is left.
-        "next_review_url": review_url(following) if following else next_review_url(book.pk, page.number),
+        "next_review_url": with_origin(
+            review_url(following) if following else next_review_url(book.pk, page.number), origin
+        ),
         "next_payload_url": reverse("api:page_review", args=[following.pk]) if following else None,
         "next_number": following.number if following else None,
         "dashboard_url": reverse("books:detail", args=[book.pk]),
+        "next_step": None if following else next_step(book, page),
     }
 
 
 @transaction.atomic
-def approve_page(page: Page, user, force: bool = False) -> dict:
-    """Mark a page reviewed. Returns `{"status", "next_review_url", "next_payload_url", ...}`.
+def approve_page(page: Page, user, force: bool = False, origin: dict | None = None) -> dict:
+    """Mark a page reviewed. Returns `{"status", "next_review_url", "next_payload_url", ..., "next_step"}`
+    (`origin`, review's `parse_origin`, is carried by the URLs).
 
     With open items left (unresolved words, open groups of added words, open suggestions:
     `ocr.services.page_open_items`) and `force` false, raises `ReviewBlocked` (API 409) with their
@@ -1387,7 +1538,7 @@ def approve_page(page: Page, user, force: bool = False) -> dict:
     """
     page = _lock_page(page)
     if page.status in REVIEWED_STATUSES:
-        return {"status": page.status, **_next_after(page)}
+        return {"status": page.status, **_next_after(page, origin)}
     if page.status != Page.Status.OCR_DONE or page.text_state != Page.TextState.FINAL:
         raise ReviewError("الصفحة ليست جاهزة للاعتماد بعد.")
     items = page_open_items(page)
@@ -1402,7 +1553,7 @@ def approve_page(page: Page, user, force: bool = False) -> dict:
     _record(page, LineRevision.Action.APPROVE, None, before, _page_state(page), user)
     refresh_page_text(page)
     _refresh_book(page)
-    return {"status": page.status, **_next_after(page)}
+    return {"status": page.status, **_next_after(page, origin)}
 
 
 @transaction.atomic

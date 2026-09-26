@@ -1,0 +1,110 @@
+{
+ "GET /books/40/review/2/?from=book&at=12": {
+  "prev_url": "/books/40/review/1/?from=book&at=12",
+  "next_url": "/books/40/review/3/?from=book&at=12",
+  "next_review_url": "/books/40/review/next/?after=2&from=book&at=12",
+  "dashboard_url": "/books/40/",
+  "back": {
+   "from": "book",
+   "label": "الكتاب",
+   "url": "/books/40/layout/#page-12"
+  },
+  "origin": {
+   "from": "book",
+   "at": 12,
+   "block": null,
+   "query": "from=book&at=12"
+  },
+  "detour": true
+ },
+ "GET /books/40/review/2/?from=book": {
+  "prev_url": "/books/40/review/1/?from=book",
+  "next_url": "/books/40/review/3/?from=book",
+  "next_review_url": "/books/40/review/next/?after=2&from=book",
+  "dashboard_url": "/books/40/",
+  "back": {
+   "from": "book",
+   "label": "الكتاب",
+   "url": "/books/40/layout/"
+  },
+  "origin": {
+   "from": "book",
+   "at": null,
+   "block": null,
+   "query": "from=book"
+  },
+  "detour": true
+ },
+ "GET /books/40/review/2/?from=manuscript&block=p40021": {
+  "prev_url": "/books/40/review/1/?from=manuscript&block=p40021",
+  "next_url": "/books/40/review/3/?from=manuscript&block=p40021",
+  "next_review_url": "/books/40/review/next/?after=2&from=manuscript&block=p40021",
+  "dashboard_url": "/books/40/",
+  "back": {
+   "from": "manuscript",
+   "label": "المخطوطة",
+   "url": "/books/40/manuscript/#block-p40021"
+  },
+  "origin": {
+   "from": "manuscript",
+   "at": null,
+   "block": "p40021",
+   "query": "from=manuscript&block=p40021"
+  },
+  "detour": false
+ },
+ "GET /books/40/review/2/?from=export": {
+  "prev_url": "/books/40/review/1/?from=export",
+  "next_url": "/books/40/review/3/?from=export",
+  "next_review_url": "/books/40/review/next/?after=2&from=export",
+  "dashboard_url": "/books/40/",
+  "back": {
+   "from": "export",
+   "label": "الإخراج",
+   "url": "/books/40/export/"
+  },
+  "origin": {
+   "from": "export",
+   "at": null,
+   "block": null,
+   "query": "from=export"
+  },
+  "detour": false
+ },
+ "GET /books/40/review/2/": {
+  "prev_url": "/books/40/review/1/",
+  "next_url": "/books/40/review/3/",
+  "next_review_url": "/books/40/review/next/?after=2",
+  "dashboard_url": "/books/40/",
+  "back": null,
+  "origin": null,
+  "detour": false
+ },
+ "GET /books/40/review/2/?from=elsewhere&at=x&block=zz (ignored)": {
+  "prev_url": "/books/40/review/1/",
+  "next_url": "/books/40/review/3/",
+  "next_review_url": "/books/40/review/next/?after=2",
+  "dashboard_url": "/books/40/",
+  "back": null,
+  "origin": null,
+  "detour": false
+ },
+ "GET /api/pages/4002/review/?from=book&at=12 (the payload API takes the same parameters)": {
+  "prev_url": "/books/40/review/1/?from=book&at=12",
+  "next_url": "/books/40/review/3/?from=book&at=12",
+  "next_review_url": "/books/40/review/next/?after=2&from=book&at=12",
+  "dashboard_url": "/books/40/",
+  "back": {
+   "from": "book",
+   "label": "الكتاب",
+   "url": "/books/40/layout/#page-12"
+  },
+  "origin": {
+   "from": "book",
+   "at": 12,
+   "block": null,
+   "query": "from=book&at=12"
+  },
+  "detour": true
+ }
+}

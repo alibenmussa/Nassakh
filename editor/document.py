@@ -916,3 +916,152 @@ def convert_digits_in_nodes(nodes: list, style: str) -> int:
                     changed += sum(1 for a, b in zip(text, new, strict=True) if a != b)
                     item["text"] = new
     return changed
+
+
+# ====================================================================== a paragraph into a footnote (D74, 7c)
+
+_NOTE_DIGITS = "0-9٠-٩۰-۹"
+_SUPERSCRIPTS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_TO_SUPERSCRIPT = str.maketrans("0123456789", _SUPERSCRIPTS)
+_RE_LEADING_NOTE = re.compile(
+    rf"^\s*(?:[\(\[]\s*([{_NOTE_DIGITS}]{{1,3}}|\*{{1,3}})\s*[\)\]]|([{_SUPERSCRIPTS}]{{1,3}}))\s*[-–.:،]?\s*"
+)
+NO_MARKER = "لا تبدأ هذه الفقرة بعلامة حاشية مثل «(1)»."
+NO_PARAGRAPH = "الفقرة غير موجودة في هذا الفصل."
+
+
+def leading_note_marker(text: str) -> tuple[str, int] | None:
+    """The note marker a paragraph's text starts with («(n)», «[n]», a superscript n or «*»), as Western
+    digits (or the stars), and the length of the marker with the punctuation and spaces after it; None."""
+    match = _RE_LEADING_NOTE.match(text or "")
+    if match is None:
+        return None
+    raw = match.group(1) or match.group(2) or ""
+    marker = to_western_digits(raw.translate(str.maketrans(_SUPERSCRIPTS, "0123456789")))
+    return marker, match.end()
+
+
+def _call_patterns(marker: str) -> list[re.Pattern]:
+    """The ways a call to note `marker` is printed: «(n)» / «[n]» (with the space before it), a superscript,
+    or the digits glued to the word before them (never inside a longer number)."""
+    if marker.startswith("*"):
+        star = re.escape(marker)
+        return [re.compile(rf"\s*[\(\[]\s*{star}\s*[\)\]]"), re.compile(rf"(?<=\S){star}(?!\*)")]
+    forms = {
+        marker,
+        marker.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")),
+        marker.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")),
+    }
+    digits = "|".join(re.escape(form) for form in sorted(forms))
+    return [
+        re.compile(rf"\s*[\(\[]\s*(?:{digits})\s*[\)\]]"),
+        re.compile(re.escape(marker.translate(_TO_SUPERSCRIPT))),
+        re.compile(rf"(?<=[^\s{_NOTE_DIGITS}\(\[\)\]])(?:{digits})(?![{_NOTE_DIGITS}])"),
+    ]
+
+
+def _last_call(block: dict, patterns: list[re.Pattern]) -> tuple[int, int, int] | None:
+    """`(text node index, start, end)` of the last call in a block's own text (not in its notes)."""
+    best = None
+    for index, item in enumerate(block.get("content") or []):
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        value = str(item.get("text") or "")
+        for pattern in patterns:
+            for match in pattern.finditer(value):
+                if match.end() > match.start() and (best is None or (index, match.start()) > best[:2]):
+                    best = (index, match.start(), match.end())
+    return best
+
+
+def paragraph_to_footnote(nodes: list, block_id: str) -> tuple[list, dict]:
+    """«تحويل إلى حاشية للعلامة (n)» (D74 on the book page): the paragraph `block_id` of a chapter's `nodes`,
+    which starts with a note marker, becomes the footnote of its call.
+
+    The call («(n)», «[n]», a superscript n, or n glued to the word before it) is looked for in the blocks
+    before the paragraph from its source page, nearest first, then in the rest of the chapter before it; the
+    last call in the nearest block wins. It is replaced by a footnote node holding the paragraph's text
+    without its marker (text and line breaks; its source page and lines), and the paragraph goes. Returns
+    `(new nodes, {id, marker, block})` (a copy; `nodes` is not changed). Raises `DocumentError` (Arabic)
+    when the paragraph is missing, starts with no marker, or no call is found."""
+    nodes = copy.deepcopy(as_nodes(nodes))
+    index = next(
+        (
+            i
+            for i, node in enumerate(nodes)
+            if isinstance(node, dict) and node.get("type") == PARAGRAPH and node_id(node) == block_id
+        ),
+        None,
+    )
+    if index is None:
+        raise DocumentError(NO_PARAGRAPH)
+    paragraph = nodes[index]
+    found = leading_note_marker(block_text(paragraph))
+    if found is None:
+        raise DocumentError(NO_MARKER)
+    marker, cut = found
+    pages = source_pages(paragraph)
+    page = pages[0] if pages else None
+    patterns = _call_patterns(marker)
+    before = [i for i in range(index - 1, -1, -1) if isinstance(nodes[i], dict)]
+    same_page = [i for i in before if page is not None and page in source_pages(nodes[i])]
+    host = call = None
+    for i in [*same_page, *[i for i in before if i not in same_page]]:
+        if nodes[i].get("type") not in (PARAGRAPH, HEADING):
+            continue
+        call = _last_call(nodes[i], patterns)
+        if call is not None:
+            host = i
+            break
+    if host is None or call is None:
+        where = f"الصفحة {page}" if page is not None else "الفصل"
+        raise DocumentError(
+            f"لم تُعثر على العلامة ({marker}) في نص {where}؛ ضع المؤشّر موضعها ثم اختر «حاشية» (⌘⇧F)."
+        )
+    content: list = []
+    remaining = cut
+    for item in paragraph.get("content") or []:
+        if not isinstance(item, dict) or item.get("type") not in NOTE_INLINE_TYPES:
+            continue
+        if item.get("type") == "text" and remaining:
+            value = str(item.get("text") or "")
+            drop = min(remaining, len(value))
+            remaining -= drop
+            value = value[drop:]
+            if not value:
+                continue
+            item = {**item, "text": value}
+        content.append(item)
+    lines = sorted(source_lines([paragraph]))
+    note_node_id = f"n{lines[0]}" if lines else ""
+    taken = all_ids(nodes[:index] + nodes[index + 1 :])
+    if not note_node_id or note_node_id in taken:
+        n = 1
+        while f"ne{n}" in taken:
+            n += 1
+        note_node_id = f"ne{n}"
+    note = {
+        "type": "footnote",
+        "attrs": {
+            "id": note_node_id,
+            "number": int(marker) if marker.isdigit() else None,
+            "marker": marker,
+            "sourcePage": page,
+            "sourceLineIds": lines,
+            "orphan": False,
+        },
+        "content": content,
+    }
+    target = nodes[host]
+    item_index, start, end = call
+    text_node = target["content"][item_index]
+    value = str(text_node.get("text") or "")
+    pieces = []
+    if value[:start]:
+        pieces.append({**text_node, "text": value[:start]})
+    pieces.append(note)
+    if value[end:]:
+        pieces.append({**text_node, "text": value[end:]})
+    target["content"] = [*target["content"][:item_index], *pieces, *target["content"][item_index + 1 :]]
+    del nodes[index]
+    return nodes, {"id": note_node_id, "marker": marker, "block": node_id(target)}

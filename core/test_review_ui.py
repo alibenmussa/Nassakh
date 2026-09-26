@@ -190,7 +190,9 @@ def test_review_template_structure_rtl_counters_and_config():
     assert "'لا كلمات غير مؤكَّدة في هذه الصفحة؛ اقرأ الأسطر مع الصورة ثم اعتمدها.'" in body
     assert '<span class="rv-progress-text meta" x-show="b.lowTotal > 0">حُسمت' in body
     assert "يحفظ…" in body and "محفوظ" in body and "تعذّر الحفظ · إعادة المحاولة" in body
-    assert body.count("btn btn-primary") == 1 and "اعتماد الصفحة" in body
+    # one primary in the top bar; the lines pane's after-approval panels (§5.3) have their own, one at a time
+    bar = body[body.index('x-data="reviewBar"') : body.index('id="review-config"')]
+    assert bar.count("btn btn-primary") == 1 and "اعتماد الصفحة" in body
     # split view: scan pane, lines pane, swap toggle, tabs, filmstrip
     assert 'class="rv-pane rv-scan-pane"' in body and 'class="rv-pane rv-lines-pane"' in body
     assert "toggleSwap()" in body and "المعالَجة" in body and "الأصل" in body
@@ -227,7 +229,7 @@ def test_review_template_words_popover_editing_and_states():
     assert 'العودة إلى <span x-text="fitLabel"></span>' in body
     # designed states: error (Arabic headline, dashboard retry), pending (decode noise),
     # loading skeleton, read-only
-    assert 'x-text="errorHeadline"' in body and "فتح لوحة الكتاب لإعادة المرحلة" in body
+    assert 'x-text="errorHeadline"' in body and "العودة إلى المعالجة" in body and "في «المعالجة»." in body
     assert 'x-ref="noise"' in body and "النص قيد التعرّف" in body
     assert 'class="rv-skeleton" x-show="loading"' in body
     assert "عرض فقط" in body and 'x-show="!canEdit && ready"' in body
@@ -236,10 +238,15 @@ def test_review_template_words_popover_editing_and_states():
     assert 'role="alertdialog" aria-modal="true"' in body and 'x-text="dialogTitle"' in body
     assert "لا يدخل الكتابَ نصٌّ مقترح لم يُحسم." in body and 'x-show="dialog.gaps > 0"' in body
     # open groups are words already in the text (D72): they enter the book as they are
-    assert "تبقى الكلمات المضافة التي لم تُحسم في النص كما هي." in body and 'x-show="dialog.suggested > dialog.gaps"' in body
+    assert (
+        "تبقى الكلمات المضافة التي لم تُحسم في النص كما هي." in body
+        and 'x-show="dialog.suggested > dialog.gaps"' in body
+    )
     assert "متابعة المراجعة" in body and '@click="approve(true)"' in body
     assert 'aria-labelledby="rv-sheet-title"' in body and "اختصارات لوحة المفاتيح" in body
-    assert body.count('@keydown.tab="trapTab($event, $el)"') == 2
+    assert (
+        body.count('@keydown.tab="trapTab($event, $el)"') == 3
+    )  # the dialog, the sheet, the fix sheet (D79)
     assert "الصفحة التالية / السابقة" in body  # ArrowLeft/ArrowRight row of the sheet
     # D69: the sheet in two groups, letters as Latin capitals that work on the Arabic layout; ⌘↵ approves
     sheet = body[body.index('<dl class="rv-keys">') : body.index("</dl>", body.index('<dl class="rv-keys">'))]
@@ -1922,3 +1929,417 @@ def test_review_trust_on_the_contract_fixtures(tmp_path):
         ["صفحة 3 · نص Tesseract وحده", "tesseract"],
         ["صفحة 4", ""],
     ]
+
+
+# ---------------------------------------------------------------- 7c: where review leads, fix everywhere
+
+CONTRACT = ROOT / "editor" / "fixtures" / "contract"
+
+
+def _contract(name: str) -> dict:
+    return json.loads((CONTRACT / name).read_text(encoding="utf-8"))
+
+
+def _entry(fixture: dict, label: str):
+    return next(v for k, v in fixture.items() if label in k)
+
+
+NAV_RUN = r"""
+const fx = JSON.parse(fs.readFileSync(process.argv[5], 'utf8'));
+const withNav = (nav, extra) => Object.assign(clone(config), { nav: Object.assign(clone(config.nav), nav) }, extra || {});
+const film = (reviewed) => [1, 2, 3, 4].map((n) => ({ id: 6 + n, number: n, url: `/books/1/review/${n}/`, status: reviewed.includes(n) ? 'reviewed' : 'ocr_done', is_reviewed: reviewed.includes(n), n_unresolved: 0 }));
+// a server that answers by URL: the approve, the payloads, the filmstrip, the occurrences, the fix and its undo
+let approveAnswer = null; let payloadFor = null; let routes = {};
+globalThis.fetch = async (url, init) => {
+  const method = (init && init.method) || 'GET';
+  const body = init && init.body ? JSON.parse(init.body) : null;
+  calls.push([method, url, body]);
+  const hit = Object.keys(routes).find((k) => url.startsWith(k));
+  let status = 200; let data = {};
+  if (hit) [status, data] = routes[hit](url, body);
+  else if (/\/approve\/$/.test(url)) data = approveAnswer;
+  else if (/\/api\/pages\/\d+\/review\//.test(url)) data = payloadFor ? payloadFor(url) : clone(config);
+  return { ok: status < 400, status, json: async () => clone(data) };
+};
+const settleSlide = async () => { await flush(); await flush(); await flush(); };
+(async () => {
+  const out = {};
+  const nav = fx['review_nav.json'];
+  const book = Object.entries(nav).find(([k]) => k.includes('from=book&at=12'))[1];
+  const manuscript = Object.entries(nav).find(([k]) => k.includes('from=manuscript'))[1];
+  const none = Object.entries(nav).find(([k]) => k === 'GET /books/40/review/2/')[1];
+  // ---- the back link and the origin every client-built address keeps
+  const b = make(withNav(book));
+  b.film = { items: film([]), state: 'ready' };
+  out.back = { bar: stores.review.bar.back, detour: b.fromBook, film: b.filmHref(b.film.items[2]), payload: b.payloadUrlFor(9), page: b.pageUrlFor(4), body: b.originBody };
+  const n = make(withNav(none));
+  out.noBack = { bar: stores.review.bar.back, film: n.filmHref({ url: '/books/1/review/3/' }), body: n.originBody, detour: n.fromBook };
+  const m = make(withNav(manuscript));
+  out.manuscript = { bar: stores.review.bar.back, detour: m.fromBook, film: m.filmHref({ url: '/books/1/review/3/' }) };
+  // ---- the detour (from=book): approval stays on the page; the pane offers the way back first
+  const steps = fx['next_step.json'];
+  const withNext = Object.entries(steps.approve).find(([k]) => k.includes('(a next page)'))[1];
+  const last = Object.entries(steps.approve).find(([k]) => k.includes('(the last page)'))[1];
+  const d = make(withNav(book, { counts: { low_total: 0, unresolved: 0, resolved: 0 } }));
+  d.film = { items: film([]), state: 'ready' };
+  approveAnswer = withNext.response;
+  await d.approve(false); await settleSlide();
+  out.detour = { after: clone(d.after), live: d.liveMessage, page: d.page.number, body: calls.filter((x) => x[0] === 'POST').pop()[2], fetched: calls.filter((x) => x[0] === 'GET').length };
+  payloadFor = () => { const p = clone(config); p.page = Object.assign(p.page, { id: 10, number: 4 }); p.nav = clone(book); return p; };
+  d.leaveAfter(); d.goNextReview(); await settleSlide();
+  payloadFor = null;
+  out.detourNext = { page: d.page.number, arrived: d.arrived, get: calls.filter((x) => x[0] === 'GET').map((x) => x[1]).pop() };
+  // ---- the last page (from=book): the end panel names the next step; the approve body carries the origin
+  const e = make(withNav(book, { counts: { low_total: 0, unresolved: 0, resolved: 0 } }));
+  e.film = { items: film([1, 2, 4]), state: 'ready' };
+  approveAnswer = last.response;
+  await e.approve(false); await settleSlide();
+  out.end = { after: clone(e.after), live: e.liveMessage, body: calls.filter((x) => x[0] === 'POST').pop()[2] };
+  out.escEnd = (e.closeTop(), e.after);
+  // every variant of the next step, as the panel draws it
+  out.variants = Object.fromEntries(Object.entries(steps.variants).map(([k, v]) => [k, (({ key, heading, summary, step, text, button, url, stay }) => ({ key, heading, summary, step, text, button, url, stay }))(e.endPanel(v))]));
+  // ---- the N rule: a page approval brought in, untouched, stays; once touched, N moves on
+  const r = make(withNav(manuscript, { counts: { low_total: 0, unresolved: 0, resolved: 0 } }));
+  r.film = { items: film([]), state: 'ready' };
+  approveAnswer = withNext.response;
+  payloadFor = (url) => { const p = clone(config); p.page = Object.assign(p.page, { id: 10, number: 4 }); return p; };
+  await r.approve(false); await settleSlide();
+  const arrivedAt = r.page.number;
+  calls.length = 0;
+  r.goNextReview(); await settleSlide();
+  out.nRule = { arrivedAt, arrived: r.arrived, stayed: r.page.number, toast: toasts().pop(), gets: calls.filter((x) => x[0] === 'GET').length };
+  r.film.items.forEach((p) => { if (p.number === 4) { p.is_reviewed = false; } });
+  r.lines[0].tokens[1].res = null;
+  r.focusWord({ lineId: 51, index: 1 });
+  await r.choose('primary'); // a save: the page is touched
+  out.touched = r.arrived;
+  // ---- N with nothing left: the current page still open says so; reviewed, the end panel from the payload
+  const z = make(withNav(none, { next_step: steps.variants['book'] }));
+  z.film = { items: film([1, 2, 4]), state: 'ready' };
+  z.goNextReview();
+  out.nLast = { toast: toasts().pop(), after: z.after };
+  z.page.status = 'reviewed'; z.page.is_reviewed = true;
+  z.goNextReview();
+  out.nNone = { kind: z.after && z.after.kind, heading: z.after && z.after.heading, button: z.after && z.after.button, done: z.after && z.after.done };
+  // ---- §5.8: G the pager's jump field, O the original, V the sides, C the copy
+  const k = make(withNav(none));
+  k.film = { items: film([]), state: 'ready' };
+  const key = (ev) => press(k, Object.assign({ code: 'Key' + ev.toUpperCase(), key: ev }));
+  key('g'); const jumping = stores.review.bar.jumping;
+  k.jumpTo('٣'); await settleSlide();
+  out.jump = { jumping, page: k.page.number, after: stores.review.bar.jumping };
+  k.jumpTo('99'); out.jumpUnknown = toasts().pop();
+  const tab0 = k.tab; key('o'); const tab1 = k.tab; key('o');
+  const sw0 = k.swapped; key('v');
+  calls.length = 0; key('c');
+  out.keys = { tabs: [tab0, tab1, k.tab], swapped: [sw0, k.swapped], copied: calls.some((x) => x[0] === 'copy') };
+  // the detail page («تفاصيل المعالجة») for editors, none for a reader
+  out.detail = [k.detailUrl, make(Object.assign(withNav(none), { can_edit: false })).detailUrl];
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
+"""  # noqa: E501
+
+
+FIX_RUN = r"""
+const fx = JSON.parse(fs.readFileSync(process.argv[5], 'utf8'));
+let routes = {};
+globalThis.fetch = async (url, init) => {
+  const method = (init && init.method) || 'GET';
+  const body = init && init.body ? JSON.parse(init.body) : null;
+  calls.push([method, url, body]);
+  const hit = Object.keys(routes).find((k) => decodeURIComponent(url).startsWith(k));
+  const [status, data] = hit ? routes[hit](url, body) : [200, clone(config)];
+  return { ok: status < 400, status, json: async () => clone(data) };
+};
+const occ = fx['occurrences.json'];
+const found = Object.entries(occ).find(([k]) => k.startsWith('GET'));
+const fix = fx['fix_everywhere.json'];
+const plain = Object.entries(fix).find(([k]) => k.includes('(an unedited book)'))[1];
+const edited = Object.entries(fix).find(([k]) => k.includes('on an edited book'))[1];
+const undo = Object.entries(fix).find(([k]) => k.includes('(every line still at the fix)'))[1];
+const elsewhere = Object.entries(fix).find(([k]) => k.includes('elsewhere'))[1];
+const cfg = Object.assign(clone(config), { book: Object.assign(clone(config.book), { id: 42 }), urls: Object.assign(clone(config.urls), { payload: '/api/pages/7/review/' }) });
+cfg.lines[0].tokens[1] = { t: '«السعودي»', alt: null, tess: null, conf: 'low', digit: false, bbox: [760, 100, 890, 160], res: null };
+(async () => {
+  const out = {};
+  const c = make(cfg);
+  // ⌥F on the focused word, a correction typed in its menu: the sheet on «السعودي» → «المسعودي»
+  c.focusWord({ lineId: 51, index: 1 }, { open: true });
+  c.pop.typing = true; c.pop.typed = 'المسعودي';
+  routes = { '/api/books/42/occurrences/': () => [200, found[1].response] };
+  const K = press(c, { key: 'ƒ', code: 'KeyF', altKey: true });
+  await flush(); await flush();
+  out.open = { prevented: K, open: c.fix.open, from: c.fix.from, to: c.fix.to, url: decodeURIComponent(calls[calls.length - 1][1]), popOpen: c.pop.open };
+  out.sheet = { count: c.fixCountText, button: c.fixButton, picked: c.fixPicked, rows: c.fixRows.map((o) => [o.number, o.line_id, c.picked(o), c.fixNote(o)]), crop: c.fixCrop(c.fixRows[1]) };
+  // the sheet's keys: ↓ moves, Space ticks, Enter corrects; the window's keys wait behind it
+  const target = { tagName: 'LI', type: '', closest: () => null };
+  const fk = (key) => { let prevented = false; c.onFixKey({ key, target, preventDefault: () => { prevented = true; } }); return prevented; };
+  fk('ArrowDown'); fk('ArrowDown'); const cursor = c.fix.cursor; fk(' ');
+  out.keys = { cursor, ticked: c.picked(c.fixRows[2]), behind: press(c, { key: 'ArrowLeft' }) };
+  // an unedited book: the picks the fixture sends (a word there may have changed since the list opened)
+  const want = new Map(plain.request.picks.map((p) => [`${p.line_id}:${p.index}`, p.t]));
+  c.fix.results.forEach((p) => p.lines.forEach((o) => { if (want.has(c.fixKey(o))) o.word = want.get(c.fixKey(o)); }));
+  c.fixRows.forEach((o) => { if (c.picked(o) !== want.has(c.fixKey(o))) c.togglePick(o); });
+  routes = { '/api/books/42/fix-everywhere/': () => [plain.status, plain.response], '/api/pages/7/review/': () => [200, clone(cfg)] };
+  calls.length = 0;
+  fk('Enter'); await flush(); await flush(); await flush();
+  const sent = calls.find((x) => x[0] === 'POST');
+  out.apply = { body: sent[2], url: sent[1], open: c.fix.open, toast: clone(c.undoToast), reloaded: calls.some((x) => x[1] === '/api/pages/7/review/') };
+  // «تراجع» undoes the batch
+  routes = { '/api/books/42/fix-everywhere/6c1b9b52-0000-4000-8000-000000000001/undo/': () => [undo.status, undo.response], '/api/pages/7/review/': () => [200, clone(cfg)] };
+  calls.length = 0;
+  await c.undoFromToast(); await flush();
+  out.undo = { post: calls.find((x) => x[0] === 'POST').slice(1), toast: toasts().pop(), toastGone: c.undoToast };
+  // an edited book: one pick, and the toast leads to the book page's find & replace, pre-filled
+  const e = make(cfg);
+  e.focusWord({ lineId: 51, index: 1 }, { open: true });
+  routes = { '/api/books/42/occurrences/': () => [200, found[1].response] };
+  await e.openFix('السعودي', 'المسعودي');
+  const only = new Set(edited.request.picks.map((p) => `${p.line_id}:${p.index}`));
+  e.fixRows.forEach((o) => { if (e.picked(o) !== only.has(e.fixKey(o))) e.togglePick(o); });
+  routes = { '/api/books/42/fix-everywhere/': () => [edited.status, edited.response], '/api/pages/7/review/': () => [200, clone(cfg)] };
+  calls.length = 0;
+  await e.applyFix(); await flush();
+  out.edited = { body: calls.find((x) => x[0] === 'POST')[2], toast: clone(e.undoToast) };
+  // an empty correction, or the same word, never posts
+  const s = make(cfg);
+  routes = { '/api/books/42/occurrences/': () => [200, found[1].response] };
+  await s.openFix('السعودي', '');
+  calls.length = 0;
+  await s.applyFix(); const noTo = s.fix.error; s.fix.to = 'السعودي'; await s.applyFix();
+  out.refused = { noTo, same: s.fix.error, posts: calls.filter((x) => x[0] === 'POST').length };
+  // a correction whose form occurs elsewhere: the chip under the undo toast opens the sheet on it
+  const w = make(cfg);
+  w.focusWord({ lineId: 51, index: 1 }, { open: true });
+  routes = { '/api/lines/51/resolve/': () => [200, Object.assign({ line: clone(cfg.lines[0]), counts: { line_n_low: 1, page_unresolved: 3, page_low_total: 5 } }, elsewhere['response (keys added to today\'s answer)'])], '/api/books/42/occurrences/': () => [200, found[1].response] };
+  await w.choose('typed', 'المسعودي');
+  const chip = clone(w.undoToast);
+  await w.openElsewhere(); await flush();
+  out.elsewhere = { chip, open: w.fix.open, from: w.fix.from, to: w.fix.to };
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
+"""  # noqa: E501
+
+
+def _run_contract(tmp_path: Path, run: str) -> dict:
+    fixtures = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in CONTRACT.glob("*.json")}
+    (tmp_path / "fx.json").write_text(json.dumps(fixtures, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "config.json").write_text(json.dumps(_config(), ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "harness.js"
+    prelude = TRUST_HARNESS[: TRUST_HARNESS.index("(async () => {")]
+    prelude = prelude.replace(
+        "globalThis.Nassakh = { toast: (m) => calls.push(['toast', m]), copyText: () => true };",
+        "globalThis.Nassakh = { toast: (m) => calls.push(['toast', m]),"
+        " copyText: () => { calls.push(['copy']); return true; } };",
+    )
+    harness.write_text(prelude + run, encoding="utf-8")
+    result = subprocess.run(
+        [
+            "node",
+            str(harness),
+            str(JS / "review.js"),
+            str(tmp_path / "config.json"),
+            str(JS / "keys.js"),
+            str(tmp_path / "fx.json"),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr[-4000:]
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_review_leads_back_to_its_origin_and_names_the_next_step(tmp_path):
+    """D76 (§5.3) on the contract (`review_nav.json`, `next_step.json`): «‹ الكتاب», the origin kept by every
+    page swap and sent with the approval, the detour, every end panel, the N rule and §5.8's keys."""
+    out = _run_contract(tmp_path, NAV_RUN)
+    nav = _contract("review_nav.json")
+    book = _entry(nav, "from=book&at=12")
+    query = book["origin"]["query"]
+    assert out["back"] == {
+        "bar": book["back"],
+        "detour": book["detour"],
+        "film": f"/books/1/review/3/?{query}",
+        "payload": f"/api/pages/9/review/?{query}",
+        "page": f"/books/1/review/4/?{query}",
+        "body": {k: v for k, v in book["origin"].items() if k in ("from", "at", "block") and v is not None},
+    }
+    assert out["noBack"] == {"bar": None, "film": "/books/1/review/3/", "body": {}, "detour": False}
+    manuscript = _entry(nav, "from=manuscript")
+    assert out["manuscript"] == {
+        "bar": manuscript["back"],
+        "detour": manuscript["detour"],
+        "film": f"/books/1/review/3/?{manuscript['origin']['query']}",
+    }
+    steps = _contract("next_step.json")
+    last = _entry(steps["approve"], "(the last page)")
+    # the detour: the page stays (no payload is fetched), the pane offers the way back first
+    assert out["detour"]["after"] == {
+        "kind": "detour",
+        "number": 3,
+        "backUrl": book["back"]["url"],
+        "hasNext": True,
+    }
+    assert out["detour"]["live"] == "اعتُمدت الصفحة 3." and out["detour"]["page"] == 3
+    assert out["detour"]["fetched"] == 0 and out["detour"]["body"] == last["request"]
+    # «الصفحة التالية للمراجعة»: the next page slides in, asked with the origin (its nav leads back alike)
+    assert out["detourNext"] == {"page": 4, "arrived": False, "get": f"/api/pages/10/review/?{query}"}
+    # the last page: the end panel, the contract's words; the live region says so; Esc stays in review
+    assert out["end"]["body"] == last["request"]
+    ns = last["response"]["next_step"]
+    assert out["end"]["after"] == {
+        "kind": "end",
+        "key": ns["state"],
+        "done": True,
+        "heading": ns["heading"],
+        "summary": ns["summary"],
+        "step": ns["title"],
+        "text": ns["text"],
+        "button": ns["button"],
+        "url": ns["url"],
+        "stay": ns["stay"],
+    }
+    assert out["end"]["live"] == "رُوجعت كل الصفحات" and out["escEnd"] is None
+    for name, variant in steps["variants"].items():
+        drawn = out["variants"][name]
+        assert drawn["heading"] == variant["heading"] and drawn["url"] == variant["url"], name
+        assert drawn["step"] == variant["title"] and drawn["button"] == variant["button"], name
+        assert drawn["text"] == variant["text"] and drawn["summary"] == variant["summary"], name
+    assert out["variants"]["processing"]["key"] == "processing"
+    # the N rule: N right after A never skips the page it brought in; a save makes it an ordinary page again
+    assert out["nRule"] == {
+        "arrivedAt": 4,
+        "arrived": True,
+        "stayed": 4,
+        "toast": "هذه هي الصفحة التالية للمراجعة",
+        "gets": 0,
+    }
+    assert out["touched"] is False
+    assert out["nLast"] == {"toast": "هذه آخر صفحة بانتظار المراجعة", "after": None}
+    book_step = steps["variants"]["book"]
+    assert out["nNone"] == {
+        "kind": "end",
+        "heading": book_step["heading"],
+        "button": book_step["button"],
+        "done": True,
+    }
+    # §5.8: G, O, V, C
+    assert out["jump"] == {"jumping": True, "page": 3, "after": False}
+    assert out["jumpUnknown"] == "لا صفحة بهذا الرقم"
+    assert out["keys"] == {"tabs": ["display", "scan", "display"], "swapped": [False, True], "copied": True}
+    assert out["detail"] == [f"{_entry(nav, 'GET /books/40/review/2/')['dashboard_url']}pages/3/", ""]
+
+
+def test_review_templates_carry_the_origin_the_panels_and_the_fix_sheet():
+    body = _render()
+    bar = body[body.index('x-data="reviewBar"') : body.index('id="review-config"')]
+    assert '<template x-if="b.back">' in bar and "data-back-link" in bar and 'x-text="b.back.label"' in bar
+    assert 'class="rv-jump" x-show="b.jumping"' in bar and "act('jumpTo', $el.value)" in bar
+    assert "تفاصيل المعالجة" in bar and ':href="b.detailUrl" data-detail-link' in bar
+    assert (
+        'data-stage-bar data-rail data-current="review"' in body and 'class="review-screen" data-rail' in body
+    )
+    assert '<h1 class="page-title">كتاب التجربة</h1>' in body and "لوحة الكتاب" not in body
+    # the panes after an approval: the detour and the end panel, in place of the lines
+    after = body[body.index("data-after") : body.index("data-readers-banner")]
+    assert "العودة إلى الكتاب" in after and "الصفحة التالية للمراجعة" in after
+    assert "الخطوة التالية:" in after and 'x-text="after.stay"' in after and "data-end-primary" in after
+    assert 'x-show="ready && !loading && !after"' in body
+    assert '<p class="sr-only" aria-live="polite" x-text="liveMessage"></p>' in body
+    assert "يُحرَّر هذا الكتاب في «الكتاب»؛ تصله تغييرات هذه الصفحة من «تغييرات المراجعة»." in body
+    # the word menu's «إجراءات أخرى» offers «تصحيح في كل الكتاب…» (⌥F); the sheet and the toast's chip
+    fly = body[body.index('class="rv-fly"') : body.index("حذف الكلمة</span>")]
+    assert "تصحيح في كل الكتاب…" in fly and '<kbd class="kbd">⌥</kbd><kbd class="kbd">F</kbd>' in fly
+    sheet = body[body.index('class="rv-modal rv-fix"') : body.index("data-fix-apply")]
+    for needle in (
+        "تصحيح في كل الكتاب",
+        "توحيد صور الألف",
+        "كلمة كاملة",
+        "مطابقة التشكيل",
+        'x-text="fixCountText"',
+    ):
+        assert needle in sheet, needle
+    assert (
+        '@keydown="onFixKey($event)"' in sheet and ':style="cropBox(o, p)"' in sheet and " · مُعتمَدة" in sheet
+    )
+    assert 'x-text="fixButton"' in body and "data-elsewhere" in body and "تصحيحها…" in body
+    assert '@click="undoFromToast()"' in body and "data-find-link" in body
+    # the sheet's keys in the shortcut sheet
+    assert '<kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة برقمها' in body
+    assert '<kbd class="kbd">O</kbd></dt><dd>الصورة المعالَجة / الأصل' in body
+    assert '<kbd class="kbd">V</kbd></dt><dd>تبديل جهتَي الصورة والنص' in body
+    assert '<kbd class="kbd">C</kbd></dt><dd>نسخ نص الصفحة' in body
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_fix_everywhere_sheet_on_the_contract(tmp_path):
+    """D79 (§5.7) on `occurrences.json` and `fix_everywhere.json`: the sheet's list, ticks and keys, the
+    request bodies, the toast (the places left, the book's find & replace), the batch undo, the chip."""
+    out = _run_contract(tmp_path, FIX_RUN)
+    occ = _contract("occurrences.json")
+    key = next(k for k in occ if k.startswith("GET"))
+    fix = _contract("fix_everywhere.json")
+    plain = _entry(fix, "(an unedited book)")
+    edited = _entry(fix, "on an edited book")
+    undo = _entry(fix, "(every line still at the fix)")
+    assert out["open"] == {
+        "prevented": True,
+        "open": True,
+        "from": "السعودي",
+        "to": "المسعودي",
+        "url": key.split(" ", 1)[1],
+        "popOpen": False,
+    }
+    # the ticks are the lines' `pick`; the count line and the button in Arabic count forms
+    from assembly.render import ar_count
+
+    answer = occ[key]["response"]
+    lines = [(p["number"], line) for p in answer["results"] for line in p["lines"]]
+    picked = sum(line["pick"] for _n, line in lines)
+    places = ("موضع واحد", "موضعان", "مواضع", "موضعًا")
+    pages_in = ("صفحة واحدة", "صفحتين", "صفحات", "صفحة")
+    assert out["sheet"]["count"] == (
+        f"{ar_count(answer['total'], places)} في {ar_count(answer['pages'], pages_in)} · المحدَّد {picked}"
+    )
+    assert out["sheet"]["button"] == f"تصحيح {ar_count(picked, ('موضع واحد', 'موضعين', 'مواضع', 'موضعًا'))}"
+    assert out["sheet"]["picked"] == picked
+
+    # a running head and a form a reviewer confirmed start unticked, and say why
+    def note(line):
+        if line["head"]:
+            return "ترويسة لا تدخل الكتاب"
+        return "أكّدها المراجع كما هي" if line["res"] in ("primary", "typed") else ""
+
+    assert out["sheet"]["rows"] == [[n, line["line_id"], line["pick"], note(line)] for n, line in lines]
+    crop = out["sheet"]["crop"]
+    assert crop["box"].startswith("width:") and "height:30px" in crop["box"]
+    assert f'url("{answer["results"][0]["image"]["url"]}")' in crop["box"] and crop["word"].startswith(
+        "left:"
+    )
+    assert out["keys"] == {"cursor": 2, "ticked": False, "behind": False}
+    # Enter corrects the ticked ones: the contract's body; the toast names the places left
+    assert out["apply"]["url"] == "/api/books/42/fix-everywhere/" and out["apply"]["open"] is False
+    assert out["apply"]["body"] == plain["request"]
+    toast = out["apply"]["toast"]
+    assert toast["message"] == plain["response"]["message"] and toast["batch"] == plain["response"]["batch"]
+    assert toast["detail"] == "وتُرك موضع واحد تغيّر منذ فتح القائمة" and toast["link"] is None
+    assert out["apply"]["reloaded"] is False  # the page on screen (3) is not in the batch's pages (1, 2)
+    assert out["undo"]["post"] == [
+        "/api/books/42/fix-everywhere/6c1b9b52-0000-4000-8000-000000000001/undo/",
+        undo["request"],
+    ]
+    assert out["undo"]["toast"] == undo["response"]["message"] and out["undo"]["toastGone"] is None
+    # an edited book: the request is the contract's, the toast leads to find & replace pre-filled
+    assert out["edited"]["body"] == edited["request"]
+    assert out["edited"]["toast"]["link"] == {
+        "label": "وفي نص الكتاب: استبدال «السعودي» بـ«المسعودي»…",
+        "url": edited["response"]["find_url"],
+    }
+    assert out["refused"] == {"noTo": "اكتب التصحيح أولًا.", "same": "التصحيح مطابق للكلمة نفسها.", "posts": 0}
+    chip = out["elsewhere"]["chip"]
+    offered = _entry(fix, "elsewhere")["response (keys added to today's answer)"]["elsewhere"]
+    assert chip["message"] == "صُحّحت الكلمة" and chip["elsewhere"]["text"] == offered["text"]
+    assert out["elsewhere"]["open"] is True and out["elsewhere"]["from"] == offered["from"]
+    assert out["elsewhere"]["to"] == offered["to"]

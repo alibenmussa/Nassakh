@@ -14,7 +14,7 @@
   const NS = (root.NassakhBook = root.NassakhBook || {});
   NS.parts = NS.parts || {};
 
-  const TABS = ['chapters', 'pages', 'find', 'format', 'block', 'source', 'uncertain'];
+  const TABS = ['chapters', 'pages', 'find', 'format', 'block', 'source', 'uncertain', 'changes'];
   const TAB_KEY = 'nassakh.book.tab.';
   const DEFAULT_TAB = { preview: 'format', edit: 'source' };
   const FIND_MS = 200;
@@ -26,6 +26,13 @@
   const MATCHES = ['مطابقة واحدة', 'مطابقتان', 'مطابقات', 'مطابقة'];
   const DIGITS = ['رقم واحد', 'رقمان', 'أرقام', 'رقمًا'];
   const PAGES = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
+  const PAGES_GEN = ['صفحة واحدة', 'صفحتين', 'صفحات', 'صفحة']; // after «نص» / «قراءة»: «تغيّر نص صفحتين»
+  // D78 (PHASE7 §5.6): «تغييرات المراجعة», the page-by-page merge of review's changes into the edited book
+  const PLAN_MS = 700; // the plan's poll
+  const APPLIED_MS = 600; // the blocks an apply changed flash once
+  const LATER_KEY = 'nassakh.book.later.'; // «لاحقًا»: the drift signature the banner was put off for (per book)
+  const REASONS = { review: 'المراجعة', processing: 'إعادة المعالجة', added: 'صفحة جديدة', removed: 'أُخرجت من الكتاب' };
+  const BANNER_PAGES = 8; // at most 8 page numbers in the banner
   const MINUTES = ['دقيقة', 'دقيقتين', 'دقائق', 'دقيقة'];
   const HOURS = ['ساعة', 'ساعتين', 'ساعات', 'ساعة'];
   const DAYS = ['يوم', 'يومين', 'أيام', 'يومًا'];
@@ -75,7 +82,7 @@
       pointedNode: null, // {key, id, node}: that block from its chapter's nodes when no chapter is being edited («الفقرة»)
       flash: null, // {n, block, i}: a line pointed at from a list, lit for a moment
       // find & replace
-      find: { query: '', replacement: '', matchTashkeel: false, foldAlef: true, wholeWord: false, scope: 'chapter', chapter: null, results: [], index: -1, total: 0, groups: [], busy: false, loading: false },
+      find: { query: '', replacement: '', matchTashkeel: false, foldAlef: true, wholeWord: false, scope: 'chapter', chapter: null, results: [], index: -1, total: 0, groups: [], busy: false, loading: false, fixBatch: null },
       // the uncertain words
       uncertain: { loaded: false, loading: false, items: [], count: Number(cfg.uncertainCount) || 0, busy: '', error: '', open: null },
       // the source («الأصل»)
@@ -86,14 +93,33 @@
       digits: { open: false, style: 'western', scope: 'chapter', busy: false },
       sheetOpen: false,
       // the review drift (D41), live (D70): `{edited, pages, chapters}`, refreshed from `api:review_drift`
-      drift: { edited: Boolean(cfg.drift && cfg.drift.edited), pages: ((cfg.drift && cfg.drift.pages) || []).slice(), chapters: ((cfg.drift && cfg.drift.chapters) || []).slice() },
+      drift: { edited: Boolean(cfg.drift && cfg.drift.edited), pages: ((cfg.drift && cfg.drift.pages) || []).slice(), chapters: ((cfg.drift && cfg.drift.chapters) || []).slice(), reasons: Object.assign({}, (cfg.drift && cfg.drift.reasons) || {}), approvals: ((cfg.drift && cfg.drift.approvals) || []).slice() },
       dismissedDrift: [],
+      later: U.readSession(LATER_KEY + (cfg.bookId || '')) || '', // «لاحقًا» put the banner off for this drift
+      // «تغييرات المراجعة» (D78): the newest plan (api:review_changes), the owner's choices per item, the pages taken
+      changes: { plan: null, stale: false, state: 'idle', error: '', notEdited: '', choices: {}, pages: {}, busy: '', planId: null, requested: null },
+      appliedBlocks: null, // the blocks an apply changed, lit once (APPLIED_MS)
       reassembly: { running: false, runId: null, error: '' },
+      noteBusy: false, // «تحويل إلى حاشية» on the wire
       rebuild: { open: false, chapter: null, title: '' }, // D70: «إعادة بناء الفصل من المراجعة؟»
 
       _init_panel() {
         if (this.uncertain.count && this.tab === 'uncertain') this.loadUncertain();
         this.bindLiveDrift();
+        // the address (§5.4): `?block=` lands on the paragraph once the pages are there; `?tab=find&q=&r=&fix=` fills
+        // find & replace (fix everywhere on an edited book, §5.7); `?tab=changes` compares at once
+        this.pendingBlock = typeof cfg.block === 'string' && cfg.block ? cfg.block : null;
+        if (this.pendingBlock && this.pages.length) this.landBlock(); // the first pages landed already (the stage inits first)
+        const pre = cfg.findPrefill;
+        if (pre && pre.query) {
+          this.find.query = String(pre.query);
+          this.find.replacement = String(pre.replacement || '');
+          this.find.scope = 'book';
+          this.find.fixBatch = pre.fix || null;
+          this.tab = 'find';
+          this.scheduleFind();
+        }
+        if (this.tab === 'changes') this.openChanges();
       },
       _destroy_panel() {
         if (liveChannel) { try { liveChannel.close(); } catch (_) { /* closed */ } liveChannel = null; }
@@ -110,12 +136,19 @@
           { key: 'block', label: 'الفقرة', icon: 'i-pilcrow', badge: '' },
           { key: 'source', label: 'الأصل', icon: 'i-image', badge: '' },
           { key: 'uncertain', label: 'غير المؤكَّدة', icon: 'i-uncertain', badge: this.uncertain.count ? String(this.uncertain.count) : '', warn: Boolean(this.uncertain.count) },
+          ...(this.hasChangesTab ? [{ key: 'changes', label: 'تغييرات المراجعة', icon: 'i-merge', badge: this.changesCount ? String(this.changesCount) : '', warn: Boolean(this.changesCount) }] : []),
         ];
       },
+      // the tabs shown (the changes tab only with content drift or an open plan)
+      get shownTabs() { return TABS.filter((k) => k !== 'changes' || this.hasChangesTab); },
       setTab(key, opts = {}) {
         if (!TABS.includes(key)) return false;
         this.tab = key;
-        if (!opts.quiet) U.writeLocal(TAB_KEY + this.mode, key);
+        // the changes tab is never the remembered one: it opens from the banner, the menu or the address
+        if (!opts.quiet && key !== 'changes') U.writeLocal(TAB_KEY + this.mode, key);
+        // §5.4: the address keeps the tab (a copied link opens on it)
+        if (typeof this.remember === 'function') this.remember();
+        if (key === 'changes') this.openChanges();
         if (key === 'pages') this.centerFilm();
         if (key === 'uncertain' && !this.uncertain.loaded) this.loadUncertain();
         if (key === 'source') this.followSource(true);
@@ -126,8 +159,9 @@
       },
       // ←/→ on the tab bar move between the tabs (RTL: the next tab is on the left)
       stepTab(dir) {
-        const i = TABS.indexOf(this.tab);
-        const next = TABS[(i + dir + TABS.length) % TABS.length];
+        const list = this.shownTabs;
+        const i = list.indexOf(this.tab);
+        const next = list[(i + dir + list.length) % list.length];
         this.setTab(next);
         const focus = () => U.focus(U.q(ctx.dom.root || (U.hasDOM ? document.querySelector('[data-book]') : null), `[data-tab="${next}"]`));
         if (this.$nextTick) this.$nextTick(focus); else focus();
@@ -179,7 +213,22 @@
       afterLand(n) {
         if (this.tab === 'chapters') this.renderChapters();
         if (this.tab === 'source' && !ctx.openId) this.followSource();
+        if (this.pendingBlock) this.landBlock();
         void n;
+      },
+      // `?block=` (§5.4, the readiness rows): the paragraph's page, lit. Its chapter's pages are fetched first when
+      // the first window does not hold it; a block that cannot be found says so once.
+      async landBlock() {
+        const block = this.pendingBlock;
+        this.pendingBlock = null;
+        if (!block || this.goToBlock(block)) return Boolean(block);
+        const range = this.ranges.find((c) => c.id === cfg.chapter) || null;
+        if (range) {
+          await this.fetchLayout(range.first, Math.min(range.last, range.first + 119));
+          if (this.goToBlock(block)) return true;
+        }
+        U.toast('لم تُعثر على الفقرة في صفحات الكتاب');
+        return false;
       },
       afterSave() {
         if (this.uncertain.loaded) { clearTimeout(T.uncertain); T.uncertain = setTimeout(() => this.loadUncertain(), UNCERTAIN_REFRESH_MS); }
@@ -408,6 +457,9 @@
         this.liveMessage = `استُبدلت ${G.arCount(n, MATCHES)}${where}`;
         const snapshot = r.data.snapshot;
         this.undoToast(`استُبدلت ${G.arCount(n, MATCHES)}${where}`, () => this.restoreSnapshot(snapshot, { quiet: true }));
+        // D79 (§5.7): the book side of a fix everywhere — the batch's pages are compared now; those that agree with
+        // review settle at once, the rest wait in «تغييرات المراجعة»
+        if (f.fixBatch) { const batch = f.fixBatch; f.fixBatch = null; this.planChanges({ fix: batch }); }
         await this.runFind();
         return n;
       },
@@ -509,7 +561,13 @@
         const s = this.source.sheet;
         return s && s.width > 0 && s.height > 0 ? (s.width / s.height).toFixed(4) : '0.7';
       },
-      reviewUrl(n) { return n ? U.fill(urls.review, n) : ''; },
+      // D76 (§5.3): review opened from here leads back to this page of the book («‹ الكتاب», the detour)
+      reviewUrl(n, at) {
+        if (!n) return '';
+        const url = U.fill(urls.review, n);
+        const page = at || this.current;
+        return `${url}${url.includes('?') ? '&' : '?'}from=book${page ? `&at=${page}` : ''}`;
+      },
       // The block the pane shows: the open one, the one clicked in preview, else the first on the page shown.
       async followSource(now) {
         clearTimeout(T.source);
@@ -607,7 +665,39 @@
           pages,
           reviewed: a.reviewed !== false,
           separator: b.node.type === 'separator',
+          noteFor: b.node.type === 'paragraph' ? this.noteMarkerOf(b.node) : '',
         };
+      },
+      // D74 on the book page (§5.4): a paragraph that starts with a footnote marker («(1)», «[1]», «1-»), or whose
+      // mark the assembly left (`noteFor`), can become the footnote of its call: «تحويل إلى حاشية للعلامة (1)»
+      noteMarkerOf(node) {
+        const a = (node && node.attrs) || {};
+        if (a.noteFor) return String(a.noteFor);
+        const text = B() ? B().plainText(node) : '';
+        const m = /^\s*[(\[]\s*([0-9٠-٩]{1,3}|\*)\s*[)\]]/.exec(text || '');
+        return m ? U.westernDigits(m[1]) : '';
+      },
+      // POST api:to_footnote with the chapter as this page holds it; its answer is one step of the chapter's undo,
+      // saved and laid out like an edit; the note's call is lit. Refused: the server's words («لم تُعثر على العلامة…»).
+      async toFootnote(blockId) {
+        const id = blockId || (this.blockInfo && this.blockInfo.id);
+        if (!this.canEdit || !id || !urls.toFootnote || this.noteBusy) return false;
+        await this.closeBlock({ commit: true });
+        const cid = await this.chapterFor(id, this.current);
+        if (!cid) { U.toast('لم تُعثر على الفقرة في هذا الفصل'); return false; }
+        this.noteBusy = true;
+        const r = await U.api(urls.toFootnote, { method: 'POST', body: { block: id, content: { type: 'doc', content: ctx.nodes } } });
+        this.noteBusy = false;
+        if (!r.ok || !r.data || !r.data.content) { U.toast(r.message); return false; }
+        this.change(r.data.content.content || []);
+        this.pointed = null;
+        this.pointedNode = null;
+        this.paint();
+        const note = r.data.note || {};
+        this.liveMessage = `صارت الفقرة حاشية للعلامة (${note.marker || ''})`;
+        this.undoToast(`صارت الفقرة حاشية للعلامة (${note.marker || ''})`, () => this.undo(), true);
+        if (note.block) this.goToBlock(note.block);
+        return r.data;
       },
 
       // ------------------------------------------------------------ dialogs: snapshots, digits, shortcuts
@@ -767,9 +857,15 @@
         this.applyDrift(r.data);
         return true;
       },
-      // A new set of changed pages brings a dismissed banner back: «الاحتفاظ بالنص» kept the text as it was then.
+      // The classified drift (D78: `reasons`, `approvals`); a new set of changed pages brings a dismissed banner back.
       applyDrift(d) {
-        const next = { edited: Boolean(d && d.edited), pages: Array.isArray(d && d.pages) ? d.pages.slice() : [], chapters: Array.isArray(d && d.chapters) ? d.chapters.slice() : [] };
+        const next = {
+          edited: Boolean(d && d.edited),
+          pages: Array.isArray(d && d.pages) ? d.pages.slice() : [],
+          chapters: Array.isArray(d && d.chapters) ? d.chapters.slice() : [],
+          reasons: Object.assign({}, (d && d.reasons) || {}),
+          approvals: Array.isArray(d && d.approvals) ? d.approvals.slice() : [],
+        };
         if (next.pages.join(',') !== (this.drift.pages || []).join(',')) this.dismissedDrift = [];
         this.drift = next;
         this.summaries.forEach((s) => { s.drift = next.chapters.includes(s.id); });
@@ -778,12 +874,226 @@
       get driftText() {
         const d = this.driftChapter;
         if (!d) return '';
-        return d.pages.length ? `تغيّر نص ${G.arCount(d.pages.length, PAGES)} من هذا الفصل في المراجعة بعد التحرير:` : 'تغيّر نص هذا الفصل في المراجعة بعد التحرير.';
+        return d.pages.length ? `تغيّر نص ${G.arCount(d.pages.length, PAGES_GEN)} من هذا الفصل في المراجعة بعد التحرير:` : 'تغيّر نص هذا الفصل في المراجعة بعد التحرير.';
       },
       dismissDrift() {
         const d = this.driftChapter;
         if (d) this.dismissedDrift = [...this.dismissedDrift, d.id];
         this.renderChapters();
+      },
+      // ---- the banner (D78, §5.6): book-wide, from the live drift and its reasons
+      // «تغيّر نص صفحتين في المراجعة بعد تحرير الكتاب: 12، 13.», «أعادت المعالجة قراءة 70 صفحة بعد تحرير الكتاب:
+      // 4، 12، 13…», «رُوجعت 3 صفحات لم تدخل الكتاب بعد: 91، 92، 93.», mixed: «تغيّر نص 5 صفحات بعد تحرير الكتاب: 3 في
+      // المراجعة و2 أعادت المعالجة قراءتها.». An unedited manuscript loses nothing to a re-assembly, and says so.
+      // «لاحقًا» puts it off until the drift changes (sessionStorage, per book and drift signature).
+      get driftSignature() {
+        const d = this.drift;
+        return (d.pages || []).map((n) => `${n}:${(d.reasons || {})[n] || ''}`).join(',');
+      },
+      get driftBanner() {
+        const d = this.drift;
+        const pages = (d.pages || []).slice().sort((a, b) => a - b);
+        if (!pages.length || (this.later && this.later === this.driftSignature)) return null;
+        const shown = pages.slice(0, BANNER_PAGES);
+        const more = pages.length > BANNER_PAGES;
+        if (!d.edited) {
+          return { kind: 'assembled', pages: [], more: false, text: `تغيّر نص ${G.arCount(pages.length, PAGES_GEN)} في المراجعة بعد التجميع؛ لم يُحرَّر الكتاب بعد، فإعادة التجميع لا تُضيّع شيئًا.` };
+        }
+        const by = { review: 0, processing: 0, added: 0, removed: 0 };
+        pages.forEach((n) => { const r = (d.reasons || {})[n] || 'review'; by[r in by ? r : 'review'] += 1; });
+        const kinds = Object.keys(by).filter((k) => by[k]);
+        const n = pages.length;
+        if (kinds.length === 1) {
+          const k = kinds[0];
+          let text;
+          if (k === 'processing') text = `أعادت المعالجة قراءة ${G.arCount(n, PAGES_GEN)} بعد تحرير الكتاب:`;
+          else if (k === 'added') text = n === 2 ? 'رُوجعت صفحتان لم تدخلا الكتاب بعد:' : `رُوجعت ${G.arCount(n, PAGES)} لم تدخل الكتاب بعد:`;
+          else if (k === 'removed') text = n === 2 ? 'أُخرجت صفحتان من الكتاب بعد تحريره:' : `أُخرجت ${G.arCount(n, PAGES)} من الكتاب بعد تحريره:`;
+          else text = `تغيّر نص ${G.arCount(n, PAGES_GEN)} في المراجعة بعد تحرير الكتاب:`;
+          return { kind: 'edited', pages: shown, more, text };
+        }
+        const PARTS = { review: 'في المراجعة', processing: 'أعادت المعالجة قراءتها', added: 'رُوجعت ولم تدخل الكتاب', removed: 'أُخرجت من الكتاب' };
+        const parts = kinds.map((k) => `${by[k]} ${PARTS[k]}`);
+        const list = parts.length > 1 ? `${parts.slice(0, -1).join('، ')} و${parts[parts.length - 1]}` : parts[0];
+        return { kind: 'edited', pages: [], more: false, text: `تغيّر نص ${G.arCount(n, PAGES_GEN)} بعد تحرير الكتاب: ${list}.` };
+      },
+      putOffBanner() {
+        this.later = this.driftSignature;
+        U.writeSession(LATER_KEY + (cfg.bookId || ''), this.later);
+      },
+
+      // ------------------------------------------------------------ «تغييرات المراجعة» (D78, §5.6)
+      // Opening the tab closes and saves the open paragraph, posts a plan (every drift page) and polls it every
+      // 700 ms. Rows are the plan's pages (a checkbox: taken now or not), items the paragraphs with their chip and
+      // diff; a conflict and a `choose` item ask «نصّي | المراجعة» (default «نصّي»). «أخذ التغييرات (3)» applies the
+      // checked pages (a snapshot first: the toast's «تراجع» restores it), «الاحتفاظ بنصّي في الكل» moves the baseline
+      // without writing the text. A 409 plans again and keeps the choices of the items that remain.
+      get hasChangesTab() {
+        const p = this.changes.plan;
+        return Boolean(this.drift.edited && (this.drift.pages || []).length) || Boolean(p && (p.status === 'queued' || p.status === 'running' || (p.status === 'done' && !p.applied && (p.items || []).length)));
+      },
+      // the badge and the «⋯» item's count: the plan's items once compared, else the drift's pages
+      get changesCount() {
+        const p = this.changes.plan;
+        if (p && p.status === 'done' && !p.applied) return (p.items || []).length;
+        return this.drift.edited ? (this.drift.pages || []).length : 0;
+      },
+      get changesItems() { const p = this.changes.plan; return new Map(((p && p.items) || []).map((it) => [it.id, it])); },
+      // rows per page, with the page's items and whether it is taken now
+      get changesRows() {
+        const p = this.changes.plan;
+        if (!p || p.status !== 'done') return [];
+        const items = this.changesItems;
+        return (p.pages || []).map((row) => Object.assign({}, row, { items: (row.items || []).map((id) => items.get(id)).filter(Boolean), taken: this.changes.pages[row.number] !== false }));
+      },
+      get changesTaken() { return this.changesRows.filter((r) => r.taken); },
+      // «أخذ التغييرات (3)»: the items of the pages taken
+      get changesApplyCount() { return this.changesTaken.reduce((n, r) => n + r.items.length, 0); },
+      get changesApplyLabel() {
+        if (this.changes.busy === 'apply') return 'تُؤخذ…';
+        return `أخذ التغييرات (${this.changesApplyCount})`;
+      },
+      choiceOf(item) { const c = this.changes.choices[item.id]; return c && (item.choices || []).includes(c) ? c : item.default; },
+      setChoice(item, choice) { if ((item.choices || []).includes(choice)) this.changes.choices = Object.assign({}, this.changes.choices, { [item.id]: choice }); },
+      // «خذ ما جاء من المراجعة في هذه الصفحة» / «أبقِ نصّي في هذه الصفحة»
+      setPageChoice(row, choice) {
+        const next = Object.assign({}, this.changes.choices);
+        row.items.forEach((it) => { if ((it.choices || []).includes(choice)) next[it.id] = choice; });
+        this.changes.choices = next;
+        this.changes.pages = Object.assign({}, this.changes.pages, { [row.number]: true });
+      },
+      togglePage(row) { this.changes.pages = Object.assign({}, this.changes.pages, { [row.number]: !row.taken }); },
+      // an item's word, by kind (the status dot's word is its chip)
+      itemTone(item) {
+        return { take: 'accent', merged: 'accent', insert: 'accent', remove: 'warning', conflict: 'warning', choose: 'neutral' }[item.kind] || 'neutral';
+      },
+      reasonLabel(row) { return row.reason_label || REASONS[row.reason] || ''; },
+      // the item on its page: the block turned to and lit (an insert, or a deleted paragraph, lights where it goes)
+      goToItem(item) {
+        if (!item) return false;
+        if (item.block && this.goToBlock(item.block)) return true;
+        return item.chapter ? this.goToChapter(item.chapter) : false;
+      },
+      async openChanges(body) {
+        if (!urls.reviewChanges || this.changes.state === 'posting' || this.changes.state === 'polling') return false;
+        if (ctx.ed) await this.closeBlock({ commit: true });
+        if (this.editDirty) await this.saveNow();
+        return this.planChanges(body);
+      },
+      // POST a plan ({} every drift page, {pages}, {fix: batch}); 202 → poll until it is done or failed
+      async planChanges(body = {}) {
+        if (!this.canEdit) return this.fetchChanges();
+        this.changes = Object.assign({}, this.changes, { state: 'posting', error: '', notEdited: '' });
+        const r = await U.api(urls.reviewChanges, { method: 'POST', body });
+        if (r.status === 409 && r.data && r.data.reassemble) {
+          this.changes = Object.assign({}, this.changes, { state: 'idle', notEdited: r.message, plan: null });
+          return false;
+        }
+        if (!r.ok || !r.data) { this.changes = Object.assign({}, this.changes, { state: 'error', error: r.message || 'تعذّرت المقارنة؛ بقي الكتاب كما هو.' }); return false; }
+        this.changes.planId = r.data.plan_id;
+        this.changes.requested = body;
+        this.changes.state = 'polling';
+        return this.pollChanges();
+      },
+      async pollChanges() {
+        clearTimeout(T.changes);
+        const r = await U.api(urls.reviewChanges);
+        if (!r.ok || !r.data) {
+          this.changes = Object.assign({}, this.changes, { state: 'error', error: r.message || 'تعذّرت المقارنة؛ بقي الكتاب كما هو.' });
+          return false;
+        }
+        if (r.data.drift) this.applyDrift(r.data.drift);
+        // the newest plan is the book's (a plan asked for meanwhile, elsewhere, is the same comparison or newer)
+        const plan = r.data.plan;
+        if (plan && (plan.status === 'queued' || plan.status === 'running')) {
+          this.changes.plan = plan;
+          T.changes = setTimeout(() => this.pollChanges(), PLAN_MS);
+          return null;
+        }
+        this.adoptPlan(plan, r.data.stale);
+        return plan;
+      },
+      // GET only (a proofreader, a reload): the newest plan as it is
+      async fetchChanges() {
+        const r = await U.api(urls.reviewChanges);
+        if (!r.ok || !r.data) return false;
+        if (r.data.drift) this.applyDrift(r.data.drift);
+        this.adoptPlan(r.data.plan, r.data.stale);
+        return true;
+      },
+      adoptPlan(plan, stale) {
+        const failed = plan && plan.status === 'error';
+        // the choices of the items that remain survive a new plan (item ids are stable in order)
+        const ids = new Set(((plan && plan.items) || []).map((it) => it.id));
+        const choices = {};
+        Object.entries(this.changes.choices).forEach(([id, c]) => { if (ids.has(id)) choices[id] = c; });
+        this.changes = Object.assign({}, this.changes, {
+          plan: plan || null,
+          stale: Boolean(stale),
+          state: failed ? 'error' : plan ? 'ready' : 'idle',
+          error: failed ? plan.error || 'تعذّرت المقارنة؛ بقي الكتاب كما هو.' : '',
+          choices,
+          pages: {},
+        });
+      },
+      // the apply's body: the checked pages; only the choices that differ from the item's default
+      applyBody(keepAll) {
+        const pages = this.changesTaken.map((r) => r.number);
+        if (keepAll) return { keep_all: true, pages };
+        const choices = {};
+        this.changesTaken.forEach((row) => row.items.forEach((it) => { const c = this.choiceOf(it); if (c !== it.default) choices[it.id] = c; }));
+        return { choices, pages };
+      },
+      async applyChanges(keepAll) {
+        const plan = this.changes.plan;
+        if (!this.canEdit || !plan || plan.status !== 'done' || this.changes.busy) return false;
+        const body = this.applyBody(keepAll);
+        if (!body.pages.length) { U.toast('اختر صفحة واحدة على الأقل'); return false; }
+        if (ctx.ed) await this.closeBlock({ commit: true });
+        await this.saveNow();
+        if (this.editDirty) { U.toast('تعذّر الحفظ قبل أخذ التغييرات'); return false; }
+        const taken = this.changesTaken.flatMap((r) => r.items);
+        this.changes.busy = keepAll ? 'keep' : 'apply';
+        const r = await U.api(U.fill(urls.reviewChangesApply, plan.id), { method: 'POST', body });
+        this.changes.busy = '';
+        if (r.status === 409 && r.data && r.data.stale) {
+          U.toast('تغيّر النص منذ المقارنة؛ أُعيدت المقارنة.');
+          this.planChanges(this.changes.requested || {});
+          return false;
+        }
+        if (!r.ok || !r.data) { U.toast(r.message); return false; }
+        const d = r.data;
+        chapterCache.clear();
+        if (d.reload !== false) await this.afterServerEdit(); else this.pollNow();
+        this.afterApplied(keepAll ? [] : taken, d);
+        return d;
+      },
+      // the text agrees: «تم» moves the baseline (nothing is written)
+      settleChanges() { return this.applyChanges(true); },
+      afterApplied(items, d) {
+        const pages = (d.applied && d.applied.pages) || [];
+        const n = this.changesTaken.length;
+        this.changes = Object.assign({}, this.changes, { plan: Object.assign({}, this.changes.plan, { applied: d.applied || {} }), state: 'idle', choices: {}, pages: {} });
+        this.drift = Object.assign({}, this.drift, { pages: (this.drift.pages || []).filter((x) => !pages.includes(x)) });
+        this.fetchDrift();
+        if (root.NassakhStages) root.NassakhStages.changed(cfg.bookId);
+        const snapshot = d.snapshot;
+        const written = d.applied ? d.applied.written !== false : items.length > 0;
+        if (written && items.length) {
+          this.flashApplied(items.flatMap((it) => [it.block, ...(it.blocks || [])]).filter(Boolean));
+          this.undoToast(`أُخذت تغييرات ${G.arCount(n, PAGES_GEN)} من المراجعة`, () => this.restoreSnapshot(snapshot, { quiet: true }));
+          this.liveMessage = `أُخذت تغييرات ${G.arCount(n, PAGES_GEN)} من المراجعة`;
+        } else {
+          this.undoToast('بقي نصّك كما هو؛ لن تعود هذه الصفحات إلى التغييرات', () => this.restoreSnapshot(snapshot, { quiet: true }));
+        }
+        if (this.tab === 'changes' && !this.hasChangesTab) this.setTab(tabFor(this.mode), { quiet: true });
+      },
+      flashApplied(blocks) {
+        if (U.reduced() || !blocks.length) return;
+        this.appliedBlocks = new Set(blocks);
+        this.paint();
+        clearTimeout(T.applied);
+        T.applied = setTimeout(() => { this.appliedBlocks = null; this.paint(); }, APPLIED_MS);
       },
       // «إعادة بناء الفصل من المراجعة…» (D70): over a text edited here the rebuild replaces the whole chapter, so
       // the dialog names what is lost first; an unedited text loses nothing and is rebuilt at once (a 409 from

@@ -53,25 +53,7 @@
   /* ------------------------------------------------------------ top bar (§2.1) */
   .bk-bar { display: flex; align-items: center; gap: 10px; min-width: 0; } /* = rv-bar-inner */
   .bk-bar form { display: contents; }
-  .bk-status { /* = rv-save */
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 24px;
-    min-width: 14ch;
-    padding: 0 8px;
-    border-radius: var(--radius-pill);
-    font-size: 12px;
-    color: var(--color-text-3);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    transition: color 120ms ease, background-color 120ms ease;
-  }
-  .bk-status .dot { width: 6px; height: 6px; }
-  .bk-status.is-active { color: var(--color-text-2); }
-  .bk-status.is-active .dot { animation: bk-pulse 1200ms ease-in-out infinite; }
-  .bk-progress { width: 96px; } /* = rv-progress-bar */
-  .bk-progress .progress-fill { transition: width 320ms cubic-bezier(0.2, 0.7, 0.2, 1), background-color 200ms ease; }
+  /* the book's status is the stage bar's current step (D76, PHASE7 §5.1; layout.css `stg-`) */
   .bk-poll {
     display: inline-flex;
     align-items: center;
@@ -89,6 +71,7 @@
   .bk-poll:hover { background: var(--color-danger-border); }
   .bk-poll .dot { width: 6px; height: 6px; background: var(--color-danger); }
   .bk-menu .menu-item .icon { color: var(--color-text-3); }
+  .bk-menu-glyph { display: inline-grid; place-items: center; width: 14px; font-weight: 600; color: var(--color-text-3); } /* = ms-menu-glyph */
   .bk-menu { width: 240px; max-width: 240px; inset-inline-start: auto; inset-inline-end: 0; }
   /* Phase 4 (§4.1): the convert popover hangs from the bar's end (its look lives in manuscript.css, .ms-convert) */
   .bk-bar-inner, .bk-bar > .bk-bar { position: relative; }
@@ -701,7 +684,6 @@
   .bk-dashboard.is-guides .page-tile.is-doubt .page-tile-thumb { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--color-warning) 55%, transparent), var(--shadow-md); }
 
   /* ------------------------------------------------------------ keyframes (= rv-…) */
-  @keyframes bk-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: 0.55; } }
   @keyframes bk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   @keyframes bk-fade-in { from { opacity: 0; } to { opacity: 1; } }
   @keyframes bk-line-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
@@ -713,9 +695,6 @@
   @keyframes bk-read { from { top: 0; } to { top: 100%; } }
 
   /* ------------------------------------------------------------ responsive + reduced motion (§2.6, §10) */
-  @media (max-width: 1180px) {
-    .bk-progress { display: none; }
-  }
   /* D34 amended: in the viewer the whole side panel scrolls (summary, manuscript, thumbnails as one column); the
      attention list opens inline there, since a scrolling panel would clip a popover */
   @media (min-width: 901px) {
@@ -767,7 +746,6 @@
     .fac-line { animation: none; }
     .fac-line.is-lit .fac-text { animation: none; color: inherit; background: none; -webkit-background-clip: initial; background-clip: initial; }
     .fac-bar { animation: none; }
-    .bk-status.is-active .dot { animation: none; }
     .bk-mark { animation: none; }
     .page-sheet.is-pulse { animation: none; }
   }

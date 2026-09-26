@@ -993,7 +993,7 @@ def page_payload(book: Book, user=None) -> dict:
     from .preview import stylesheet_for
     from .readiness import book_readiness
 
-    manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").first()
+    manuscript = Manuscript.objects.filter(book_id=book.pk).select_related("run").defer("base").first()
     can_edit = has_role(user, ROLE_EDITOR)
     urls = {
         "create": reverse("api:exports", args=[book.pk]),

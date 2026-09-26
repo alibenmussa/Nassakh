@@ -13,7 +13,8 @@ Context: book, exists, can_edit, config (editor.services.page_config + `initial`
 book's preview, the first live pages). Western digits everywhere; numbers in Arabic strings sit in <bdi>.
 {% endcomment %}
 {% block head_title %}الكتاب · {{ book.title }} · نسّاخ{% endblock %}
-{% block title %}<span class="title-page">الكتاب</span><span class="title-sep" aria-hidden="true">·</span><span class="title-main">{{ book.title }}</span>{% endblock %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block stagebar %}{% include "partials/_stage_bar.html" with current="book" %}{% endblock %}
 
 {% block header_actions %}
 {% if exists %}
@@ -43,7 +44,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
         <span>الإخراج</span>
       </a>
 
-      {# «⋯»: snapshots, digits, the chapter's re-assembly on drift, the preview's PDF, the export page, the manuscript, the dashboard #}
+      {# «⋯»: snapshots, digits, review's changes and the chapter's rebuild, the preview's PDF, the export page, the manuscript (every step is in the stage bar) #}
       <div class="menu-anchor" x-data="{ open: false }" @keydown.escape.window="open = false">
         <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
           <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
@@ -59,6 +60,12 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
             <span class="bp-menu-glyph" aria-hidden="true">0</span>
             <span>تحويل الأرقام…</span>
           </button>
+          {# D78: review's changes, paragraph by paragraph; the chapter's rebuild stays a deliberate second way #}
+          <button type="button" class="menu-item" role="menuitem" x-show="v.hasChangesTab" @click="open = false; v.setTab('changes')" data-changes-menu-item>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-merge"/></svg>
+            <span>تغييرات المراجعة…</span>
+            <bdi class="meta ms-auto num" x-show="v.changesCount" x-text="v.changesCount"></bdi>
+          </button>
           <button type="button" class="menu-item" role="menuitem" x-show="v.driftChapter" :disabled="v.reassembly.running" @click="open = false; v.askReassemble()" data-rebuild-menu-item>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
             <span>إعادة بناء الفصل من المراجعة…</span>
@@ -67,7 +74,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
           <a class="menu-item" role="menuitem" :href="v.pdfUrl || '#'" :aria-disabled="v.pdfUrl ? 'false' : 'true'" target="_blank" rel="noopener" @click="if (!v.pdfUrl) $event.preventDefault(); else open = false" data-pdf-link>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-external"/></svg>
             <span>PDF المعاينة</span>
-            <span class="meta ms-auto" x-show="!v.pdfUrl">بعد أول إخراج</span>
+            <span class="meta ms-auto" x-show="!v.pdfUrl">بعد أول ترتيب</span>
           </a>
           <button type="button" class="menu-item" role="menuitem" @click="open = false; v.openSheet()">
             <span class="bp-menu-glyph" aria-hidden="true">?</span>
@@ -82,10 +89,6 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-text"/></svg>
             <span>المخطوطة</span>
           </a>
-          <a class="menu-item" role="menuitem" href="{% url 'books:detail' book.pk %}">
-            <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-start"/></svg>
-            <span>لوحة الكتاب</span>
-          </a>
         </div>
       </div>
     </div>
@@ -98,9 +101,9 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 {{ config|json_script:"book-config" }}
 {% if not exists %}
 {% url 'assembly:manuscript' book.pk as manuscript_url %}
-{% include "partials/_empty_state.html" with title="لا توجد مخطوطة بعد" text="حوّل الكتاب إلى مخطوطة أولًا، ثم اختر قطعه وخطوطه وهوامشه هنا وحرّر نصّه على صفحاته." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-book" %}
+{% include "partials/_empty_state.html" with title="لا توجد مخطوطة بعد" text="اجمع مخطوطة الكتاب أولًا، ثم اختر قطعه وخطوطه وهوامشه هنا وحرّر نصّه على صفحاته." action_url=manuscript_url action_label="فتح المخطوطة" icon="i-book" %}
 {% else %}
-<div class="lo-screen bp-screen" data-book x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
+<div class="lo-screen bp-screen" data-book data-rail x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
      :class="{ 'is-spread': spreadOn, 'is-edit': mode === 'edit', 'is-open': Boolean(open), 'has-marks': pageMarks }" :data-fit="fit" :data-mode="mode"
      @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @hashchange.window="onHashChange()" @visibilitychange.document="onVisible()"
      @focus.window="onWindowFocus()" @pageshow.window="onPageShow($event)">
@@ -112,21 +115,21 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 
   {# ------------------------------------------------------------ banners: the review drift (D41), a save conflict, a re-assembly, a failed layout #}
   <div class="lo-banners">
-    <div class="banner" x-show="driftChapter" x-cloak data-drift-banner>
+    {# D78 (PHASE7 §5.6): the review drift, book-wide, by its reasons; «عرض التغييرات» opens «تغييرات المراجعة», «لاحقًا» #}
+    {# puts it off until the drift changes. An unedited manuscript loses nothing to a re-assembly, and says so. #}
+    <div class="banner lo-drift" x-show="driftBanner" x-cloak data-drift-banner :data-kind="driftBanner ? driftBanner.kind : ''">
       <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
       <span class="grow">
-        <span x-text="driftText"></span>
-        <template x-for="(n, i) in (driftChapter ? driftChapter.pages : [])" :key="n">
-          <span><a class="bp-drift-page" :href="reviewUrl(n)"><bdi class="num" x-text="n"></bdi></a><span x-show="i < driftChapter.pages.length - 1">، </span></span>
+        <span x-text="driftBanner ? driftBanner.text : ''"></span>
+        <template x-for="(n, i) in (driftBanner ? driftBanner.pages : [])" :key="n">
+          <span><a class="bp-drift-page" :href="reviewUrl(n)"><bdi class="num" x-text="n"></bdi></a><span x-text="i < driftBanner.pages.length - 1 ? '، ' : (driftBanner.more ? '…' : '.')"></span></span>
         </template>
       </span>
       {% if can_edit %}
-      <button type="button" class="btn btn-sm" :disabled="reassembly.running" @click="askReassemble()" data-rebuild-button>
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-        <span>إعادة بناء الفصل من المراجعة…</span>
-      </button>
-      <button type="button" class="btn btn-ghost btn-sm" @click="dismissDrift()">الاحتفاظ بالنص</button>
+      <button type="button" class="btn btn-sm" x-show="driftBanner && driftBanner.kind === 'edited'" @click="setTab('changes')" data-changes-button>عرض التغييرات</button>
+      <a class="btn btn-sm" x-show="driftBanner && driftBanner.kind === 'assembled'" href="{% url 'assembly:manuscript' book.pk %}" data-reassemble-link>إعادة التجميع</a>
       {% endif %}
+      <button type="button" class="btn btn-ghost btn-sm" @click="putOffBanner()" data-later>لاحقًا</button>
     </div>
     <div class="banner banner-danger" role="alert" x-show="conflict.open" x-cloak data-conflict-banner>
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
@@ -178,7 +181,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
             <div class="empty-state lo-state-error" x-show="phase === 'error'" x-cloak role="alert" data-error-state>
               <svg class="icon icon-lg" aria-hidden="true"><use href="#i-alert"/></svg>
               <h2 class="empty-title" x-text="errorText"></h2>
-              <p class="empty-text">لم تُخرَج صفحات. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.</p>
+              <p class="empty-text">لم تُرتَّب الصفحات. أعد المحاولة، وإن تكرّر الخطأ فراجع سجل الخادم.</p>
               {% if can_edit %}
               <button type="button" class="btn" @click="retry()" :disabled="retrying">
                 <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>

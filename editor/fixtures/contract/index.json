@@ -1,0 +1,136 @@
+{
+ "about": "The 7c contract (docs/PHASE7_SPEC.md §5): the stage bar (D76, `api:book_stages`), review's origin and next step (§5.3), the classified drift and the page-by-page merge «تغييرات المراجعة» (D78, §5.6), «تحويل إلى حاشية للعلامة (n)» (§5.4) and «تصحيح في كل الكتاب» (D79, §5.7). Every file holds real answers of the books the tests build and is compared with them: `books/tests.py::stages_contract` (stages.json, tile.json; book 41 «كتاب المراحل»), `editor/tests.py::test_round_trip_payloads_equal_the_contract` (drift, changes_*, to_footnote, page_config; book 40 «رحلة النص», pages 4001–4007 = numbers 1–7, one chapter `h40011` «الفصل الأول»; book 44 unedited, 45 without a manuscript, 46 another book), `review/tests.py::test_review_payloads_equal_the_7c_contract` (review_nav, next_step, occurrences, fix_everywhere; book 40, book 47 «كتاب الخطوة التالية», book 42 «مروج الذهب»). ISO stamps are normalised to STAMP (2026-09-26T15:20:00.000000+00:00) and batch uuids to 6c1b9b52-0000-4000-8000-000000000001; `NASSAKH_WRITE_CONTRACT_FIXTURES=1` rewrites the files. The first version was written from the spec before the code; the live answers kept every shape and corrected a few values (context words, ids, counts). The top-level keys of each file are descriptive labels, not URLs to call: read the files at test time and do not copy their values into the UI code.",
+ "scenario (book 40)": {
+  "page 1": "h40011 «الفصل الأول» + p40012 «كان الشيخ فقيها، فاضلا، زاهدا في الدنيا.»; review corrects the three words → take (i1)",
+  "page 2": "p40021 «ورحل إلى المشرق فأقام به مدة ثم عاد إلى بلده.»: the owner writes «بلاده», review «الشرق» → merged (i2); p40022 «وله كتب كثيرة في الفقه واللغة سنة 1966.»: the owner writes 1967, review 1965 → conflict (i3)",
+  "page 3": "p40031 «وكانت وفاته في طرابلس بعد عودته بسنين.»: the owner deleted it on the book page, review changed «بسنين» → «بسنوات» → conflict, deleted by the owner (i4)",
+  "page 4": "excluded at the assembly, back in the book now → added: insert (i5)",
+  "page 5": "in the book at the assembly, excluded now → removed: remove (i6)",
+  "page 6": "approved after the assembly with no line change → approvals (not an item)",
+  "page 7": "p40071 «ثم ألف كتابه الكبير في التاريخ.» rewritten by a machine pass (no review revision) → processing: take (i7)"
+ },
+ "files": {
+  "stages.json": "`api:book_stages`: `steps` holds one step dict per key and state (every state of every step, with its link), `responses` four whole answers",
+  "review_nav.json": "the review payload's `nav` for each `from` (book with and without `at`, manuscript with `block`, export, none, an unknown value) and on the payload API",
+  "next_step.json": "`next_step` variants (the end-of-review panel), its value in the review payload while another page waits (null), and approve's answer with and without a next page",
+  "drift.json": "`api:review_drift` (also `config.drift` of the book page and `drift` of `api:review_changes`): the classified drift, per reason",
+  "changes_plan.json": "GET `api:review_changes`: `{drift, plan, stale}` with the plan queued, running, done (a stored base: every kind; no base: `choose`), stale, in error and after an apply",
+  "changes_items.json": "one plan item of each kind: take, merged, conflict, conflict (deleted by the owner), insert, remove, take (processing), choose",
+  "changes_requests.json": "POST plan (202), apply, keep-all, one page, and their errors (409 stale version, 409 a page reviewed again, 400, 403 reader, 404); the undo (snapshot restore)",
+  "to_footnote.json": "POST `api:to_footnote` («تحويل إلى حاشية للعلامة (n)»): request, answer and refusals",
+  "occurrences.json": "GET `api:book_occurrences` (the fix-everywhere sheet): per page, every occurrence with context, boxes, head marking and the default tick",
+  "fix_everywhere.json": "POST `api:fix_everywhere`, its undo (full and partial), the edited book's `find_url`, errors, and the `elsewhere` chip of a correction",
+  "tile.json": "the dashboard tile's `primary_url`",
+  "page_config.json": "the book page's config: `block`, `tab: changes`, `findPrefill`, the new URLs, `PANEL_TABS`"
+ },
+ "stages": {
+  "GET /api/books/<id>/stages/?current=<key>": "→ {book, current, steps: [six steps]} (`api:book_stages`, login). `current` ∈ pages | ocr | review | manuscript | book | export (anything else: null). The dashboard passes `pages` in the «التخطيط» mode, else `ocr`. At most 8 queries whatever the book's size",
+  "step": {
+   "key": "pages | ocr | review | manuscript | book | export, always in this order",
+   "label": "التخطيط · المعالجة · المراجعة · المخطوطة · الكتاب · الإخراج",
+   "url": "the step's screen; null when `state` is `blocked` (no link)",
+   "state": "todo | active | done | stale | attention | blocked",
+   "state_label": "the visually hidden words: «لم تبدأ» «جارية» «مكتملة» «أقدم من النص» «تحتاج انتباهًا» «غير متاحة بعد» (the UI writes «(مكتملة)» …)",
+   "detail": "the short line after the label (≥ 560 px; only the current step's at 360–560 px)",
+   "hint": "the step's `title` (why it is in that state, what to do)",
+   "count": "'done/total' for pages, ocr and review when there is a total (the < 360 px button «المراجعة 6/8 ▾»), else null",
+   "current": "true for the step of the screen shown (aria-current=\"page\")"
+  },
+  "rules": {
+   "pages": "todo: nothing extracted; active: extracting (no page yet: «تُستخرج الصفحات…») or preparing; attention: a page failed before the start; done: every page prepared, or «المعالجة» started (then the link is `?view=guides`)",
+   "ocr": "todo while the book awaits «بدء المعالجة»; active while pages are read; attention: pages in error; done: every page read or later",
+   "review": "blocked before the first page is read; the link is `review:next` while a page waits, else review of the first page; todo: none reviewed; active: some; done: all",
+   "manuscript": "todo: none; active: an assembly queued or running; attention: the newest run failed; stale: out of date and not edited (content: «تغيّر نص…», approvals only: «اعتُمدت…»); done: fresh, or edited («النص يُحرَّر الآن في «الكتاب»»)",
+   "book": "blocked without a manuscript; stale: edited with content drift (link `?tab=changes`); done: a layout exists; todo otherwise",
+   "export": "blocked without a manuscript; active: an export queued or running; attention: the newest export failed; done: a finished file of the current text; stale: files, none of the current text; todo: no file"
+  },
+  "refresh": "screens dispatch `window` event `nassakh:stages` after an approval, a finished assembly, an apply and a finished export; the bar also refreshes on the `nassakh` BroadcastChannel, on visibility and on `pageshow`; no poll",
+  "on the screens": "the first paint needs no request: the template context `stage_steps` (`book_stages(book, current)`) of the dashboard (current `pages` in the «التخطيط» mode, else `ocr`; also `config.stageBar` and `config.stageBarUrl`), the review screen (`review`) and the book page (`book`; also `config.urls.stages`). The manuscript view, the export page and the page detail have no `stage_steps` in their context yet (their views are not F's): the bar fetches `api:book_stages` there"
+ },
+ "review": {
+  "origin": "review:page and api:page_review take `from` ∈ book | manuscript | export, `at` (an int: the book page's page) and `block` (`[hpn][0-9]+`); anything else is ignored",
+  "nav.back": "{from, label, url}: «الكتاب» → layout#page-<at> (layout/ without `at`), «المخطوطة» → manuscript#block-<id>, «الإخراج» → export; null without a valid `from`. The top bar's first link reads «‹ <label>»",
+  "nav.origin": "{from, at, block, query}: `query` is the origin as a query string; prev_url, next_url and next_review_url already carry it; append it to review URLs built on the client (page swaps keep it)",
+  "nav.detour": "true for `from=book`: after «اعتماد الصفحة» the page stays and the lines pane shows «اعتُمدت الصفحة 12.», «العودة إلى الكتاب» (nav.back.url, primary) and «الصفحة التالية للمراجعة» (the approve answer's next_review_url)",
+  "next_step": "in the review payload: null while a page other than this one waits for review, else the end-of-review panel's content; in approve's answer: null when there is a next page. The approve body may carry the origin (`from`, `at`, `block`); its next_review_url then carries it",
+  "next_step fields": {
+   "state": "assemble | reassemble | changes | book | processing",
+   "heading": "«رُوجعت كل الصفحات» (every page reviewed), «هذه آخر صفحة بانتظار المراجعة» (only the current page is left), «رُوجعت كل الصفحات الجاهزة» (pages still processing)",
+   "summary": "«8 صفحات · حُسمت 41 كلمة»: reviewed pages, then the words resolved in review (omitted when none)",
+   "title": "«الخطوة التالية: <title>»",
+   "text": "the explanation under it",
+   "button": "the primary button (focus moves there; the live region says «رُوجعت كل الصفحات»)",
+   "url": "where the button goes (`?convert=1` opens the manuscript's convert popover)",
+   "stay": "the secondary «البقاء في المراجعة»"
+  },
+  "book.edited": "the review payload's `book.edited`: the book's text is edited on the book page; review then shows the quiet line «يُحرَّر هذا الكتاب في «الكتاب»؛ تصله تغييرات هذه الصفحة من «تغييرات المراجعة».»",
+  "undo / reopen": "POST api:page_undo and api:page_reopen take the origin in their body too; the payload they answer has the same nav"
+ },
+ "drift": {
+  "fields": {
+   "edited": "the text was saved on the book page since the last whole-book assembly",
+   "pages": "content drift: pages whose text or place in the book changed since the manuscript's baseline (what the banner and readiness count)",
+   "reasons": "page number (a string key) → review (a line-changing review revision after the page was read, undone ones included) | processing (the lines changed with no such revision: a re-run, the numbers pass) | added (in the book now, not then) | removed (in the book then, not now)",
+   "approvals": "pages whose only change is the approval: never announced; an apply absorbs them",
+   "chapters": "chapter ids with drift (as in 7a)",
+   "chapter_pages": "chapter id → its drift pages (a page shared by two chapters is under both)"
+  },
+  "reason labels (the page rows' chips)": {
+   "review": "المراجعة",
+   "processing": "إعادة المعالجة",
+   "added": "صفحة جديدة",
+   "removed": "أُخرجت من الكتاب"
+  }
+ },
+ "changes": {
+  "GET /api/books/<id>/review-changes/": "`api:review_changes` (login) → {drift, plan: the newest plan or null, stale}; `stale`: the manuscript's version or a planned page moved since the plan (plan again)",
+  "POST /api/books/<id>/review-changes/": "(editor) {pages?: [n…]} (default: every drift page) or {fix: <batch>} (the batch's pages; pages left with no item are settled at once) → 202 {plan_id, status}; idempotent while a plan is queued or running; 400 before a manuscript; 409 {detail, reassemble: true} when the text is not edited",
+  "poll": "GET every 700 ms until plan.status is done or error; the task runs on the default queue (eager in tests)",
+  "POST /api/books/<id>/review-changes/<plan_id>/apply/": "`api:review_changes_apply` (editor) {choices: {item id: theirs | mine | merged}, pages: [n…]} (an item left out takes its `default`; `keep_all: true` = every choice mine) → 200 {version, snapshot, chapters: [{id, version, title}] (every chapter after the apply), reload (the document was written: reload the chapter list and the open chapter), relayout, applied: {at, taken, merged, kept, pages (applied + approval pages), written}}; 409 {detail, stale: true, pages}; undo = POST api:snapshot_restore of `snapshot` (the text, its base and its baseline come back)",
+  "which items apply": "an item applies when its `page` (the row it is listed under) is in `pages`; a page is taken whole; the approval-only pages come along with any apply",
+  "plan": {
+   "status / status_label": "queued «في الانتظار» | running «قيد التجميع» | done «اكتمل» | error «خطأ» (the error's Arabic headline in `error`)",
+   "manuscript_version": "the version the plan compared",
+   "requested": "the pages asked for (null: every drift page)",
+   "base": "stored: the text the edits started from is known; none: a book edited before 7c (its items are `choose`, starting on «نصّي»); null before the plan is done",
+   "pages": "one row per page: {number, reason, reason_label, chapter, chapter_title, items: [ids]}; a page with no item has no text difference («لا فرق في النص…»)",
+   "approvals": "the approval-only pages (absorbed by the apply)",
+   "items": "in page, then document order (changes_items.json)",
+   "counts": "{items, pages, take, merged, conflict, choose, insert, remove}",
+   "applied": "null, or the apply's `applied` once applied"
+  },
+  "item": {
+   "id": "i1, i2 … (stable for one plan; a new plan keeps the ids of the items that remain in the same order)",
+   "kind / chip / default": "take «من المراجعة» theirs · merged «مع تعديلك» merged · conflict «تعارض» mine · choose «للمقارنة» mine · insert «فقرة جديدة» theirs · remove «تُحذف» theirs",
+   "choices": "what the apply accepts for this item",
+   "ask": "true for conflict and choose: the segmented control «نصّي | المراجعة» (mine | theirs), default «نصّي»",
+   "help": "conflict: «عدّلتَ هذه الكلمات في الكتاب، وغيّرتها المراجعة أيضًا.»; a paragraph the owner deleted: «حذفتَ هذه الفقرة من الكتاب، وغيّرتها المراجعة.»; choose: «لا يُعرف ما عدّلتَه هنا قبل هذا الإصدار من نسّاخ؛ قارن واختر.»",
+   "page / pages": "the row it is listed under / every source page it touches",
+   "block / blocks": "the block to turn to and light (for an insert or a deleted paragraph: the block it goes after) / the book's blocks it replaces ([] when none)",
+   "diff": "by word, the book's text against what the item brings (the merged text for merged, the review's text otherwise), 5 words of context, «…» where cut: [op, text] with op eq | del | ins (del struck through, ins underlined); a footnote reads «[حاشية: …]», a paragraph break «¶»",
+   "conflicts": "per conflicting stretch {mine, theirs} (the book's / the review's words, 3 words of context; '' for a deleted paragraph)",
+   "base": "stored | none"
+  }
+ },
+ "to_footnote": {
+  "POST /api/books/<id>/to-footnote/": "`api:to_footnote` (editor) {block, content: the chapter as the book page holds it ({type: doc, content})} → 200 {content: the chapter with the paragraph turned into a footnote at its call, note: {id, marker, block (where the call is)}, removed}: the page puts `content` in place as one step of the chapter's undo and saves it. Nothing is written by this call. The call is looked for in the preceding blocks of the paragraph's source page, then of the chapter: «(n)», «[n]», a superscript n or a digit glued to a word; the paragraph's marker is dropped from the note's text"
+ },
+ "fix": {
+  "GET /api/books/<id>/occurrences/?q=&match_tashkeel=&fold_alef=&whole_word=": "`api:book_occurrences` (login): whole tokens matched by their core (edge punctuation aside); `results` per page in book order {number, page_id, status, status_label, approved, image: {url, width, height} (the review image; boxes are in its pixels), lines: [{line_id, v, index, word, before, after, bbox (the word), line_bbox, res, conf, head, pick}]}; `head`: a line assembly drops (a running head); `pick`: the default tick (false for a form a reviewer confirmed as it is, res primary or typed, and for head lines); `total` occurrences, `pages` pages, `picked` ticked by default, `truncated` (more than 2000)",
+  "POST /api/books/<id>/fix-everywhere/": "`api:fix_everywhere` (reviewer) {from, to, picks: [{line_id, index, t}]} → {batch, applied, skipped: [{line_id, index, page, reason: changed | page}], pages, edited, find_url, message}: one transaction per page; a token that no longer reads `t` (or a page not open for review) is skipped; approved pages stay approved, an assembled page goes back to reviewed (D36)",
+  "toast": "«صُحّح 158 موضعًا في 51 صفحة · تراجع» (message), plus «وتُرك موضعان تغيّرا منذ فتح القائمة» when skipped; on an edited book also «وفي نص الكتاب: استبدال «السعودي» بـ«المسعودي»…» linking `find_url` (the book page's find & replace, pre-filled; after its «استبدال الكل» the page posts {fix: batch} to api:review_changes)",
+  "POST /api/books/<id>/fix-everywhere/<batch>/undo/": "`api:fix_everywhere_undo` (reviewer) → {batch, reverted, kept: [{line_id, page}] (lines changed after the fix keep their text), pages, message}",
+  "elsewhere": "the answers of api:line_resolve and api:line_edit gain `elsewhere: {from, to, count, pages, text}` (null when the corrected form occurs nowhere else): the chip under the undo toast «159 موضعًا آخر بالشكل نفسه في الكتاب · تصحيحها…» opens the sheet on `from` → `to`",
+  "urls in the review payload": "`urls.occurrences` (api:book_occurrences), `urls.fix_everywhere` (api:fix_everywhere) and `urls.fix_everywhere_undo` (api:fix_everywhere_undo with `__batch__` for the batch)"
+ },
+ "urls": {
+  "api:book_stages": "/api/books/<id>/stages/",
+  "api:review_drift": "/api/books/<id>/drift/",
+  "api:review_changes": "/api/books/<id>/review-changes/",
+  "api:review_changes_apply": "/api/books/<id>/review-changes/<plan_id>/apply/",
+  "api:to_footnote": "/api/books/<id>/to-footnote/",
+  "api:book_occurrences": "/api/books/<id>/occurrences/",
+  "api:fix_everywhere": "/api/books/<id>/fix-everywhere/",
+  "api:fix_everywhere_undo": "/api/books/<id>/fix-everywhere/<batch>/undo/"
+ }
+}

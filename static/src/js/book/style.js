@@ -253,7 +253,7 @@
         if (!this.missingFonts.length) return '';
         const names = [...new Set(this.missingFonts.map((m) => m.name))];
         const fallback = this.missingFonts[0].fallback || 'Amiri';
-        return `${names.join('، ')} غير مثبّت على هذا الجهاز؛ تُخرَج الصفحات بخط ${fallback} بدلًا منه.`;
+        return `${names.join('، ')} غير مثبّت على هذا الجهاز؛ تُرتَّب الصفحات بخط ${fallback} بدلًا منه.`;
       },
 
       // ------------------------------------------------------------ the page diagram and labels

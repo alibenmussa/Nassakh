@@ -14,7 +14,7 @@ from django.shortcuts import render as render_template
 from django.urls import reverse
 
 from books.models import Book
-from books.services import page_url_templates
+from books.services import book_stages, page_url_templates
 from core.decorators import ROLE_EDITOR, ROLE_PROOFREADER, has_role
 
 from . import render, services
@@ -57,6 +57,7 @@ def manuscript(request: HttpRequest, book_id: int) -> HttpResponse:
         "assembling": bool(state.get("active")),
         "failed": bool(state.get("run") and state["run"].get("status") == "error"),
         "config": _config(book, state, can_edit, can_review, fragment.get("counts_text", "")),
+        "stage_steps": book_stages(book, "manuscript"),  # the stage bar (D76)
         **fragment,
     }
     return render_template(request, "assembly/manuscript.html", context)

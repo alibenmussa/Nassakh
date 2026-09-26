@@ -1,0 +1,146 @@
+{
+ "POST /api/lines/42021/resolve/ … the answer's `elsewhere` (other occurrences of the corrected form)": {
+  "request": {
+   "index": 1,
+   "choice": "typed",
+   "text": "المسعودي،",
+   "t": "السعودي،"
+  },
+  "status": 200,
+  "response (keys added to today's answer)": {
+   "elsewhere": {
+    "from": "السعودي",
+    "to": "المسعودي",
+    "count": 3,
+    "pages": 2,
+    "text": "3 مواضع أخرى بالشكل نفسه في الكتاب"
+   }
+  }
+ },
+ "POST /api/books/42/fix-everywhere/ (an unedited book)": {
+  "request": {
+   "from": "السعودي",
+   "to": "المسعودي",
+   "picks": [
+    {
+     "line_id": 42012,
+     "index": 3,
+     "t": "«السعودي»"
+    },
+    {
+     "line_id": 42021,
+     "index": 1,
+     "t": "السعودي،"
+    },
+    {
+     "line_id": 42031,
+     "index": 0,
+     "t": "كلمة تغيّرت منذ فتح القائمة"
+    }
+   ]
+  },
+  "status": 200,
+  "response": {
+   "batch": "6c1b9b52-0000-4000-8000-000000000001",
+   "applied": 2,
+   "skipped": [
+    {
+     "line_id": 42031,
+     "index": 0,
+     "page": 3,
+     "reason": "changed"
+    }
+   ],
+   "pages": [
+    1,
+    2
+   ],
+   "edited": false,
+   "find_url": null,
+   "message": "صُحّح موضعان في صفحتين"
+  }
+ },
+ "POST /api/books/42/fix-everywhere/<batch>/undo/ (every line still at the fix)": {
+  "request": {},
+  "status": 200,
+  "response": {
+   "batch": "6c1b9b52-0000-4000-8000-000000000001",
+   "reverted": 2,
+   "kept": [],
+   "pages": [
+    1,
+    2
+   ],
+   "message": "تُراجع عن التصحيح في موضعين"
+  }
+ },
+ "… a partial undo (a line changed after the fix keeps its newer text)": {
+  "request": {},
+  "status": 200,
+  "response": {
+   "batch": "6c1b9b52-0000-4000-8000-000000000001",
+   "reverted": 1,
+   "kept": [
+    {
+     "line_id": 42021,
+     "page": 2
+    }
+   ],
+   "pages": [
+    1
+   ],
+   "message": "تُراجع عن التصحيح في موضع واحد؛ وبقي على حاله ما تغيّر بعد التصحيح (1)"
+  }
+ },
+ "… on an edited book (the review toast adds the book-side replace)": {
+  "request": {
+   "from": "السعودي",
+   "to": "المسعودي",
+   "picks": [
+    {
+     "line_id": 42012,
+     "index": 3,
+     "t": "«السعودي»"
+    }
+   ]
+  },
+  "status": 200,
+  "response": {
+   "batch": "6c1b9b52-0000-4000-8000-000000000001",
+   "applied": 1,
+   "skipped": [],
+   "pages": [
+    1
+   ],
+   "edited": true,
+   "find_url": "/books/42/layout/?tab=find&q=%D8%A7%D9%84%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&r=%D8%A7%D9%84%D9%85%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&fix=6c1b9b52-0000-4000-8000-000000000001",
+   "message": "صُحّح موضع واحد في صفحة واحدة"
+  }
+ },
+ "… errors": {
+  "no picks": {
+   "status": 400,
+   "response": {
+    "message": "لم يُحدَّد موضع للتصحيح."
+   }
+  },
+  "the same word": {
+   "status": 400,
+   "response": {
+    "message": "التصحيح مطابق للكلمة نفسها."
+   }
+  },
+  "an unknown batch": {
+   "status": 404,
+   "response": {
+    "message": "لا تصحيح بهذا المعرّف في هذا الكتاب."
+   }
+  },
+  "a reader (no review role)": {
+   "status": 403,
+   "response": {
+    "detail": "هذا الإجراء يتطلب صلاحية مراجع."
+   }
+  }
+ }
+}

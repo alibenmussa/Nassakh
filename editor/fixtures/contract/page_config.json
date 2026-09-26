@@ -1,0 +1,68 @@
+{
+ "GET /books/40/layout/?tab=changes&block=p40021 → config (keys added or changed)": {
+  "tab": "changes",
+  "block": "p40021",
+  "chapter": "h40011",
+  "drift": {
+   "edited": true,
+   "pages": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7
+   ],
+   "reasons": {
+    "1": "review",
+    "2": "review",
+    "3": "review",
+    "4": "added",
+    "5": "removed",
+    "7": "processing"
+   },
+   "approvals": [
+    6
+   ],
+   "chapters": [
+    "h40011"
+   ],
+   "chapter_pages": {
+    "h40011": [
+     1,
+     2,
+     3,
+     4,
+     5,
+     7
+    ]
+   }
+  },
+  "findPrefill": null,
+  "urls (added)": {
+   "reviewChanges": "/api/books/40/review-changes/",
+   "reviewChangesApply": "/api/books/40/review-changes/__pid__/apply/",
+   "toFootnote": "/api/books/40/to-footnote/",
+   "stages": "/api/books/40/stages/"
+  }
+ },
+ "GET /books/42/layout/?tab=find&q=…&r=…&fix=<batch> → config": {
+  "tab": "find",
+  "block": null,
+  "findPrefill": {
+   "query": "السعودي",
+   "replacement": "المسعودي",
+   "fix": "6c1b9b52-0000-4000-8000-000000000001"
+  }
+ },
+ "PANEL_TABS": [
+  "chapters",
+  "pages",
+  "find",
+  "format",
+  "block",
+  "source",
+  "uncertain",
+  "changes"
+ ]
+}

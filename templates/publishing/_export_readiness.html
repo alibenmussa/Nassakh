@@ -2,8 +2,8 @@
 ready-made {code, level, message, action?}), as the first card. The head: the tone's icon (the alert while a warning
 is left, info with notes only, a check when the book is clear), the title and what the count counts («3 ملاحظات»:
 every row but the all-clear one, amber while any of them warns). Then one row per item: its level's icon (warn amber,
-info grey, success green), the message and, on the end side, the link to the fix with a mirrored chevron. Nothing
-here blocks an export. Inside exportPage.{% endcomment %}
+info grey, success green), the message and, on the end side, the link to the fix with a mirrored chevron (a review
+link carries `from=export`, so review leads back here). Nothing here blocks an export. Inside exportPage.{% endcomment %}
 <section class="ex-card ex-ready" :class="'is-' + readyLevel" aria-labelledby="ex-ready-title" x-show="readiness.length" x-cloak data-readiness>
   <div class="ex-card-head">
     <span class="ex-card-icon" aria-hidden="true"><svg class="icon"><use :href="'#' + levelIcon(readyLevel)"/></svg></span>
@@ -20,7 +20,7 @@ here blocks an export. Inside exportPage.{% endcomment %}
         <svg class="icon ex-check-icon" aria-hidden="true"><use :href="'#' + levelIcon(r.level)"/></svg>
         <span class="ex-check-label" x-text="r.message"></span>
         <template x-if="r.action && r.action.url">
-          <a class="link ex-fix" :href="r.action.url"><span x-text="r.action.label"></span><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg></a>
+          <a class="link ex-fix" :href="fixUrl(r)"><span x-text="r.action.label"></span><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg></a>
         </template>
       </li>
     </template>

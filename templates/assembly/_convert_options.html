@@ -14,6 +14,8 @@ provides `ms` (the component holding `convert.options` and `convert.unreviewed`)
     <input type="checkbox" x-model="ms.convert.options.include_unreviewed">
     <span>تضمين الصفحات غير المُراجَعة (<bdi class="num" x-text="ms.convert.unreviewed"></bdi>)</span>
   </label>
+  {# D35 (owner question 3): unchecked, the pages left out are named; they join once reviewed #}
+  <p class="help ms-convert-left" x-show="NassakhBooks.convertLeftOut(ms.convert)" x-text="NassakhBooks.convertLeftOut(ms.convert)" data-left-out></p>
   <label class="check ms-convert-check">
     <input type="checkbox" x-model="ms.convert.options.strip_tatweel">
     <span>حذف التطويل</span>

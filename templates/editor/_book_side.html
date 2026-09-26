@@ -1,8 +1,9 @@
 {% comment %}The book page's one side panel (PHASE5_SPEC §9.2, = bk-side, one scrolling column): an icon tab bar (the
 icon with its name as the tooltip, the active tab labelled, count badges) over one tab at a time — الفصول، الصفحات،
-بحث، التنسيق، الفقرة، الأصل، غير المؤكَّدة. Preview opens التنسيق, edit الأصل; the choice is remembered per mode.
+بحث، التنسيق، الفقرة، الأصل، غير المؤكَّدة، and «تغييرات المراجعة» while review's changes wait (D78, PHASE7 §5.6).
+Preview opens التنسيق, edit الأصل; the choice is remembered per mode, and the address keeps it (`?tab=`).
 Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
-<aside class="bk-side lo-side bp-side" aria-label="لوحة الكتاب" data-side>
+<aside class="bk-side lo-side bp-side" aria-label="أدوات الكتاب" data-side>
   <div class="bp-tabbar" role="tablist" aria-label="أقسام اللوحة" data-tabbar>
     {% include "editor/_book_tab.html" with key="chapters" label="الفصول" icon="i-list" %}
     {% include "editor/_book_tab.html" with key="pages" label="الصفحات" icon="i-pages" %}
@@ -11,6 +12,7 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
     {% include "editor/_book_tab.html" with key="block" label="الفقرة" icon="i-pilcrow" %}
     {% include "editor/_book_tab.html" with key="source" label="الأصل" icon="i-image" %}
     {% include "editor/_book_tab.html" with key="uncertain" label="غير المؤكَّدة" icon="i-uncertain" %}
+    {% include "editor/_book_tab.html" with key="changes" label="تغييرات المراجعة" icon="i-merge" %}
   </div>
 
   <div class="bp-tab-body" data-tab-body>
@@ -147,6 +149,14 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
             </div>
             <p class="help" x-show="!blockInfo.reviewed">من صفحة لم تُراجَع بعد.</p>
           </div>
+          {% if can_edit %}
+          {# D74 on the book page (§5.4): a paragraph that is a footnote's text becomes the note of its call #}
+          <div class="bp-group" x-show="blockInfo.noteFor && mode === 'edit'" data-to-footnote>
+            <div class="bk-side-head"><span>الحاشية</span></div>
+            <button type="button" class="btn btn-sm bp-to-note" :disabled="noteBusy" @mousedown.prevent @click="toFootnote(blockInfo.id)" x-text="'تحويل إلى حاشية للعلامة (' + blockInfo.noteFor + ')'">تحويل إلى حاشية</button>
+            <p class="help">تُنقل الفقرة إلى موضع علامتها في نص صفحتها، ويبقى التراجع ممكنًا.</p>
+          </div>
+          {% endif %}
         </div>
       </template>
     </section>
@@ -222,6 +232,93 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
           </template>
         </div>
       </template>
+    </section>
+
+    {# ---------------------------------------------------------- تغييرات المراجعة (D78, §5.6): review's changes, page by page #}
+    <section class="bp-panel bp-changes" id="bp-panel-changes" role="tabpanel" aria-labelledby="bp-tab-changes" x-show="tab === 'changes'" x-cloak data-panel="changes">
+      <div class="bk-side-head"><span>تغييرات المراجعة</span><bdi class="num" x-show="changesCount" x-text="changesCount"></bdi></div>
+      <p class="bp-changes-intro help">تُؤخذ فقرات هذه الصفحات وحدها، ويبقى كل ما سواها كما حرّرته. تُحفظ نسخة قبل الأخذ.</p>
+
+      {# comparing: two skeleton rows #}
+      <div class="bp-changes-loading" x-show="changes.state === 'posting' || changes.state === 'polling'" role="status" data-changes-loading>
+        <span class="meta">يُقارَن نص الصفحات بنص الكتاب…</span>
+        <div class="bp-changes-skel" aria-hidden="true"><span></span><span></span></div>
+        <div class="bp-changes-skel" aria-hidden="true"><span></span><span></span></div>
+      </div>
+      <div class="banner banner-danger bp-changes-error" role="alert" x-show="changes.state === 'error'" x-cloak data-changes-error>
+        <span class="grow" x-text="changes.error || 'تعذّرت المقارنة؛ بقي الكتاب كما هو.'"></span>
+        <button type="button" class="btn btn-sm" @click="planChanges(changes.requested || {})">إعادة المحاولة</button>
+      </div>
+      <p class="bp-empty" x-show="changes.notEdited" x-text="changes.notEdited"></p>
+      <div class="banner bp-changes-stale" x-show="changes.state === 'ready' && changes.stale" x-cloak>
+        <span class="grow">تغيّر النص منذ المقارنة.</span>
+        <button type="button" class="btn btn-sm" @click="planChanges(changes.requested || {})">إعادة المقارنة</button>
+      </div>
+
+      {# the text agrees: the baseline moves, nothing is written #}
+      <template x-if="changes.state === 'ready' && changes.plan && !(changes.plan.items || []).length && !changes.plan.applied">
+        <div class="bp-changes-none" data-changes-none>
+          <p class="bp-empty">لا فرق في النص؛ المراجعة والكتاب متّفقان في هذه الصفحات.</p>
+          {% if can_edit %}<button type="button" class="btn btn-sm" :disabled="Boolean(changes.busy)" @click="settleChanges()">تم</button>{% endif %}
+        </div>
+      </template>
+
+      <ol class="bp-changes-pages" x-show="changes.state === 'ready' && changesRows.length">
+        <template x-for="row in changesRows" :key="'cp' + row.number">
+          <li class="bp-cpage" :class="{ 'is-off': !row.taken }">
+            <div class="bp-cpage-head">
+              {% if can_edit %}<input type="checkbox" class="bp-cpage-take" :checked="row.taken" @change="togglePage(row)" :aria-label="'أخذ تغييرات الصفحة ' + row.number">{% endif %}
+              <span class="bp-cpage-title"><span x-show="row.chapter_title" x-text="row.chapter_title + ' · '"></span><a class="bp-cpage-review" :href="reviewUrl(row.number)" title="فتح الصفحة في المراجعة">ص <bdi class="num" x-text="row.number"></bdi></a></span>
+              <span class="bp-reason" :class="'is-' + row.reason" x-text="reasonLabel(row)"></span>
+              {% if can_edit %}
+              <div class="menu-anchor bp-cpage-more" x-data="{ open: false }" @keydown.escape="open = false">
+                <button type="button" class="btn-icon btn-icon-sm" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" :aria-label="'خيارات الصفحة ' + row.number">
+                  <svg class="icon icon-sm" aria-hidden="true"><use href="#i-more"/></svg>
+                </button>
+                <div class="menu menu-popover bp-cpage-menu" role="menu" x-show="open" x-cloak @click.outside="open = false">
+                  <button type="button" class="menu-item" role="menuitem" @click="open = false; setPageChoice(row, 'theirs')">خذ ما جاء من المراجعة في هذه الصفحة</button>
+                  <button type="button" class="menu-item" role="menuitem" @click="open = false; setPageChoice(row, 'mine')">أبقِ نصّي في هذه الصفحة</button>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+            <ul class="bp-citems">
+              <template x-for="item in row.items" :key="item.id">
+                <li class="bp-citem" :class="'is-' + item.kind" :data-item="item.id">
+                  <button type="button" class="bp-citem-go" @click="goToItem(item)" :title="'الانتقال إلى الفقرة في صفحتها'">
+                    <span class="status bp-citem-chip"><span class="dot" :class="'dot-' + itemTone(item)" aria-hidden="true"></span><span x-text="item.chip"></span></span>
+                    <span class="bp-diff" dir="rtl"><template x-for="(part, pi) in item.diff" :key="item.id + ':' + pi"><span :class="'bp-d-' + part[0]"><template x-if="part[0] === 'del'"><del x-text="part[1]"></del></template><template x-if="part[0] === 'ins'"><ins x-text="part[1]"></ins></template><template x-if="part[0] === 'eq'"><span x-text="part[1]"></span></template><span x-text="pi < item.diff.length - 1 ? ' ' : ''"></span></span></template></span>
+                  </button>
+                  <p class="help bp-citem-help" x-show="item.help" x-text="item.help"></p>
+                  <template x-if="item.ask">
+                    <div class="bp-citem-ask">
+                      <dl class="bp-citem-conflicts" x-show="(item.conflicts || []).some((c) => c.mine)">
+                        <template x-for="(c, ci) in (item.conflicts || [])" :key="item.id + ':c' + ci">
+                          <div><dt>نصّك:</dt><dd dir="rtl" x-text="c.mine ? '«' + c.mine + '»' : '—'"></dd><dt>المراجعة:</dt><dd dir="rtl" x-text="c.theirs ? '«' + c.theirs + '»' : '—'"></dd></div>
+                        </template>
+                      </dl>
+                      {% if can_edit %}
+                      <div class="segmented bp-citem-choice" role="radiogroup" :aria-label="'اختيار: ' + item.chip">
+                        <button type="button" role="radio" :aria-checked="choiceOf(item) === 'mine' ? 'true' : 'false'" :class="{ 'is-selected': choiceOf(item) === 'mine' }" @click="setChoice(item, 'mine')">نصّي</button>
+                        <button type="button" role="radio" :aria-checked="choiceOf(item) === 'theirs' ? 'true' : 'false'" :class="{ 'is-selected': choiceOf(item) === 'theirs' }" @click="setChoice(item, 'theirs')">المراجعة</button>
+                      </div>
+                      {% endif %}
+                    </div>
+                  </template>
+                </li>
+              </template>
+            </ul>
+          </li>
+        </template>
+      </ol>
+
+      {% if can_edit %}
+      <div class="bp-changes-foot" x-show="changes.state === 'ready' && changesRows.length">
+        <button type="button" class="btn btn-primary btn-sm bp-changes-apply" :disabled="Boolean(changes.busy) || !changesApplyCount" @click="applyChanges(false)" x-text="changesApplyLabel" data-changes-apply>أخذ التغييرات</button>
+        <button type="button" class="link bp-changes-keep" :disabled="Boolean(changes.busy)" @click="applyChanges(true)" data-changes-keep>الاحتفاظ بنصّي في الكل</button>
+      </div>
+      <button type="button" class="link bp-changes-rebuild" x-show="driftChapter" :disabled="reassembly.running" @click="askReassemble()" data-rebuild-button>إعادة بناء الفصل من المراجعة…</button>
+      {% endif %}
     </section>
   </div>
 </aside>

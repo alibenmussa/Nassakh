@@ -35,9 +35,10 @@ class PreviewRender(models.Model):
         BOOK = "book", "الكتاب"
         CHAPTER = "chapter", "فصل"
 
+    # Pagination is «ترتيب الصفحات» (D77): a running render reads «قيد الترتيب» (an Export: «قيد الإخراج»).
     class Status(models.TextChoices):
         QUEUED = "queued", "في الانتظار"
-        RUNNING = "running", "قيد الإخراج"
+        RUNNING = "running", "قيد الترتيب"
         DONE = "done", "اكتمل"
         ERROR = "error", "خطأ"
         CANCELLED = "cancelled", "أُلغي"

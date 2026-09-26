@@ -37,22 +37,23 @@ ARABIC = {
 LETTERS = "abcdefghijklmnopqrstuvwxyz"
 DIGITS = "0123456789"
 
-# §3.15's table, the cells that exist after 7a (7c adds review's G / O / V / C and the dashboard's ?).
+# §3.15's table with the cells 7c fills (§5.8): review's G (the pager's jump field), O (the processed image or
+# the original: the source), V (the sides swapped: the view), C (the page's text copied), the dashboard's «?».
 # Key → {screen: meaning}; a key or screen not listed has no meaning there.
 TABLE: dict[str, dict[str, str]] = {
-    "g": {"dashboard": "jump", "manuscript": "jump", "book": "jump"},
+    "g": {"dashboard": "jump", "review": "jump", "manuscript": "jump", "book": "jump"},
     "n": {"dashboard": "nextReview", "review": "nextReview"},
     "a": {"review": "approve"},
     "e": {"review": "edit", "book": "edit"},
-    "o": {"manuscript": "source", "book": "source"},
+    "o": {"review": "source", "manuscript": "source", "book": "source"},
     "s": {"manuscript": "marks", "book": "marks"},
-    "v": {"dashboard": "view", "book": "view"},
-    "c": {"dashboard": "copy"},
+    "v": {"dashboard": "view", "review": "view", "book": "view"},
+    "c": {"dashboard": "copy", "review": "copy"},
     "j": {"manuscript": "nextBlock"},
     "k": {"manuscript": "prevBlock"},
     "]": {"manuscript": "nextWarning"},
     "[": {"manuscript": "prevWarning"},
-    "?": {"review": "sheet", "manuscript": "sheet", "book": "sheet"},
+    "?": {"dashboard": "sheet", "review": "sheet", "manuscript": "sheet", "book": "sheet"},
     "+": {"review": "zoomIn", "book": "zoomIn"},
     "-": {"review": "zoomOut", "book": "zoomOut"},
     "0": {"review": "fit", "book": "fit"},
@@ -106,8 +107,8 @@ const SCREENS = {
   book: [(e) => B(e, { mode: 'preview' }), (e) => B(e, { mode: 'edit' })],
 };
 const MEANING = {
-  dashboard: { jump: 'jump', nextReview: 'nextReview', copy: 'copy', toggleView: 'view', sheets: 'view', grid: 'view' },
-  review: { approve: 'approve', edit: 'edit', nextReview: 'nextReview', sheet: 'sheet', zoomIn: 'zoomIn', zoomOut: 'zoomOut', zoomReset: 'fit' },
+  dashboard: { jump: 'jump', nextReview: 'nextReview', copy: 'copy', toggleView: 'view', sheets: 'view', grid: 'view', sheet: 'sheet' },
+  review: { approve: 'approve', edit: 'edit', nextReview: 'nextReview', sheet: 'sheet', zoomIn: 'zoomIn', zoomOut: 'zoomOut', zoomReset: 'fit', jump: 'jump', toggleScan: 'source', swap: 'view', copy: 'copy' },
   manuscript: { jump: 'jump', seams: 'marks', source: 'source', next: 'nextBlock', prev: 'prevBlock', nextWarning: 'nextWarning', prevWarning: 'prevWarning', sheet: 'sheet' },
   book: { jump: 'jump', mode: 'edit', source: 'source', marks: 'marks', spread: 'view', fitIn: 'zoomIn', fitOut: 'zoomOut', fitHeight: 'fit', sheet: 'sheet' },
 };
@@ -146,6 +147,10 @@ out.review = {
   shiftA: R({ key: 'A', code: 'KeyA', shiftKey: true }, page), altA: R({ key: 'å', code: 'KeyA', altKey: true }, word),
   tabOpen: R({ key: 'Tab' }, word), enterOpen: R({ key: 'Enter' }, word), escOpen: R({ key: 'Escape' }, word), mergeOpen: R({ key: 'ArrowLeft', altKey: true }, word),
   undo: R({ key: 'z', code: 'KeyZ', metaKey: true }, page), undoArabic: R({ key: 'ئ', code: 'KeyZ', metaKey: true }, page),
+  // §5.8: the page's letters stay quiet in word mode (they type), and ⌥F there is «تصحيح في كل الكتاب»
+  gOpen: R({ key: 'ل', code: 'KeyG' }, word), cOpen: R({ key: 'ؤ', code: 'KeyC' }, word),
+  altF: R({ key: 'ƒ', code: 'KeyF', altKey: true }, word), altFArabic: R({ key: 'ب', code: 'KeyF', altKey: true }, word),
+  altFClosed: R({ key: 'ƒ', code: 'KeyF', altKey: true }, page), altFGap: R({ key: 'ƒ', code: 'KeyF', altKey: true }, { ...word, gap: true }),
 };
 console.log(JSON.stringify(out));
 """  # noqa: E501
@@ -292,6 +297,12 @@ def test_review_word_mode_and_page_mode(node_out):
         "mergeOpen": "mergeNext",
         "undo": "undo",
         "undoArabic": "undo",
+        "gOpen": "type",
+        "cOpen": "type",
+        "altF": "fixEverywhere",
+        "altFArabic": "fixEverywhere",
+        "altFClosed": None,
+        "altFGap": None,
     }
 
 

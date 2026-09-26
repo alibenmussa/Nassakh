@@ -516,6 +516,7 @@ def test_review_payload_shape(page, reviewer, book):
         "counts",
         "labels",
         "nav",
+        "next_step",
         "urls",
         "can_edit",
     }
@@ -526,6 +527,7 @@ def test_review_payload_shape(page, reviewer, book):
         "total_pages": 2,
         "reviewed_pages": 0,
         "unresolved_total": 8,
+        "edited": False,
     }
     assert payload["image"]["width"] == W and payload["image"]["height"] == H
     assert payload["image"]["display_url"].endswith("display.webp")
@@ -1404,11 +1406,33 @@ def test_trust_payloads_equal_the_fixtures(reviewer_client):
     contract = trust_contract(reviewer_client)
     if os.environ.get("NASSAKH_WRITE_TRUST_FIXTURES"):
         for name, content in contract.items():
-            (TRUST_DIR / name).write_text(json.dumps(content, ensure_ascii=False, indent=1) + "\n")
+            (TRUST_DIR / name).write_text(
+                json.dumps(without_7c(content), ensure_ascii=False, indent=1) + "\n"
+            )
     index = json.loads((TRUST_DIR / "index.json").read_text())
     assert set(index["files"]) == set(contract)
     for name, content in contract.items():
-        assert json.loads((TRUST_DIR / name).read_text()) == json.loads(json.dumps(content)), name
+        assert json.loads((TRUST_DIR / name).read_text()) == without_7c(json.loads(json.dumps(content))), name
+
+
+def without_7c(value):
+    """A 7b answer without what 7c added (`next_step`, `elsewhere`, the tile's `primary_url`, `nav.back` /
+    `origin` / `detour`; their contract is editor/fixtures/contract/), so the 7b contract keeps its shape."""
+    if isinstance(value, dict):
+        out = {
+            k: without_7c(v) for k, v in value.items() if k not in ("next_step", "elsewhere", "primary_url")
+        }
+        if isinstance(out.get("nav"), dict):
+            out["nav"] = {k: v for k, v in out["nav"].items() if k not in ("back", "origin", "detour")}
+        if isinstance(out.get("book"), dict) and "unresolved_total" in out["book"]:
+            out["book"] = {k: v for k, v in out["book"].items() if k != "edited"}
+        if isinstance(out.get("urls"), dict) and "roles" in out["urls"]:
+            fix = ("occurrences", "fix_everywhere", "fix_everywhere_undo")
+            out["urls"] = {k: v for k, v in out["urls"].items() if k not in fix}
+        return out
+    if isinstance(value, list):
+        return [without_7c(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------- 7b: the services behind the contract
@@ -1576,3 +1600,368 @@ def test_resolve_with_the_year_from_the_words(trust):
     assert line.tokens[4]["t"] == "٢٤٣" and line.tokens[4]["res"] == "sug" and line.tokens[4]["orig"] == "٢٤٢"
     with pytest.raises(services.ReviewError, match="لا توجد قراءة مقترحة"):
         services.resolve_token(line, 0, "sug")
+
+
+# ====================================================================== 7c: origin, next step, fix everywhere
+
+from editor.tests import (  # noqa: E402 - the round trip's books (editor/fixtures/contract/)
+    BATCH,
+    check_contract,
+    round_trip_book,
+)
+from review import corrections  # noqa: E402
+
+
+def nav_contract(client) -> dict:
+    out = {}
+    for label, query in (
+        ("GET /books/40/review/2/?from=book&at=12", "?from=book&at=12"),
+        ("GET /books/40/review/2/?from=book", "?from=book"),
+        ("GET /books/40/review/2/?from=manuscript&block=p40021", "?from=manuscript&block=p40021"),
+        ("GET /books/40/review/2/?from=export", "?from=export"),
+        ("GET /books/40/review/2/", ""),
+        ("GET /books/40/review/2/?from=elsewhere&at=x&block=zz (ignored)", "?from=elsewhere&at=x&block=zz"),
+    ):
+        response = client.get(reverse("review:page", args=[40, 2]) + query)
+        assert response.status_code == 200
+        out[label] = response.context["config"]["nav"]
+    api = client.get(reverse("api:page_review", args=[4002]) + "?from=book&at=12").json()
+    out["GET /api/pages/4002/review/?from=book&at=12 (the payload API takes the same parameters)"] = api[
+        "nav"
+    ]
+    return out
+
+
+def next_step_contract(user, client) -> dict:
+    """The end-of-review panel in each state (book 47, three pages; book 40 for the approvals)."""
+    from assembly import services as assembly_services
+    from editor import services as editor_services
+
+    variants = {}
+    lines = {
+        1: [(47011, "الفصل الأول", "heading"), (47012, "نص الصفحة الأولى.", "body")],
+        2: [(47021, "نص الصفحة الثانية.", "body")],
+        3: [(47031, "نص الصفحة الثالثة.", "body")],
+    }
+    book = Book.objects.create(pk=47, title="كتاب الخطوة التالية", status=Book.Status.REVIEWING)
+    for number, rows in lines.items():
+        page = make_page(book, number, status=Page.Status.REVIEWED, with_lines=False)
+        for order, (line_id, words, role) in enumerate(rows):
+            Line.objects.create(
+                pk=line_id,
+                page=page,
+                order=order,
+                text=words,
+                ocr_text=words,
+                role=role,
+                tokens=[tok(w) for w in words.split()],
+            )
+    three = Page.objects.get(book=book, number=3)
+    Line.objects.filter(pk=47031).update(
+        tokens=[tok("نص"), tok("الصفحة", conf="low"), tok("الثالثة.")], n_low=1
+    )
+    services.resolve_token(Line.objects.get(pk=47031), 1, "primary", user=user)
+    variants["assemble"] = services.next_step(book)
+    Page.objects.filter(pk=three.pk).update(status=Page.Status.OCR_DONE)
+    variants["last_page (the current page is the only one left)"] = services.next_step(book, three)
+    Page.objects.filter(pk=three.pk).update(status=Page.Status.REVIEWED)
+    assembly_services.start_assembly(book, user)
+    variants["book"] = services.next_step(book)
+    services.edit_line(Line.objects.get(pk=47021), "نص الصفحة الثانية مصححًا.", user)
+    services.edit_line(Line.objects.get(pk=47031), "نص الصفحة الثالثة مصححًا.", user)
+    variants["reassemble"] = services.next_step(book)
+    chapter = editor_services.chapter_document(book, "h47011")
+    chapter["content"]["content"][0]["content"][0]["text"] = "الفصل الأول محرَّرًا"
+    editor_services.save_chapter(book, "h47011", chapter["content"], chapter["version"], user)
+    variants["changes"] = services.next_step(book)
+    for number in (4, 5, 6):
+        make_page(book, number, status=Page.Status.LAYOUT_DONE, with_lines=False)
+    variants["processing"] = services.next_step(book)
+    # book 40: approving a page with a next page, then the last one (the origin comes along)
+    round_trip_book(user)
+    Page.objects.filter(pk=4007).update(status=Page.Status.OCR_DONE)
+    approve = {}
+    response = client.post(
+        reverse("api:page_approve", args=[4006]), {"force": False}, content_type="application/json"
+    )
+    approve["POST /api/pages/4006/approve/ {force: false} (a next page)"] = {
+        "request": {"force": False},
+        "status": response.status_code,
+        "response": response.json(),
+    }
+    body = {"force": False, "from": "book", "at": 12}
+    response = client.post(reverse("api:page_approve", args=[4007]), body, content_type="application/json")
+    approve["POST /api/pages/4007/approve/ {force: false, from: book, at: 12} (the last page)"] = {
+        "request": body,
+        "status": response.status_code,
+        "response": response.json(),
+    }
+    Page.objects.filter(pk=4007).update(status=Page.Status.OCR_DONE)
+    Page.objects.filter(pk=4006).update(status=Page.Status.OCR_DONE)
+    payload = services.review_payload(Page.objects.get(pk=4006), user)
+    return {
+        "variants": variants,
+        "review_payload": {"next_step (another page waits for review)": payload["next_step"]},
+        "approve": approve,
+    }
+
+
+MUROOJ = {
+    1: [
+        (42011, "السعودي رأس الصفحة", "running_header", [None, None, None]),
+        (42012, "وقد ذكر المؤرخ «السعودي» في كتابه مروج الذهب", "body", [None, None, None, "low"]),
+    ],
+    2: [(42021, "قال السعودي، وهو ثقة", "body", [None, None])],
+    3: [(42031, "السعودي في أخبار الزمان", "body", ["primary"])],
+}
+
+
+def murooj_book() -> Book:
+    """Book 42 «مروج الذهب»: «السعودي» four times on three pages (a running head on page 1, approved; a form
+    the reviewer confirmed as it is on page 3)."""
+    book = Book.objects.create(pk=42, title="مروج الذهب", status=Book.Status.REVIEWING)
+    for number, rows in MUROOJ.items():
+        page = Page.objects.create(
+            pk=4200 + number,
+            book=book,
+            number=number,
+            source_index=number - 1,
+            status=Page.Status.REVIEWED if number == 1 else Page.Status.OCR_DONE,
+            text_state=Page.TextState.FINAL,
+            width=1000,
+            height=1400,
+        )
+        pre = Preprocess.objects.create(page=page, output_width=1000, output_height=1400)
+        pre.display_image.name = f"books/42/pages/{number}/display.png"
+        pre.save()
+        regions = {
+            kind: Region.objects.create(page=page, kind=kind, bbox=[0, 0, 1000, 1400], order=n)
+            for n, kind in enumerate(("running_header", "body"))
+        }
+        for order, (line_id, words, kind, marks) in enumerate(rows):
+            y = 40 if kind == "running_header" else 120 + order * 80
+            tokens = []
+            for index, word in enumerate(words.split()):
+                token = tok(word, bbox=[120 + index * 150, y, 260 + index * 150, y + 40])
+                if index < len(marks) and marks[index] == "low":
+                    token["conf"] = "low"
+                if index < len(marks) and marks[index] == "primary":
+                    token.update(conf="low", res="primary")
+                tokens.append(token)
+            Line.objects.create(
+                pk=line_id,
+                page=page,
+                order=order,
+                region=regions[kind],
+                bbox=[100, y, 900, y + 40],
+                text=words,
+                ocr_text=words,
+                tokens=tokens,
+                n_low=0,
+            )
+    return book
+
+
+def fix_contract(user, client) -> dict:
+    from editor.models import Manuscript
+
+    book = murooj_book()
+    occurrences = {}
+    url = reverse("api:book_occurrences", args=[42])
+    query = "?q=السعودي&fold_alef=1&whole_word=1&match_tashkeel=0"
+    response = client.get(url + query)
+    occurrences["GET /api/books/42/occurrences/?q=السعودي&fold_alef=1&whole_word=1&match_tashkeel=0"] = {
+        "status": response.status_code,
+        "response": response.json(),
+    }
+    for label, q in (("… an empty query", "?q="), ("… more than one word", "?q=السعودي المؤرخ")):
+        response = client.get(url + q)
+        occurrences[label] = {"status": response.status_code, "response": response.json()}
+    fix = {}
+    resolve = {"index": 1, "choice": "typed", "text": "المسعودي،", "t": "السعودي،"}
+    response = client.post(
+        reverse("api:line_resolve", args=[42021]), resolve, content_type="application/json"
+    )
+    label = (
+        "POST /api/lines/42021/resolve/ … the answer's `elsewhere` (other occurrences of the corrected form)"
+    )
+    fix[label] = {
+        "request": resolve,
+        "status": response.status_code,
+        "response (keys added to today's answer)": {"elsewhere": response.json()["elsewhere"]},
+    }
+    services.undo_last(Page.objects.get(pk=4202), user)
+    fix_url = reverse("api:fix_everywhere", args=[42])
+    body = {
+        "from": "السعودي",
+        "to": "المسعودي",
+        "picks": [
+            {"line_id": 42012, "index": 3, "t": "«السعودي»"},
+            {"line_id": 42021, "index": 1, "t": "السعودي،"},
+            {"line_id": 42031, "index": 0, "t": "كلمة تغيّرت منذ فتح القائمة"},
+        ],
+    }
+    response = client.post(fix_url, body, content_type="application/json")
+    fix["POST /api/books/42/fix-everywhere/ (an unedited book)"] = {
+        "request": body,
+        "status": 200,
+        "response": response.json(),
+    }
+    batch = response.json()["batch"]
+    undo = client.post(reverse("api:fix_everywhere_undo", args=[42, batch]))
+    fix["POST /api/books/42/fix-everywhere/<batch>/undo/ (every line still at the fix)"] = {
+        "request": {},
+        "status": undo.status_code,
+        "response": undo.json(),
+    }
+    again = client.post(fix_url, {**body, "picks": body["picks"][:2]}, content_type="application/json").json()
+    services.edit_line(Line.objects.get(pk=42021), "قال المسعودي، وهو ثقة ثبت", user)
+    undo = client.post(reverse("api:fix_everywhere_undo", args=[42, again["batch"]]))
+    fix["… a partial undo (a line changed after the fix keeps its newer text)"] = {
+        "request": {},
+        "status": undo.status_code,
+        "response": undo.json(),
+    }
+    Manuscript.objects.create(book=book, document={"type": "doc", "content": []}, version=2, origin="editor")
+    edited = {
+        "from": "السعودي",
+        "to": "المسعودي",
+        "picks": [{"line_id": 42012, "index": 3, "t": "«السعودي»"}],
+    }
+    response = client.post(fix_url, edited, content_type="application/json")
+    fix["… on an edited book (the review toast adds the book-side replace)"] = {
+        "request": edited,
+        "status": response.status_code,
+        "response": response.json(),
+    }
+    errors = {}
+    for label, payload in (
+        ("no picks", {"from": "السعودي", "to": "المسعودي", "picks": []}),
+        ("the same word", {"from": "السعودي", "to": "السعودي", "picks": body["picks"][:1]}),
+    ):
+        response = client.post(fix_url, payload, content_type="application/json")
+        errors[label] = {"status": response.status_code, "response": response.json()}
+    response = client.post(reverse("api:fix_everywhere_undo", args=[42, BATCH]))
+    errors["an unknown batch"] = {"status": response.status_code, "response": response.json()}
+    stranger = Client()
+    stranger.force_login(role_user("visitor", None))
+    response = stranger.post(fix_url, body, content_type="application/json")
+    errors["a reader (no review role)"] = {"status": response.status_code, "response": response.json()}
+    fix["… errors"] = errors
+    return {"occurrences.json": occurrences, "fix_everywhere.json": fix}
+
+
+def test_review_payloads_equal_the_7c_contract(db, monkeypatch):
+    from editor import services as editor_services
+
+    monkeypatch.setattr(editor_services, "_schedule", lambda book, chapter_id, version: None)
+    editor = role_user("editor", "editor")
+    client = Client()
+    client.force_login(editor)
+    round_trip_book(editor)
+    contract = {"review_nav.json": nav_contract(client)}
+    Book.objects.filter(pk=40).delete()
+    contract["next_step.json"] = next_step_contract(editor, client)
+    contract.update(fix_contract(editor, client))
+    check_contract(contract)
+
+
+def test_the_origin_is_validated_and_carried_by_every_review_url(db):
+    assert services.parse_origin("book", "12", "p5") == {
+        "from": "book",
+        "at": 12,
+        "block": "p5",
+        "query": "from=book&at=12&block=p5",
+    }
+    assert services.parse_origin("elsewhere", "12") is None
+    assert services.parse_origin("book", "x", "<b>") == {
+        "from": "book",
+        "at": None,
+        "block": None,
+        "query": "from=book",
+    }
+    assert services.parse_origin("book", 0)["at"] is None
+    assert services.with_origin("/books/1/review/next/?after=2", services.parse_origin("export")) == (
+        "/books/1/review/next/?after=2&from=export"
+    )
+
+
+def test_review_next_keeps_the_origin(db):
+    editor = role_user("editor", "editor")
+    client = Client()
+    client.force_login(editor)
+    book = murooj_book()
+    response = client.get(reverse("review:next", args=[book.pk]) + "?from=book&at=3")
+    assert response.status_code == 302 and response["Location"] == "/books/42/review/2/?from=book&at=3"
+
+
+def test_fix_everywhere_keeps_approval_skips_stale_tokens_and_undoes_in_one_batch(db):
+    user = role_user("editor", "editor")
+    book = murooj_book()
+    Page.objects.filter(pk=4202).update(status=Page.Status.ASSEMBLED)
+    picks = [
+        {"line_id": 42012, "index": 3, "t": "«السعودي»"},
+        {"line_id": 42021, "index": 1, "t": "السعودي،"},
+        {"line_id": 42031, "index": 0, "t": "غيرها"},
+        {"line_id": 99999, "index": 0, "t": "السعودي"},
+    ]
+    result = corrections.fix_everywhere(book, "السعودي", "المسعودي", picks, user)
+    assert result["applied"] == 2 and result["pages"] == [1, 2] and result["find_url"] is None
+    assert [(s["line_id"], s["reason"]) for s in result["skipped"]] == [
+        (99999, "changed"),
+        (42031, "changed"),
+    ]
+    token = Line.objects.get(pk=42012).tokens[3]
+    assert token["t"] == "«المسعودي»" and token["orig"] == "«السعودي»" and token["res"] == "typed"
+    assert Line.objects.get(pk=42021).text == "قال المسعودي، وهو ثقة"
+    assert Page.objects.get(pk=4201).status == Page.Status.REVIEWED  # approved stays approved
+    assert Page.objects.get(pk=4202).status == Page.Status.REVIEWED  # assembled → reviewed (D36)
+    revisions = LineRevision.objects.filter(batch=result["batch"])
+    assert revisions.count() == 2 and set(revisions.values_list("action", flat=True)) == {"fix"}
+    undone = corrections.undo_fix(book, result["batch"], user)
+    assert undone["reverted"] == 2 and undone["kept"] == []
+    assert Line.objects.get(pk=42012).tokens[3]["t"] == "«السعودي»"
+    assert corrections.undo_fix(book, result["batch"], user)["reverted"] == 0  # nothing left to undo
+    with pytest.raises(corrections.CorrectionNotFound):
+        corrections.undo_fix(book, "not-a-batch", user)
+
+
+def test_a_page_undo_reverts_its_share_of_a_fix(db):
+    user = role_user("editor", "editor")
+    book = murooj_book()
+    picks = [
+        {"line_id": 42012, "index": 3, "t": "«السعودي»"},
+        {"line_id": 42021, "index": 1, "t": "السعودي،"},
+    ]
+    corrections.fix_everywhere(book, "السعودي", "المسعودي", picks, user)
+    services.undo_last(Page.objects.get(pk=4202), user)
+    assert Line.objects.get(pk=42021).text == "قال السعودي، وهو ثقة"
+    assert Line.objects.get(pk=42012).tokens[3]["t"] == "«المسعودي»"  # the other page keeps its share
+
+
+def test_occurrences_ignore_diacritics_fold_alef_and_match_parts_of_words_when_asked(db):
+    book = murooj_book()
+    Line.objects.filter(pk=42021).update(
+        text="قال السَّعودي، والسعودي وهو ثقة",
+        tokens=[tok("قال"), tok("السَّعودي،"), tok("والسعودي"), tok("وهو"), tok("ثقة")],
+    )
+    whole = corrections.find_occurrences(book, "السعودي", corrections.options_of({}))
+    words = [line["word"] for page in whole["results"] for line in page["lines"]]
+    assert "السَّعودي،" in words and "والسعودي" not in words and whole["total"] == 4
+    part = corrections.find_occurrences(book, "السعودي", corrections.options_of({"whole_word": "0"}))
+    assert part["total"] == 5
+    strict = corrections.find_occurrences(book, "السعودي", corrections.options_of({"match_tashkeel": "1"}))
+    assert strict["total"] == 3
+    heads = [line for page in whole["results"] for line in page["lines"] if line["head"]]
+    assert [line["line_id"] for line in heads] == [42011] and heads[0]["pick"] is False
+    assert (
+        corrections.corrected(
+            "والسعودي",
+            corrections.folded_form("السعودي", corrections.options_of({"whole_word": 0})),
+            "المسعودي",
+            corrections.options_of({"whole_word": 0}),
+        )
+        == "والمسعودي"
+    )
+    with pytest.raises(services.ReviewError):
+        corrections.find_occurrences(book, "", corrections.options_of({}))

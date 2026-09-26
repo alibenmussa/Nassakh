@@ -1,6 +1,6 @@
 # Nassakh (نسّاخ) — Implementation Plan
 
-Status: **Phases 1–6 built and reviewed; Phase 7 approved 2026-09-26 (D64–D79) and built in four sub-phases: 7a («التخطيط» first, then «المعالجة»; one keymap; a safe round trip) built and integrated 2026-09-26; 7b (trust in the text; footnote and verse roles) built and integrated 2026-09-26, awaiting the owner's hand test.** Phase specs in `docs/PHASE2_SPEC.md` … `docs/PHASE7_SPEC.md` and `docs/DASHBOARD_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
+Status: **Phases 1–6 built and reviewed; Phase 7 approved 2026-09-26 (D64–D79) and built in four sub-phases: 7a («التخطيط» first, then «المعالجة»; one keymap; a safe round trip) built and integrated 2026-09-26; 7b (trust in the text; footnote and verse roles) built and integrated 2026-09-26; 7c (the stage bar, review's origin, the page-by-page merge, fix everywhere) built and integrated 2026-09-26, awaiting the owner's hand test.** Phase specs in `docs/PHASE2_SPEC.md` … `docs/PHASE7_SPEC.md` and `docs/DASHBOARD_SPEC.md`. Run instructions in `docs/RUNBOOK.md`.
 v2 integrates the owner's answers and the inspection of the four sample PDFs in `playground/poc/input/`.
 Once Phase 1 starts, the decisions below are copied into `docs/DECISIONS.md`.
 
@@ -215,7 +215,13 @@ text, still open (D71). Words only the second model read come back as a group or
 read say so, and approved pages leave the attention list (D73). «حاشية» and «شعر» are line roles, with the continuation
 guard and the stray note (D74), and readiness names doubtful text (D75). Also `rebuild_lines --report` before any write,
 the PDF text layer for Chrome (Q1), and years checked against the number in words.
-**7c** navigation (the stage bar, review's origin), the page-by-page merge, fix everywhere. **7d** designed after 7c's test.
+**7c** (built 2026-09-26) every book screen carries the stage bar of six steps in its top bar and folds the sidebar into
+the rail; review knows where it was opened from («‹ الكتاب»), stays on an approved page on a detour and ends on a panel
+that names the next step; tiles lead to review (D76). One term per concept: «تجميع المخطوطة», «ترتيب الصفحات», no «لوحة
+الكتاب» (D77). An edited book takes review changes page by page: the base it descends from is kept (`Manuscript.base`),
+a plan compares mine, the base and the fresh text by tokens and diff3, and «أخذ التغييرات» takes only those paragraphs
+behind one snapshot (D78). «تصحيح في كل الكتاب» corrects one form on every page in one undoable batch, and on an edited
+book the find & replace it opens settles the pages that agree (D79). **7d** designed after 7c's test.
 
 ### Later (not scheduled)
 - **Tables** (sample 3): table node in the editor, table extraction from born-digital PDFs, table rendering in export.

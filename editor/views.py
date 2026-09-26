@@ -1,7 +1,8 @@
 """Editor pages (PHASE5_SPEC §5, §9 D47).
 
-- `editor:layout` → `/books/<id>/layout/[?chapter=<cid>][&mode=edit]`, the book page (`bookLayout`): live
-  pages, preview and edit, the one side panel
+- `editor:layout` → `/books/<id>/layout/[?chapter=<cid>][&mode=edit][&tab=<tab>][&block=<id>]`, the book
+  page (`bookLayout`): live pages, preview and edit, the one side panel (`?tab=find&q=&r=&fix=` fills in its
+  find & replace, D79)
 - `editor:edit`   → `/books/<id>/editor/[?chapter=<cid>]`, the old editor address: 302 to the book page on
   that chapter in edit mode
 
@@ -29,7 +30,14 @@ def _context(request: HttpRequest, book_id: int, page: str) -> dict:
     book = get_object_or_404(Book, pk=book_id)
     chapter_id = request.GET.get("chapter") or None
     config = services.page_config(
-        book, request.user, chapter_id, page, request.GET.get("mode"), tab=request.GET.get("tab")
+        book,
+        request.user,
+        chapter_id,
+        page,
+        request.GET.get("mode"),
+        tab=request.GET.get("tab"),
+        block=request.GET.get("block"),
+        find={key: request.GET.get(key) for key in ("q", "r", "fix")},
     )
     return {"book": book, "config": config, "exists": config["exists"], "can_edit": config["canEdit"]}
 
@@ -109,8 +117,11 @@ def _first_page(initial: dict, chapter_id: str | None) -> dict | None:
 @login_required
 def layout(request: HttpRequest, book_id: int) -> HttpResponse:
     """The stylesheet panel and the page preview (an empty state before the first assembly)."""
+    from books.services import book_stages
+
     context = _context(request, book_id, "layout")
     config = context["config"]
+    context["stage_steps"] = book_stages(context["book"], "book")  # the stage bar (D76)
     config["initial"] = _layout_initial(context["book"], config)
     context["initial"] = config["initial"]
     context["first_page"] = _first_page(config["initial"], config.get("requestedChapter"))
