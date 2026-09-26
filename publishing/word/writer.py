@@ -7,6 +7,14 @@ with its prefilled field), then one section per chapter (recto or new-page openi
 page numbers), writing every paragraph as a `Para` whose direct spacing the collapse rule decides per
 flow (§5.5), the footnotes into their part, the comments of uncertain words into theirs, then the
 styles, settings, font table (Amiri embedded), document properties and the package.
+
+**The cover (D80)** — `build_docx(…, cover=CoverPicture)`: a first section of one page holding the cover
+rasterised from the preview's render (`publishing.cover.export_raster`, 300 dpi), anchored at the page's
+corner, the page's exact size, behind the text (`sections.cover_para`), with no header or footer; the
+next section opens with a `nextPage` break and restarts the page numbers at 1 (`w:pgNumType w:start`), so
+the interior's numbers, odd / even pages and contents field are those of a file without a cover. The
+picture is `word/media/cover.png|jpeg`, relationship `rId6` (the header and footer parts then count from
+`rId7`), typed by its extension. Without a cover nothing of this is written: the same bytes as before.
 """
 
 from __future__ import annotations
@@ -34,6 +42,7 @@ from .sections import (
     Para,
     contents_page,
     copyright_page,
+    cover_para,
     resolve_flow,
     running_text,
     sect_pr,
@@ -94,6 +103,21 @@ class PagePlan:
 
 
 @dataclass(frozen=True)
+class CoverPicture:
+    """The cover as the Word file holds it (D80): the raster's bytes and media type (`image/png` |
+    `image/jpeg`) and the page's size it is drawn at."""
+
+    data: bytes
+    media_type: str
+    width_mm: float
+    height_mm: float
+
+    @property
+    def file_name(self) -> str:
+        return "cover.jpeg" if self.media_type == "image/jpeg" else "cover.png"
+
+
+@dataclass(frozen=True)
 class DocMeta:
     """What the document properties record (§5.13) and the export time (`now`, UTC)."""
 
@@ -135,10 +159,12 @@ def assemble(
     parts: list,
     properties: Properties,
     now: datetime,
+    media: list[Part] = (),
 ) -> Package:
     """The package of a document: the OPC relationships, the properties, then every part in the fixed
-    order (`document_rels` already lists the styles, settings, font table, footnotes, comments and the
-    header / footer `parts`, which carry their names and rIds)."""
+    order (`document_rels` already lists the styles, settings, font table, footnotes, comments, the
+    pictures and the header / footer `parts`, which carry their names and rIds); `media` are the picture
+    parts (the cover), written last."""
     package = Package()
     package.relate(ooxml.REL_DOCUMENT, "word/document.xml")
     package.relate(ooxml.REL_CORE, "docProps/core.xml")
@@ -174,6 +200,8 @@ def assemble(
     for part in parts:
         content_type = ooxml.CT_HEADER if part.kind == "hdr" else ooxml.CT_FOOTER
         package.add(Part(part.name, content_type, serialize(part.element)))
+    for part in media:
+        package.add(part)
     return package
 
 
@@ -206,7 +234,8 @@ def base_rels(with_comments: bool) -> list[Rel]:
     return rels
 
 
-FIRST_PART_REL = 6  # the rId of the first header or footer part
+FIRST_PART_REL = 6  # the rId of the first header or footer part (the cover's picture when there is one)
+COVER_REL = f"rId{FIRST_PART_REL}"  # D80: the cover's picture, the header and footer parts after it
 
 
 @dataclass
@@ -244,6 +273,8 @@ class Section:
     break_type: str | None
     running: str = ""
     body: bool = False
+    cover: bool = False  # the cover's section (D80): no header or footer
+    restart: bool = False  # the section after the cover: page numbers from 1
 
 
 class BookWriter:
@@ -261,8 +292,10 @@ class BookWriter:
         embed_fonts: bool,
         front_matter: bool,
         compat_mode: int | None = None,
+        cover: CoverPicture | None = None,
     ):
         self.book = book
+        self.cover = cover
         self.setup = book.setup
         self.options = options
         self.plan = plan
@@ -294,9 +327,24 @@ class BookWriter:
     def _open(
         self, paras: list[Para], running: str = "", body: bool = False, break_type: str | None = None
     ) -> Section:
-        section = Section(paras, None if not self.sections else (break_type or self.opening), running, body)
+        after_cover = len(self.sections) == 1 and self.sections[0].cover
+        if not self.sections:
+            kind = None
+        elif after_cover:  # D80: a new page numbered 1, whatever the chapters' openings
+            kind = "nextPage"
+        else:
+            kind = break_type or self.opening
+        section = Section(paras, kind, running, body, restart=after_cover)
         self.sections.append(section)
         return section
+
+    # ------------------------------------------------------------------ the cover (D80)
+
+    def cover_section(self) -> None:
+        if self.cover is None:
+            return
+        para = cover_para(COVER_REL, self.cover.width_mm, self.cover.height_mm, self.cover.file_name)
+        self.sections.append(Section([para], None, cover=True))
 
     # ------------------------------------------------------------------ the front matter (§5.9)
 
@@ -378,6 +426,7 @@ class BookWriter:
                 break_type=section.break_type,
                 references=references,
                 title_pg=title_pg,
+                page_start=1 if section.restart else None,
             )
             if not section.paras:
                 section.paras.append(Para("Normal"))
@@ -424,14 +473,21 @@ class BookWriter:
 
     def build(self) -> WordResult:
         started = time.monotonic()
+        self.cover_section()
         self.front()
         self.body()
         # the comments part exists only when a comment was written, so the document is built first;
-        # its rId is kept free either way, and the header parts count from FIRST_PART_REL
-        self.headers.next_rel = FIRST_PART_REL
+        # its rId is kept free either way, and the header parts count from FIRST_PART_REL (after the
+        # cover's picture, when there is one)
+        self.headers.next_rel = FIRST_PART_REL + (1 if self.cover is not None else 0)
         document = self.document()
         with_comments = self.comments is not None and self.comments.count > 0
         document_rels = base_rels(with_comments)
+        media: list[Part] = []
+        if self.cover is not None:
+            name = f"word/media/{self.cover.file_name}"
+            document_rels.append(Rel(COVER_REL, ooxml.REL_IMAGE, name.removeprefix("word/")))
+            media.append(Part(name, self.cover.media_type, self.cover.data))
         name_parts(self.headers.parts, document_rels)
         embedded = self.faces.embedded_files(self.embed_fonts)
         settings = ooxml.settings_xml(
@@ -453,6 +509,7 @@ class BookWriter:
             parts=self.headers.parts,
             properties=self.properties(),
             now=self.meta.now,
+            media=media,
         )
         data = package.to_bytes()
         if self.stats.comments_skipped:
@@ -465,7 +522,7 @@ class BookWriter:
             "comments": self.stats.comments,
             "comments_skipped": self.stats.comments_skipped,
             "sections": len(self.sections),
-            "front_sections": sum(1 for section in self.sections if not section.body),
+            "front_sections": sum(1 for section in self.sections if not section.body and not section.cover),
             "embedded_fonts": [item.name for item in embedded],
             "families": self.faces.families(),
             "parts": len(package.parts),
@@ -474,6 +531,11 @@ class BookWriter:
             "text_width_mm": round(text_width_mm(self.setup), 2),
             "build_ms": int((time.monotonic() - started) * 1000),
         }
+        if self.cover is not None:
+            stats["cover"] = {
+                "format": self.cover.file_name.rpartition(".")[2],
+                "bytes": len(self.cover.data),
+            }
         return WordResult(data=data, warnings=self.warnings, stats=stats, log=self.log)
 
 
@@ -488,10 +550,11 @@ def build_docx(
     embed_fonts: bool = True,
     front_matter: bool = True,
     compat_mode: int | None = None,
+    cover: CoverPicture | None = None,
 ) -> WordResult:
     """The book as a .docx (pure). `embed_fonts=False` keeps the golden files small; `front_matter=False`
-    is the harness's one-chapter check; `compat_mode` overrides `COMPAT_MODE` (the harness's C0). Same
-    inputs and `meta.now` give the same bytes."""
+    is the harness's one-chapter check; `compat_mode` overrides `COMPAT_MODE` (the harness's C0); `cover`
+    opens the file with the cover's page (D80). Same inputs and `meta.now` give the same bytes."""
     writer = BookWriter(
         book,
         fonts,
@@ -502,5 +565,6 @@ def build_docx(
         embed_fonts=embed_fonts,
         front_matter=front_matter,
         compat_mode=compat_mode,
+        cover=cover,
     )
     return writer.build()

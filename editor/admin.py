@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ChangesPlan, Manuscript, ManuscriptSnapshot, StyleSheet
+from .models import BookImage, ChangesPlan, Manuscript, ManuscriptSnapshot, StyleSheet
 
 
 @admin.register(Manuscript)
@@ -45,3 +45,23 @@ class StyleSheetAdmin(admin.ModelAdmin):
     raw_id_fields = ("book",)
     readonly_fields = ("updated_at",)
     list_select_related = ("book",)
+
+
+@admin.register(BookImage)
+class BookImageAdmin(admin.ModelAdmin):
+    list_display = (
+        "book",
+        "purpose",
+        "format",
+        "width",
+        "height",
+        "source_name",
+        "uploaded_by",
+        "created_at",
+    )
+    list_filter = ("purpose", "format")
+    search_fields = ("book__title", "source_name", "sha256")
+    raw_id_fields = ("book", "uploaded_by")
+    # D80: written by the upload service only (checked, normalised, named by content)
+    readonly_fields = ("file", "sha256", "width", "height", "format", "source_name", "created_at")
+    list_select_related = ("book", "uploaded_by")

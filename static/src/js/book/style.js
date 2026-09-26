@@ -1,8 +1,9 @@
-// The book page's stylesheet («التنسيق», PHASE5_SPEC §5, §9.2): the accordions القطع، الهوامش، الخطوط، النص،
-// الصفحة، بيانات الكتاب. Every change shows at once and saves after a short quiet (one PUT of the waiting
-// fields); the server's values win. A saved change lays the book out again (the page setup changed: the
-// re-layout of the chapter under the reader's eyes lays out the whole book, in a second or so for most
-// books) and the book render follows in the background.
+// The book page's stylesheet («التنسيق», PHASE5_SPEC §5, §9.2): the accordions الغلاف (D80, cover.js)، القطع،
+// الهوامش، الخطوط، النص، الصفحة، بيانات الكتاب. Every change shows at once and saves after a short quiet (one
+// PUT of the waiting fields); the server's values win. A saved change lays the book out again (the page setup
+// changed: the re-layout of the chapter under the reader's eyes lays out the whole book, in a second or so for
+// most books) and the book render follows in the background. A change of the cover alone lays nothing out
+// again (the cover is its own page, outside the interior): only its render is fetched again.
 (function () {
   'use strict';
 
@@ -17,14 +18,29 @@
     width_mm: 1, height_mm: 1, top_mm: 1, bottom_mm: 1, inner_mm: 1, outer_mm: 1, bleed_mm: 0.5,
     body_size_pt: 0.5, line_height: 0.05, indent_em: 0.25, footnote_size_pt: 0.5,
     'heading_scale.h1': 0.05, 'heading_scale.h2': 0.05, widows: 1, orphans: 1,
+    'front_matter.cover.center_pt': 1, 'front_matter.cover.bottom_pt': 0.5, 'front_matter.cover.bottom_mm': 1,
   };
   const INTEGERS = new Set(['widows', 'orphans']);
+  const NULLABLE = new Set(['front_matter.cover.bottom_mm']); // null: the automatic distance (the bottom margin + 8 mm)
+  // the cover's limits (COVER_SPEC §2) until the stylesheet payload names them
+  const FALLBACK_LIMITS = { 'front_matter.cover.center_pt': [8, 96], 'front_matter.cover.bottom_pt': [8, 96], 'front_matter.cover.bottom_mm': [0, 80] };
   const MARGIN_OF = { top_mm: 'top', bottom_mm: 'bottom', inner_mm: 'inner', outer_mm: 'outer' };
   const FONT_FIELDS = { body: 'body_font', latin: 'latin_font', heading: 'heading_font' };
   const SAMPLES = { body: 'نسّاخ يُخرج الكتاب صفحةً صفحة', latin: 'Nassakh, 1234 pages', heading: 'الفصل الأول' };
   const FONT_MENU_H = 300;
-  const SECTIONS = ['trim', 'margins', 'fonts', 'text', 'page', 'details'];
+  const SECTIONS = ['cover', 'trim', 'margins', 'fonts', 'text', 'page', 'details'];
   const OPEN_KEY = 'nassakh.book.sections';
+  const COVER_PREFIX = 'front_matter.cover.';
+  const COVER_TEXTS = new Set(['front_matter.cover.center', 'front_matter.cover.bottom']); // typed letter by letter
+  // a path whose error the server names in full (`front_matter.fields.title`, `front_matter.cover.center`)
+  const ownError = (path) => path.startsWith('front_matter.fields.') || path.startsWith(COVER_PREFIX);
+  // a save body that touches the cover alone: nothing in the interior changed
+  const coverOnly = (body) => {
+    const keys = Object.keys(body || {});
+    if (keys.length !== 1 || keys[0] !== 'front_matter') return false;
+    const front = Object.keys(body.front_matter || {});
+    return front.length === 1 && front[0] === 'cover';
+  };
   // the book details (StyleSheet.front_matter.fields), in the order of the title and copyright pages
   const DETAILS = [
     { key: 'title', label: 'العنوان' },
@@ -60,7 +76,7 @@
     const urls = ctx.urls;
     const T = ctx.timers;
     let pendingFlush = false;
-    const openSaved = String(U.readLocal(OPEN_KEY, 'trim,margins')).split(',').filter((s) => SECTIONS.includes(s));
+    const openSaved = String(U.readLocal(OPEN_KEY, 'cover,trim,margins')).split(',').filter((s) => SECTIONS.includes(s));
 
     return {
       sheet: {},
@@ -92,6 +108,16 @@
       openSection(key) {
         if (!this.sections[key]) this.toggleSection(key);
       },
+      // a section opened and brought into view (the cover sheet clicked, «بيانات الكتاب» from the cover's note)
+      revealSection(key) {
+        this.openSection(key);
+        const run = () => {
+          const el = U.q(ctx.dom.root || (U.hasDOM ? document.querySelector('[data-book]') : null), `[data-section="${key}"]`);
+          if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start', behavior: U.reduced() ? 'auto' : 'smooth' });
+        };
+        if (this.$nextTick) this.$nextTick(run); else run();
+        return true;
+      },
 
       // ------------------------------------------------------------ values
       applyStylesheet(payload) {
@@ -100,6 +126,9 @@
         values.heading_scale = Object.assign({ h1: 1.6, h2: 1.25 }, values.heading_scale || {});
         values.front_matter = Object.assign({ title_page: true, contents: true, copyright_page: false }, values.front_matter || {});
         values.front_matter.fields = Object.assign({}, values.front_matter.fields || {});
+        // D80: a stylesheet without a cover key is «بلا غلاف» (NassakhBook.cover.DEFAULTS, cover.js)
+        const coverDefaults = (NS.cover && NS.cover.DEFAULTS) || { mode: 'none' };
+        values.front_matter.cover = Object.assign({}, coverDefaults, values.front_matter.cover || {});
         this.sheet = values;
         this.saved = Boolean(payload.saved);
         if (payload.trims) this.trims = payload.trims;
@@ -109,6 +138,8 @@
         if (payload.limits) this.limits = payload.limits;
         if (payload.missing_fonts) this.missingFonts = payload.missing_fonts;
         if (payload.field_defaults) this.fieldDefaults = payload.field_defaults;
+        // D80: the cover's choices (modes, fits, presets, limits, the upload's limits, the print sizes, the image)
+        if (payload.cover && typeof payload.cover === 'object' && !Array.isArray(payload.cover)) this.coverChoices = payload.cover;
       },
       value(path) { return getPath(this.sheet, path); },
       fmt(v) {
@@ -116,8 +147,15 @@
         return Number.isFinite(n) ? String(round2(n)) : '';
       },
       limit(path) {
-        const pair = this.limits[path];
+        const pair = this.limits[path] || FALLBACK_LIMITS[path];
         return Array.isArray(pair) && pair.length === 2 ? pair : [-Infinity, Infinity];
+      },
+      // a value shown at once and not saved (a colour well while it is dragged); the change event saves it
+      setLocal(path, value) {
+        const next = JSON.parse(JSON.stringify(this.sheet));
+        setPath(next, path, value);
+        this.sheet = next;
+        return true;
       },
       step(path, dir) {
         const now = Number(this.value(path));
@@ -128,7 +166,7 @@
       // the value shows at once, the PUT follows after a short quiet.
       setField(path, raw) {
         let value = raw;
-        if (path in STEPS) {
+        if (path in STEPS && !(raw === null && NULLABLE.has(path))) {
           const text = U.westernDigits(raw).replace(/[٫,]/g, '.').replace(/[^\d.-]/g, '').trim();
           value = typeof raw === 'number' ? raw : text ? parseFloat(text) : NaN;
           if (!Number.isFinite(value)) { this.sheet = Object.assign({}, this.sheet); return false; }
@@ -140,9 +178,10 @@
         setPath(next, path, value);
         this.sheet = next;
         this.dirty[path] = value;
-        const field = path.startsWith('front_matter.fields.') ? path : path.split('.')[0];
+        const field = ownError(path) ? path : path.split('.')[0];
         if (this.errors[field]) { const errors = Object.assign({}, this.errors); delete errors[field]; this.errors = errors; }
-        this.scheduleSheetSave(path.startsWith('front_matter.fields.') ? TEXT_DEBOUNCE_MS : SAVE_DEBOUNCE_MS);
+        this.scheduleSheetSave(path.startsWith('front_matter.fields.') || COVER_TEXTS.has(path) ? TEXT_DEBOUNCE_MS : SAVE_DEBOUNCE_MS);
+        if (path.startsWith(COVER_PREFIX) && typeof this.onCoverField === 'function') this.onCoverField(path, value);
         return true;
       },
       setTrim(key) {
@@ -211,9 +250,11 @@
           this.sheetSave = refused.length ? { state: 'invalid', message: 'لم يُحفظ · صحّح القيم' } : { state: 'saved', message: 'حُفظ' };
           clearTimeout(T.sheetSaved);
           T.sheetSaved = setTimeout(() => { if (this.sheetSave.state === 'saved') this.sheetSave = { state: '', message: '' }; }, SAVED_PILL_MS);
-          // the page setup changed: the chapter under the eyes is laid out again (the whole book, as a layout)
-          if (this.focusChapter && typeof this.requestRelayout === 'function') this.requestRelayout(this.focusChapter);
+          // the page setup changed: the chapter under the eyes is laid out again (the whole book, as a layout);
+          // the cover alone changes no page of the interior
+          if (!coverOnly(body) && this.focusChapter && typeof this.requestRelayout === 'function') this.requestRelayout(this.focusChapter);
           this.pollNow();
+          if (typeof this.afterSheetSaved === 'function') this.afterSheetSaved(body);
         } else if (r.status === 400) {
           this.errors = (r.data && r.data.errors) || {};
           this.sheetSave = { state: 'invalid', message: (r.data && r.data.detail) || 'لم يُحفظ · صحّح القيم' };

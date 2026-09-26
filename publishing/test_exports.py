@@ -42,6 +42,7 @@ from publishing.models import Export
 from publishing.tests import document, heading, logged, long_book, para, role_user, text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "export"
+COVER_FIXTURES = Path(__file__).parent.parent / "editor" / "fixtures" / "cover"
 
 
 # ====================================================================== fixtures
@@ -1244,6 +1245,10 @@ def test_the_real_exporters_answer_the_shape_of_the_fixtures(book, editor, monke
     _real_registry(monkeypatch)
     assert exporters.available_formats() == ["docx", "print_pdf", "screen_pdf", "epub"]
     model = fixture("page")
+    # D80: the print form's cover option, whose contract is editor/fixtures/cover/exports.json
+    cover_forms = json.loads((COVER_FIXTURES / "exports.json").read_text(encoding="utf-8"))
+    no_cover = next(value for key, value in cover_forms.items() if key.startswith("… (no cover"))
+    model["formats"][1]["form"]["cover"] = no_cover
     payload = exports.page_payload(Book.objects.get(pk=book.pk), editor)
     same_shape(payload, model)
     for real, want in zip(payload["formats"], model["formats"], strict=True):

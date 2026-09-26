@@ -46,7 +46,7 @@ BOOK_JS = JS / "book"
 SRC = ROOT / "static" / "src" / "editor"
 BUNDLE = ROOT / "static" / "dist" / "editor.js"
 CSS = ROOT / "static" / "dist" / "app.css"
-BOOK_FILES = ("geometry.js", "stage.js", "style.js", "edit.js", "panel.js", "page.js")
+BOOK_FILES = ("geometry.js", "stage.js", "style.js", "cover.js", "edit.js", "panel.js", "page.js")
 NODE = shutil.which("node")
 
 
@@ -231,9 +231,10 @@ def test_book_page_first_paint_before_any_layout(editor):
     for key in ("chapters", "pages", "find", "format", "block", "source", "uncertain", "changes"):
         assert f'data-panel="{key}"' in side and f"x-show=\"tab === '{key}'\"" in side, key
     assert 'x-text="uncertain.count"' in side and "bp-badge is-warn" in side
-    # «التنسيق»: six accordions in order, with the book details and the D47 fields
+    # «التنسيق»: seven accordions in order (the cover first, D80: core/test_cover_ui.py), with the book
+    # details and the D47 fields
     sections = re.findall(r'data-section="(\w+)"', side)
-    assert sections == ["trim", "margins", "fonts", "text", "page", "details"]
+    assert sections == ["cover", "trim", "margins", "fonts", "text", "page", "details"]
     for needle in (
         'field="widows"',
         'field="orphans"',
@@ -320,11 +321,12 @@ def test_book_page_for_a_proofreader_is_read_only(proofreader):
     assert "data-mode-toggle" not in body and "data-edit-tools" not in body and "data-done" not in body
     # every section's fields are disabled, its head still opens and closes (the reader sees every value)
     assert '<fieldset class="lo-panel is-readonly"' in body and "التنسيق يغيّره محرّر الكتاب" in body
-    assert body.count('x-show="sections.') == 6 and body.count("{% if") == 0
+    assert body.count('x-show="sections.') == 7 and body.count("{% if") == 0
     assert all(
-        f'x-show="sections.{k}"' in body for k in ("trim", "margins", "fonts", "text", "page", "details")
+        f'x-show="sections.{k}"' in body
+        for k in ("cover", "trim", "margins", "fonts", "text", "page", "details")
     )
-    assert len(re.findall(r'<fieldset class="lo-section[^"]*"[^>]*\sdisabled>', body)) == 6
+    assert len(re.findall(r'<fieldset class="lo-section[^"]*"[^>]*\sdisabled>', body)) == 7
     assert re.search(r'<button type="button" class="bp-acc-head"[^>]*disabled', body) is None
     assert (
         "تحويل الأرقام…" not in body
@@ -1597,8 +1599,10 @@ globalThis.NassakhEditor = Object.assign({}, convert, {
 });
 
 (0, eval)(readFileSync(`${root}/static/src/js/keys.js`, 'utf8')); // NassakhKeys (D69)
-for (const name of ['geometry.js', 'stage.js', 'style.js', 'edit.js', 'panel.js', 'page.js']) (0, eval)(readFileSync(`${root}/static/src/js/book/${name}`, 'utf8'));
+for (const name of ['geometry.js', 'stage.js', 'style.js', 'cover.js', 'edit.js', 'panel.js', 'page.js']) (0, eval)(readFileSync(`${root}/static/src/js/book/${name}`, 'utf8'));
 globalThis.NassakhBook.register();
+// the filmstrip's page thumbs (the cover's thumb, D80, comes first and is hidden without a cover)
+const pageThumbs = (v) => v._dom.film.children.filter((t) => t.dataset.number !== undefined);
 
 const mkDom = () => {
   const rootEl = el('div', '', { book: '' });
@@ -1644,7 +1648,7 @@ const out = {};
   const v = mk();
   await settle();
   out.first = { pageCount: v.pageCount, revision: v.revision, current: v.current, phase: v.phase, painted: v._dom.sheets.right.page.dataset.n,
-    lines: shownLines(v).map((l) => l[1]), left: v._dom.sheets.left.lines.innerHTML, gets: gets(), thumbs: v._dom.film.children.map((t) => [t.dataset.number, t.childNodes[0].childNodes[0].getAttribute('src'), t.classList.contains('is-current')]),
+    lines: shownLines(v).map((l) => l[1]), left: v._dom.sheets.left.lines.innerHTML, gets: gets(), thumbs: pageThumbs(v).map((t) => [t.dataset.number, t.childNodes[0].childNodes[0].getAttribute('src'), t.classList.contains('is-current')]),
     tab: v.tab, mode: v.mode, counter: v.counterText, store: stores.bookPage.view === v, html: v._dom.sheets.right.lines.innerHTML.slice(0, 400) };
   // ---- virtualisation: one page in the DOM, two in a spread; turning redraws, fetching only what is missing
   v.setSpread(true);
@@ -1693,7 +1697,7 @@ const out = {};
     pageCount: v.pageCount, revision: v.revision, numbers: [...v.ctx().pages.keys()].sort((a, b) => a - b), sides: [...v.ctx().pages.values()].sort((a, b) => a.n - b.n).map((p) => [p.n, p.side, p.number && p.number.text]),
     p5x: v.ctx().pages.get(5).lines[0].x, chapterDeltas: v.chapterDeltas, delta: v.delta, footprint: [v.footprint.text, v.footprint.deltaText], version: v.version, state: v.editSave.state, pill: v.savePill.text,
     stillOpen: !ed.destroyed && v.open && v.open.block, editors: editors.length, relayout: v.relayout.state, current: v.current, numbersAsked: ed.calls.filter((c) => c[0] === 'numbers').length,
-    thumbs: v._dom.film.children.map((t) => [t.dataset.number, t.classList.contains('is-pending')]), laid: convert.plainText(convert.locate(v.ctx().laid, 'p13').node) === grownText };
+    thumbs: pageThumbs(v).map((t) => [t.dataset.number, t.classList.contains('is-pending')]), laid: convert.plainText(convert.locate(v.ctx().laid, 'p13').node) === grownText };
   // a re-layout seen from a later page: the page shown moves with its content (5 → 6)
   v.ctx().pages = new Map(fixture.pages.map((p) => [p.n, p])); v.revision = 3; v.pageCount = 5; v.rebuildSequence();
   v.closeBlock({ commit: false }); drop(); v.showPage(5, { instant: true });

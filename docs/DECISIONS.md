@@ -397,4 +397,18 @@ v2; unreviewed pages stay in «تجميع المخطوطة» with their count on
   doubtful text.
 - **7c:** D76 the stage bar and navigation; D77 one term per concept; D78 the page-by-page merge of review changes into
   an edited book; D79 «تصحيح في كل الكتاب».
-- 7d (D80+) is designed after 7c.
+- 7d (D81+) is designed after 7c.
+
+## D80 — The cover: a separate page, four modes, in every output (2026-09-27, `docs/COVER_SPEC.md`)
+
+The owner asked for a cover page that is its own page: generated from the book details, an image (fit width, fit
+height or filling the page) or custom text (a centre block and a bottom block), or none. It is rendered alone (one
+WeasyPrint page of the trim, no margins) and never enters the interior's layout, so page numbers, sides, openings, the
+footprint and the contents' numbers are unchanged. Modes `none` (the default, so no existing export changes), `info`,
+`image` (`fill` / `width` / `height`), `text`; colours with named presets; faces from the stylesheet. Outputs: the book
+page shows it before page 1 (not counted); the screen PDF prepends it with `/PageLabels` («غلاف», then 1…); the print
+PDF leaves it out unless its option asks (printers take the cover as its own file), and then gives it the interior's
+boxes and marks; Word opens with a one-page section holding the cover rasterised at 300 dpi, the next section
+restarting at 1; the EPUB has `cover.xhtml` first and the rasterised cover as its `cover-image`. Images are
+`editor.BookImage` rows (checked, oriented, sRGB, stored by content hash, never deleted), the pipeline body images
+will reuse. Readiness warns of a missing cover image and of a low resolution.

@@ -525,3 +525,102 @@ def test_characters_xml_forbids_are_left_out(tmp_path):
     assert "".join(chapter.find(f".//{X}h1").itertext()) == "الفصل الأول"
     opf = _opf(result.data)  # the metadata go through lxml, which refuses such characters
     assert '<dc:title id="title">كتاب' in opf and "الرحلة</dc:title>" in opf and "المسعودي" in opf
+
+
+# ====================================================================== the cover (D80)
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+from publishing.cover import EPUB_HEIGHT_PX  # noqa: E402
+from publishing.model import CoverSpec  # noqa: E402
+
+
+def _png(width: int = 10, height: int = 14) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), (31, 59, 45)).save(out, "PNG")
+    return out.getvalue()
+
+
+def test_the_cover_comes_first_and_is_the_library_picture():
+    setup = sample_setup()
+    book = book_model(sample_document(), setup)
+    resolved = fonts.resolve("amiri", "amiri", "amiri")
+    result = build_epub(book, resolved, identifier="urn:uuid:x", created=CREATED, cover=(_png(), "image/png"))
+    assert check_epub(result.data) == []
+    assert result.documents[0] == "cover.xhtml" and result.documents[1] == "title.xhtml"
+    opf = _opf(result.data)
+    assert re.search(r'<item [^>]*href="images/cover\.png"[^>]*properties="cover-image"', opf) or re.search(
+        r'<item [^>]*properties="cover-image"[^>]*href="images/cover\.png"', opf
+    )
+    assert '<meta name="cover" content="cover-image"' in opf  # EPUB 2 readers
+    assert re.search(r'<reference [^>]*type="cover"', opf) and '<itemref idref="cover"' in opf
+    page = xml(result.data, "cover.xhtml")
+    assert page.get("dir") == "rtl" and page.get("lang") == "ar"
+    assert epub_type(page, "cover") and page.find(f".//{X}img").get("src") == "images/cover.png"
+    nav = xml(result.data, "nav.xhtml")
+    marks = [
+        (a.get(f"{{{NS_EPUB}}}type"), a.get("href"), a.text)
+        for a in nav.iter(f"{X}a")
+        if a.get(f"{{{NS_EPUB}}}type")
+    ]
+    assert marks[0] == ("cover", "cover.xhtml", "الغلاف")
+    with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
+        assert archive.read("EPUB/images/cover.png") == _png()
+        assert "div.cover img" in archive.read("EPUB/styles/book.css").decode()
+    package = read(result.data)
+    from ebooklib import ITEM_COVER
+
+    assert [item.file_name for item in package.get_items() if item.get_type() == ITEM_COVER] == [
+        "images/cover.png"
+    ]
+
+
+def test_a_book_without_a_cover_gets_the_epub_it_got_before():
+    _book, before = build()
+    off = sample_setup(
+        front_matter={
+            "title_page": True,
+            "contents": True,
+            "copyright_page": True,
+            "fields": DETAILS,
+            "cover": {"mode": "none", "center": "x"},
+        }
+    )
+    _book, again = build(setup=off)
+    assert again.data == before.data and "cover" not in _opf(before.data)
+
+
+def test_check_epub_catches_a_missing_picture():
+    setup = sample_setup()
+    book = book_model(sample_document(), setup)
+    result = build_epub(
+        book,
+        fonts.resolve("amiri", "amiri", "amiri"),
+        identifier="urn:uuid:x",
+        created=CREATED,
+        cover=(_png(), "image/png"),
+    )
+    source = zipfile.ZipFile(io.BytesIO(result.data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as target:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename == "EPUB/cover.xhtml":
+                data = data.replace(b"images/cover.png", b"images/gone.png")
+            target.writestr(info, data)
+    assert any("images/gone.png is not in the package" in error for error in check_epub(out.getvalue()))
+
+
+@pytest.mark.django_db
+def test_the_export_rasterises_the_cover_1600_px_tall():
+    setup = _replace(sample_setup(), cover=CoverSpec(mode="text", center="كتاب الرحلة", background="#1f3b2d"))
+    result = EpubExporter().export(job_of(sample_document(), setup), NullProgress())
+    assert check_epub(result.data) == []
+    assert (
+        result.stats["documents"][0] == "cover.xhtml" and result.stats["cover"]["media_type"] == "image/png"
+    )
+    with zipfile.ZipFile(io.BytesIO(result.data)) as archive:
+        with Image.open(io.BytesIO(archive.read("EPUB/images/cover.png"))) as image:
+            assert image.height == EPUB_HEIGHT_PX and image.width == round(1600 * 170 / 240)

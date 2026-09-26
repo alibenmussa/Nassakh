@@ -26,6 +26,13 @@ Phase 5 styles, see `editor.document`) into plain dataclasses that know nothing 
 - **Page layout (D47)**: every block and note keeps its plain text (`Block.plain`, `Footnote.plain`,
   `editor.document.object_kinds`), so the layout export can give each laid-out line its character range;
   `break_before` / `keep_with_next` come from the block's `breakBefore` / `keepWithNext` attrs.
+- **The cover (D80, COVER_SPEC §2)**: `front_matter["cover"]` parsed into `PageSetup.cover` (`CoverSpec`,
+  frozen: the settings with their defaults — `cover_settings` — and the image's file, size and sha,
+  looked up once when the setup is read from a stylesheet), and `Front.cover` when it can be drawn (mode
+  `info` or `text`, or `image` with its image; `none` and an image mode without an image give None). The
+  cover is a page of its own outside the book's pages, so `PageSetup.as_dict()` (the preview, layout and
+  export hashes) leaves it out: a stylesheet without a cover key gives the setup, the hashes and the
+  files it gave before.
 
 Empty paragraphs are left out (spacing comes from the styles). `direction_flags` (over a paragraph's
 whole text) and `direction_runs` (over one text) cut text into right-to-left and left-to-right pieces for
@@ -38,6 +45,7 @@ import re
 import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from editor import document as doc
 
@@ -97,6 +105,213 @@ BOOK_FIELDS: tuple[str, ...] = (
     "isbn",
     "rights",
 )
+
+
+# ====================================================================== the cover (D80)
+
+# `front_matter["cover"]["mode"]` → its label in «التنسيق»; `none` (the default) prints no cover anywhere
+COVER_MODES: dict[str, str] = {
+    "none": "بلا غلاف",
+    "info": "من بيانات الكتاب",
+    "image": "صورة",
+    "text": "نص مخصّص",
+}
+# how the image meets the page: `fill` covers it (the overflow cropped, centred), `width` / `height` show
+# the whole width / height, centred, the background colour where the image does not reach
+COVER_FITS: dict[str, str] = {"fill": "ملء الصفحة", "width": "ملاءمة العرض", "height": "ملاءمة الارتفاع"}
+# the named colour pairs: key → (label, background, text colour)
+COVER_PRESETS: dict[str, tuple[str, str, str]] = {
+    "white": ("أبيض", "#ffffff", "#1b1b1b"),
+    "cream": ("كريمي", "#f4efe4", "#2a2419"),
+    "gray": ("رمادي", "#e9e9ec", "#1f1f24"),
+    "navy": ("كحلي", "#1d2433", "#f3efe6"),
+    "green": ("أخضر داكن", "#1f3b2d", "#f1ead8"),
+    "burgundy": ("عنابي", "#4a1d24", "#f4e9d8"),
+}
+CUSTOM_PRESET = "custom"  # colours picked by hand
+COVER_TEXT_MAX = 600  # characters of the centre and of the bottom text
+COVER_SIZE_LIMITS: tuple[float, float] = (8.0, 96.0)  # centre and bottom text sizes (pt)
+COVER_BOTTOM_LIMITS: tuple[float, float] = (0.0, 80.0)  # the bottom block's distance from the trim (mm)
+COVER_BOTTOM_GAP_MM = 8.0  # the default distance: the page's bottom margin plus this
+COVER_SUB_SCALE = 0.55  # the subtitle and the author of an `info` cover, as a share of the centre size
+COVER_DEFAULTS: dict = {
+    "mode": "none",
+    "image": None,
+    "fit": "fill",
+    "center": "",
+    "bottom": "",
+    "center_pt": 28.0,
+    "bottom_pt": 13.0,
+    "background": "#ffffff",
+    "color": "#1b1b1b",
+    "preset": "white",
+    "bottom_mm": None,  # None: the page's bottom margin + COVER_BOTTOM_GAP_MM
+}
+_RE_HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def hex_colour(value) -> str | None:
+    """`#rrggbb` in lower case, or None for anything else."""
+    if isinstance(value, str) and _RE_HEX_COLOUR.fullmatch(value.strip()):
+        return value.strip().lower()
+    return None
+
+
+def cover_text(value) -> str:
+    """A cover text as it is kept: its lines (CRLF / CR as LF), each line's spaces collapsed, the empty lines
+    at both ends dropped (those between lines stay)."""
+    raw = str(value if value is not None else "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [" ".join(line.split()) for line in raw.split("\n")]
+    while lines and not lines[0]:
+        lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def preset_of(background: str, color: str) -> str:
+    """The preset whose two colours these are, else `custom`."""
+    for key, (_label, bg, fg) in COVER_PRESETS.items():
+        if (bg, fg) == (background, color):
+            return key
+    return CUSTOM_PRESET
+
+
+def _cover_number(value, limits: tuple[float, float]) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return round(number, 2) if limits[0] <= number <= limits[1] else None
+
+
+def cover_settings(value) -> dict:
+    """`front_matter["cover"]` as a whole settings dict: every key of `COVER_DEFAULTS`, a stored value
+    kept when it is valid, the default otherwise (the stylesheet's PUT validates what it saves, so this
+    only mends hand-edited rows); `preset` follows the two colours."""
+    value = value if isinstance(value, dict) else {}
+    out = dict(COVER_DEFAULTS)
+    if value.get("mode") in COVER_MODES:
+        out["mode"] = value["mode"]
+    image = value.get("image")
+    if isinstance(image, int) and not isinstance(image, bool) and image > 0:
+        out["image"] = image
+    if value.get("fit") in COVER_FITS:
+        out["fit"] = value["fit"]
+    for key in ("center", "bottom"):
+        if isinstance(value.get(key), str):
+            out[key] = cover_text(value[key])[:COVER_TEXT_MAX]
+    for key in ("center_pt", "bottom_pt"):
+        number = _cover_number(value.get(key), COVER_SIZE_LIMITS)
+        if number is not None:
+            out[key] = number
+    for key in ("background", "color"):
+        colour = hex_colour(value.get(key))
+        if colour is not None:
+            out[key] = colour
+    out["preset"] = preset_of(out["background"], out["color"])
+    out["bottom_mm"] = _cover_number(value.get("bottom_mm"), COVER_BOTTOM_LIMITS)
+    return out
+
+
+@dataclass(frozen=True)
+class CoverImage:
+    """The cover's picture as a renderer needs it: the `editor.BookImage` row's id, the stored file's
+    absolute path, its pixel size, sha256 and format (`jpeg` | `png`)."""
+
+    id: int
+    path: str
+    width: int
+    height: int
+    sha256: str
+    format: str
+
+
+@dataclass(frozen=True)
+class CoverSpec:
+    """The cover's settings (`cover_settings`, mode other than `none`) and, for an image cover, its image
+    (None when none is chosen or its file is gone)."""
+
+    mode: str
+    fit: str = "fill"
+    center: str = ""
+    bottom: str = ""
+    center_pt: float = 28.0
+    bottom_pt: float = 13.0
+    background: str = "#ffffff"
+    color: str = "#1b1b1b"
+    bottom_mm: float | None = None
+    image_id: int | None = None
+    image: CoverImage | None = None
+
+    @property
+    def ready(self) -> bool:
+        """True when the cover can be drawn: `info` and `text` always, `image` with its image."""
+        return self.mode in ("info", "text") or (self.mode == "image" and self.image is not None)
+
+    @property
+    def photo(self) -> bool:
+        """True when the cover shows a picture (rasters of it are JPEG, not PNG)."""
+        return self.mode == "image" and self.image is not None
+
+    def fingerprint(self) -> dict:
+        """What identifies the cover's look (its render and export hashes): the settings and the image's
+        sha (never its path)."""
+        return {
+            "mode": self.mode,
+            "fit": self.fit,
+            "center": self.center,
+            "bottom": self.bottom,
+            "center_pt": self.center_pt,
+            "bottom_pt": self.bottom_pt,
+            "background": self.background,
+            "color": self.color,
+            "bottom_mm": self.bottom_mm,
+            "image": self.image.sha256 if self.image is not None else None,
+        }
+
+
+def cover_image(image_id: int | None, book_id: int | None = None) -> CoverImage | None:
+    """The `editor.BookImage` `image_id` (of `book_id` when given) as a `CoverImage`; None when there is
+    no such row or its file is missing (one query)."""
+    if not image_id:
+        return None
+    from editor.models import BookImage
+
+    rows = BookImage.objects.filter(pk=image_id)
+    if book_id is not None:
+        rows = rows.filter(book_id=book_id)
+    row = rows.only("id", "file", "width", "height", "sha256", "format").first()
+    if row is None or not row.file:
+        return None
+    try:
+        path = row.file.path
+    except (NotImplementedError, ValueError):  # a storage without local paths
+        return None
+    if not Path(path).is_file():
+        return None
+    return CoverImage(row.pk, path, int(row.width), int(row.height), row.sha256, row.format)
+
+
+def cover_spec(value, book_id: int | None = None) -> CoverSpec | None:
+    """`front_matter["cover"]` as a `CoverSpec` (None for mode `none`); an image cover's image is looked
+    up (`cover_image`)."""
+    settings = cover_settings(value)
+    if settings["mode"] == "none":
+        return None
+    image = cover_image(settings["image"], book_id) if settings["mode"] == "image" else None
+    return CoverSpec(
+        mode=settings["mode"],
+        fit=settings["fit"],
+        center=settings["center"],
+        bottom=settings["bottom"],
+        center_pt=settings["center_pt"],
+        bottom_pt=settings["bottom_pt"],
+        background=settings["background"],
+        color=settings["color"],
+        bottom_mm=settings["bottom_mm"],
+        image_id=settings["image"],
+        image=image,
+    )
 
 
 # ====================================================================== the structure
@@ -204,6 +419,7 @@ class Front:
     edition: str = ""
     isbn: str = ""
     rights: str = ""
+    cover: CoverSpec | None = None  # D80: the cover when it can be drawn (`CoverSpec.ready`)
 
 
 @dataclass(frozen=True)
@@ -238,9 +454,12 @@ class PageSetup:
     keep_headings: bool = True
     copyright_page: bool = False
     details: tuple[tuple[str, str], ...] = ()  # the non-empty book details, `(field, value)` in field order
+    cover: CoverSpec | None = None  # D80: `front_matter["cover"]` (None: mode `none`); never in `as_dict`
 
     def as_dict(self) -> dict:
-        return {name: getattr(self, name) for name in self.__dataclass_fields__}
+        """The fields that lay the pages out (every preview, layout and export hash): the cover is left
+        out, as it never changes a page of the book (D80)."""
+        return {name: getattr(self, name) for name in self.__dataclass_fields__ if name != "cover"}
 
     def detail(self, name: str) -> str:
         """One book detail ('' when not given)."""
@@ -357,6 +576,9 @@ def page_setup(stylesheet) -> PageSetup:
         if isinstance(fields.get(name), str) and fields[name].strip()
     )
     keep = get("keep_headings", base.keep_headings)
+    # the cover's image is looked up once here (a stylesheet row knows its book; a dict of fields does not)
+    book_id = None if isinstance(stylesheet, dict) else getattr(stylesheet, "book_id", None)
+    cover = cover_spec(front["cover"], book_id) if isinstance(front.get("cover"), dict) else None
     return PageSetup(
         **values,
         h1_scale=_number(scale.get("h1"), base.h1_scale),
@@ -369,6 +591,7 @@ def page_setup(stylesheet) -> PageSetup:
         keep_headings=keep if isinstance(keep, bool) else base.keep_headings,
         copyright_page=bool(front.get("copyright_page", base.copyright_page)),
         details=details,
+        cover=cover,
     )
 
 
@@ -584,6 +807,7 @@ def book_model(
         contents=setup.contents,
         copyright_page=setup.copyright_page,
         **{name: setup.detail(name) for name in BOOK_FIELDS if name not in ("title", "author")},
+        cover=setup.cover if setup.cover is not None and setup.cover.ready else None,
     )
     wanted = set(chapter_ids) if chapter_ids is not None else None
     counters = _Counters(editorial=editorial)

@@ -29,13 +29,17 @@ Western digits (`assembly.render.ar_count`).
 - `single_reader` (info, D75): pages of the book that one model read (`Page.reading.readers` is `one`,
   or `tesseract` when the page's text is Tesseract's alone; a page read before 7b, `{}`, is not counted)
   and that nobody has reviewed yet (`ocr_done`) → «المراجعة»;
+- `cover_image_missing` (warn, D80): an image cover with no image (none chosen, or its file gone): no
+  output will have a cover → «الغلاف» (`?tab=format`);
 - `book_details` (info): no author for the title page and the file's properties; a copyright page with
   neither publisher nor year → «بيانات الكتاب» (`?tab=format`);
 - `no_headings` (info): a contents page but no chapter headings;
 - `clear` (success): none of the above — every page of the book reviewed and nothing to note.
 
 **Helpers the exporters use for their notes** (`Exporter.notes`): `missing_font_rows` (a face of the
-stylesheet not installed: Amiri stands in), `page_checks_row` (the live layout's page checks, 6b),
+stylesheet not installed: Amiri stands in), `cover_resolution_row` (D80: the cover's picture short of
+300 dpi as it is fitted on the trim; warn for the print PDF, info for the others), `page_checks_row` (the
+live layout's page checks, 6b),
 `layout_is_current` (the live pages are those of the current text and setup: Word's contents numbers
 come from them), `uncertain_counts` (cached on the book instance, so the page payload counts once) and
 `layout_url` (the book page on a panel tab).
@@ -79,6 +83,9 @@ BOOK_LABEL = "الكتاب"
 CHANGES_LABEL = "تغييرات المراجعة"
 DETAILS_LABEL = "بيانات الكتاب"
 FONTS_LABEL = "الخطوط"
+COVER_LABEL = "الغلاف"
+COVER_IMAGE_MISSING = "اختير غلاف بصورة ولم تُرفع صورة؛ لن يكون للكتاب غلاف."
+COVER_RESOLUTION = "دقة صورة الغلاف {dpi} نقطة في البوصة على هذا القطع؛ يُستحسن 300 للطباعة."
 
 NUMBERS_LISTED = 8  # page numbers a message lists before «…»
 NOTE_MARKER_MAX = 15  # «(n)» / «[n]» up to this n reads as a note marker
@@ -432,6 +439,10 @@ def book_readiness(book: Book, *, manuscript=None, setup=None) -> list[dict]:
     if running:
         rows.append(row("assembly_running", WARN, ASSEMBLY_RUNNING))
 
+    missing = cover_missing_row(book.pk, setup)
+    if missing is not None:
+        rows.append(missing)
+
     if trust.single_reader:
         rows.append(row("single_reader", INFO, single_reader_message(len(trust.single_reader)), review))
     model = book_model(document, setup, title=book.title, author=book.author)
@@ -468,6 +479,30 @@ def missing_font_rows(book_id: int, setup, code: str = "font_missing") -> list[d
         message = MISSING_FONT.format(name=name, fallback=fallback)
         out.append(row(code, WARN, message, action(FONTS_LABEL, book_id, "format")))
     return out
+
+
+def cover_missing_row(book_id: int, setup) -> dict | None:
+    """`cover_image_missing` (warn) when the setup asks for an image cover that has no image."""
+    cover = getattr(setup, "cover", None)
+    if cover is None or cover.mode != "image" or cover.ready:
+        return None
+    return row("cover_image_missing", WARN, COVER_IMAGE_MISSING, action(COVER_LABEL, book_id, "format"))
+
+
+def cover_resolution_row(book_id: int, setup, level: str = INFO) -> dict | None:
+    """`cover_resolution` (`level`: warn for print, info otherwise) when the cover's picture, as it is
+    fitted on the trim, has fewer than `publishing.cover.LOW_DPI` pixels per inch (the message gives the
+    rounded figure: «دقة صورة الغلاف 150 نقطة…»)."""
+    from .cover import LOW_DPI, effective_dpi
+
+    cover = getattr(setup, "cover", None)
+    if cover is None or not cover.photo:
+        return None
+    dpi = effective_dpi(cover, setup.width_mm, setup.height_mm)
+    if dpi is None or dpi >= LOW_DPI:
+        return None
+    message = COVER_RESOLUTION.format(dpi=round(dpi))
+    return row("cover_resolution", level, message, action(COVER_LABEL, book_id, "format"))
 
 
 def layout_checks(book_id: int) -> list[dict]:

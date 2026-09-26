@@ -1,0 +1,61 @@
+{
+ "GET /api/books/80/cover/ (mode none, or no cover key) → 200": {
+  "mode": "none",
+  "hash": null,
+  "image_1x": null,
+  "image_2x": null,
+  "width": null,
+  "height": null
+ },
+ "GET … (mode info) → 200": {
+  "mode": "info",
+  "hash": "<hash>",
+  "image_1x": "/media/books/80/cover/<hash>/cover.webp",
+  "image_2x": "/media/books/80/cover/<hash>/cover-2x.webp",
+  "width": 779,
+  "height": 1100
+ },
+ "GET … (mode image, no image) → 200": {
+  "mode": "image",
+  "hash": null,
+  "image_1x": null,
+  "image_2x": null,
+  "width": null,
+  "height": null
+ },
+ "GET … (mode image, image 801, fit fill) → 200": {
+  "mode": "image",
+  "hash": "<hash>",
+  "image_1x": "/media/books/80/cover/<hash>/cover.webp",
+  "image_2x": "/media/books/80/cover/<hash>/cover-2x.webp",
+  "width": 779,
+  "height": 1100
+ },
+ "GET … (mode image, image 802, fit width) → 200": {
+  "mode": "image",
+  "hash": "<hash>",
+  "image_1x": "/media/books/80/cover/<hash>/cover.webp",
+  "image_2x": "/media/books/80/cover/<hash>/cover-2x.webp",
+  "width": 779,
+  "height": 1100
+ },
+ "GET … (mode image, image 802, fit height) → 200": {
+  "mode": "image",
+  "hash": "<hash>",
+  "image_1x": "/media/books/80/cover/<hash>/cover.webp",
+  "image_2x": "/media/books/80/cover/<hash>/cover-2x.webp",
+  "width": 779,
+  "height": 1100
+ },
+ "GET … (mode text) → 200": {
+  "mode": "text",
+  "hash": "<hash>",
+  "image_1x": "/media/books/80/cover/<hash>/cover.webp",
+  "image_2x": "/media/books/80/cover/<hash>/cover-2x.webp",
+  "width": 779,
+  "height": 1100
+ },
+ "GET /api/books/999999/cover/ → 404": {
+  "detail": "الكتاب غير موجود."
+ }
+}

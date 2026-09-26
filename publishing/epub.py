@@ -9,10 +9,14 @@ editor and translator with their MARC roles, publisher, year, rights) and `dcter
 export's time. The zip is written again with fixed times (the same export gives the same bytes) and
 `mimetype` first, stored.
 
-**The documents:** the title page and the copyright page when the stylesheet asks for them (the preview's
-lines), `nav.xhtml` (the contents — the book page's contents entries, chapters with their sections — and
-the landmarks; in the reading order when the book has a contents page), then one XHTML file per chapter
-(D40's chapters; a chapter left with nothing to print gets none, as in the preview).
+**The documents:** the cover when the book has one (D80: `cover.xhtml`, first in the spine, `epub:type
+cover`, landmark «الغلاف», showing the preview's cover rendered alone and rasterised 1600 px tall —
+`images/cover.jpeg` for a picture, `.png` otherwise —, declared `properties="cover-image"` with the EPUB 2
+`<meta name="cover">` and guide entry, so readers show it in the library), the title page and the
+copyright page when the stylesheet asks for them (the preview's lines), `nav.xhtml` (the contents — the
+book page's contents entries, chapters with their sections — and the landmarks; in the reading order when
+the book has a contents page), then one XHTML file per chapter (D40's chapters; a chapter left with
+nothing to print gets none, as in the preview). A book without a cover gets the file it got before.
 
 **Blocks:** `h1` (chapter title), `h2` (section title), `p.body`, `blockquote.quote` (consecutive quote
 paragraphs together), `p.verse` with `<br/>`, `p.center`, `p.separator`, `b`, `i`. Scan page marks are
@@ -31,7 +35,7 @@ Mac is Amiri, as in the preview. `ibooks:specified-fonts` lets Apple Books use t
 **The check** reads the file back with ebooklib and lxml: `mimetype` first and stored, every XHTML
 document well formed and right to left, every noteref's target and every back link present, the spine
 right to left and never empty (a book with nothing to read has its nav as the one document), the nav and
-the fonts in the manifest. A file that fails is an `InvalidExport`.
+the fonts in the manifest, every picture a document shows in it. A file that fails is an `InvalidExport`.
 
 **Text** goes in without the characters XML 1.0 forbids (`xml_safe`: C0 controls such as an OCR'd
 vertical tab or form feed, lone surrogates, U+FFFE / U+FFFF), in the documents, the metadata and the NCX.
@@ -67,6 +71,8 @@ MARC_ROLES: dict[str, str] = {"author": "aut", "editor": "edt", "translator": "t
 NOTE_CALL_SCALE = 0.62  # the call's size, as the preview's (`css.FOOTNOTE_CALL_SCALE`)
 
 LANDMARKS_TITLE = "معالم الكتاب"
+COVER_TITLE = "الغلاف"
+COVER_ID = "cover-image"
 TITLE_PAGE = "صفحة العنوان"
 COPYRIGHT_PAGE = "صفحة الحقوق"
 BODY_START = "بداية الكتاب"
@@ -344,6 +350,19 @@ def _credit(value: str, label: str) -> str:
     return value if value.startswith(label) else f"{label}: {value}"
 
 
+# the cover's page (D80): the picture alone, as large as the screen lets it be
+COVER_CSS = (
+    "div.cover { margin: 0; padding: 0; text-align: center; }",
+    "div.cover img { max-width: 100%; max-height: 96vh; height: auto; }",
+)
+
+
+def cover_page(book: Book, image_name: str) -> bytes:
+    """`cover.xhtml`: the cover's picture (`image_name`, the file in the package)."""
+    body = f'<div class="cover"><img src="{_attr(image_name)}" alt="{_attr(COVER_TITLE)}"/></div>'
+    return _document(COVER_TITLE, body, body_type="cover")
+
+
 def title_page(book: Book) -> bytes:
     """The title page: the preview's lines (title, subtitle, author, editor, translator, imprint)."""
     front = book.front
@@ -477,9 +496,15 @@ def _repack(data: bytes, when: datetime) -> bytes:
 
 
 def build_epub(
-    book: Book, fonts: F.ResolvedFonts, *, identifier: str, created: datetime | None = None
+    book: Book,
+    fonts: F.ResolvedFonts,
+    *,
+    identifier: str,
+    created: datetime | None = None,
+    cover: tuple[bytes, str] | None = None,
 ) -> EpubBuild:
-    """The EPUB of a book model (pure: no database). See the module docstring."""
+    """The EPUB of a book model (pure: no database). `cover` is the cover's picture `(bytes, media type)`
+    (`publishing.cover.export_raster`), None for a book without one. See the module docstring."""
     from ebooklib import epub
 
     when = _utc(created)
@@ -519,7 +544,8 @@ def build_epub(
         package.add_item(found)
         return found
 
-    item("css", "styles/book.css", "text/css", epub_css(book.setup, fonts).encode())
+    css = epub_css(book.setup, fonts) + ("\n".join(COVER_CSS) + "\n" if cover is not None else "")
+    item("css", "styles/book.css", "text/css", css.encode())
     amiri = F.VENDORED_DIR / "amiri"
     for index, (_weight, name) in enumerate(AMIRI_FILES, start=1):
         item(f"font-{index}", f"fonts/{name}", FONT_TYPE, (amiri / name).read_bytes())
@@ -527,6 +553,17 @@ def build_epub(
 
     spine: list = []
     landmarks: list[tuple[str, str, str]] = []
+    if cover is not None:  # D80: first in the spine, and the library's picture
+        data, media_type = cover
+        image_name = f"images/cover.{'jpeg' if media_type == 'image/jpeg' else 'png'}"
+        picture = epub.EpubCover(uid=COVER_ID, file_name=image_name)
+        picture.media_type = media_type
+        picture.content = data
+        package.add_item(picture)
+        package.add_metadata(None, "meta", "", {"name": "cover", "content": COVER_ID})
+        spine.append(item("cover", "cover.xhtml", XHTML, cover_page(book, image_name)))
+        landmarks.append(("cover", "cover.xhtml", COVER_TITLE))
+        package.guide.append({"type": "cover", "href": "cover.xhtml", "title": COVER_TITLE})
     if front.title_page and front.title:
         spine.append(item("title-page", "title.xhtml", XHTML, title_page(book)))
         landmarks.append(("titlepage", "title.xhtml", TITLE_PAGE))
@@ -629,6 +666,7 @@ def check_epub(data: bytes) -> list[str]:
         except etree.XMLSyntaxError as exc:
             errors.append(f"{name} is not well formed: {exc}")
     ids = {name: set(root.xpath("//@id")) for name, root in roots.items()}
+    files = {item.file_name for item in package.get_items()}
     for name, root in roots.items():
         if root.get("dir") != "rtl" or root.get("lang") != "ar":
             errors.append(f"{name} is not lang=ar dir=rtl")
@@ -640,6 +678,9 @@ def check_epub(data: bytes) -> list[str]:
             target = target or name
             if target not in documents or (anchor and anchor not in ids.get(target, ())):
                 errors.append(f"{name}: the link {href} has no target")
+        for picture in root.xpath("//*[local-name()='img']/@src"):
+            if "://" not in picture and picture not in files:
+                errors.append(f"{name}: the picture {picture} is not in the package")
         refs = root.xpath("//*[@epub:type='noteref']", namespaces={"epub": NS_EPUB})
         notes = root.xpath("//*[@epub:type='footnote']", namespaces={"epub": NS_EPUB})
         if len(refs) != len(notes):
@@ -682,12 +723,18 @@ class EpubExporter:
         return {}
 
     def notes(self, book, setup: PageSetup) -> list[dict]:
-        """The faces (Amiri embedded, the others shown where installed), the notes per chapter."""
+        """The faces (Amiri embedded, the others shown where installed), the notes per chapter, a cover
+        picture short of 300 dpi (`cover_resolution`, info)."""
+        from .readiness import cover_resolution_row
+
         fonts = F.resolve(setup.body_font, setup.latin_font, setup.heading_font)
-        return epub_notes(book.pk, setup, fonts)
+        resolution = cover_resolution_row(book.pk, setup, INFO)
+        return epub_notes(book.pk, setup, fonts) + ([resolution] if resolution is not None else [])
 
     def export(self, job: ExportJob, progress: Progress) -> ExportResult:
         """prepare → write → check."""
+        from .cover import EPUB_HEIGHT_PX, export_raster
+
         progress("prepare")
         book = book_model(job.document, job.setup, title=job.title, author=job.author)
         setup = book.setup
@@ -695,8 +742,15 @@ class EpubExporter:
         if progress.cancelled():
             raise ExportCancelled
         progress("write")
+        cover = export_raster(book, fonts, height=EPUB_HEIGHT_PX) if book.front.cover is not None else None
+        if progress.cancelled():
+            raise ExportCancelled
         built = build_epub(
-            book, fonts, identifier=book_identifier(job.book_id, book.front.isbn), created=job.created
+            book,
+            fonts,
+            identifier=book_identifier(job.book_id, book.front.isbn),
+            created=job.created,
+            cover=cover,
         )
         if progress.cancelled():
             raise ExportCancelled
@@ -707,6 +761,8 @@ class EpubExporter:
         warnings = [item for item in epub_notes(job.book_id, setup, fonts) if item["code"] != "font_embedded"]
         stats = dict(built.stats)
         stats["documents"] = built.documents
+        if cover is not None:
+            stats["cover"] = {"media_type": cover[1], "bytes": len(cover[0])}
         lines = [
             f"epub: {built.chapters} chapters, {built.footnotes} notes, {len(built.documents)} documents,"
             f" {len(built.data)} bytes",

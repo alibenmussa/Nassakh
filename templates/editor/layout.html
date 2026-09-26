@@ -6,7 +6,8 @@ keys, wheel, spread, fit modes) draws live pages: every line of the WeasyPrint l
 render's faces, so the page on screen is the PDF's page. «معاينة | تحرير» (E, a double-click in preview):
 in edit mode a click opens the paragraph in place; after a short pause the chapter is saved, laid out again and
 the pages swap in place. One side panel with an icon tab bar (الفصول، الصفحات، بحث، التنسيق، الفقرة، الأصل،
-غير المؤكَّدة). The top-bar controls live in header_actions (outside the component root) and read the page
+غير المؤكَّدة). The cover (D80) is a sheet of its own before page 1 and the filmstrip's first thumb, never a page;
+a click on either opens «الغلاف» in «التنسيق». The top-bar controls live in header_actions (outside the component root) and read the page
 through Alpine.store('bookPage').view; everything else is `bookPage` (static/src/js/book/*.js) with the one-block
 editor of static/dist/editor.js; styles in static/src/components/layout.css.
 Context: book, exists, can_edit, config (editor.services.page_config + `initial`: the stylesheet payload, the
@@ -169,8 +170,18 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
               <template x-if="phase === 'skeleton'">
                 <figure class="lo-sheet lo-sheet-right is-skeleton" aria-hidden="true" data-skeleton><span class="lo-skel-title"></span><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span><span class="lo-skel-num"></span></figure>
               </template>
+              {# the cover (D80): a sheet of its own before page 1, never a page — alone, on the right in a spread (the left #}
+              {# sheet keeps its place, empty); api:cover's render, else the cover's colours with a hint; a click (Enter, Space) #}
+              {# opens the cover section of «التنسيق» #}
+              <figure class="lo-sheet lo-sheet-cover" x-show="phase === 'pages' && onCover" x-cloak data-sheet="cover" aria-label="الغلاف" :style="coverSheetStyle">
+                <div class="lp-page lp-cover" :class="{ 'is-blank': !coverImageUrl, 'is-loading': coverState === 'loading' }" role="button" tabindex="0" title="الغلاف · فتح إعداداته" aria-label="الغلاف: فتح إعداداته في «التنسيق»"
+                     @click="openCoverSection()" @keydown.enter.prevent="openCoverSection()" @keydown.space.prevent="openCoverSection()">
+                  <img class="lp-cover-img" :src="coverImageUrl || ''" :srcset="coverSrcset || ''" alt="" decoding="async" x-show="coverImageUrl" data-cover-img>
+                  <span class="lp-cover-hint" x-show="!coverImageUrl" x-text="coverHint" data-cover-hint></span>
+                </div>
+              </figure>
               {# the live pages: the even (verso) page on the right, the odd (recto) on the left; one sheet in single mode #}
-              <figure class="lo-sheet lo-sheet-right" :class="{ 'is-empty': !rightPage }" x-show="phase === 'pages'" x-cloak data-sheet="right" :aria-label="rightPage ? 'صفحة ' + rightPage.n : ''">
+              <figure class="lo-sheet lo-sheet-right" :class="{ 'is-empty': !rightPage }" x-show="phase === 'pages' && !onCover" x-cloak data-sheet="right" :aria-label="rightPage ? 'صفحة ' + rightPage.n : ''">
                 <div class="lp-page" @click="onSheetClick($event, 'right')" @dblclick="onSheetDblClick($event, 'right')"><div class="lp-lines" data-lines></div><div class="lp-edit" data-edit-host></div></div>
               </figure>
               <figure class="lo-sheet lo-sheet-left" :class="{ 'is-empty': !leftPage }" x-show="phase === 'pages' && spreadOn" x-cloak data-sheet="left" :aria-label="leftPage ? 'صفحة ' + leftPage.n : ''">

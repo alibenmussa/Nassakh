@@ -1894,7 +1894,7 @@ toast: «صُحّح 158 موضعًا في 51 صفحة · تراجع» (+ «وت�
 - **On the dashboard:** a «?» sheet, also reachable from «⋯» «اختصارات لوحة المفاتيح».
 - The `core/test_keymap.py` table fills these cells.
 
-## 6. 7d (briefly; designed in detail after 7c's hand test, decisions D80+)
+## 6. 7d (briefly; designed in detail after 7c's hand test, decisions D81+; D80 is the cover)
 
 - **The line audit** (`ocr/audit.py`), in the GPU task before a page is finalised.
   - At most 4 suspect bands per page are read alone by the primary model:
@@ -2205,7 +2205,7 @@ in parallel with the rest of them.
 | 4–5 | Owner, then an Opus review | | | | |
 
 **7d.** One or two Opus agents, backend (`ocr/audit.py`, assembly verse) and UI (verse tools, narrow screens,
-contrast), designed after 7c's test. Decisions D80+.
+contrast), designed after 7c's test. Decisions D81+ (D80 is the cover, docs/COVER_SPEC.md).
 
 ## 10. Acceptance: what the owner tests at the end of each sub-phase
 

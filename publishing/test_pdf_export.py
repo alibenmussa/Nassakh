@@ -576,12 +576,17 @@ def test_the_registry_resolves_the_pdf_exporters():
     assert parse_options(printer.options, {"bleed_mm": "3", "crop_marks": "true"}) == {
         "bleed_mm": 3,
         "crop_marks": True,
+        "cover": False,  # D80: printers take the cover as its own file
     }
-    assert parse_options(printer.options, {}) == {"bleed_mm": 0, "crop_marks": False}
+    assert parse_options(printer.options, {}) == {"bleed_mm": 0, "crop_marks": False, "cover": False}
     with pytest.raises(OptionsError):
         parse_options(printer.options, {"bleed_mm": 4})
     assert exporters.options_text(printer, {"bleed_mm": 3, "crop_marks": True}) == "نزف 3 مم · علامات القص"
     assert exporters.options_text(printer, {"bleed_mm": 0, "crop_marks": False}) == ""
+    assert (
+        exporters.options_text(printer, {"bleed_mm": 3, "crop_marks": True, "cover": True})
+        == "نزف 3 مم · علامات القص · مع الغلاف"
+    )
     assert exporters.get_exporter("screen_pdf").options == ()
 
 
@@ -591,6 +596,7 @@ def test_the_print_form_block():
     assert [choice["value"] for choice in form["bleed_mm"]["choices"]] == [0, 3, 5]
     assert all({"value", "label", "title", "hint"} <= set(choice) for choice in form["bleed_mm"]["choices"])
     assert form["crop_marks"] == {"value": True, "label": "علامات القص", "hint": form["crop_marks"]["hint"]}
+    assert form["cover"]["available"] == 0 and form["cover"]["value"] is False  # no book, no cover (D80)
     assert ScreenPdfExporter().form(None, {}) == {}
 
 
@@ -710,7 +716,7 @@ def test_the_print_export_runs_through_the_pipeline(pdf_book):
     row.refresh_from_db()
     assert row.status == Export.Status.DONE, row.error
     assert row.filename == "كتاب التصدير - للطباعة.pdf" and row.page_count and row.size_bytes > 1000
-    assert row.options == {"bleed_mm": 3, "crop_marks": True}
+    assert row.options == {"bleed_mm": 3, "crop_marks": True, "cover": False}
     assert row.renderer == get_engine().version and row.progress["step"] == "done"
     with row.file.open("rb") as handle, pymupdf.open(stream=handle.read(), filetype="pdf") as pdf:
         assert pdf.page_count == row.page_count
@@ -732,3 +738,119 @@ def test_the_same_export_gives_the_same_bytes(outline_doc):
     a = render(outline_doc, setup, first).pdf
     b = render(outline_doc, setup, replace(first)).pdf
     assert a == b
+
+
+# ====================================================================== the cover (D80)
+
+from publishing.cover import page_labels_of  # noqa: E402
+from publishing.model import CoverSpec  # noqa: E402
+
+NAVY = CoverSpec(mode="info", background="#1d2433", color="#f3efe6")
+
+
+def covered(setup, spec: CoverSpec = NAVY):
+    return replace(setup, cover=spec)
+
+
+def links_of(pdf: pymupdf.Document) -> list[tuple[int, int]]:
+    return [(index, link["page"]) for index, page in enumerate(pdf) for link in page.get_links()]
+
+
+@pytest.mark.django_db
+def test_the_screen_pdf_opens_with_the_cover(outline_doc):
+    exporter = ScreenPdfExporter()
+    plain = exporter.export(job_of(outline_doc, amiri_setup(), "screen_pdf"), NullProgress())
+    result = exporter.export(job_of(outline_doc, covered(amiri_setup()), "screen_pdf"), NullProgress())
+    assert result.page_count == plain.page_count  # the book's pages: the cover is not one of them
+    assert result.stats["cover"] == "info" and result.stats["file_pages"] == plain.page_count + 1
+    assert "cover" not in plain.stats and not [
+        row for row in result.warnings if row["code"] == "layout_mismatch"
+    ]
+    with (
+        pymupdf.open(stream=plain.data, filetype="pdf") as before,
+        pymupdf.open(stream=result.data, filetype="pdf") as after,
+    ):
+        assert after.page_count == before.page_count + 1
+        assert "كتاب التصدير" in after[0].get_text() and after[0].get_images() == []
+        # the outline and every link (contents, note calls) stay on their pages
+        assert after.get_toc() == [[level, title, page + 1] for level, title, page in before.get_toc()]
+        assert links_of(after) == [(page + 1, target + 1) for page, target in links_of(before)]
+        assert len(links_of(after)) > 3
+        # the interior's pages are the ones it had, and the cover has their boxes
+        assert [after[index + 1].get_text() for index in range(before.page_count)] == [
+            page.get_text() for page in before
+        ]
+        assert raw_box(after, 0, "TrimBox") == raw_box(after, 1, "TrimBox") == raw_box(before, 0, "TrimBox")
+        assert raw_box(after, 0, "MediaBox") == raw_box(after, 1, "MediaBox")
+        # the file keeps the interior's catalog: its outline pane, right-to-left reading, language
+        assert catalog_key(after, "PageMode") == ("name", "/UseOutlines")
+        assert "R2L" in catalog_key(after, "ViewerPreferences")[1]
+        assert after.metadata["title"] == before.metadata["title"]
+    assert page_labels_of(result.data) == ["غلاف", *(str(n) for n in range(1, plain.page_count + 1))]
+
+
+@pytest.mark.django_db
+def test_a_book_without_a_cover_gets_the_file_it_got_before(outline_doc):
+    """No cover key, mode `none`, or an image cover without its image: the same bytes."""
+    exporter = ScreenPdfExporter()
+    before = exporter.export(job_of(outline_doc, amiri_setup(), "screen_pdf"), NullProgress()).data
+    off = amiri_setup(
+        front_matter={"title_page": True, "contents": True, "cover": {"mode": "none", "center": "x"}}
+    )
+    empty = amiri_setup(front_matter={"title_page": True, "contents": True, "cover": {"mode": "image"}})
+    assert off.cover is None and empty.cover is not None and not empty.cover.ready
+    for setup in (off, empty):
+        assert exporter.export(job_of(outline_doc, setup, "screen_pdf"), NullProgress()).data == before
+    printed = PrintPdfExporter().export(
+        job_of(outline_doc, empty, "print_pdf", {"cover": True}), NullProgress()
+    )
+    assert "no cover: mode image without its image" in printed.log[-1] and "cover" not in printed.stats
+
+
+@pytest.mark.django_db
+def test_the_print_pdf_takes_the_cover_only_when_asked(outline_doc):
+    exporter = PrintPdfExporter()
+    setup = covered(amiri_setup())
+    options = {"bleed_mm": 3, "crop_marks": True}
+    alone = exporter.export(job_of(outline_doc, setup, "print_pdf", options), NullProgress())
+    plain = exporter.export(job_of(outline_doc, amiri_setup(), "print_pdf", options), NullProgress())
+    assert alone.data == plain.data  # printers take the cover as its own file
+    result = exporter.export(
+        job_of(outline_doc, setup, "print_pdf", {**options, "cover": True}), NullProgress()
+    )
+    assert result.stats["file_pages"] == plain.page_count + 1 and result.page_count == plain.page_count
+    with pymupdf.open(stream=result.data, filetype="pdf") as pdf:
+        for key in ("MediaBox", "TrimBox", "BleedBox"):  # the interior's boxes, bleed and slug
+            assert raw_box(pdf, 0, key) == pytest.approx(raw_box(pdf, 1, key), abs=0.01)
+        assert raw_box(pdf, 0, "BleedBox") == pytest.approx([-3 * MM, -3 * MM, 173 * MM, 243 * MM], abs=0.01)
+        cover, first = _marks(pdf[0]), _marks(pdf[1])
+        assert len(cover) == 8 and cover == first  # the crop marks, drawn by the same finisher
+        page = pdf[0]
+        pix = page.get_pixmap(dpi=72)  # the media box, 1 px a point: the background in the bleed
+        assert pix.pixel(round(7.5 * MM), round(120 * MM)) == pytest.approx((0x1D, 0x24, 0x33), abs=2)
+        assert pix.pixel(round(2 * MM), round(120 * MM)) == (255, 255, 255)  # never in the slug
+    assert page_labels_of(result.data, 2) == ["غلاف", "1"]
+
+
+def test_the_cover_is_compared_with_the_book_page_as_the_interior_only(pdf_book):
+    """`layout_mismatch` compares the interior's pages: a cover never makes the file look different."""
+    StyleSheet_ = __import__("editor.models", fromlist=["StyleSheet"]).StyleSheet
+    StyleSheet_.objects.create(book=pdf_book, front_matter={"cover": {"mode": "text", "center": "عنوان"}})
+    job, _inputs, _digest = exports.read_inputs(pdf_book, "screen_pdf", {})
+    assert job.setup.cover.mode == "text"
+    digest = job_hash(
+        RenderJob(document=job.document, stylesheet=job.setup, title=job.title, author=job.author)
+    )
+    exporter = ScreenPdfExporter()
+    first = exporter.export(job, NullProgress())
+    PreviewRender.objects.create(
+        book=pdf_book,
+        scope="book",
+        content_hash=digest,
+        status="done",
+        page_count=first.page_count,
+        chapters=first.stats["chapters"],
+    )
+    again = exporter.export(job, NullProgress())
+    assert again.stats["reference"] == "preview" and again.stats["file_pages"] == first.page_count + 1
+    assert not [item for item in again.warnings if item["code"] == "layout_mismatch"]

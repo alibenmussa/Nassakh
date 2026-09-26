@@ -1,0 +1,125 @@
+{% comment %}«الغلاف» (COVER_SPEC §4, D80): the first section of «التنسيق». The mode as a segmented control (بلا غلاف ·
+من بيانات الكتاب · صورة · نص مخصّص), then per mode: a drop zone (a button: the keyboard reaches it) with «اختيار
+صورة…», the upload's progress, the image once uploaded (a thumb on the cover's colours in its fit, its size, «تغيير
+الصورة…», «إزالة الصورة»), the print-size note for the trim and the fit; the centre and bottom texts (lines kept);
+the note pointing at «بيانات الكتاب». Every mode but «بلا غلاف» gets «الألوان» (the presets as small covers, the
+background and text pickers) and, but for an image, the two text sizes. Every change saves through
+bookPage.setField (front_matter.cover.*, cover.js); the stage's cover sheet and the filmstrip's first thumb follow
+api:cover about a second later. Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
+<section class="bp-acc" data-section="cover">
+  <button type="button" class="bp-acc-head" :aria-expanded="sections.cover ? 'true' : 'false'" aria-controls="bp-sec-cover" @click="toggleSection('cover')">
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+    <span class="bp-acc-title">الغلاف</span><span class="lo-head-meta" x-text="coverModeLabel"></span>
+  </button>
+  <fieldset class="lo-section bp-cover" id="bp-sec-cover" x-show="sections.cover" data-cover-section{% if not can_edit %} disabled{% endif %}>
+    <div class="segmented lo-seg bp-cover-modes" role="group" aria-label="الغلاف" data-cover-modes>
+      <template x-for="m in coverModes" :key="m.key">
+        <button type="button" :aria-pressed="coverMode === m.key" @click="setCoverMode(m.key)" x-text="m.label"></button>
+      </template>
+    </div>
+    <p class="field-error" x-show="errors['front_matter.cover.mode']" x-text="errors['front_matter.cover.mode']"></p>
+    <p class="help" x-show="coverMode === 'none'">بلا غلاف يبدأ الكتاب بصفحاته التمهيدية، وتبقى ملفاته كما هي.</p>
+
+    {# ---- من بيانات الكتاب: the note, its link opening «بيانات الكتاب» #}
+    <p class="help" x-show="coverMode === 'info'" x-cloak data-cover-info>يُؤخذ العنوان والعنوان الفرعي والمؤلف من <button type="button" class="bp-cover-link" @click="revealSection('details')">«بيانات الكتاب»</button>، والناشر والمدينة والسنة في الأسفل.</p>
+
+    {# ---- صورة: the drop zone, the file input, the progress; the image chosen; the size note; the fit #}
+    <template x-if="coverMode === 'image'">
+      <div class="bp-group bp-cover-image-block" data-cover-image>
+        <input type="file" class="sr-only" x-ref="coverFile" accept="image/jpeg,image/png,image/webp" tabindex="-1" aria-hidden="true" @change="onCoverFile($event)">
+        <template x-if="!coverImageInfo">
+          <button type="button" class="bp-drop" :class="{ 'is-over': coverDrag, 'is-busy': coverUpload.state === 'uploading' }" :disabled="coverUpload.state === 'uploading'" aria-describedby="bp-cover-size-note"
+                  @click="pickCoverImage()" @dragenter.prevent="coverDrag = true" @dragover.prevent="coverDrag = true" @dragleave="coverDrag = false" @drop.prevent="onCoverDrop($event)" data-cover-drop>
+            <svg class="icon icon-lg" aria-hidden="true"><use href="#i-image"/></svg>
+            <span class="bp-drop-text" x-show="coverUpload.state !== 'uploading'">اسحب صورة الغلاف إلى هنا أو اخترها</span>
+            <span class="bp-drop-cta" x-show="coverUpload.state !== 'uploading'">اختيار صورة…</span>
+            <span class="bp-drop-text" x-show="coverUpload.state === 'uploading'" x-text="coverUploadText" aria-live="polite"></span>
+            <span class="bp-drop-note">JPEG أو PNG أو WebP، حتى 30 ميغابايت</span>
+            <span class="bp-drop-progress" x-show="coverUpload.state === 'uploading'" aria-hidden="true"><span :style="'width:' + coverUpload.percent + '%'"></span></span>
+          </button>
+        </template>
+        <template x-if="coverImageInfo">
+          <div class="bp-cover-image" :data-fit="coverValues.fit" :style="coverSheetStyle" data-cover-chosen>
+            <span class="bp-cover-thumb" :style="'--thumb-ar:' + pageRatio.toFixed(4)" aria-hidden="true"><img :src="coverImageInfo.thumb_url || coverImageInfo.url || ''" alt="" decoding="async" x-show="coverImageInfo.thumb_url || coverImageInfo.url"></span>
+            <span class="bp-cover-name" x-text="coverImageInfo.name || 'صورة الغلاف'"></span>
+            <span class="bp-cover-meta" x-show="coverImageNote" x-text="coverImageNote"></span>
+            <span class="bp-cover-actions">
+              <button type="button" class="bp-cover-link" :disabled="coverUpload.state === 'uploading'" @click="pickCoverImage()" x-text="coverUpload.state === 'uploading' ? coverUploadText : 'تغيير الصورة…'">تغيير الصورة…</button>
+              <button type="button" class="bp-cover-link bp-cover-remove" :disabled="coverUpload.state === 'uploading'" @click="removeCoverImage()">إزالة الصورة</button>
+            </span>
+          </div>
+        </template>
+        <p class="field-error" x-show="coverUpload.error || errors['front_matter.cover.image']" x-text="coverUpload.error || errors['front_matter.cover.image']" role="alert"></p>
+        <p class="help" id="bp-cover-size-note" x-text="coverSizeNote"></p>
+        <div class="lo-field">
+          <span class="lo-stepper-label">ملاءمة الصورة</span>
+          <div class="segmented lo-seg" role="group" aria-label="ملاءمة الصورة" data-cover-fits>
+            <template x-for="f in coverFits" :key="f.key">
+              <button type="button" :aria-pressed="coverValues.fit === f.key" @click="setCoverFit(f.key)" x-text="f.label"></button>
+            </template>
+          </div>
+          <p class="field-error" x-show="errors['front_matter.cover.fit']" x-text="errors['front_matter.cover.fit']"></p>
+        </div>
+      </div>
+    </template>
+
+    {# ---- نص مخصّص: the centre text (each line centred) and the bottom text #}
+    <template x-if="coverMode === 'text'">
+      <div class="bp-details" data-cover-texts>
+        <label class="bp-detail bp-cover-center" :class="{ 'is-invalid': errors['front_matter.cover.center'] }">
+          <span class="lo-stepper-label">نص الوسط</span>
+          <textarea dir="auto" spellcheck="false" rows="3" maxlength="600" placeholder="عنوان الغلاف وما تحته، سطرًا سطرًا" @input="setField('front_matter.cover.center', $el.value)" x-text="coverValues.center"></textarea>
+          <span class="field-error" x-show="errors['front_matter.cover.center']" x-text="errors['front_matter.cover.center']"></span>
+        </label>
+        <label class="bp-detail bp-cover-bottom" :class="{ 'is-invalid': errors['front_matter.cover.bottom'] }">
+          <span class="lo-stepper-label">نص الأسفل</span>
+          <textarea dir="auto" spellcheck="false" rows="2" maxlength="600" placeholder="الناشر أو السنة في أسفل الغلاف" @input="setField('front_matter.cover.bottom', $el.value)" x-text="coverValues.bottom"></textarea>
+          <span class="field-error" x-show="errors['front_matter.cover.bottom']" x-text="errors['front_matter.cover.bottom']"></span>
+        </label>
+      </div>
+    </template>
+
+    {# ---- الألوان (every mode but «بلا غلاف»): the presets as small covers, then the two pickers #}
+    <template x-if="coverMode !== 'none'">
+      <div class="bp-group bp-cover-colours" data-cover-colours>
+        <span class="lo-stepper-label">الألوان</span>
+        <div class="bp-palette" role="radiogroup" aria-label="ألوان الغلاف">
+          <template x-for="p in coverPresets" :key="p.key">
+            <button type="button" class="bp-swatch" role="radio" :aria-checked="coverPreset === p.key ? 'true' : 'false'" :style="'--bg:' + p.background + ';--fg:' + p.color" :title="p.label" @click="setCoverPreset(p.key)">
+              <span class="bp-swatch-cover" aria-hidden="true"></span>
+              <span class="bp-swatch-name" x-text="p.label"></span>
+            </button>
+          </template>
+        </div>
+        <div class="bp-color-row">
+          <div class="bp-color" :class="{ 'is-invalid': errors['front_matter.cover.background'] }">
+            <span class="lo-stepper-label" id="bp-cover-bg-label">لون الخلفية</span>
+            <span class="bp-color-box">
+              <input type="color" :value="coverValues.background" aria-labelledby="bp-cover-bg-label" @input="previewCoverColor('background', $el.value)" @change="setCoverColor('background', $el.value)">
+              <input type="text" dir="ltr" maxlength="7" spellcheck="false" autocomplete="off" aria-label="لون الخلفية، سداسيًّا" :value="coverValues.background" @change="setCoverColor('background', $el.value)" @keydown.enter.prevent="setCoverColor('background', $el.value); $el.blur()" @keydown.escape.stop="$el.blur()">
+            </span>
+            <span class="field-error" x-show="errors['front_matter.cover.background']" x-text="errors['front_matter.cover.background']"></span>
+          </div>
+          <div class="bp-color" :class="{ 'is-invalid': errors['front_matter.cover.color'] }">
+            <span class="lo-stepper-label" id="bp-cover-fg-label">لون النص</span>
+            <span class="bp-color-box">
+              <input type="color" :value="coverValues.color" aria-labelledby="bp-cover-fg-label" @input="previewCoverColor('color', $el.value)" @change="setCoverColor('color', $el.value)">
+              <input type="text" dir="ltr" maxlength="7" spellcheck="false" autocomplete="off" aria-label="لون النص، سداسيًّا" :value="coverValues.color" @change="setCoverColor('color', $el.value)" @keydown.enter.prevent="setCoverColor('color', $el.value); $el.blur()" @keydown.escape.stop="$el.blur()">
+            </span>
+            <span class="field-error" x-show="errors['front_matter.cover.color']" x-text="errors['front_matter.cover.color']"></span>
+          </div>
+        </div>
+        <p class="field-error" x-show="errors['front_matter.cover.preset']" x-text="errors['front_matter.cover.preset']"></p>
+      </div>
+    </template>
+
+    {# ---- the text sizes (not for an image) #}
+    <template x-if="coverMode === 'info' || coverMode === 'text'">
+      <div class="lo-grid" data-cover-sizes>
+        {% include "editor/_book_stepper.html" with field="front_matter.cover.center_pt" label="حجم نص الوسط" unit="نقطة" %}
+        {% include "editor/_book_stepper.html" with field="front_matter.cover.bottom_pt" label="حجم نص الأسفل" unit="نقطة" %}
+        <p class="field-error bp-cover-size-errors" x-show="errors['front_matter.cover.center_pt'] || errors['front_matter.cover.bottom_pt']" x-text="errors['front_matter.cover.center_pt'] || errors['front_matter.cover.bottom_pt']"></p>
+      </div>
+    </template>
+  </fieldset>
+</section>

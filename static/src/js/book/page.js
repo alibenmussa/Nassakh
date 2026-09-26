@@ -3,6 +3,8 @@
 //                      stage.js  the viewer drawing live pages from the WeasyPrint layout, the layout cache, the
 //                                re-layouts spliced in place, the footprint, the polling, the filmstrip
 //                      style.js  the stylesheet («التنسيق»: القطع، الهوامش، الخطوط، النص، الصفحة، بيانات الكتاب)
+//                      cover.js  «الغلاف» (D80): the cover section's controls, the image upload, the render the
+//                                stage's cover sheet and the filmstrip's first thumb show
 //                      edit.js   edit mode: the chapter's nodes, a paragraph opened in place on its page (the
 //                                one-block editor of static/dist/editor.js), the pause → save → re-layout loop,
 //                                the chapter's undo, styles, marks, footnotes, «الفقرة»
@@ -108,7 +110,7 @@
         thumbs: new Map(), // n → {url, url2x} of the filmstrip
         dom: {},
       };
-      const names = ['stage', 'style', 'edit', 'panel'];
+      const names = ['stage', 'style', 'cover', 'edit', 'panel'];
       const parts = names.map((name) => (NS.parts[name] ? NS.parts[name](ctx) : {}));
       const self = compose(parts);
       const inits = names.map((name) => `_init_${name}`);

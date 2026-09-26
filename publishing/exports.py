@@ -225,11 +225,15 @@ def export_filename(row: Export) -> str:
 
 def stylesheet_hash(setup) -> str:
     """24 hex digits of the page setup and its faces' files, without the engine version (a WeasyPrint
-    update does not show Word files as «تغيّر التنسيق»)."""
+    update does not show Word files as «تغيّر التنسيق»). A cover that is drawn counts too (D80: its settings
+    and image, `CoverSpec.fingerprint`); without one the hash is the one it always was."""
     from .fonts import resolve
 
     fonts = resolve(setup.body_font, setup.latin_font, setup.heading_font)
     payload = {"setup": setup.as_dict(), "fonts": fonts.fingerprint()}
+    cover = getattr(setup, "cover", None)
+    if cover is not None and cover.ready:
+        payload["cover"] = cover.fingerprint()
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 

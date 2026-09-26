@@ -1207,3 +1207,114 @@ def test_calibration_and_c12_files_validate():
     check(c12)
     expected = calibration.c12_expected()
     assert expected["adds"] > expected["max"] > expected["text_height_mm"]
+
+
+# ====================================================================== the cover (D80)
+
+from publishing.word.writer import COVER_REL, CoverPicture  # noqa: E402
+
+WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+R = f"{{{ooxml.R_NS}}}"
+
+
+def tiny_png(width: int = 17, height: int = 24) -> bytes:
+    from PIL import Image
+
+    out = io.BytesIO()
+    Image.new("RGB", (width, height), (29, 36, 51)).save(out, "PNG")
+    return out.getvalue()
+
+
+def sections_of(data: bytes) -> list[tuple[list[etree._Element], etree._Element]]:
+    """`[(paragraphs, sectPr)]` of document.xml in order."""
+    body = xml(data, "word/document.xml").find(f"{W}body")
+    out, paras = [], []
+    for node in body:
+        if node.tag == f"{W}sectPr":
+            out.append((paras, node))
+            continue
+        paras.append(node)
+        props = node.find(f"{W}pPr/{W}sectPr")
+        if props is not None:
+            out.append((paras, props))
+            paras = []
+    return out
+
+
+COVERED_SOURCE = document(
+    heading("h1", "الفصل الأول"), para("p1", LOREM), heading("h2", "الفصل الثاني"), para("p2", LOREM)
+)
+
+
+@pytest.mark.parametrize("opening", ["any", "recto"])
+def test_the_cover_is_a_first_section_of_one_picture(opening):
+    cover = CoverPicture(tiny_png(), "image/png", 170.0, 240.0)
+    data = build(COVERED_SOURCE, sheet(chapter_opening=opening, page_number="bottom_outer"), cover=cover).data
+    check(data)  # XSD-valid, every relationship and r:embed resolves
+    sections = sections_of(data)
+    (cover_para,), cover_props = sections[0]
+    assert cover_props.find(f"{W}headerReference") is None and cover_props.find(f"{W}footerReference") is None
+    assert cover_props.find(f"{W}type") is None and cover_props.find(f"{W}pgNumType") is None
+    anchor = cover_para.find(f".//{W}drawing/{WP}anchor")
+    assert anchor.get("behindDoc") == "1" and anchor.get("locked") == "1"
+    assert anchor.find(f"{WP}positionH").get("relativeFrom") == "page"
+    assert anchor.find(f"{WP}positionH/{WP}posOffset").text == "0"
+    assert anchor.find(f"{WP}positionV").get("relativeFrom") == "page"
+    extent = anchor.find(f"{WP}extent")
+    assert (extent.get("cx"), extent.get("cy")) == ("6120000", "8640000")  # 170 × 240 mm exactly
+    assert anchor.find(f"{WP}wrapNone") is not None
+    assert anchor.find(f".//{A}blip").get(f"{R}embed") == COVER_REL == "rId6"
+    # the next section opens a new page numbered 1, whatever the chapters' openings
+    _paras, after = sections[1]
+    assert after.find(f"{W}type").get(f"{W}val") == "nextPage"
+    assert after.find(f"{W}pgNumType").get(f"{W}start") == "1"
+    assert all(props.find(f"{W}pgNumType") is None for _paras, props in sections[2:])
+    if opening == "recto":
+        assert sections[2][1].find(f"{W}type").get(f"{W}val") == "oddPage"
+    # the picture's part, its relationship and its content type
+    files = parts(data)
+    assert files["word/media/cover.png"] == cover.data
+    rels = etree.fromstring(files["word/_rels/document.xml.rels"])
+    targets = {rel.get("Id"): (rel.get("Type").rpartition("/")[2], rel.get("Target")) for rel in rels}
+    assert targets["rId6"] == ("image", "media/cover.png")
+    assert all(int(rel_id[3:]) > 6 for rel_id, (kind, _t) in targets.items() if kind in ("header", "footer"))
+    assert '<Default Extension="png" ContentType="image/png"/>' in files["[Content_Types].xml"].decode()
+    assert "cover.png" not in files["[Content_Types].xml"].decode()  # typed by its extension
+
+
+def test_a_book_without_a_cover_gets_the_word_file_it_got_before():
+    before = build(COVERED_SOURCE, sheet()).data
+    assert build(COVERED_SOURCE, sheet(), cover=None).data == before
+    for cover in ({"mode": "none", "center": "x"}, {"mode": "image"}):
+        assert build(COVERED_SOURCE, sheet(front_matter={"cover": cover, "title_page": True})).data == before
+    assert "word/media/cover.png" not in parts(before)
+
+
+def test_a_jpeg_cover_and_the_stats():
+    cover = CoverPicture(b"\xff\xd8\xff\xe0fake-jpeg", "image/jpeg", 148.0, 210.0)
+    result = build(COVERED_SOURCE, sheet(trim="a5", width_mm=148, height_mm=210), cover=cover)
+    files = parts(result.data)
+    assert files["word/media/cover.jpeg"] == cover.data
+    assert '<Default Extension="jpeg" ContentType="image/jpeg"/>' in files["[Content_Types].xml"].decode()
+    assert result.stats["cover"] == {"format": "jpeg", "bytes": len(cover.data)}
+    assert result.stats["front_sections"] == build(COVERED_SOURCE, sheet(trim="a5")).stats["front_sections"]
+
+
+def test_the_exporter_opens_the_file_with_the_rendered_cover(word_book):
+    from PIL import Image
+
+    from editor.models import StyleSheet
+
+    StyleSheet.objects.filter(book=word_book).update(
+        front_matter={"fields": {"title": "الأمالي"}, "cover": {"mode": "info", "background": "#1d2433"}}
+    )
+    result = DocxExporter().export(job_for(word_book), NullProgress())
+    check(result.data)
+    files = parts(result.data)
+    with Image.open(io.BytesIO(files["word/media/cover.png"])) as image:
+        assert image.size == (2008, 2835)  # 17 × 24 cm at 300 dpi
+        assert image.getpixel((5, 5)) == pytest.approx((0x1D, 0x24, 0x33), abs=2)
+    sections = sections_of(result.data)
+    assert sections[1][1].find(f"{W}pgNumType").get(f"{W}start") == "1"
+    assert result.stats["cover"]["format"] == "png"

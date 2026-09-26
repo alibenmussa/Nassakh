@@ -6,8 +6,11 @@
 //   - the live layout's revision: a re-layout's pages are spliced in place (later pages renumbered, sides
 //     swapped on an odd delta), a newer revision (the book render adopted) refetches the pages shown
 //   - the footprint, the page checks, the render pill, the polling of `api:preview`, the filmstrip thumbs
+//   - the cover (D80, cover.js): a sheet of its own before page 1 («الغلاف»: alone, on the right in a spread) and
+//     the first thumb; never a page — `onCover` sits beside the cursor (which stays on page 1), so the sequence,
+//     the numbers, the spreads, the footprint and every turn stay as they are; a turn back from page 1 reaches it
 // Hooks the other parts answer: paintOpts(n) (what a page draws besides its lines), afterPaint(), afterLand(),
-// afterRelayout(info).
+// afterRelayout(info); hasCover / cover / coverValues / openCoverSection (cover.js).
 (function () {
   'use strict';
 
@@ -36,6 +39,9 @@
   const PAGE_KEY = 'nassakh.book.page.'; // the page shown, per book (session)
   const PAGE_FORMS = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
   const RENDER_ERROR = 'تعذّر ترتيب صفحات الكتاب.';
+  const COVER = -2; // a turn's target that is the cover sheet (−1 is «no target»)
+  const COVER_HASH = '#cover';
+  const COVER_LABEL = 'الغلاف';
   const SKELETON = '<div class="lp-skeleton" aria-hidden="true"><span class="lp-sk-title"></span><span style="width:96%"></span><span style="width:92%"></span><span style="width:88%"></span><span style="width:61%"></span><span style="width:90%"></span><span style="width:95%"></span><span style="width:84%"></span><span style="width:93%"></span><span style="width:40%"></span></div>';
 
   const isActive = (p) => Boolean(p && (ACTIVE.includes(p.status) || p.rendering));
@@ -54,6 +60,7 @@
     let wheelLock = false;
     let swipeStart = null;
     let pendingN = 0;
+    let pendingCover = false; // «#cover» (or the session) asked for the cover before the pages or the stylesheet were there
     let fetchGen = 0;
     let requestedStale = false;
     let thumbTries = 0;
@@ -77,6 +84,7 @@
       // the viewer
       pages: [], // the sequence: [{n, chapter}]
       cursor: -1,
+      onCover: false, // the cover sheet is shown (D80): before page 1, not a page; the cursor waits on page 1
       turning: '',
       spread: U.readLocal(SPREAD_KEY, '0') === '1',
       fit: FIT_MODES.includes(U.readLocal(FIT_KEY, 'height')) ? U.readLocal(FIT_KEY, 'height') : 'height',
@@ -216,15 +224,20 @@
         if (ctx.dom.film && typeof ctx.dom.film.addEventListener === 'function') {
           ctx.dom.film.addEventListener('click', (e) => {
             const thumb = U.closest(e.target, '.lo-thumb');
-            if (thumb) this.showIndex(Number(thumb.dataset.index), { manual: true });
+            if (!thumb) return;
+            // the cover's thumb: the cover, and its section in «التنسيق»
+            if (thumb.dataset.cover !== undefined) { this.showCover({ manual: true }); if (typeof this.openCoverSection === 'function') this.openCoverSection(); return; }
+            this.showIndex(Number(thumb.dataset.index), { manual: true });
           });
         }
+        if (ctx.dom.film && U.hasDOM && !ctx.dom.coverThumb) { ctx.dom.coverThumb = this.makeCoverThumb(); ctx.dom.film.appendChild(ctx.dom.coverThumb.el); }
         this.onResize();
         this.syncFilm();
       },
-      // The page numbers on the two sheets now (0 = none).
+      // The page numbers on the two sheets now (0 = none; none while the cover is shown).
       get shownNumbers() {
-        void this.cursor; void this.spreadOn; void this.pages.length;
+        void this.cursor; void this.spreadOn; void this.pages.length; void this.onCover;
+        if (this.onCover) return { right: 0, left: 0 };
         return G.shown(this.pages.map((p) => p.n), this.cursor, this.spreadOn);
       },
       sideOf(n) {
@@ -427,7 +440,9 @@
       },
 
       // ------------------------------------------------------------ derived state
+      // the page shown (0: none, also on the cover — the cover is no page)
       get current() {
+        if (this.onCover) return 0;
         const p = this.pages[this.cursor];
         return p ? p.n : 0;
       },
@@ -531,14 +546,15 @@
         return { right: idx > 0 && this.pages[idx - 1].n === p.n - 1 ? idx - 1 : -1, left: idx };
       },
       get shown() {
-        if (this.cursor < 0) return { right: -1, left: -1 };
+        if (this.cursor < 0 || this.onCover) return { right: -1, left: -1 };
         if (!this.spreadOn) return { right: this.cursor, left: -1 };
         return this.spreadOf(this.cursor);
       },
       get rightPage() { return this.pages[this.shown.right] || null; },
       get leftPage() { return this.pages[this.shown.left] || null; },
-      // «صفحة 37 من 412», «الصفحتان 36–37 من 412»
+      // «صفحة 37 من 412», «الصفحتان 36–37 من 412»; «الغلاف» on the cover
       get counterText() {
+        if (this.onCover) return COVER_LABEL;
         const nums = [this.rightPage, this.leftPage].filter(Boolean).map((p) => p.n).sort((a, b) => a - b);
         if (!nums.length) return '';
         // the range isolated left to right (U+2066 … U+2069): in an Arabic line «36–37» would read «37–36»
@@ -556,23 +572,32 @@
         const g = this.geometry || {};
         return Number(g.width_pt) && Number(g.height_pt) ? g.width_pt / g.height_pt : 170 / 240;
       },
+      // The index a turn lands on (COVER: the cover sheet, before page 1 when the book has one; null: no turn).
       neighbour(dir, from) {
         const base = from !== undefined ? from : this.turning ? pendingTarget : this.cursor;
         const n = this.pages.length;
         if (!n) return null;
+        const covered = from === undefined && (this.turning ? pendingTarget === COVER : this.onCover);
+        if (covered) return dir > 0 ? 0 : null;
         if (base < 0) return dir > 0 ? 0 : (this.spreadOn ? this.canonical(n - 1) : n - 1);
-        if (!this.spreadOn) { const next = base + dir; return next >= 0 && next < n ? next : null; }
+        if (!this.spreadOn) {
+          const next = base + dir;
+          if (next < 0) return this.hasCover ? COVER : null;
+          return next < n ? next : null;
+        }
         const s = this.spreadOf(base);
         const next = dir > 0 ? Math.max(s.right, s.left) + 1 : Math.min(...[s.right, s.left].filter((i) => i >= 0)) - 1;
-        return next >= 0 && next < n ? this.canonical(next) : null;
+        if (next < 0) return this.hasCover ? COVER : null;
+        return next < n ? this.canonical(next) : null;
       },
       canTurn(dir) {
-        void this.cursor; void this.pages.length; void this.spreadOn;
+        void this.cursor; void this.pages.length; void this.spreadOn; void this.onCover; void this.hasCover;
         return this.neighbour(dir) !== null;
       },
       turn(dir) {
         const idx = this.neighbour(dir);
         if (idx === null) return false;
+        if (idx === COVER) return this.showCover({ dir });
         return this.showIndex(idx, { dir });
       },
       showPage(n, opts = {}) {
@@ -585,7 +610,7 @@
       showIndex(idx, opts = {}) {
         if (idx < 0 || idx >= this.pages.length) return false;
         const target = this.spreadOn ? this.canonical(idx) : idx;
-        if (target === this.cursor && !this.turning) { if (opts.focus) this.focusStage(); return true; }
+        if (target === this.cursor && !this.turning && !this.onCover) { if (opts.focus) this.focusStage(); return true; }
         if (typeof this.beforeTurn === 'function') this.beforeTurn(target, opts);
         const base = this.turning ? pendingTarget : this.cursor;
         const dir = opts.dir || (base >= 0 && target < base ? -1 : 1);
@@ -605,15 +630,18 @@
         return true;
       },
       landTurn(dir) {
-        this.land(pendingTarget);
+        if (pendingTarget === COVER) this.landCover(); else this.land(pendingTarget);
         this.turning = dir > 0 ? 'in-next' : 'in-prev';
         U.frame(() => U.frame(() => {
           this.turning = '';
           if (pendingFocus) { this.focusStage(); pendingFocus = false; }
-          if (pendingTarget >= 0 && pendingTarget !== this.cursor) this.showIndex(pendingTarget);
+          // a target asked for mid-turn: once more, to it
+          if (pendingTarget === COVER) { if (!this.onCover) this.showCover(); }
+          else if (pendingTarget >= 0 && (pendingTarget !== this.cursor || this.onCover)) this.showIndex(pendingTarget);
         }));
       },
       land(idx) {
+        this.onCover = false;
         this.cursor = idx;
         this.markThumbs();
         const n = this.current;
@@ -630,11 +658,101 @@
         if (typeof this.afterLand === 'function') this.afterLand(n);
       },
       landFirst() {
+        if (pendingCover && this.hasCover) { pendingCover = false; pendingN = 0; this.landCover(); return; }
         let idx = pendingN ? this.pages.findIndex((p) => p.n === pendingN) : -1;
         if (idx < 0 && cfg.requestedChapter) { const r = this.ranges.find((c) => c.id === cfg.requestedChapter); if (r) idx = this.pages.findIndex((p) => p.n === r.first); }
         if (idx < 0) idx = 0;
         pendingN = 0;
         this.land(this.spreadOn ? this.canonical(idx) : idx);
+      },
+      // ------------------------------------------------------------ the cover sheet (D80): before page 1, not a page
+      // The cover shown: the sheets empty, the cover figure in their place (alone, on the right in a spread), the
+      // cursor waiting on page 1 for the next turn; the address is «#cover».
+      landCover() {
+        this.onCover = true;
+        this.cursor = 0;
+        this.markThumbs();
+        U.writeSession(PAGE_KEY + (this.bookId || ''), 'cover');
+        if (typeof history !== 'undefined' && history.replaceState && typeof window !== 'undefined' && window.location) {
+          try { history.replaceState(null, '', `${window.location.pathname}${this.addressQuery ? this.addressQuery() : window.location.search}${COVER_HASH}`); } catch (_) { /* sandboxed */ }
+        }
+        this.liveMessage = COVER_LABEL;
+        this.paint();
+        this.centerFilm();
+        if (typeof this.afterLand === 'function') this.afterLand(0);
+      },
+      // Turn to the cover: as a page turn backwards (the sheet slides out, the cover in); `instant` lands at once.
+      showCover(opts = {}) {
+        if (!this.hasCover || !this.pages.length) return false;
+        if (this.onCover && !this.turning) { if (opts.focus) this.focusStage(); return true; }
+        if (typeof this.beforeTurn === 'function') this.beforeTurn(COVER, opts);
+        pendingTarget = COVER;
+        pendingFocus = pendingFocus || Boolean(opts.focus);
+        if (this.cursor < 0 || opts.instant || U.reduced()) {
+          clearTimeout(T.turn);
+          this.turning = '';
+          this.landCover();
+          if (pendingFocus) { this.focusStage(); pendingFocus = false; }
+          return true;
+        }
+        if (this.turning) return true;
+        this.turning = 'out-prev';
+        clearTimeout(T.turn);
+        T.turn = setTimeout(() => this.landTurn(-1), TURN_OUT_MS);
+        return true;
+      },
+      // «#cover» asked for before the stylesheet said there is one (cover.js's init, after style.js's): the cover
+      // now, or with the first pages (landFirst); nothing when the book has none.
+      resolvePendingCover() {
+        if (!pendingCover) return false;
+        if (!this.hasCover) { pendingCover = false; return false; }
+        if (!this.pages.length) return true;
+        pendingCover = false;
+        return this.showCover({ instant: true });
+      },
+      makeCoverThumb() {
+        const el = document.createElement('button');
+        el.type = 'button';
+        el.className = 'lo-thumb lo-thumb-cover';
+        el.setAttribute('data-cover', '');
+        el.setAttribute('title', COVER_LABEL);
+        el.setAttribute('aria-label', COVER_LABEL);
+        el.setAttribute('hidden', '');
+        const box = document.createElement('span');
+        box.className = 'lo-thumb-img';
+        const img = document.createElement('img');
+        img.setAttribute('loading', 'lazy');
+        img.setAttribute('decoding', 'async');
+        img.setAttribute('alt', '');
+        box.appendChild(img);
+        const num = document.createElement('span');
+        num.className = 'lo-thumb-num';
+        num.textContent = COVER_LABEL;
+        el.appendChild(box);
+        el.appendChild(num);
+        return { el, img, num };
+      },
+      // the cover's thumb: hidden without a cover; the render, else the cover's colours; current on the cover
+      syncCoverThumb() {
+        const t = ctx.dom.coverThumb;
+        if (!t || !t.el) return false;
+        const has = Boolean(this.hasCover);
+        if (has) { if (t.el.removeAttribute) t.el.removeAttribute('hidden'); } else if (t.el.setAttribute) t.el.setAttribute('hidden', '');
+        t.el.hidden = !has;
+        if (!has) return false;
+        const url = typeof this.coverImageUrl === 'string' ? this.coverImageUrl : '';
+        if (t.img && t.img.getAttribute('src') !== url) { if (url) t.img.setAttribute('src', url); else if (t.img.removeAttribute) t.img.removeAttribute('src'); }
+        const v = this.coverValues || {};
+        if (t.el.style && typeof t.el.style.setProperty === 'function') {
+          t.el.style.setProperty('--thumb-ar', this.pageRatio.toFixed(4));
+          t.el.style.setProperty('--cover-bg', String(v.background || '#ffffff'));
+          t.el.style.setProperty('--cover-fg', String(v.color || '#1b1b1b'));
+        }
+        t.el.classList.toggle('is-pending', this.coverState === 'loading' && !url);
+        t.el.classList.toggle('is-blank', !url);
+        t.el.classList.toggle('is-current', Boolean(this.onCover));
+        if (this.onCover) t.el.setAttribute('aria-current', 'page'); else if (t.el.removeAttribute) t.el.removeAttribute('aria-current');
+        return true;
       },
       get turnClass() {
         return this.turning ? `is-${this.turning}` : '';
@@ -694,17 +812,22 @@
       restorePosition() {
         const hash = typeof window !== 'undefined' && window.location ? window.location.hash || '' : '';
         const m = /^#page-(\d+)$/.exec(hash);
-        const saved = Number(U.readSession(PAGE_KEY + (this.bookId || '')));
+        const savedRaw = U.readSession(PAGE_KEY + (this.bookId || ''));
+        const saved = Number(savedRaw);
+        // «#cover», or the cover shown last in this session: the cover once the stylesheet says there is one
+        pendingCover = hash === COVER_HASH || (!m && !cfg.requestedChapter && savedRaw === 'cover');
         const n = m ? Number(m[1]) : cfg.requestedChapter ? 0 : saved;
         if (!this.pages.length) { pendingN = n > 0 ? n : 0; return; }
         if (n > 0 && this.showPage(n, { instant: true })) return;
         if (n > 0 && m) U.toast('لا صفحة بهذا الرقم');
         this.landFirst();
       },
-      // a #page-N link opened in this tab (the address the page itself writes goes through replaceState,
-      // which fires no hashchange)
+      // a #page-N (or #cover) link opened in this tab (the address the page itself writes goes through
+      // replaceState, which fires no hashchange)
       onHashChange() {
-        const m = /^#page-(\d+)$/.exec(typeof window !== 'undefined' && window.location ? window.location.hash || '' : '');
+        const hash = typeof window !== 'undefined' && window.location ? window.location.hash || '' : '';
+        if (hash === COVER_HASH) { if (!this.onCover) this.showCover({ manual: true }); return; }
+        const m = /^#page-(\d+)$/.exec(hash);
         if (!m || Number(m[1]) === this.current) return;
         if (!this.showPage(Number(m[1]), { manual: true }) && this.pages.length) U.toast('لا صفحة بهذا الرقم');
       },
@@ -788,12 +911,13 @@
           if (on) t.el.setAttribute('aria-current', 'page');
           else if (t.el.removeAttribute) t.el.removeAttribute('aria-current');
         });
+        this.syncCoverThumb();
       },
       centerFilm() {
         const film = ctx.dom.film;
         if (!film || typeof film.querySelector !== 'function' || this.tab !== 'pages') return;
         const run = () => {
-          const item = film.querySelector(`[data-index="${this.cursor}"]`);
+          const item = film.querySelector(this.onCover ? '[data-cover]' : `[data-index="${this.cursor}"]`);
           const scroller = U.closest(film, '.bp-tab-body') || film;
           if (!item || !item.getBoundingClientRect || !scroller.getBoundingClientRect || !scroller.scrollBy) return;
           const f = scroller.getBoundingClientRect();

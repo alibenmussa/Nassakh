@@ -4,7 +4,9 @@ A `Para` is a paragraph waiting to be written: its style, content, the CSS margi
 needs, and the direct spacing that rule decides (`resolve_flow`). Section properties are built fresh for
 every section (spike lesson 3) by `sect_pr`; `HeaderFooterPlan` decides which header and footer parts a
 body section declares (the first declares all it uses, later ones only what differs, since Word
-inherits the rest).
+inherits the rest). The cover (D80) is `cover_para`: one paragraph holding the cover's picture anchored
+to the page at 0, 0, the page's exact size, behind the text; its section declares no header or footer,
+and the section after it restarts the page numbers at 1 (`sect_pr(page_start=1)`).
 """
 
 from __future__ import annotations
@@ -17,7 +19,23 @@ from lxml import etree
 from publishing.html import CONTENTS_TITLE, CREDIT_LABELS, EDITION_LABEL, ISBN_LABEL
 from publishing.model import Block, Book, PageSetup
 
-from .ooxml import field_runs, fld_char, mm_to_pt, pt_to_mm, root, run, text, twips, twips_mm, w
+from .ooxml import (
+    A_NS,
+    PIC_NS,
+    R_NS,
+    WP_NS,
+    emu_mm,
+    field_runs,
+    fld_char,
+    mm_to_pt,
+    pt_to_mm,
+    root,
+    run,
+    text,
+    twips,
+    twips_mm,
+    w,
+)
 from .options import BIDI_LEFT_IS_START, MIRROR_PGMAR_LEFT
 from .runs import RunWriter, rpr
 from .styles import ParaStyle, collapse, split_gap, text_width_mm
@@ -206,10 +224,12 @@ def sect_pr(
     title_pg: bool = False,
     number_format: str = "decimal",
     pgmar_left: str | None = None,
+    page_start: int | None = None,
 ) -> etree._Element:
     """A section's properties, built fresh: its header and footer references `(hdr|ftr, type, rId)`,
     its own footnote numbering, the break type that opens it (None for the first section), the trim,
-    the mirrored margins (`pgmar_left` overrides the C1 convention), `titlePg` and `bidi`."""
+    the mirrored margins (`pgmar_left` overrides the C1 convention), the page number it restarts at
+    (`page_start`: the section after the cover, D80), `titlePg` and `bidi`."""
     restart = NUMBERING_RESTART.get(setup.footnote_numbering, "eachPage")
     refs = [
         w("headerReference" if kind == "hdr" else "footerReference", type=type_, r_id=rel_id)
@@ -222,9 +242,88 @@ def sect_pr(
         w("type", val=break_type) if break_type else None,
         page_size(setup),
         page_margins(setup, table, pgmar_left),
+        w("pgNumType", start=page_start) if page_start is not None else None,
         w("titlePg") if title_pg else None,
         w("bidi"),
     )
+
+
+# ====================================================================== the cover (D80)
+
+COVER_NAME = "الغلاف"
+
+
+def _dml(namespace: str, prefix: str, tag: str, *children, **attrs) -> etree._Element:
+    """A DrawingML element (`wp:`, `a:`, `pic:`) with its attributes as strings (`r_embed` → `r:embed`)."""
+    nsmap = {prefix: namespace, **({"r": R_NS} if any(name.startswith("r_") for name in attrs) else {})}
+    node = etree.Element(f"{{{namespace}}}{tag}", nsmap=nsmap)
+    for name, value in attrs.items():
+        key = f"{{{R_NS}}}{name[2:]}" if name.startswith("r_") else name
+        node.set(key, str(int(value) if isinstance(value, bool) else value))
+    for child in children:
+        if isinstance(child, str):
+            node.text = child
+        elif child is not None:
+            node.append(child)
+    return node
+
+
+def _wp(tag: str, *children, **attrs) -> etree._Element:
+    return _dml(WP_NS, "wp", tag, *children, **attrs)
+
+
+def _a(tag: str, *children, **attrs) -> etree._Element:
+    return _dml(A_NS, "a", tag, *children, **attrs)
+
+
+def _pic(tag: str, *children, **attrs) -> etree._Element:
+    return _dml(PIC_NS, "pic", tag, *children, **attrs)
+
+
+def cover_drawing(rel_id: str, width_mm: float, height_mm: float, file_name: str) -> etree._Element:
+    """`w:drawing` of the cover's picture: anchored to the page at 0, 0, `width_mm` × `height_mm` (the
+    page's size), behind the text, no wrapping, locked; the picture's part is relationship `rel_id`."""
+    cx, cy = emu_mm(width_mm), emu_mm(height_mm)
+    picture = _pic(
+        "pic",
+        _pic("nvPicPr", _pic("cNvPr", id=0, name=file_name), _pic("cNvPicPr")),
+        _pic("blipFill", _a("blip", r_embed=rel_id), _a("stretch", _a("fillRect"))),
+        _pic(
+            "spPr",
+            _a("xfrm", _a("off", x=0, y=0), _a("ext", cx=cx, cy=cy)),
+            _a("prstGeom", _a("avLst"), prst="rect"),
+        ),
+    )
+    anchor = _wp(
+        "anchor",
+        _wp("simplePos", x=0, y=0),
+        _wp("positionH", _wp("posOffset", "0"), relativeFrom="page"),
+        _wp("positionV", _wp("posOffset", "0"), relativeFrom="page"),
+        _wp("extent", cx=cx, cy=cy),
+        _wp("effectExtent", l=0, t=0, r=0, b=0),
+        _wp("wrapNone"),
+        _wp("docPr", id=1, name=COVER_NAME),
+        _wp("cNvGraphicFramePr", _a("graphicFrameLocks", noChangeAspect=True)),
+        _a("graphic", _a("graphicData", picture, uri=PIC_NS)),
+        distT=0,
+        distB=0,
+        distL=0,
+        distR=0,
+        simplePos=False,
+        relativeHeight=0,
+        behindDoc=True,
+        locked=True,
+        layoutInCell=True,
+        allowOverlap=True,
+    )
+    drawing = w("drawing")
+    drawing.append(anchor)
+    return drawing
+
+
+def cover_para(rel_id: str, width_mm: float, height_mm: float, file_name: str) -> Para:
+    """The cover section's one paragraph: the anchored picture (`cover_drawing`) in its only run."""
+    return Para("Normal", [run(cover_drawing(rel_id, width_mm, height_mm, file_name))])
 
 
 # ====================================================================== headers and footers

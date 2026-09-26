@@ -1,0 +1,225 @@
+{
+ "PUT /api/books/80/stylesheet/ {front_matter: {cover: {mode: 'info'}}} → 200": {
+  "stylesheet.front_matter.cover": {
+   "mode": "info",
+   "image": null,
+   "fit": "fill",
+   "center": "",
+   "bottom": "",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  },
+  "cover.image": null
+ },
+ "PUT … {front_matter: {cover: {mode: 'image', image: 801}}} → 200": {
+  "stylesheet.front_matter.cover": {
+   "mode": "image",
+   "image": 801,
+   "fit": "fill",
+   "center": "",
+   "bottom": "",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {fit: 'width'}}} → 200 (the other keys stay)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "image",
+   "image": 801,
+   "fit": "width",
+   "center": "",
+   "bottom": "",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {mode: 'text', center: '  كتاب   الأمالي \\r\\n\\r\\nلأبي علي القالي\\n\\n', bottom: 'طرابلس ٢٠٢٦'}}} → 200 (lines kept, spaces collapsed, empty lines at the ends dropped)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "text",
+   "image": 801,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {preset: 'navy'}}} → 200 (a preset sets both colours)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "text",
+   "image": 801,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#1d2433",
+   "color": "#f3efe6",
+   "preset": "navy",
+   "bottom_mm": null
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {background: '#123456', center_pt: '32', bottom_pt: 12.5, bottom_mm: 40}}} → 200 (a colour by hand: preset custom; numbers as numbers)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "text",
+   "image": 801,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 32.0,
+   "bottom_pt": 12.5,
+   "background": "#123456",
+   "color": "#f3efe6",
+   "preset": "custom",
+   "bottom_mm": 40.0
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {background: '#F4EFE4', color: '#2A2419', bottom_mm: null}}} → 200 (colours in lower case; the two colours of a preset: preset cream; bottom_mm back to automatic)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "text",
+   "image": 801,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 32.0,
+   "bottom_pt": 12.5,
+   "background": "#f4efe4",
+   "color": "#2a2419",
+   "preset": "cream",
+   "bottom_mm": null
+  },
+  "cover.image": {
+   "id": 801,
+   "url": "/media/books/80/images/<sha256>.jpg",
+   "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+   "width": 1004,
+   "height": 1417,
+   "format": "jpeg",
+   "source_name": "غلاف.jpg"
+  }
+ },
+ "PUT … {front_matter: {cover: {mode: 'image', image: null}}} → 200 (the image removed; the file is kept)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "image",
+   "image": null,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 32.0,
+   "bottom_pt": 12.5,
+   "background": "#f4efe4",
+   "color": "#2a2419",
+   "preset": "cream",
+   "bottom_mm": null
+  },
+  "cover.image": null
+ },
+ "PUT … {front_matter: {cover: {mode: 'none'}}} → 200 (disabled; the settings are kept for when it is turned on again)": {
+  "stylesheet.front_matter.cover": {
+   "mode": "none",
+   "image": null,
+   "fit": "width",
+   "center": "كتاب الأمالي\n\nلأبي علي القالي",
+   "bottom": "طرابلس ٢٠٢٦",
+   "center_pt": 32.0,
+   "bottom_pt": 12.5,
+   "background": "#f4efe4",
+   "color": "#2a2419",
+   "preset": "cream",
+   "bottom_mm": null
+  },
+  "cover.image": null
+ },
+ "PUT … {front_matter: {cover: {mode: 'poster', fit: 'stretch', image: 803, center: <601 characters>, bottom: 7, center_pt: 200, bottom_pt: 'كبير', background: 'blue', color: '#12345', preset: 'pink', bottom_mm: 90}}} → 400 (nothing saved)": {
+  "detail": "نوع الغلاف غير معروف.",
+  "errors": {
+   "front_matter.cover.mode": "نوع الغلاف غير معروف.",
+   "front_matter.cover.image": "الصورة غير موجودة في هذا الكتاب.",
+   "front_matter.cover.fit": "طريقة وضع الصورة غير معروفة.",
+   "front_matter.cover.center": "النص أطول من المسموح (600 حرفًا).",
+   "front_matter.cover.bottom": "قيمة غير صالحة.",
+   "front_matter.cover.center_pt": "الحجم بين 8 و96 نقطة.",
+   "front_matter.cover.bottom_pt": "الحجم بين 8 و96 نقطة.",
+   "front_matter.cover.background": "اللون غير صالح؛ يُكتب مثل #1d2433.",
+   "front_matter.cover.color": "اللون غير صالح؛ يُكتب مثل #1d2433.",
+   "front_matter.cover.preset": "مجموعة الألوان غير معروفة.",
+   "front_matter.cover.bottom_mm": "المسافة بين 0 و80 مم."
+  }
+ },
+ "PUT … {front_matter: {cover: 'info'}} → 400": {
+  "detail": "إعدادات الغلاف غير صالحة.",
+  "errors": {
+   "front_matter.cover": "إعدادات الغلاف غير صالحة."
+  }
+ },
+ "PUT … {front_matter: {cover: {image: 999999}}} → 400 (no such image)": {
+  "detail": "الصورة غير موجودة في هذا الكتاب.",
+  "errors": {
+   "front_matter.cover.image": "الصورة غير موجودة في هذا الكتاب."
+  }
+ },
+ "PUT … as a reader → 403": {
+  "detail": "هذا الإجراء يتطلب صلاحية محرّر."
+ }
+}

@@ -33,6 +33,17 @@ with the same setup); a difference is `layout_mismatch`.
 
 **Notes** (`notes`, before exporting): the live layout's page checks (`page_checks`, → «الفصول») and each
 face that is not installed (`missing_font`, Amiri stands in as in the preview).
+
+**The cover (D80, COVER_SPEC §1.6).** The screen PDF opens with the cover when the book has one: rendered
+alone (`publishing.cover.render_cover`, with the export's finisher, so its boxes are the interior's) and
+prepended (`cover.prepend_cover`: the outline and every link stay on their pages; `/PageLabels` «غلاف»,
+then 1…). Printers take the cover as its own file, so the print PDF leaves it out unless its option
+`cover` «تضمين الغلاف في أول الملف» (off; disabled on the form when the book has no cover) asks; then the
+cover gets the interior's bleed, slug and crop marks, its background and image running into the bleed.
+With a cover the check also reads the cover's and the interior's first page boxes, the page count (the
+interior's + 1) and the labels; the page-count and chapter comparison with the book page
+(`layout_mismatch`) and the export's `page_count` stay the interior's (the cover is not a page of the
+book). A book without a cover gets the file it got before, byte for byte.
 """
 
 from __future__ import annotations
@@ -58,7 +69,16 @@ from .exporters import (
 )
 from .model import PageSetup
 from .pdf_text import fix_text_layer
-from .readiness import CHECKS, WARN, action, missing_font_rows, page_checks_row, row
+from .readiness import (
+    CHECKS,
+    INFO,
+    WARN,
+    action,
+    cover_resolution_row,
+    missing_font_rows,
+    page_checks_row,
+    row,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +97,10 @@ BLEEDS: tuple[tuple[int, str, str, str], ...] = (
 BLEED_LABEL = "النزف"
 CROP_MARKS_LABEL = "علامات القص"
 CROP_MARKS_HINT = "خطوط دقيقة خارج الصفحة تُري المطبعة حدود القطع."
+COVER_LABEL = "تضمين الغلاف في أول الملف"
+COVER_HINT = "تطبع المطابع الغلاف عادةً ملفًّا منفصلًا مع الكعب والظهر؛ لا تحدّده إلا إن طلبته المطبعة."
+NO_COVER_HINT = "لا غلاف لهذا الكتاب؛ يُختار في «التنسيق» في صفحة الكتاب."
+COVER_TEXT = "مع الغلاف"
 
 PRINT_OPTIONS: tuple[OptionSpec, ...] = (
     OptionSpec(
@@ -87,6 +111,7 @@ PRINT_OPTIONS: tuple[OptionSpec, ...] = (
         text={value: title for value, _short, title, _hint in BLEEDS if value},
     ),
     OptionSpec("crop_marks", "bool", False, text={True: CROP_MARKS_LABEL}),
+    OptionSpec("cover", "bool", False, text={True: COVER_TEXT}),
 )
 
 FOREIGN_FONT = "حروف {where} طُبعت بخط «{name}»، وهو ليس من خطوط الكتاب."
@@ -313,8 +338,11 @@ def foreign_font_rows(audit: PdfAudit) -> list[dict]:
     ]
 
 
-def check_boxes(audit: PdfAudit, setup: PageSetup, output) -> list[str]:
-    """The file's boxes against the trim and the bleed asked for (empty: right)."""
+def check_boxes(
+    audit: PdfAudit, setup: PageSetup, output, boxes: dict | None = None, where: str = ""
+) -> list[str]:
+    """The file's boxes (its first page's, or `boxes`) against the trim and the bleed asked for (empty:
+    right); `where` names the page in the messages."""
     width, height = setup.width_mm * MM_PT, setup.height_mm * MM_PT
     bleed = output.bleed_mm * MM_PT if output.is_print else 0.0
     page = output.page_bleed_mm * MM_PT
@@ -323,11 +351,39 @@ def check_boxes(audit: PdfAudit, setup: PageSetup, output) -> list[str]:
         "BleedBox": [-bleed, -bleed, width + bleed, height + bleed],
         "MediaBox": [-page, -page, width + page, height + page],
     }
+    boxes = audit.boxes if boxes is None else boxes
     errors = []
     for key, box in wanted.items():
-        found = audit.boxes.get(key) or []
+        found = boxes.get(key) or []
         if len(found) != 4 or any(abs(a - b) > BOX_TOLERANCE_PT for a, b in zip(found, box, strict=True)):
-            errors.append(f"{key} is {found}, expected {[round(value, 3) for value in box]}")
+            errors.append(f"{where}{key} is {found}, expected {[round(value, 3) for value in box]}")
+    return errors
+
+
+def page_boxes(data: bytes, index: int) -> dict[str, list[float]]:
+    """The raw MediaBox, TrimBox and BleedBox of page `index` (0-based) of a PDF, in points."""
+    import pymupdf
+
+    with pymupdf.open(stream=data, filetype="pdf") as document:
+        xref = document[index].xref
+        return {key: _box(document, xref, key) for key in ("MediaBox", "TrimBox", "BleedBox")}
+
+
+def check_cover(data: bytes, audit: PdfAudit, setup: PageSetup, output, interior_pages: int) -> list[str]:
+    """What a file with a cover must be besides its boxes: the cover's and the interior's first page's
+    boxes both right, one page more than the interior, and the labels «غلاف», 1, … (empty: right)."""
+    from .cover import PAGE_LABEL, page_labels_of
+
+    errors = []
+    if audit.page_count != interior_pages + 1:
+        errors.append(f"the file has {audit.page_count} pages, the interior {interior_pages} and a cover")
+        return errors
+    if interior_pages:
+        errors += check_boxes(audit, setup, output, page_boxes(data, 1), "page 2: ")
+    labels = page_labels_of(data, 2)
+    wanted = [PAGE_LABEL, "1"][: len(labels)]
+    if labels != wanted:
+        errors.append(f"the page labels are {labels}, expected {wanted}")
     return errors
 
 
@@ -456,14 +512,40 @@ class PdfExporter:
         """The page's form block (none for the screen PDF)."""
         return {}
 
+    cover_level = INFO  # the cover's resolution matters most for print
+
     def notes(self, book, setup: PageSetup) -> list[dict]:
-        """The live layout's page checks and the faces not installed (Amiri stands in)."""
+        """The live layout's page checks, the faces not installed (Amiri stands in) and a cover picture
+        short of 300 dpi (`cover_resolution`)."""
         rows: list[dict] = []
         checks = page_checks_row(book.pk)
         if checks is not None:
             rows.append(checks)
         rows += missing_font_rows(book.pk, setup, code="missing_font")
+        resolution = cover_resolution_row(book.pk, setup, self.cover_level)
+        if resolution is not None:
+            rows.append(resolution)
         return rows
+
+    def wants_cover(self, job: ExportJob) -> bool:
+        """Whether this export opens with the book's cover (the screen PDF: whenever there is one)."""
+        return True
+
+    def cover_pdf(self, job: ExportJob, fonts: F.ResolvedFonts, output) -> bytes | None:
+        """The cover's page for this export (with its finisher: the interior's boxes and marks), or None
+        when the book has no cover or the export does not want it."""
+        from .cover import cover_book, render_cover
+        from .engine import CROP_SLUG_MM
+        from .pdf import finisher_for
+
+        if not self.wants_cover(job) or job.setup.cover is None or not job.setup.cover.ready:
+            return None
+        book = cover_book(job.document, job.setup, job.title, job.author)
+        if book.front.cover is None:
+            return None
+        bleed = float(output.bleed_mm) if output.is_print else 0.0
+        slug = CROP_SLUG_MM if output.is_print and output.crop_marks else 0.0
+        return render_cover(book, fonts, bleed_mm=bleed, slug_mm=slug, finisher=finisher_for(output))
 
     def output(self, job: ExportJob):
         """The `PdfOutput` of this export."""
@@ -493,11 +575,21 @@ class PdfExporter:
         rendered = get_engine().render(render_job, progress.cancelled, on_pass=progress)
         if progress.cancelled():
             raise ExportCancelled
-        text_layer = fix_text_layer(rendered.pdf)  # Arabic ligatures copy in logical order (§4.7)
+        data = rendered.pdf
+        cover = self.cover_pdf(job, fonts, output)  # D80: the cover in front, when there is one
+        if cover is not None:
+            from .cover import prepend_cover
+
+            data = prepend_cover(data, cover)
+        if progress.cancelled():
+            raise ExportCancelled
+        text_layer = fix_text_layer(data)  # Arabic ligatures copy in logical order (§4.7)
         progress("check")
-        audit = audit_pdf(text_layer.data, fonts)
-        errors = check_boxes(audit, setup, output)
-        if audit.page_count != rendered.page_count:
+        audit = audit_pdf(text_layer.data, fonts, first_page=0 if cover is not None else 1)
+        errors = check_boxes(audit, setup, output, where="page 1: " if cover is not None else "")
+        if cover is not None:
+            errors += check_cover(text_layer.data, audit, setup, output, rendered.page_count)
+        elif audit.page_count != rendered.page_count:
             errors.append(f"the file has {audit.page_count} pages, the render {rendered.page_count}")
         if errors:
             raise InvalidExport("\n".join(errors))
@@ -526,6 +618,9 @@ class PdfExporter:
             "crop_marks": bool(output.crop_marks) if output.is_print else False,
             "text_layer": text_layer.entries,
         }
+        if cover is not None:
+            stats["cover"] = job.setup.cover.mode
+            stats["file_pages"] = audit.page_count
         lines = [
             f"{self.format}: {rendered.page_count} pages, {rendered.passes} passes,"
             f" {rendered.duration_ms} ms",
@@ -539,6 +634,10 @@ class PdfExporter:
             lines.append(f"type 3 fonts {audit.type3}; not subset {audit.not_subset}")
         if reference is None:
             lines.append("no finished preview or current live layout to compare the pages with")
+        if cover is not None:
+            lines.append(f"cover ({job.setup.cover.mode}) prepended: {audit.page_count} pages in the file")
+        elif self.wants_cover(job) and job.setup.cover is not None:
+            lines.append(f"no cover: mode {job.setup.cover.mode} without its image")
         return ExportResult(
             data=text_layer.data, page_count=rendered.page_count, warnings=warnings, stats=stats, log=lines
         )
@@ -559,9 +658,20 @@ class PrintPdfExporter(PdfExporter):
     format = "print_pdf"
     label = "PDF للطباعة"
     options = PRINT_OPTIONS
+    cover_level = WARN
+
+    def wants_cover(self, job: ExportJob) -> bool:
+        """Only when the option asks (printers take the cover as its own file)."""
+        return bool((job.options or {}).get("cover"))
 
     def form(self, book, values: dict) -> dict:
-        """The page's print block: the bleed (a segmented choice with a hint) and the crop marks."""
+        """The page's print block: the bleed (a segmented choice with a hint), the crop marks and the cover
+        (`available` 0 — the checkbox disabled — when the book has no cover to draw)."""
+        from .model import page_setup
+        from .preview import stylesheet_for
+
+        cover = page_setup(stylesheet_for(book)).cover if book is not None else None
+        available = 1 if cover is not None and cover.ready else 0
         bleed = values.get("bleed_mm", 0)
         return {
             "bleed_mm": {
@@ -576,6 +686,12 @@ class PrintPdfExporter(PdfExporter):
                 "value": bool(values.get("crop_marks")),
                 "label": CROP_MARKS_LABEL,
                 "hint": CROP_MARKS_HINT,
+            },
+            "cover": {
+                "value": bool(values.get("cover")) and bool(available),
+                "available": available,
+                "label": COVER_LABEL,
+                "hint": COVER_HINT if available else NO_COVER_HINT,
             },
         }
 

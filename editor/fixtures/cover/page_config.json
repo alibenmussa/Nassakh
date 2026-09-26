@@ -1,0 +1,6 @@
+{
+ "GET /books/80/layout/ → config.urls (added)": {
+  "cover": "/api/books/80/cover/",
+  "bookImages": "/api/books/80/images/"
+ }
+}

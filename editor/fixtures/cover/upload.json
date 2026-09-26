@@ -1,0 +1,65 @@
+{
+ "POST /api/books/80/images/ multipart {file: غلاف.jpg (a 1417 × 1004 JPEG taken on its side, EXIF orientation 6), purpose: 'cover'} → 201 (turned upright)": {
+  "id": 801,
+  "url": "/media/books/80/images/<sha256>.jpg",
+  "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+  "width": 1004,
+  "height": 1417,
+  "format": "jpeg",
+  "source_name": "غلاف.jpg",
+  "purpose": "cover",
+  "sha256": "<sha256>"
+ },
+ "POST … the same file again → 200 (the existing image)": {
+  "id": 801,
+  "url": "/media/books/80/images/<sha256>.jpg",
+  "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+  "width": 1004,
+  "height": 1417,
+  "format": "jpeg",
+  "source_name": "غلاف.jpg",
+  "purpose": "cover",
+  "sha256": "<sha256>"
+ },
+ "POST … {file: logo.webp (1200 × 800 with transparency)} → 201 (stored as PNG)": {
+  "id": 802,
+  "url": "/media/books/80/images/<sha256>.png",
+  "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+  "width": 1200,
+  "height": 800,
+  "format": "png",
+  "source_name": "logo.webp",
+  "purpose": "cover",
+  "sha256": "<sha256>"
+ },
+ "POST … {file: <31 MB>} → 413": {
+  "detail": "الصورة أكبر من 30 ميغابايت؛ اختر صورة أصغر.",
+  "code": "too_large"
+ },
+ "POST … {file: notes.txt} → 422": {
+  "detail": "تعذّرت قراءة الملف صورةً؛ اختر صورة JPEG أو PNG أو WebP.",
+  "code": "not_an_image"
+ },
+ "POST … {file: scan.gif} → 422": {
+  "detail": "نوع الصورة غير مقبول؛ المقبول JPEG وPNG وWebP.",
+  "code": "wrong_type"
+ },
+ "POST … {file: <a 13000 × 200 PNG>} → 422": {
+  "detail": "الصورة أكبر من 12000 بكسل في أحد جانبيها؛ صغّرها ثم ارفعها.",
+  "code": "too_many_pixels"
+ },
+ "POST … without a file → 400": {
+  "detail": "لم تُرسَل صورة.",
+  "code": "no_file"
+ },
+ "POST … {file, purpose: 'banner'} → 400": {
+  "detail": "قيمة غير صالحة.",
+  "code": "bad_purpose"
+ },
+ "POST … as a reader → 403": {
+  "detail": "هذا الإجراء يتطلب صلاحية محرّر."
+ },
+ "POST /api/books/999999/images/ → 404": {
+  "detail": "الكتاب غير موجود."
+ }
+}

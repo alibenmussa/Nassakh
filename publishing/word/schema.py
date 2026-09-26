@@ -28,6 +28,7 @@ _CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 _WORD_XML = re.compile(r"^word/[^/]+\.xml$")
 _INSTR_TARGET = re.compile(r"^\s*(PAGEREF|HYPERLINK)\s+(\S+)")
 _RID_ATTR = f"{{{R_NS}}}id"
+_REL_ATTRS = (_RID_ATTR, f"{{{R_NS}}}embed", f"{{{R_NS}}}link")  # r:embed / r:link: a picture's part (D80)
 _STORIES = ("word/document.xml", "word/footnotes.xml", "word/comments.xml")
 
 
@@ -145,7 +146,8 @@ def _check_content_types(reader: _Reader, errors: list[str]) -> None:
 
 
 def _check_rels(reader: _Reader, errors: list[str]) -> None:
-    """Every `r:id` resolves and every relationship target exists."""
+    """Every `r:id` (and a picture's `r:embed` / `r:link`) resolves and every relationship target
+    exists."""
     sources = ["_rels/.rels"] + [n for n in reader.names if n.endswith(".rels") and n != "_rels/.rels"]
     for rels_name in sources:
         node = reader.part(rels_name)
@@ -173,9 +175,11 @@ def _check_rels(reader: _Reader, errors: list[str]) -> None:
         for node in root.iter():
             if not isinstance(node.tag, str):
                 continue
-            rel_id = node.get(_RID_ATTR)
-            if rel_id is not None and rel_id not in rels:
-                errors.append(f"{name}: r:id {rel_id!r} on <{local(node)}> has no relationship")
+            for attr in _REL_ATTRS:
+                rel_id = node.get(attr)
+                if rel_id is not None and rel_id not in rels:
+                    kind = attr.rpartition("}")[2]
+                    errors.append(f"{name}: r:{kind} {rel_id!r} on <{local(node)}> has no relationship")
 
 
 def _style_ids(reader: _Reader) -> set[str]:

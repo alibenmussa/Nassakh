@@ -3,7 +3,8 @@
 Phase 4 writes the manuscript from assembly; Phase 5 adds the editor that saves it one chapter at a time
 (`origin = editor`, D40–D41) and the stylesheet that gives the book its physical form (PHASE5_SPEC §2).
 Phase 7c (D78) keeps the assembled text an edited manuscript descends from (`base`) and the plans of the
-page-by-page merge of review changes (`ChangesPlan`, PHASE7_SPEC §5.6).
+page-by-page merge of review changes (`ChangesPlan`, PHASE7_SPEC §5.6). The cover (D80, COVER_SPEC) adds
+the book's images (`BookImage`): uploaded once, checked and normalised, named by their content.
 """
 
 from __future__ import annotations
@@ -280,3 +281,70 @@ class StyleSheet(models.Model):
 
     def __str__(self) -> str:
         return f"stylesheet of book {self.book_id} ({self.trim})"
+
+
+# ====================================================================== the book's images (D80)
+
+
+def book_image_path(instance: BookImage, filename: str) -> str:
+    """`books/<id>/images/<name>`: the upload service names the file by its content (`<sha256>.<ext>`)."""
+    return f"books/{instance.book_id}/images/{filename}"
+
+
+class BookImage(models.Model):
+    """An image of a book (D80, COVER_SPEC §1.7): the cover's picture now, body images later.
+
+    `editor.services.upload_image` writes the row: the upload checked with Pillow (JPEG, PNG or WebP, at
+    most 30 MB and 12 000 px a side), turned upright, converted to sRGB and stored normalised — JPEG q92
+    when opaque, PNG when it has transparency — at `books/<id>/images/<sha256>.<ext>` (the sha256 of the
+    stored bytes, unique per book: the same image uploaded twice is one row), with a WebP thumbnail beside
+    it (`<sha256>-thumb.webp`). Files are immutable and never deleted when the cover changes, so a queued
+    export keeps the image it read.
+    """
+
+    class Format(models.TextChoices):
+        JPEG = "jpeg", "JPEG"
+        PNG = "png", "PNG"
+
+    class Purpose(models.TextChoices):
+        COVER = "cover", "غلاف"
+        BODY = "body", "صورة في المتن"
+
+    book = models.ForeignKey(Book, verbose_name="الكتاب", on_delete=models.CASCADE, related_name="images")
+    file = models.FileField("الملف", upload_to=book_image_path, max_length=255)
+    sha256 = models.CharField("بصمة الملف", max_length=64)
+    width = models.PositiveIntegerField("العرض (بكسل)")
+    height = models.PositiveIntegerField("الارتفاع (بكسل)")
+    format = models.CharField("الصيغة", max_length=4, choices=Format.choices)
+    source_name = models.CharField("اسم الملف الأصلي", max_length=255, blank=True)
+    purpose = models.CharField("الغرض", max_length=10, choices=Purpose.choices, default=Purpose.COVER)
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="رفعها",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    created_at = models.DateTimeField("رُفعت في", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "صورة كتاب"
+        verbose_name_plural = "صور الكتب"
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["book", "sha256"], name="book_image_unique_sha256"),
+        ]
+
+    def __str__(self) -> str:
+        return f"image {self.pk} of book {self.book_id} ({self.format} {self.width}×{self.height})"
+
+    @property
+    def extension(self) -> str:
+        """The stored file's extension (`jpg`, `png`)."""
+        return "jpg" if self.format == self.Format.JPEG else "png"
+
+    @property
+    def thumb_name(self) -> str:
+        """The storage name of the WebP thumbnail beside the file."""
+        return f"books/{self.book_id}/images/{self.sha256}-thumb.webp"

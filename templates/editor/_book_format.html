@@ -1,13 +1,17 @@
-{% comment %}«التنسيق» (PHASE5_SPEC §5, §9.2): the stylesheet in accordions — القطع (the presets with a page glyph, custom
-fields), الهوامش (four steppers beside a live spread diagram), الخطوط (three face menus with a sample line), النص
-(sizes, leading, indent, widows and orphans), الصفحة (running header, page number, chapter opening, footnote
-numbering, front matter, headings kept with their text, scan page marks), بيانات الكتاب (the title and copyright
-pages). Every change saves through bookPage.setField (one debounced PUT) and lays the book out again.
-Context: can_edit.{% endcomment %}
+{% comment %}«التنسيق» (PHASE5_SPEC §5, §9.2): the stylesheet in accordions — الغلاف (D80, _book_cover.html: the mode, the
+image, the texts, the colours), القطع (the presets with a page glyph, custom fields), الهوامش (four steppers beside a
+live spread diagram), الخطوط (three face menus with a sample line), النص (sizes, leading, indent, widows and
+orphans), الصفحة (running header, page number, chapter opening, footnote numbering, front matter, headings kept with
+their text, scan page marks), بيانات الكتاب (the title and copyright pages). Every change saves through
+bookPage.setField (one debounced PUT) and lays the book out again (a change of the cover alone only renders the
+cover again). Context: can_edit.{% endcomment %}
 {# a proofreader reads every section (the heads open and close); the fields inside are disabled #}
 <fieldset class="lo-panel{% if not can_edit %} is-readonly{% endif %}" data-layout-panel>
   <legend class="sr-only">تنسيق الكتاب</legend>
   {% if not can_edit %}<p class="lo-readonly meta">التنسيق يغيّره محرّر الكتاب؛ يمكنك تصفّح الصفحات.</p>{% endif %}
+
+  {# ---------------------------------------------------------- الغلاف (D80) #}
+  {% include "editor/_book_cover.html" %}
 
   {# ---------------------------------------------------------- القطع #}
   <section class="bp-acc" data-section="trim">

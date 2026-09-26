@@ -8,7 +8,8 @@ inserted into existing XML later. Elements outside `ORDER` keep the order they a
 `w:body`).
 
 `Package` collects the parts with their relationships and writes the zip: entries dated 1980-01-01 in a
-fixed order with `[Content_Types].xml` first, so the same inputs give the same bytes (golden tests).
+fixed order with `[Content_Types].xml` first, so the same inputs give the same bytes (golden tests). A
+picture part (the cover, D80) is typed by its extension (`<Default Extension="png">`), as Word writes it.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 NSMAP: dict[str, str] = {"w": W_NS, "r": R_NS}
+# DrawingML (the cover's anchored picture, D80)
+WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+PIC_NS = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
 # Relationship types
 REL_DOCUMENT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
@@ -41,6 +46,7 @@ REL_COMMENTS = "http://schemas.openxmlformats.org/officeDocument/2006/relationsh
 REL_HEADER = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"
 REL_FOOTER = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer"
 REL_FONT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/font"
+REL_IMAGE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
 
 # Content types
 CT_DOCUMENT = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
@@ -231,6 +237,14 @@ def pt_to_mm(points: float) -> float:
     return points * MM_PER_PT
 
 
+EMU_PER_MM = 36_000  # DrawingML's English Metric Units
+
+
+def emu_mm(millimetres: float) -> int:
+    """Millimetres → EMU, rounded."""
+    return round(millimetres * EMU_PER_MM)
+
+
 # ====================================================================== text safety
 
 # What XML 1.0 forbids: C0 controls but tab / newline / return, the surrogates, U+FFFE and U+FFFF.
@@ -358,8 +372,8 @@ class Package:
         overrides = []
         for part in self.parts:
             extension = part.name.rpartition(".")[2]
-            if part.content_type == CT_OBFUSCATED_FONT:
-                defaults.setdefault(extension, CT_OBFUSCATED_FONT)
+            if part.content_type == CT_OBFUSCATED_FONT or part.content_type.startswith("image/"):
+                defaults.setdefault(extension, part.content_type)
                 continue
             overrides.append((part.name, part.content_type))
         lines = [

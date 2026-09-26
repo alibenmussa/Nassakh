@@ -1,0 +1,49 @@
+{
+ "GET /api/books/80/exports/ → formats[print_pdf].form.cover (the book has a cover)": {
+  "value": false,
+  "available": 1,
+  "label": "تضمين الغلاف في أول الملف",
+  "hint": "تطبع المطابع الغلاف عادةً ملفًّا منفصلًا مع الكعب والظهر؛ لا تحدّده إلا إن طلبته المطبعة."
+ },
+ "… (no cover: mode none, or image without an image) → formats[print_pdf].form.cover (the checkbox is disabled)": {
+  "value": false,
+  "available": 0,
+  "label": "تضمين الغلاف في أول الملف",
+  "hint": "لا غلاف لهذا الكتاب؛ يُختار في «التنسيق» في صفحة الكتاب."
+ },
+ "POST /api/books/80/exports/ {format: print_pdf, options: {bleed_mm: 3, crop_marks: true, cover: true}} → the row's options and options_text": {
+  "options": {
+   "bleed_mm": 3,
+   "crop_marks": true,
+   "cover": true
+  },
+  "options_text": "نزف 3 مم · علامات القص · مع الغلاف"
+ },
+ "GET … (mode image without an image) → readiness (the row added)": {
+  "code": "cover_image_missing",
+  "level": "warn",
+  "message": "اختير غلاف بصورة ولم تُرفع صورة؛ لن يكون للكتاب غلاف.",
+  "action": {
+   "label": "الغلاف",
+   "url": "/books/80/layout/?tab=format"
+  }
+ },
+ "GET … (mode image, image 801: 150 dpi as fitted on 17×24) → formats[print_pdf].notes (the row added)": {
+  "code": "cover_resolution",
+  "level": "warn",
+  "message": "دقة صورة الغلاف 150 نقطة في البوصة على هذا القطع؛ يُستحسن 300 للطباعة.",
+  "action": {
+   "label": "الغلاف",
+   "url": "/books/80/layout/?tab=format"
+  }
+ },
+ "… → formats[screen_pdf | docx | epub].notes (the row added)": {
+  "code": "cover_resolution",
+  "level": "info",
+  "message": "دقة صورة الغلاف 150 نقطة في البوصة على هذا القطع؛ يُستحسن 300 للطباعة.",
+  "action": {
+   "label": "الغلاف",
+   "url": "/books/80/layout/?tab=format"
+  }
+ }
+}

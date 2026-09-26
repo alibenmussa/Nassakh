@@ -1,5 +1,5 @@
 """Editor services (PHASE5_SPEC §3): chapters, saves, snapshots, find & replace, digits, review drift,
-per-chapter re-assembly and the book's stylesheet.
+per-chapter re-assembly, the book's stylesheet and its images (D80: the cover's settings and pictures).
 
 The manuscript stays one JSON document (`editor.Manuscript.document`); the editor works on one chapter at
 a time (D40, `editor.document`). Every save is version-checked per chapter (a short hash of its nodes):
@@ -11,24 +11,58 @@ re-assembled from the reviewed pages (the old chapter kept as a snapshot, reason
 Views and API functions stay thin; the renders after a save are scheduled through `publishing.engine`
 (the chapter's fast re-layout at once, the book debounced, D44/D47), never run here: an edit's answer
 carries `relayout` (`{id, status, url}` to poll, or null) so the book page can swap its live pages.
+
+**The cover (D80, COVER_SPEC §2).** `front_matter["cover"]` is validated key by key by the stylesheet's PUT
+(`_cover_update`, errors `front_matter.cover.<key>`), filled with its defaults in every payload
+(`publishing.model.cover_settings`) and stored only once a cover key was posted, so a book that never
+chose a cover keeps the stored stylesheet it had. `cover_choices` is the panel's block (modes, fits,
+presets, limits, the print-size note). `upload_image` checks, normalises and stores an uploaded image
+(`editor.BookImage`, named by its content; see `normalise_image`).
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
+import io
 import logging
+import os
 import re
 import time
+from dataclasses import dataclass
 
 from django.contrib.auth.models import AnonymousUser
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from django.utils import timezone
 
 from books.models import Book, Page
+from publishing.model import (
+    COVER_BOTTOM_GAP_MM,
+    COVER_BOTTOM_LIMITS,
+    COVER_DEFAULTS,
+    COVER_FITS,
+    COVER_MODES,
+    COVER_PRESETS,
+    COVER_SIZE_LIMITS,
+    COVER_TEXT_MAX,
+    CUSTOM_PRESET,
+    cover_settings,
+    cover_text,
+    hex_colour,
+    preset_of,
+)
 
 from . import document as doc
-from .models import BOOK_FIELDS, CUSTOM_TRIM, TRIM_PRESETS, Manuscript, ManuscriptSnapshot, StyleSheet
+from .models import (
+    BOOK_FIELDS,
+    CUSTOM_TRIM,
+    TRIM_PRESETS,
+    BookImage,
+    Manuscript,
+    ManuscriptSnapshot,
+    StyleSheet,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1555,11 +1589,13 @@ def stylesheet_values(sheet: StyleSheet) -> dict:
 
 
 def front_matter_values(front) -> dict:
-    """`front_matter` with every flag and every book detail present (`fields`: '' when not given)."""
+    """`front_matter` with every flag and every book detail present (`fields`: '' when not given) and the
+    cover's settings with their defaults (`cover`, mode `none` when the book has none, D80)."""
     front = front if isinstance(front, dict) else {}
     fields = front.get("fields") if isinstance(front.get("fields"), dict) else {}
     out = {**FRONT_FLAGS, **{key: bool(front[key]) for key in FRONT_FLAGS if key in front}}
     out["fields"] = {name: str(fields.get(name) or "") for name in BOOK_FIELDS}
+    out["cover"] = cover_settings(front.get("cover"))
     return out
 
 
@@ -1592,11 +1628,172 @@ def stylesheet_payload(book: Book) -> dict:
             **{f"heading_scale.{name}": [lo, hi] for name, (lo, hi, _msg) in HEADING_SCALE_LIMITS.items()},
             **{name: [lo, hi] for name, (lo, hi, _msg) in LINE_COUNT_FIELDS.items()},
             **{f"front_matter.fields.{name}": [0, limit] for name, limit in BOOK_FIELD_LIMITS.items()},
+            **{f"front_matter.cover.{name}": list(pair) for name, pair in COVER_LIMITS.items()},
         },
         "missing_fonts": resolve(sheet.body_font, sheet.latin_font, sheet.heading_font).missing,
         "book_fields": list(BOOK_FIELDS),
         "field_defaults": {"title": book.title, "author": book.author},
+        "cover": cover_choices(book, sheet, values["front_matter"]["cover"]),
     }
+
+
+# ====================================================================== the cover's settings (D80)
+
+COVER_LIMITS: dict[str, tuple[int, int]] = {
+    "center": (0, COVER_TEXT_MAX),
+    "bottom": (0, COVER_TEXT_MAX),
+    "center_pt": (int(COVER_SIZE_LIMITS[0]), int(COVER_SIZE_LIMITS[1])),
+    "bottom_pt": (int(COVER_SIZE_LIMITS[0]), int(COVER_SIZE_LIMITS[1])),
+    "bottom_mm": (int(COVER_BOTTOM_LIMITS[0]), int(COVER_BOTTOM_LIMITS[1])),
+}
+COVER_DPI = 300  # the print resolution the size note asks for
+COVER_INVALID = "إعدادات الغلاف غير صالحة."
+COVER_MODE = "نوع الغلاف غير معروف."
+COVER_FIT = "طريقة وضع الصورة غير معروفة."
+COVER_IMAGE = "الصورة غير موجودة في هذا الكتاب."
+COVER_TOO_LONG = f"النص أطول من المسموح ({COVER_TEXT_MAX} حرفًا)."
+COVER_VALUE = "قيمة غير صالحة."
+COVER_SIZE = f"الحجم بين {COVER_LIMITS['center_pt'][0]} و{COVER_LIMITS['center_pt'][1]} نقطة."
+COVER_COLOUR = "اللون غير صالح؛ يُكتب مثل #1d2433."
+COVER_PRESET = "مجموعة الألوان غير معروفة."
+COVER_BOTTOM = f"المسافة بين {COVER_LIMITS['bottom_mm'][0]} و{COVER_LIMITS['bottom_mm'][1]} مم."
+COVER_SIZE_NOTE = "للطباعة: {dpi} نقطة في البوصة، أي {width} × {height} بكسل على هذا القطع"
+COVER_INFO_NOTE = (
+    "يُؤخذ العنوان والعنوان الفرعي والمؤلف من «بيانات الكتاب»، والناشر والمدينة والسنة في الأسفل."
+)
+
+
+def print_pixels(width_mm: float, height_mm: float, dpi: int = COVER_DPI) -> tuple[int, int]:
+    """The pixels a picture needs to cover a trim at `dpi`: `round(mm / 25.4 × dpi)` per side."""
+    return round(width_mm / 25.4 * dpi), round(height_mm / 25.4 * dpi)
+
+
+def cover_choices(book: Book, sheet: StyleSheet, settings: dict | None = None) -> dict:
+    """The stylesheet payload's `cover` block (the «الغلاف» section of «التنسيق»): the modes, the fits and
+    the presets with their labels, the defaults and limits, the bottom block's automatic distance (the
+    page's bottom margin + 8 mm), the upload's limits, the print-size note for this trim and the pixels
+    of every trim preset, the `info` note, and the chosen image (`image_payload`, or None)."""
+    settings = settings if settings is not None else cover_settings((sheet.front_matter or {}).get("cover"))
+    width, height = print_pixels(sheet.width_mm, sheet.height_mm)
+    image = None
+    if settings.get("image"):
+        row = BookImage.objects.filter(pk=settings["image"], book_id=book.pk).first()
+        image = image_payload(row) if row is not None else None
+    return {
+        "modes": [{"value": key, "label": label} for key, label in COVER_MODES.items()],
+        "fits": [{"value": key, "label": label} for key, label in COVER_FITS.items()],
+        "presets": [
+            {"key": key, "label": label, "background": background, "color": color}
+            for key, (label, background, color) in COVER_PRESETS.items()
+        ],
+        "defaults": dict(COVER_DEFAULTS),
+        "limits": {name: list(pair) for name, pair in COVER_LIMITS.items()},
+        "bottom_mm_auto": round(float(sheet.bottom_mm) + COVER_BOTTOM_GAP_MM, 2),
+        "upload": {
+            "field": "file",
+            "max_bytes": IMAGE_MAX_BYTES,
+            "max_mb": IMAGE_MAX_BYTES // (1024 * 1024),
+            "max_side": IMAGE_MAX_SIDE,
+            "types": list(IMAGE_TYPES.values()),
+            "accept": ",".join(IMAGE_TYPES.values()),
+        },
+        "print_size": {
+            "dpi": COVER_DPI,
+            "width_px": width,
+            "height_px": height,
+            "note": COVER_SIZE_NOTE.format(dpi=COVER_DPI, width=width, height=height),
+        },
+        "print_sizes": {key: list(print_pixels(w, h)) for key, (_label, w, h) in TRIM_PRESETS.items()},
+        "info_note": COVER_INFO_NOTE,
+        "image": image,
+    }
+
+
+def _cover_image_id(book: Book, value) -> tuple[int | None, bool]:
+    """A posted `image`: `(id, ok)` — None for none; not ok for anything that is not an image of this
+    book."""
+    if value is None or value == "":
+        return None, True
+    if isinstance(value, bool):
+        return None, False
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if not isinstance(value, int) or value <= 0:
+        return None, False
+    return value, BookImage.objects.filter(pk=value, book_id=book.pk).exists()
+
+
+def _cover_update(book: Book, data: dict, current: dict) -> tuple[dict, dict[str, str]]:
+    """The cover's settings with the posted keys applied (`current`: the stored ones, `cover_settings`),
+    and the errors per key (`front_matter.cover.<key>`). A `preset` sets both colours, a posted colour
+    wins over it, and `preset` then follows the two colours (`preset_of`)."""
+    out = dict(current)
+    errors: dict[str, str] = {}
+
+    def refuse(key: str, message: str) -> None:
+        errors[f"front_matter.cover.{key}"] = message
+
+    if "mode" in data:
+        if isinstance(data["mode"], str) and data["mode"] in COVER_MODES:
+            out["mode"] = data["mode"]
+        else:
+            refuse("mode", COVER_MODE)
+    if "image" in data:
+        image, ok = _cover_image_id(book, data["image"])
+        if ok:
+            out["image"] = image
+        else:
+            refuse("image", COVER_IMAGE)
+    if "fit" in data:
+        if isinstance(data["fit"], str) and data["fit"] in COVER_FITS:
+            out["fit"] = data["fit"]
+        else:
+            refuse("fit", COVER_FIT)
+    for key in ("center", "bottom"):
+        if key not in data:
+            continue
+        value = "" if data[key] is None else data[key]
+        if not isinstance(value, str):
+            refuse(key, COVER_VALUE)
+            continue
+        text_value = cover_text(value)
+        if len(text_value) > COVER_TEXT_MAX:
+            refuse(key, COVER_TOO_LONG)
+        else:
+            out[key] = text_value
+    for key in ("center_pt", "bottom_pt"):
+        if key in data:
+            number = _number(data[key])
+            if number is None or not COVER_SIZE_LIMITS[0] <= number <= COVER_SIZE_LIMITS[1]:
+                refuse(key, COVER_SIZE)
+            else:
+                out[key] = round(number, 2)
+    colours: dict[str, str] = {}
+    for key in ("background", "color"):
+        if key in data:
+            colour = hex_colour(data[key])
+            if colour is None:
+                refuse(key, COVER_COLOUR)
+            else:
+                colours[key] = colour
+    if "preset" in data:
+        preset = data["preset"]
+        if isinstance(preset, str) and preset in COVER_PRESETS:
+            _label, out["background"], out["color"] = COVER_PRESETS[preset]
+        elif preset != CUSTOM_PRESET:
+            refuse("preset", COVER_PRESET)
+    out.update(colours)
+    if "bottom_mm" in data:
+        if data["bottom_mm"] is None or data["bottom_mm"] == "":
+            out["bottom_mm"] = None
+        else:
+            number = _number(data["bottom_mm"])
+            if number is None or not COVER_BOTTOM_LIMITS[0] <= number <= COVER_BOTTOM_LIMITS[1]:
+                refuse("bottom_mm", COVER_BOTTOM)
+            else:
+                out["bottom_mm"] = round(number, 2)
+    out["preset"] = preset_of(out["background"], out["color"])
+    return out, errors
 
 
 def _number(value) -> float | None:
@@ -1617,8 +1814,8 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
 
     A preset `trim` sets the width and height; `custom` keeps the posted (or stored) ones. Faces must be
     registry keys (the Latin face one with Latin glyphs); a face not installed is accepted (it renders in
-    Amiri and the panel says «غير مثبّت»). Raises `StyleSheetError` with every bad field. Returns
-    `(stylesheet, changed)`.
+    Amiri and the panel says «غير مثبّت»). `front_matter.cover` takes any subset of the cover's keys
+    (`_cover_update`, D80). Raises `StyleSheetError` with every bad field. Returns `(stylesheet, changed)`.
     """
     from publishing.fonts import FONTS, LATIN_FONTS
 
@@ -1688,6 +1885,7 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
         if "front_matter" in data:
             front = data["front_matter"]
             merged = front_matter_values(sheet.front_matter)
+            had_cover = isinstance((sheet.front_matter or {}).get("cover"), dict)
             if not isinstance(front, dict):
                 errors["front_matter"] = "الصفحات التمهيدية غير صالحة."
             else:
@@ -1714,6 +1912,15 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
                             continue
                         merged["fields"][name] = text
                 merged["fields"] = {name: text for name, text in merged["fields"].items() if text}
+                if "cover" in front:  # D80
+                    if not isinstance(front["cover"], dict):
+                        errors["front_matter.cover"] = COVER_INVALID
+                    else:
+                        cover, cover_errors = _cover_update(book, front["cover"], merged["cover"])
+                        errors.update(cover_errors)
+                        merged["cover"] = cover
+                elif not had_cover:
+                    del merged["cover"]  # a book that never chose a cover keeps its stored front matter
                 sheet.front_matter = merged
         if "print_source_pages" in data:
             sheet.print_source_pages = _parse_bool(data["print_source_pages"], sheet.print_source_pages)
@@ -1729,6 +1936,215 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
         if changed:
             sheet.save()
     return sheet, changed
+
+
+# ====================================================================== the book's images (D80)
+
+IMAGE_MAX_BYTES = 30 * 1024 * 1024
+IMAGE_MAX_SIDE = 12_000
+IMAGE_TYPES: dict[str, str] = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+IMAGE_JPEG_QUALITY = 92
+IMAGE_THUMB_SIDE = 480
+IMAGE_THUMB_QUALITY = 80
+IMAGE_TOO_LARGE = f"الصورة أكبر من {IMAGE_MAX_BYTES // (1024 * 1024)} ميغابايت؛ اختر صورة أصغر."
+IMAGE_UNREADABLE = "تعذّرت قراءة الملف صورةً؛ اختر صورة JPEG أو PNG أو WebP."
+IMAGE_WRONG_TYPE = "نوع الصورة غير مقبول؛ المقبول JPEG وPNG وWebP."
+IMAGE_TOO_WIDE = f"الصورة أكبر من {IMAGE_MAX_SIDE} بكسل في أحد جانبيها؛ صغّرها ثم ارفعها."
+IMAGE_MISSING = "لم تُرسَل صورة."
+
+
+class ImageRefused(EditorError):
+    """An upload that is not a usable image: `code` (`too_large`, `not_an_image`, `wrong_type`,
+    `too_many_pixels`, `no_file`, `bad_purpose`) and the HTTP `status` (413, 422 or 400)."""
+
+    def __init__(self, message: str, code: str, status: int):
+        super().__init__(message)
+        self.code = code
+        self.status = status
+
+
+@dataclass(frozen=True)
+class NormalisedImage:
+    """An image as it is stored (`normalise_image`): the file's bytes, its format (`jpeg` | `png`), its
+    pixel size and its WebP thumbnail."""
+
+    data: bytes
+    format: str
+    width: int
+    height: int
+    thumb: bytes
+
+
+def _srgb(image, icc: bytes | None):
+    """`image` in sRGB: through its ICC profile when it has one (CMYK, Adobe RGB, Display P3…), else by
+    Pillow's own conversion. Grey stays grey; anything with alpha comes back RGBA."""
+    from PIL import ImageCms
+
+    mode = image.mode
+    if mode == "I" or mode.startswith("I;16"):  # 16-bit grey: to 8 bits
+        return image.convert("I").point(lambda v: v * (1 / 256)).convert("L")
+    if mode in ("1", "F"):
+        return image.convert("L")
+    if mode == "L":
+        return image
+    if mode in ("P", "PA"):
+        transparent = mode == "PA" or "transparency" in image.info
+        image = image.convert("RGBA" if transparent else "RGB")
+        mode = image.mode
+    elif mode == "LA":
+        image = image.convert("RGBA")
+        mode = "RGBA"
+    target = "RGBA" if mode in ("RGBA", "RGBa") else "RGB"
+    if icc and mode in ("RGB", "RGBA", "CMYK"):
+        try:
+            source = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            if mode == "RGBA":  # the colour through the profile, the alpha as it is
+                alpha = image.getchannel("A")
+                converted = ImageCms.profileToProfile(
+                    image.convert("RGB"), source, ImageCms.createProfile("sRGB"), outputMode="RGB"
+                )
+                converted.putalpha(alpha)
+                return converted
+            return ImageCms.profileToProfile(image, source, ImageCms.createProfile("sRGB"), outputMode="RGB")
+        except (ImageCms.PyCMSError, OSError, ValueError, TypeError):
+            log.warning("an image's ICC profile could not be applied; converted without it")
+    return image.convert(target) if image.mode != target else image
+
+
+def normalise_image(data: bytes) -> NormalisedImage:
+    """Check an uploaded image and give it as it is stored (COVER_SPEC §1.7): JPEG, PNG or WebP (the
+    format read from the file, not its name), at most `IMAGE_MAX_SIDE` px a side, readable (Pillow
+    `verify`, then a full load); turned upright (EXIF orientation), in sRGB (`_srgb`), then JPEG q92
+    (4:4:4, no metadata) when it is opaque — an alpha channel that is all opaque counts as none — or PNG
+    when it has transparency, with a WebP thumbnail at most `IMAGE_THUMB_SIDE` px long. Raises
+    `ImageRefused`."""
+    import warnings
+
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    unreadable = ImageRefused(IMAGE_UNREADABLE, "not_an_image", 422)
+    try:
+        with Image.open(io.BytesIO(data)) as probe:
+            if probe.format not in IMAGE_TYPES:
+                raise ImageRefused(IMAGE_WRONG_TYPE, "wrong_type", 422)
+            if max(probe.size) > IMAGE_MAX_SIDE:
+                raise ImageRefused(IMAGE_TOO_WIDE, "too_many_pixels", 422)
+            probe.verify()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)  # the sides are checked above
+            image = Image.open(io.BytesIO(data))
+            image.load()
+    except ImageRefused:
+        raise
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        raise unreadable from None
+    icc = image.info.get("icc_profile")
+    try:
+        image = ImageOps.exif_transpose(image) or image
+        image = _srgb(image, icc)
+    except (OSError, ValueError) as exc:
+        raise unreadable from exc
+    if image.mode == "RGBA" and image.getchannel("A").getextrema() == (255, 255):
+        image = image.convert("RGB")
+    out = io.BytesIO()
+    if image.mode == "RGBA":
+        image.save(out, "PNG", compress_level=6)
+        kind = BookImage.Format.PNG
+    else:
+        image.save(out, "JPEG", quality=IMAGE_JPEG_QUALITY, subsampling=0, optimize=True)
+        kind = BookImage.Format.JPEG
+    thumb = image.copy()
+    thumb.thumbnail((IMAGE_THUMB_SIDE, IMAGE_THUMB_SIDE), Image.Resampling.LANCZOS)
+    small = io.BytesIO()
+    thumb.save(small, "WEBP", quality=IMAGE_THUMB_QUALITY, method=4)
+    return NormalisedImage(out.getvalue(), str(kind), image.width, image.height, small.getvalue())
+
+
+def image_payload(row: BookImage) -> dict:
+    """An image for the book page: `{id, url, thumb_url, width, height, format, source_name}`."""
+    from django.core.files.storage import default_storage
+
+    thumb = row.thumb_name
+    return {
+        "id": row.pk,
+        "url": default_storage.url(row.file.name),
+        "thumb_url": default_storage.url(thumb if default_storage.exists(thumb) else row.file.name),
+        "width": row.width,
+        "height": row.height,
+        "format": row.format,
+        "source_name": row.source_name,
+    }
+
+
+def upload_payload(row: BookImage) -> dict:
+    """`api:book_images`'s answer: `image_payload` with the purpose and the sha256."""
+    return {**image_payload(row), "purpose": row.purpose, "sha256": row.sha256}
+
+
+def _read_upload(upload) -> bytes:
+    """The uploaded file's bytes, at most `IMAGE_MAX_BYTES` (else `ImageRefused` 413)."""
+    size = getattr(upload, "size", None)
+    if isinstance(size, int) and size > IMAGE_MAX_BYTES:
+        raise ImageRefused(IMAGE_TOO_LARGE, "too_large", 413)
+    try:
+        upload.seek(0)
+    except (AttributeError, OSError):
+        pass
+    data = upload.read(IMAGE_MAX_BYTES + 1)
+    if len(data) > IMAGE_MAX_BYTES:
+        raise ImageRefused(IMAGE_TOO_LARGE, "too_large", 413)
+    return data
+
+
+def _write_once(name: str, data: bytes) -> None:
+    """Write `data` at the storage name `name` unless a file is already there (files named by their
+    content never change)."""
+    from django.core.files.base import ContentFile
+    from django.core.files.storage import default_storage
+
+    if default_storage.exists(name):
+        return
+    saved = default_storage.save(name, ContentFile(data))
+    if saved != name:  # another upload wrote the same name meanwhile: the same bytes, keep one
+        default_storage.delete(saved)
+
+
+def upload_image(book: Book, upload, purpose: str | None = None, user=None) -> tuple[BookImage, bool]:
+    """Store an uploaded image of `book` (`POST api:book_images`, D80): read at most 30 MB, check and
+    normalise it (`normalise_image`), write `books/<id>/images/<sha256>.<ext>` and its thumbnail, and
+    record the `BookImage` (`purpose` cover | body, default cover). The same stored bytes uploaded again
+    give the existing row. Returns `(row, created)`; raises `ImageRefused`."""
+    if upload is None:
+        raise ImageRefused(IMAGE_MISSING, "no_file", 400)
+    purpose = purpose or BookImage.Purpose.COVER
+    if purpose not in BookImage.Purpose.values:
+        raise ImageRefused(COVER_VALUE, "bad_purpose", 400)
+    image = normalise_image(_read_upload(upload))
+    sha = hashlib.sha256(image.data).hexdigest()
+    extension = "jpg" if image.format == BookImage.Format.JPEG else "png"
+    name = f"books/{book.pk}/images/{sha}.{extension}"
+    _write_once(name, image.data)
+    _write_once(f"books/{book.pk}/images/{sha}-thumb.webp", image.thumb)
+    existing = BookImage.objects.filter(book_id=book.pk, sha256=sha).first()
+    if existing is not None:
+        return existing, False
+    source = os.path.basename(str(getattr(upload, "name", "") or ""))[:255]
+    try:
+        with transaction.atomic():
+            row = BookImage.objects.create(
+                book=book,
+                file=name,
+                sha256=sha,
+                width=image.width,
+                height=image.height,
+                format=image.format,
+                source_name=source,
+                purpose=purpose,
+                uploaded_by=_user_or_none(user),
+            )
+    except IntegrityError:  # the same image uploaded at the same moment
+        return BookImage.objects.get(book_id=book.pk, sha256=sha), False
+    return row, True
 
 
 # ====================================================================== dashboard and pages
@@ -1797,6 +2213,9 @@ def editor_urls(book: Book) -> dict:
         ),
         "toFootnote": reverse("api:to_footnote", args=[book.pk]),
         "stages": reverse("api:book_stages", args=[book.pk]),
+        # D80: the cover sheet of the stage and the filmstrip, and the image upload
+        "cover": reverse("api:cover", args=[book.pk]),
+        "bookImages": reverse("api:book_images", args=[book.pk]),
     }
 
 

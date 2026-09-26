@@ -26,7 +26,12 @@ manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, 
 - POST /api/books/<id>/snapshots/<sid>/restore/       → `{version, snapshot, restored}`
 - GET  /api/books/<id>/stylesheet/                    → `services.stylesheet_payload`
 - PUT  /api/books/<id>/stylesheet/                    fields (any subset) [+ `chapter`] → the payload +
-                                                        `preview` (the book render is queued)
+                                                        `preview` (the book render is queued); PATCH alike
+- POST /api/books/<id>/images/                        multipart `file`, `purpose` → 201 (200: the same image
+                                                        again) `services.upload_payload`; 413 / 422 / 400
+                                                        `{detail, code}` (D80, `services.ImageRefused`)
+- GET  /api/books/<id>/cover/                         → `publishing.cover.cover_payload` (the book page's
+                                                        cover, rendered in the request when missing, D80)
 - GET  /api/books/<id>/uncertain/                     → `uncertain.uncertain_words` (D47)
 - POST /api/books/<id>/uncertain/accept|choose|type/  `{chapter, block, note?, start, end, word, version,
                                                         engine? | text?}` → `uncertain.resolve`
@@ -37,8 +42,9 @@ Edits answer `relayout` (the chapter's re-layout to poll, `publishing.relayout`)
 from __future__ import annotations
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.exceptions import NotFound
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -277,10 +283,11 @@ def snapshot_restore(request: Request, book_id: int, snapshot_id: int) -> Respon
         return _refused(exc)
 
 
-@api_view(["GET", "PUT"])
+@api_view(["GET", "PUT", "PATCH"])
 @permission_classes([EditorOrReadOnly])
 def stylesheet(request: Request, book_id: int) -> Response:
-    """The book's stylesheet with its options (GET); PUT saves the posted fields and queues the renders."""
+    """The book's stylesheet with its options (GET); PUT (or PATCH: the same subset) saves the posted fields
+    and queues the renders (a change of the cover alone keeps the pages' hashes: nothing is rendered)."""
     from publishing import engine
     from publishing.preview import PreviewNotFound
 
@@ -302,6 +309,30 @@ def stylesheet(request: Request, book_id: int) -> Response:
     except PreviewNotFound:
         payload["preview"] = None
     return Response(payload)
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+@parser_classes([MultiPartParser, FormParser])
+def book_images(request: Request, book_id: int) -> Response:
+    """Upload an image of the book (D80: the cover's picture): checked, normalised and stored by content."""
+    book = _book(book_id)
+    try:
+        row, created = services.upload_image(
+            book, request.FILES.get("file"), request.data.get("purpose") or None, request.user
+        )
+    except services.ImageRefused as exc:
+        return Response({"detail": str(exc), "code": exc.code}, status=exc.status)
+    code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return Response(services.upload_payload(row), status=code)
+
+
+@api_view(["GET"])
+def cover(request: Request, book_id: int) -> Response:
+    """The book page's cover (D80): `{mode, hash, image_1x, image_2x, width, height}`."""
+    from publishing.cover import cover_payload
+
+    return Response(cover_payload(_book(book_id)))
 
 
 @api_view(["GET"])

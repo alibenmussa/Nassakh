@@ -4,8 +4,10 @@
 (with the editorial marks when comments are asked for), the page plan for the contents field — only
 when the file prints one: the live layout when it is current for the exported text (the chapters that
 print, at their versions, with the same page setup), else one layout-only render —, the uncertain
-words' readings (one query), the pure build, then the schema and integrity checks — an invalid file
-fails the export (`InvalidExport`, «الملف الناتج غير سليم»). `form` and `notes` feed the export page.
+words' readings (one query), the cover's picture when the book has a cover (D80: the preview's cover
+rendered alone and rasterised at 300 dpi, `publishing.cover.export_raster`), the pure build, then the
+schema and integrity checks — an invalid file fails the export (`InvalidExport`, «الملف الناتج غير سليم»).
+`form` and `notes` feed the export page.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ from .options import (
     note,
 )
 from .styles import widow_control
-from .writer import DocMeta, PagePlan, build_docx, prints_contents
+from .writer import CoverPicture, DocMeta, PagePlan, build_docx, prints_contents
 
 log = logging.getLogger(__name__)
 
@@ -244,21 +246,24 @@ class DocxExporter:
         }
 
     def notes(self, book, setup: PageSetup) -> list[dict]:
-        """The known differences of this book's Word file (§7's table)."""
+        """The known differences of this book's Word file (§7's table), and a cover picture short of
+        300 dpi (`cover_resolution`, info)."""
         from editor.models import Manuscript
-        from publishing.readiness import layout_is_current
+        from publishing.readiness import INFO, cover_resolution_row, layout_is_current
 
         manuscript = Manuscript.objects.filter(book_id=book.pk).only("document", "version").first()
         document = manuscript.document if manuscript is not None else None
         fonts = F.resolve(setup.body_font, setup.latin_font, setup.heading_font)
         current = layout_is_current(book, setup, manuscript.version if manuscript is not None else None)
-        return static_notes(
+        rows = static_notes(
             setup,
             fonts,
             has_contents=_prints_contents(book, setup, document),
             layout_current=current,
             book_id=book.pk,
         )
+        resolution = cover_resolution_row(book.pk, setup, INFO)
+        return rows + ([resolution] if resolution is not None else [])
 
     def export(self, job: ExportJob, progress: Progress) -> ExportResult:
         """prepare → (layout) → write → check (see the module docstring)."""
@@ -286,7 +291,10 @@ class DocxExporter:
             manuscript_version=job.manuscript_version,
             export_id=job.export_id,
         )
-        result = build_docx(book, fonts, options, plan=plan, readings=readings, meta=meta)
+        cover = cover_picture(book, fonts)
+        if progress.cancelled():
+            raise ExportCancelled
+        result = build_docx(book, fonts, options, plan=plan, readings=readings, meta=meta, cover=cover)
         if progress.cancelled():
             raise ExportCancelled
         progress("check")
@@ -310,6 +318,17 @@ class DocxExporter:
         else:
             log_lines.append("no contents field: no page plan")
         return ExportResult(data=result.data, page_count=None, warnings=warnings, stats=stats, log=log_lines)
+
+
+def cover_picture(book: Book, fonts: F.ResolvedFonts) -> CoverPicture | None:
+    """The book's cover as the Word file's first page (D80): the preview's cover rendered alone and
+    rasterised at 300 dpi (JPEG q90 for a picture, PNG otherwise); None when the book has no cover."""
+    from publishing.cover import WORD_DPI, export_raster
+
+    if book.front.cover is None:
+        return None
+    data, media_type = export_raster(book, fonts, dpi=WORD_DPI)
+    return CoverPicture(data, media_type, book.setup.width_mm, book.setup.height_mm)
 
 
 def build_book(job: ExportJob, options: WordOptions, *, chapter_ids=None, readings=None, **kwargs):
@@ -336,6 +355,7 @@ __all__ = [
     "Book",
     "DocxExporter",
     "build_book",
+    "cover_picture",
     "current_live",
     "page_plan",
     "printed_versions",

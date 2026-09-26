@@ -1,0 +1,218 @@
+{
+ "GET /api/books/80/stylesheet/ (no cover key yet) → stylesheet.front_matter": {
+  "title_page": true,
+  "contents": true,
+  "copyright_page": false,
+  "fields": {
+   "title": "الأمالي",
+   "subtitle": "مجالس في الأدب",
+   "author": "أبو علي القالي",
+   "editor": "",
+   "translator": "",
+   "publisher": "دار المدار",
+   "city": "طرابلس",
+   "year": "2026",
+   "edition": "",
+   "isbn": "",
+   "rights": ""
+  },
+  "cover": {
+   "mode": "none",
+   "image": null,
+   "fit": "fill",
+   "center": "",
+   "bottom": "",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  }
+ },
+ "GET … → limits (keys added)": {
+  "front_matter.cover.center": [
+   0,
+   600
+  ],
+  "front_matter.cover.bottom": [
+   0,
+   600
+  ],
+  "front_matter.cover.center_pt": [
+   8,
+   96
+  ],
+  "front_matter.cover.bottom_pt": [
+   8,
+   96
+  ],
+  "front_matter.cover.bottom_mm": [
+   0,
+   80
+  ]
+ },
+ "GET … → cover (the choices; no image chosen)": {
+  "modes": [
+   {
+    "value": "none",
+    "label": "بلا غلاف"
+   },
+   {
+    "value": "info",
+    "label": "من بيانات الكتاب"
+   },
+   {
+    "value": "image",
+    "label": "صورة"
+   },
+   {
+    "value": "text",
+    "label": "نص مخصّص"
+   }
+  ],
+  "fits": [
+   {
+    "value": "fill",
+    "label": "ملء الصفحة"
+   },
+   {
+    "value": "width",
+    "label": "ملاءمة العرض"
+   },
+   {
+    "value": "height",
+    "label": "ملاءمة الارتفاع"
+   }
+  ],
+  "presets": [
+   {
+    "key": "white",
+    "label": "أبيض",
+    "background": "#ffffff",
+    "color": "#1b1b1b"
+   },
+   {
+    "key": "cream",
+    "label": "كريمي",
+    "background": "#f4efe4",
+    "color": "#2a2419"
+   },
+   {
+    "key": "gray",
+    "label": "رمادي",
+    "background": "#e9e9ec",
+    "color": "#1f1f24"
+   },
+   {
+    "key": "navy",
+    "label": "كحلي",
+    "background": "#1d2433",
+    "color": "#f3efe6"
+   },
+   {
+    "key": "green",
+    "label": "أخضر داكن",
+    "background": "#1f3b2d",
+    "color": "#f1ead8"
+   },
+   {
+    "key": "burgundy",
+    "label": "عنابي",
+    "background": "#4a1d24",
+    "color": "#f4e9d8"
+   }
+  ],
+  "defaults": {
+   "mode": "none",
+   "image": null,
+   "fit": "fill",
+   "center": "",
+   "bottom": "",
+   "center_pt": 28.0,
+   "bottom_pt": 13.0,
+   "background": "#ffffff",
+   "color": "#1b1b1b",
+   "preset": "white",
+   "bottom_mm": null
+  },
+  "limits": {
+   "center": [
+    0,
+    600
+   ],
+   "bottom": [
+    0,
+    600
+   ],
+   "center_pt": [
+    8,
+    96
+   ],
+   "bottom_pt": [
+    8,
+    96
+   ],
+   "bottom_mm": [
+    0,
+    80
+   ]
+  },
+  "bottom_mm_auto": 30.0,
+  "upload": {
+   "field": "file",
+   "max_bytes": 31457280,
+   "max_mb": 30,
+   "max_side": 12000,
+   "types": [
+    "image/jpeg",
+    "image/png",
+    "image/webp"
+   ],
+   "accept": "image/jpeg,image/png,image/webp"
+  },
+  "print_size": {
+   "dpi": 300,
+   "width_px": 2008,
+   "height_px": 2835,
+   "note": "للطباعة: 300 نقطة في البوصة، أي 2008 × 2835 بكسل على هذا القطع"
+  },
+  "print_sizes": {
+   "17x24": [
+    2008,
+    2835
+   ],
+   "a4": [
+    2480,
+    3508
+   ],
+   "a5": [
+    1748,
+    2480
+   ],
+   "b5": [
+    2079,
+    2953
+   ],
+   "14x21": [
+    1654,
+    2480
+   ],
+   "12x17": [
+    1417,
+    2008
+   ]
+  },
+  "info_note": "يُؤخذ العنوان والعنوان الفرعي والمؤلف من «بيانات الكتاب»، والناشر والمدينة والسنة في الأسفل.",
+  "image": null
+ },
+ "GET … → cover.image (mode image with image 801)": {
+  "id": 801,
+  "url": "/media/books/80/images/<sha256>.jpg",
+  "thumb_url": "/media/books/80/images/<sha256>-thumb.webp",
+  "width": 1004,
+  "height": 1417,
+  "format": "jpeg",
+  "source_name": "غلاف.jpg"
+ }
+}

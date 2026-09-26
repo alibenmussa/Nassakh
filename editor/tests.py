@@ -80,6 +80,7 @@ from editor import services  # noqa: E402
 from editor.models import BOOK_FIELDS, StyleSheet  # noqa: E402
 from ocr.models import Line  # noqa: E402
 from processing.models import Preprocess, Region  # noqa: E402
+from publishing.model import COVER_DEFAULTS  # noqa: E402
 from review import services as review_services  # noqa: E402
 
 
@@ -745,6 +746,7 @@ def test_stylesheet_defaults_without_a_row(book, reader_user):
         "contents": True,
         "copyright_page": False,
         "fields": {name: "" for name in BOOK_FIELDS},
+        "cover": COVER_DEFAULTS,  # D80: no cover until one is chosen
     }
     assert (sheet["widows"], sheet["orphans"], sheet["keep_headings"]) == (2, 2, True)  # D47
     assert data["field_defaults"] == {"title": book.title, "author": book.author}
@@ -2230,3 +2232,403 @@ def test_the_review_changes_command_prints_the_plan(editor_user, capsys):
     assert not ChangesPlan.objects.exists()
     call_command("review_changes", str(book.pk))
     assert ChangesPlan.objects.get().status == "done"
+
+
+# ====================================================================== D80: the cover
+
+import io  # noqa: E402
+
+from django.core.files.uploadedfile import SimpleUploadedFile  # noqa: E402
+
+from PIL import Image, ImageCms  # noqa: E402
+
+from editor.models import BookImage  # noqa: E402
+from publishing.cover import cover_payload  # noqa: E402
+
+COVER_DIR = pathlib.Path(__file__).parent / "fixtures" / "cover"
+_RE_SHA = __import__("re").compile(r"[0-9a-f]{64}")
+_RE_COVER_HASH = __import__("re").compile(r"(?<![0-9a-f<])[0-9a-f]{24}(?![0-9a-f>])")
+COVER_FIELDS_80 = {
+    "title": "الأمالي",
+    "subtitle": "مجالس في الأدب",
+    "author": "أبو علي القالي",
+    "publisher": "دار المدار",
+    "city": "طرابلس",
+    "year": "2026",
+}
+
+
+def cover_file(name: str):
+    return json.loads((COVER_DIR / name).read_text(encoding="utf-8"))
+
+
+def cover_normalised(value):
+    """An answer with image sha256s as `<sha256>` and cover hashes as `<hash>` (as the cover contract)."""
+    if isinstance(value, dict):
+        return {k: cover_normalised(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [cover_normalised(v) for v in value]
+    if isinstance(value, str):
+        return _RE_COVER_HASH.sub("<hash>", _RE_SHA.sub("<sha256>", value))
+    return value
+
+
+def check_cover_contract(contract: dict) -> None:
+    """Compare live answers with the cover contract (`NASSAKH_WRITE_CONTRACT_FIXTURES=1` rewrites them)."""
+    index = cover_file("index.json")
+    for name, content in contract.items():
+        content = cover_normalised(json.loads(json.dumps(content)))
+        if os.environ.get("NASSAKH_WRITE_CONTRACT_FIXTURES"):
+            (COVER_DIR / name).write_text(json.dumps(content, ensure_ascii=False, indent=1) + "\n")
+        assert name in index["files"], name
+        assert cover_file(name) == content, name
+
+
+def picture(width: int, height: int, mode: str = "RGB") -> Image.Image:
+    """A picture with some detail (so JPEG has work to do): a gradient and a lighter band."""
+    base = Image.linear_gradient("L").resize((width, height))
+    if mode == "L":
+        return base
+    image = Image.merge("RGB", (base, base.transpose(Image.Transpose.FLIP_LEFT_RIGHT), base.rotate(90)))
+    if mode == "RGBA":
+        image.putalpha(Image.linear_gradient("L").resize((width, height)).point(lambda v: 60 + v // 2))
+    return image.convert(mode) if mode not in ("RGB", "RGBA") else image
+
+
+def encoded(image: Image.Image, fmt: str, **options) -> bytes:
+    out = io.BytesIO()
+    image.save(out, fmt, **options)
+    return out.getvalue()
+
+
+def sideways_jpeg(width: int = 1004, height: int = 1417) -> bytes:
+    """A portrait photo stored on its side: `height` × `width` pixels with EXIF orientation 6."""
+    exif = Image.Exif()
+    exif[0x0112] = 6  # rotate 90° clockwise to view
+    stored = picture(width, height).transpose(Image.Transpose.ROTATE_90)
+    return encoded(stored, "JPEG", quality=90, exif=exif.tobytes())
+
+
+def upload(client, book_id: int, name: str, data: bytes, purpose: str | None = "cover"):
+    body = {"file": SimpleUploadedFile(name, data)}
+    if purpose is not None:
+        body["purpose"] = purpose
+    return client.post(reverse("api:book_images", args=[book_id]), body)
+
+
+@pytest.fixture
+def cover_book(db):
+    book = Book.objects.create(title="كتاب الغلاف")
+    StyleSheet.objects.create(book=book, front_matter={"fields": dict(COVER_FIELDS_80)})
+    return book
+
+
+def test_an_upload_is_checked_turned_upright_and_stored_by_content(cover_book, editor_user):
+    client = logged(editor_user)
+    response = upload(client, cover_book.pk, "غلاف.jpg", sideways_jpeg())
+    assert response.status_code == 201, response.json()
+    data = response.json()
+    row = BookImage.objects.get(pk=data["id"])
+    assert (row.width, row.height, row.format, row.purpose) == (1004, 1417, "jpeg", "cover")  # upright
+    assert row.source_name == "غلاف.jpg" and row.uploaded_by == editor_user and len(row.sha256) == 64
+    assert row.file.name == f"books/{cover_book.pk}/images/{row.sha256}.jpg"
+    with row.file.open("rb") as handle:
+        stored = handle.read()
+    assert services.hashlib.sha256(stored).hexdigest() == row.sha256
+    with Image.open(io.BytesIO(stored)) as image:
+        assert image.size == (1004, 1417) and image.mode == "RGB" and not image.getexif().get(0x0112)
+    assert data["url"] == f"/media/{row.file.name}" and data["thumb_url"].endswith(f"{row.sha256}-thumb.webp")
+    again = upload(client, cover_book.pk, "نسخة.jpg", sideways_jpeg())
+    assert again.status_code == 200 and again.json()["id"] == row.pk and BookImage.objects.count() == 1
+
+
+def test_an_upload_normalises_colours_and_transparency(cover_book, editor_user):
+    client = logged(editor_user)
+    cmyk = picture(300, 200).convert("CMYK")
+    found = upload(client, cover_book.pk, "cmyk.jpg", encoded(cmyk, "JPEG", quality=95)).json()
+    assert found["format"] == "jpeg"
+    with BookImage.objects.get(pk=found["id"]).file.open("rb") as handle, Image.open(handle) as image:
+        assert image.mode == "RGB"
+    # a WebP with transparency is kept as PNG with its alpha; an opaque one becomes JPEG
+    alpha = upload(client, cover_book.pk, "logo.webp", encoded(picture(120, 80, "RGBA"), "WEBP")).json()
+    assert (alpha["format"], alpha["width"], alpha["height"]) == ("png", 120, 80)
+    with BookImage.objects.get(pk=alpha["id"]).file.open("rb") as handle, Image.open(handle) as image:
+        assert image.mode == "RGBA" and image.getchannel("A").getextrema()[0] < 255
+    opaque = upload(client, cover_book.pk, "photo.webp", encoded(picture(90, 60), "WEBP")).json()
+    assert opaque["format"] == "jpeg"
+    # a palette PNG, an all-opaque RGBA PNG and a grey JPEG
+    palette = upload(client, cover_book.pk, "p.png", encoded(picture(64, 64).quantize(16), "PNG")).json()
+    assert palette["format"] == "jpeg"
+    solid = picture(64, 48, "RGB")
+    solid.putalpha(255)
+    assert upload(client, cover_book.pk, "solid.png", encoded(solid, "PNG")).json()["format"] == "jpeg"
+    grey = upload(client, cover_book.pk, "g.jpg", encoded(picture(50, 70, "L"), "JPEG")).json()
+    with BookImage.objects.get(pk=grey["id"]).file.open("rb") as handle, Image.open(handle) as image:
+        assert image.mode == "L"
+
+
+COLORSYNC = pathlib.Path("/System/Library/ColorSync/Profiles")
+
+
+@pytest.mark.skipif(not (COLORSYNC / "Display P3.icc").is_file(), reason="the Mac's ColorSync profiles")
+def test_an_icc_profile_is_applied():
+    """A Display P3 photo (an iPhone's) and a CMYK file with its profile come out in sRGB, as the profile
+    says; a broken profile is logged and the picture kept."""
+    p3 = (COLORSYNC / "Display P3.icc").read_bytes()
+    colour = Image.new("RGB", (40, 40), (40, 160, 90))
+    stored = services.normalise_image(encoded(colour, "PNG", icc_profile=p3))
+    expected = ImageCms.profileToProfile(
+        colour, ImageCms.ImageCmsProfile(io.BytesIO(p3)), ImageCms.createProfile("sRGB"), outputMode="RGB"
+    ).getpixel((20, 20))
+    with Image.open(io.BytesIO(stored.data)) as image:
+        found = image.getpixel((20, 20))
+        assert "icc_profile" not in image.info  # stored as plain sRGB
+    assert found != (40, 160, 90) and found == pytest.approx(expected, abs=3)
+    cmyk_profile = (COLORSYNC / "Generic CMYK Profile.icc").read_bytes()
+    cmyk = Image.new("CMYK", (30, 30), (0, 200, 200, 0))  # a red in CMYK
+    with Image.open(
+        io.BytesIO(services.normalise_image(encoded(cmyk, "JPEG", icc_profile=cmyk_profile)).data)
+    ) as out:
+        red, green, blue = out.getpixel((15, 15))
+        assert out.mode == "RGB" and red > 180 and green < 90 and blue < 90
+    broken = services.normalise_image(encoded(colour, "JPEG", icc_profile=b"not a profile"))
+    assert broken.format == "jpeg"
+
+
+def test_an_upload_is_refused_with_an_arabic_message(cover_book, editor_user, reader_user, monkeypatch):
+    client = logged(editor_user)
+    cases = [
+        (upload(client, cover_book.pk, "notes.txt", "نص".encode()), 422, "not_an_image"),
+        (upload(client, cover_book.pk, "scan.gif", encoded(picture(20, 20), "GIF")), 422, "wrong_type"),
+        (
+            upload(client, cover_book.pk, "wide.png", encoded(Image.new("L", (13_000, 20)), "PNG")),
+            422,
+            "too_many_pixels",
+        ),
+        (
+            upload(client, cover_book.pk, "x.jpg", encoded(picture(9, 9), "JPEG"), purpose="banner"),
+            400,
+            "bad_purpose",
+        ),
+        (
+            upload(client, cover_book.pk, "bad.jpg", encoded(picture(40, 40), "JPEG")[:200]),
+            422,
+            "not_an_image",
+        ),
+    ]
+    for response, code, reason in cases:
+        assert response.status_code == code and response.json()["code"] == reason, response.json()
+    missing = client.post(reverse("api:book_images", args=[cover_book.pk]), {})
+    assert missing.status_code == 400 and missing.json() == {"detail": "لم تُرسَل صورة.", "code": "no_file"}
+    monkeypatch.setattr(services, "IMAGE_MAX_BYTES", 1000)
+    large = upload(client, cover_book.pk, "big.jpg", encoded(picture(200, 200), "JPEG", quality=100))
+    assert large.status_code == 413 and large.json()["code"] == "too_large"
+    reader = upload(logged(reader_user), cover_book.pk, "x.jpg", encoded(picture(9, 9), "JPEG"))
+    assert reader.status_code == 403 and not BookImage.objects.exists()
+    assert upload(client, 999_999, "x.jpg", encoded(picture(9, 9), "JPEG")).status_code == 404
+
+
+def test_the_cover_settings_are_validated_key_by_key(cover_book, editor_user):
+    client = logged(editor_user)
+    url = reverse("api:stylesheet", args=[cover_book.pk])
+    other = Book.objects.create(title="كتاب آخر")
+    theirs = upload(client, other.pk, "t.jpg", encoded(picture(30, 30), "JPEG")).json()["id"]
+    before = StyleSheet.objects.get(book=cover_book).front_matter
+    assert "cover" not in before  # a book that never chose a cover
+    put_json(client, url, {"front_matter": {"title_page": False}})
+    assert "cover" not in StyleSheet.objects.get(book=cover_book).front_matter  # nor after another change
+    refused = put_json(client, url, {"front_matter": {"cover": {"mode": "image", "image": theirs}}})
+    assert refused.status_code == 400
+    assert refused.json()["errors"] == {"front_matter.cover.image": "الصورة غير موجودة في هذا الكتاب."}
+    for value in (True, -3, "x", 1.5):
+        response = put_json(client, url, {"front_matter": {"cover": {"image": value}}})
+        assert set(response.json()["errors"]) == {"front_matter.cover.image"}, value
+    ok = put_json(
+        client, url, {"front_matter": {"cover": {"mode": "text", "center_pt": "٣٠", "preset": "custom"}}}
+    )
+    cover = ok.json()["stylesheet"]["front_matter"]["cover"]
+    assert (cover["mode"], cover["center_pt"], cover["preset"]) == ("text", 30.0, "white")
+    stored = StyleSheet.objects.get(book=cover_book).front_matter["cover"]
+    assert stored == cover and stored["background"] == "#ffffff"
+    # the cover alone never changes a page: the preview hash and the page setup's hash stay
+    from publishing.model import page_setup
+    from publishing.preview import job_for, job_hash, setup_hash
+
+    Manuscript.objects.create(book=cover_book, document=sample_document(), version=1)
+    sheet = StyleSheet.objects.get(book=cover_book)
+    digest, layout = job_hash(job_for(cover_book, "book", None)), setup_hash(page_setup(sheet))
+    put_json(client, url, {"front_matter": {"cover": {"mode": "info", "preset": "navy", "center_pt": 40}}})
+    sheet.refresh_from_db()
+    assert sheet.front_matter["cover"]["mode"] == "info"
+    assert job_hash(job_for(cover_book, "book", None)) == digest and setup_hash(page_setup(sheet)) == layout
+    patched = logged(editor_user).patch(
+        url, json.dumps({"front_matter": {"cover": {"fit": "height"}}}), content_type="application/json"
+    )
+    assert (
+        patched.status_code == 200
+        and patched.json()["stylesheet"]["front_matter"]["cover"]["fit"] == "height"
+    )
+
+
+def test_the_book_page_cover_is_rendered_once_per_hash(cover_book, editor_user, reader_user, settings):
+    client = logged(editor_user)
+    url = reverse("api:cover", args=[cover_book.pk])
+    assert logged(reader_user).get(url).json()["mode"] == "none"
+    put_json(
+        client, reverse("api:stylesheet", args=[cover_book.pk]), {"front_matter": {"cover": {"mode": "info"}}}
+    )
+    first = logged(reader_user).get(url).json()
+    assert first["mode"] == "info" and (first["width"], first["height"]) == (779, 1100)
+    folder = pathlib.Path(settings.MEDIA_ROOT) / f"books/{cover_book.pk}/cover/{first['hash']}"
+    assert sorted(path.name for path in folder.iterdir()) == ["cover-2x.webp", "cover.pdf", "cover.webp"]
+    with Image.open(folder / "cover-2x.webp") as image:
+        assert image.size == (1558, 2200)
+    stamp = (folder / "cover.pdf").stat().st_mtime_ns
+    assert logged(reader_user).get(url).json() == first and (folder / "cover.pdf").stat().st_mtime_ns == stamp
+    for index, colour in enumerate(("#101010", "#202020", "#303030", "#404040")):
+        put_json(
+            client,
+            reverse("api:stylesheet", args=[cover_book.pk]),
+            {"front_matter": {"cover": {"background": colour}}},
+        )
+        assert cover_payload(cover_book)["hash"] != first["hash"], index
+    kept = [path.name for path in folder.parent.iterdir()]
+    assert len(kept) == 3 and first["hash"] not in kept  # the newest 3
+
+
+def test_cover_payloads_equal_the_contract(editor_user, reader_user):
+    """The cover contract (editor/fixtures/cover/): books 80 and 81, images 801–803 (index.json)."""
+    from django.db import connection
+
+    book = Book.objects.create(pk=80, title="كتاب الغلاف")
+    other = Book.objects.create(pk=81, title="كتاب آخر")
+    StyleSheet.objects.create(book=book, front_matter={"fields": dict(COVER_FIELDS_80)})
+    seed = BookImage.objects.create(pk=800, book=other, sha256="0", width=1, height=1, format="png")
+    seed.delete()  # the next image id is 801
+    if connection.vendor != "sqlite":  # pragma: no cover - the tests run on SQLite
+        pytest.skip("the ids rely on SQLite's AUTOINCREMENT")
+    client, reader = logged(editor_user), logged(reader_user)
+    sheet_url = reverse("api:stylesheet", args=[80])
+    contract: dict = {}
+
+    # ------------------------------------------------------------ the upload
+    answers = {}
+    first = upload(client, 80, "غلاف.jpg", sideways_jpeg())
+    again = upload(client, 80, "غلاف.jpg", sideways_jpeg())
+    logo = upload(client, 80, "logo.webp", encoded(picture(1200, 800, "RGBA"), "WEBP"))
+    upload(client, 81, "theirs.jpg", encoded(picture(40, 40), "JPEG"))  # 803
+    keys = list(cover_file("upload.json"))
+    for key, response, status_code in ((keys[0], first, 201), (keys[1], again, 200), (keys[2], logo, 201)):
+        assert response.status_code == status_code, response.json()
+        answers[key] = response.json()
+    import editor.services as editor_services
+
+    limit = editor_services.IMAGE_MAX_BYTES
+    try:
+        editor_services.IMAGE_MAX_BYTES = 10
+        answers[keys[3]] = upload(client, 80, "big.jpg", encoded(picture(20, 20), "JPEG")).json()
+    finally:
+        editor_services.IMAGE_MAX_BYTES = limit
+    answers[keys[4]] = upload(client, 80, "notes.txt", "ملاحظات".encode()).json()
+    answers[keys[5]] = upload(client, 80, "scan.gif", encoded(picture(20, 20), "GIF")).json()
+    answers[keys[6]] = upload(client, 80, "wide.png", encoded(Image.new("L", (13_000, 200)), "PNG")).json()
+    answers[keys[7]] = client.post(reverse("api:book_images", args=[80]), {}).json()
+    answers[keys[8]] = upload(client, 80, "x.jpg", encoded(picture(9, 9), "JPEG"), purpose="banner").json()
+    answers[keys[9]] = upload(reader, 80, "x.jpg", encoded(picture(9, 9), "JPEG")).json()
+    answers[keys[10]] = upload(client, 999_999, "x.jpg", encoded(picture(9, 9), "JPEG")).json()
+    contract["upload.json"] = answers
+    assert [image.pk for image in BookImage.objects.order_by("pk")] == [801, 802, 803]
+
+    # ------------------------------------------------------------ the stylesheet
+    fixture = cover_file("stylesheet.json")
+    keys = list(fixture)
+    payload = reader.get(sheet_url).json()
+    wanted = (
+        "front_matter.cover.center",
+        "front_matter.cover.bottom",
+        "front_matter.cover.center_pt",
+        "front_matter.cover.bottom_pt",
+        "front_matter.cover.bottom_mm",
+    )
+    contract["stylesheet.json"] = {
+        keys[0]: payload["stylesheet"]["front_matter"],
+        keys[1]: {key: payload["limits"][key] for key in wanted},
+        keys[2]: payload["cover"],
+    }
+    put_json(client, sheet_url, {"front_matter": {"cover": {"mode": "image", "image": 801}}})
+    contract["stylesheet.json"][keys[3]] = reader.get(sheet_url).json()["cover"]["image"]
+    put_json(client, sheet_url, {"front_matter": {"cover": dict(COVER_DEFAULTS)}})
+
+    # ------------------------------------------------------------ the PUT bodies
+    bodies = [
+        {"mode": "info"},
+        {"mode": "image", "image": 801},
+        {"fit": "width"},
+        {"mode": "text", "center": "  كتاب   الأمالي \r\n\r\nلأبي علي القالي\n\n", "bottom": "طرابلس ٢٠٢٦"},
+        {"preset": "navy"},
+        {"background": "#123456", "center_pt": "32", "bottom_pt": 12.5, "bottom_mm": 40},
+        {"background": "#F4EFE4", "color": "#2A2419", "bottom_mm": None},
+        {"mode": "image", "image": None},
+        {"mode": "none"},
+    ]
+    requests: dict = {}
+    keys = list(cover_file("stylesheet_requests.json"))
+    for key, body in zip(keys, bodies, strict=False):
+        response = put_json(client, sheet_url, {"front_matter": {"cover": body}})
+        assert response.status_code == 200, (key, response.json())
+        data = response.json()
+        requests[key] = {
+            "stylesheet.front_matter.cover": data["stylesheet"]["front_matter"]["cover"],
+            "cover.image": data["cover"]["image"],
+        }
+    saved = StyleSheet.objects.get(book=book).front_matter["cover"]
+    bad = {
+        "mode": "poster",
+        "fit": "stretch",
+        "image": 803,
+        "center": "ن" * 601,
+        "bottom": 7,
+        "center_pt": 200,
+        "bottom_pt": "كبير",
+        "background": "blue",
+        "color": "#12345",
+        "preset": "pink",
+        "bottom_mm": 90,
+    }
+    response = put_json(client, sheet_url, {"front_matter": {"cover": bad}})
+    assert response.status_code == 400
+    requests[keys[9]] = response.json()
+    requests[keys[10]] = put_json(client, sheet_url, {"front_matter": {"cover": "info"}}).json()
+    requests[keys[11]] = put_json(client, sheet_url, {"front_matter": {"cover": {"image": 999999}}}).json()
+    requests[keys[12]] = put_json(reader, sheet_url, {"front_matter": {"cover": {"mode": "info"}}}).json()
+    assert StyleSheet.objects.get(book=book).front_matter["cover"] == saved  # nothing saved by a refusal
+    contract["stylesheet_requests.json"] = requests
+
+    # ------------------------------------------------------------ api:cover
+    cover_url = reverse("api:cover", args=[80])
+    keys = list(cover_file("cover_api.json"))
+    states = [
+        {"mode": "none"},
+        {"mode": "info"},
+        {"mode": "image", "image": None},
+        {"mode": "image", "image": 801, "fit": "fill"},
+        {"mode": "image", "image": 802, "fit": "width"},
+        {"mode": "image", "image": 802, "fit": "height"},
+        {"mode": "text"},
+    ]
+    covers: dict = {}
+    hashes = set()
+    for key, state in zip(keys, states, strict=False):
+        assert put_json(client, sheet_url, {"front_matter": {"cover": state}}).status_code == 200
+        covers[key] = reader.get(cover_url).json()
+        hashes.add(covers[key]["hash"])
+    covers[keys[7]] = reader.get(reverse("api:cover", args=[999_999])).json()
+    assert len(hashes) == 6  # none and «image without an image» share null; every render differs
+    contract["cover_api.json"] = covers
+
+    # ------------------------------------------------------------ the book page's URLs
+    urls = services.page_config(book, editor_user, None, "layout")["urls"]
+    contract["page_config.json"] = {
+        next(iter(cover_file("page_config.json"))): {"cover": urls["cover"], "bookImages": urls["bookImages"]}
+    }
+    check_cover_contract(contract)

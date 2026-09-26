@@ -41,6 +41,8 @@ api_urlpatterns = [
         name="snapshot_restore",
     ),
     path("books/<int:book_id>/stylesheet/", api.stylesheet, name="stylesheet"),
+    path("books/<int:book_id>/images/", api.book_images, name="book_images"),
+    path("books/<int:book_id>/cover/", api.cover, name="cover"),
     path("books/<int:book_id>/uncertain/", api.uncertain_words, name="uncertain"),
     path("books/<int:book_id>/uncertain/accept/", api.uncertain_accept, name="uncertain_accept"),
     path("books/<int:book_id>/uncertain/choose/", api.uncertain_choose, name="uncertain_choose"),
