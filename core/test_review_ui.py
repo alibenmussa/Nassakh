@@ -2347,7 +2347,7 @@ def test_fix_everywhere_sheet_on_the_contract(tmp_path):
 
 # ------------------------------------------------ the scan finds its words in the text
 
-SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + r"""
+_SCAN_BODY = r"""
 (async () => {
   const out = {};
   // a pointerdown on a box (the scan captures the pointer, so the click may come to the scan itself)
@@ -2383,13 +2383,14 @@ SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + r"""
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
+SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + _SCAN_BODY
 
 
 def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
     """A tap on a box of the processed image goes to the word in the text: a word still to decide opens its
-    menu there (as a click in the text does); a confident or resolved word, or any word of an approved page, is
-    focused without a menu; a second tap, or a tap on another word, closes the menu; the image stays put; a
-    drag is no tap. The boxes carry their word's address, and «الأصل» hides them."""
+    menu there (as a click in the text does); a confident or resolved word, or any word of an approved page,
+    is focused without a menu; a second tap, or a tap on another word, closes the menu; the image stays put;
+    a drag is no tap. The boxes carry their word's address, and «الأصل» hides them."""
     harness = tmp_path / "harness.js"
     harness.write_text(SCAN_HARNESS, encoding="utf-8")
     fixture = tmp_path / "config.json"
@@ -2402,7 +2403,12 @@ def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
     )
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout.strip().splitlines()[-1])
-    assert out["uncertain"] == {"focus": {"lineId": 51, "index": 1}, "open": True, "stopped": True, "still": True}
+    assert out["uncertain"] == {
+        "focus": {"lineId": 51, "index": 1},
+        "open": True,
+        "stopped": True,
+        "still": True,
+    }
     assert out["sure"] == {"focus": {"lineId": 52, "index": 1}, "open": False}
     assert out["drag"] == {"stopped": False, "focus": None}
     assert out["none"] == {"stopped": False, "focus": None}
@@ -2415,3 +2421,48 @@ def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
     assert "onBoxClick(" not in body  # one path for every tap on the image: the scan's click
     src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
     assert ".rv-sheet.show-scan .rv-overlay { visibility: hidden; }" in src
+
+
+FIX_OPTIONS_RUN = r"""
+const fx = JSON.parse(fs.readFileSync(process.argv[5], 'utf8'));
+let routes = {};
+globalThis.fetch = async (url, init) => {
+  const method = (init && init.method) || 'GET';
+  const body = init && init.body ? JSON.parse(init.body) : null;
+  calls.push([method, url, body]);
+  const hit = Object.keys(routes).find((k) => decodeURIComponent(url).startsWith(k));
+  const [status, data] = hit ? routes[hit](url, body) : [200, clone(config)];
+  return { ok: status < 400, status, json: async () => clone(data) };
+};
+const found = Object.entries(fx['occurrences.json']).find(([k]) => k.startsWith('GET'))[1];
+const plain = Object.entries(fx['fix_everywhere.json']).find(([k]) => k.includes('(an unedited book)'))[1];
+const cfg = Object.assign(clone(config), { book: Object.assign(clone(config.book), { id: 42 }), urls: Object.assign(clone(config.urls), { payload: '/api/pages/7/review/' }) });
+(async () => {
+  const out = {};
+  const run = async (toggle) => {
+    const c = make(cfg);
+    routes = { '/api/books/42/occurrences/': () => [200, found.response] };
+    await c.openFix('السعودي', 'المسعودي');
+    if (toggle) await c.setFixOption(toggle); // the list again, with «كلمة كاملة» off
+    const listed = decodeURIComponent(calls.filter((x) => x[1].includes('/occurrences/')).pop()[1]);
+    routes = { '/api/books/42/fix-everywhere/': () => [plain.status, plain.response], '/api/pages/7/review/': () => [200, clone(cfg)] };
+    calls.length = 0;
+    await c.applyFix(); await flush();
+    const body = calls.find((x) => x[0] === 'POST')[2];
+    return { listed, options: { match_tashkeel: body.match_tashkeel, fold_alef: body.fold_alef, whole_word: body.whole_word } };
+  };
+  out.defaults = await run(null);
+  out.loose = await run('whole_word');
+  console.log(JSON.stringify(out));
+})().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_fix_everywhere_posts_the_options_the_sheet_listed_with(tmp_path):
+    """The POST of «تصحيح في كل الكتاب» carries the sheet's options: with «كلمة كاملة» off the server must
+    correct «والسعودي» as the list ticked it, not skip it as changed since the list opened (its default is
+    whole words)."""
+    out = _run_contract(tmp_path, FIX_OPTIONS_RUN)
+    assert "whole_word=1" in out["defaults"]["listed"] and "whole_word=0" in out["loose"]["listed"]
+    assert out["defaults"]["options"] == {"match_tashkeel": False, "fold_alef": True, "whole_word": True}
+    assert out["loose"]["options"] == {"match_tashkeel": False, "fold_alef": True, "whole_word": False}

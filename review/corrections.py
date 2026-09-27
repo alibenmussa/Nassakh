@@ -8,7 +8,8 @@ reviewer did not tick.
   line (a running head). A regex over `Line.text` (diacritics allowed between the letters) finds the
   candidate lines; the tokens decide.
 - `fix_everywhere(book, from_, to, picks, user)` sets each ticked token to the correction (its edge
-  punctuation kept, `orig` kept, `res = "typed"`), one transaction per page and one
+  punctuation kept, `orig` kept, `res = "typed"`; an open suggestion after it reads the new text as its
+  `after_t`), one transaction per page and one
   `LineRevision(action="fix")` per line, every line in one `batch`. A token that no longer reads what the
   sheet showed, or a page not open for review, is skipped and reported. Approved pages stay approved; an
   `assembled` page goes back to `reviewed` (D36).
@@ -18,9 +19,9 @@ reviewer did not tick.
   «159 موضعًا آخر بالشكل نفسه في الكتاب · تصحيحها…»).
 
 An edited book (D41) gets the fix in review only; `find_url` opens the book page's find & replace filled
-in with the same correction, and the book page then plans the batch's pages (`api:review_changes` with
-`{fix}`): the pages whose plan has no item left are settled at once, so the baseline moves only where the
-book text agrees with review.
+in with the same correction and the same options, and the book page then plans the batch's pages
+(`api:review_changes` with `{fix}`): the pages whose plan has no item left are settled at once, so the
+baseline moves only where the book text agrees with review.
 
 The contract of these payloads is editor/fixtures/contract/ (occurrences.json, fix_everywhere.json).
 """
@@ -39,7 +40,7 @@ from django.urls import reverse
 from assembly.render import ar_count
 from books.models import Book, Page
 from editor import document as doc
-from ocr.models import Line
+from ocr.models import Line, TextGap
 from ocr.services import SKIPPED_KINDS
 
 from .models import LineRevision
@@ -363,10 +364,36 @@ def _fix_message(applied: int, pages: int) -> str:
     return f"صُحّح {ar_count(applied, PLACES)} في {ar_count(pages, PAGES_OF)}"
 
 
-def find_url(book: Book, from_: str, to: str, batch: str) -> str:
-    """The edited book's find & replace, filled in with the correction (D79)."""
-    query = urlencode({"tab": "find", "q": from_, "r": to, "fix": batch})
+def find_url(book: Book, from_: str, to: str, batch: str, options: doc.FindOptions | None = None) -> str:
+    """The edited book's find & replace, filled in with the correction (D79) and the sheet's options
+    (`match_tashkeel`, `fold_alef`, `whole_word` as 1 / 0): the book page's own defaults (whole word off)
+    would also replace «السعودية» for «السعودي», and the batch's plan would take that for the owner's edit."""
+    options = options or doc.FindOptions(whole_word=True)
+    flag = {True: "1", False: "0"}
+    query = urlencode(
+        {
+            "tab": "find",
+            "q": from_,
+            "r": to,
+            "fix": batch,
+            "match_tashkeel": flag[bool(options.match_tashkeel)],
+            "fold_alef": flag[bool(options.fold_alef)],
+            "whole_word": flag[bool(options.whole_word)],
+        }
+    )
     return f"{reverse('editor:layout', args=[book.pk])}?{query}"
+
+
+def _follow_gaps(line: Line, changed: dict[int, str]) -> None:
+    """The open suggestions (TextGap, D72) after a corrected token read its new text as `after_t`: review
+    draws a gap by its `index`, and `gap_anchor` would otherwise take the stale `after_t` for a moved word
+    and put the accepted words after another token that still reads it. The line's snapshot taken before
+    the fix keeps the old `after_t`, so the batch's undo puts it back."""
+    for gap in TextGap.objects.filter(line=line, status=TextGap.Status.OPEN, index__in=list(changed)):
+        after_t = changed[gap.index][:200]
+        if gap.after_t != after_t:
+            gap.after_t = after_t
+            gap.save(update_fields=["after_t"])
 
 
 def fix_everywhere(book: Book, from_, to, picks, user=None, options: doc.FindOptions | None = None) -> dict:
@@ -422,7 +449,7 @@ def fix_everywhere(book: Book, from_, to, picks, user=None, options: doc.FindOpt
             for line_id, wanted in sorted(by_page[page_id].items()):
                 line = _line_of(page, line_id)
                 tokens = [normalize_token(token) for token in (line.tokens or [])] if line is not None else []
-                changed = False
+                changed: dict[int, str] = {}  # token index → its corrected text
                 for index, seen in sorted(wanted):
                     token = tokens[index] if 0 <= index < len(tokens) else None
                     new = corrected(token["t"], query, target, options) if token is not None else None
@@ -436,12 +463,13 @@ def fix_everywhere(book: Book, from_, to, picks, user=None, options: doc.FindOpt
                     token.setdefault("orig", token["t"])
                     token["t"] = new
                     token["res"] = "typed"
-                    changed = True
+                    changed[index] = new
                     count += 1
                 if changed:
                     _set_tokens(line, tokens)
                     line.updated_by = _user_or_none(user)
                     line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+                    _follow_gaps(line, changed)
                     _record(page, LineRevision.Action.FIX, line, before, line_snapshot(line), user, batch)
             if count:
                 refresh_page_text(page)
@@ -454,7 +482,7 @@ def fix_everywhere(book: Book, from_, to, picks, user=None, options: doc.FindOpt
         "skipped": skipped,
         "pages": sorted(changed_pages),
         "edited": edited,
-        "find_url": find_url(book, source, target, str(batch)) if edited and applied else None,
+        "find_url": find_url(book, source, target, str(batch), options) if edited and applied else None,
         "message": _fix_message(applied, len(changed_pages)),
     }
 

@@ -1535,3 +1535,71 @@ def test_book_guides_api_enforces_csrf(book, users):
     assert strict.post(url, body, content_type="application/json").status_code == 403
     assert strict.get(url).status_code == 200
     assert not LayoutGuides.objects.filter(book=book, source="manual").exists()
+
+
+# ---------------------------------------------------------------- 7 review: «إزالة الضبط العام», «التلقائي»
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("awaits", [True, False])
+def test_the_reset_preview_names_the_pages_the_reset_changes(book, users, client, awaits):
+    # the side panel previews «إزالة الضبط العام» with `{reset: true}` (processing.js draftBody): the preview
+    # must say what the apply then does, or «تطبيق على كل الصفحات» stays disabled
+    Book.objects.filter(pk=book.pk).update(
+        awaits_ocr_start=awaits, status=Book.Status.NEEDS_GUIDES if awaits else Book.Status.READY_FOR_REVIEW
+    )
+    LayoutGuides.objects.create(book=book, header_cut=0.05, source="manual", page_number_zone="none")
+    pages = []
+    for n in (1, 2, 3):
+        page = make_page(book, n)
+        _pre(page)
+        pages.append(page)
+    if not awaits:
+        for page in pages:
+            page.refresh_from_db()
+            services.derive_regions(page)
+    client.force_login(users.editor)
+    body = json.dumps({"reset": True, "stage": "layout" if awaits else "ocr"})
+    preview = client.post(
+        reverse("api:book_guides_preview", args=[book.pk]), body, content_type="application/json"
+    ).json()
+    assert LayoutGuides.objects.get(book=book).source == "manual"  # a preview writes nothing
+    with patch("processing.services._run_stage") as run_stage:
+        applied = client.post(
+            reverse("api:book_guides", args=[book.pk]), body, content_type="application/json"
+        ).json()
+    assert applied["changed"] == [1, 2, 3]  # the running head goes from every page
+    assert preview["changed"] == 3 and preview["pages"] == applied["changed"]
+    assert preview["kept_overrides"] == [] and preview["locked"] == []
+    assert preview["reocr"] == run_stage.call_count == (0 if awaits else 3)
+    assert (preview["minutes"] is None) is awaits
+
+
+@pytest.mark.django_db
+def test_a_pending_automatic_then_a_drag_saves_the_dragged_line(book, users, client):
+    # a started book: «التلقائي» (pending), then a drag of the running head; «حفظ وإعادة التعرّف على الصفحة»
+    # posts both (processing.js change() keeps `reset`): the override is cleared, then the drag applies
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=False, status=Book.Status.READY_FOR_REVIEW)
+    LayoutGuides.objects.create(book=book, source="manual", page_number_zone="none")
+    page = make_page(book, 4)
+    _pre(page)
+    Page.objects.filter(pk=page.pk).update(guides_override={"footnote_line": 0.8})
+    page.refresh_from_db()
+    services.derive_regions(page)
+    client.force_login(users.editor)
+    body = {"merge": True, "set": {"header_cut": 0.07}, "unset": [], "reset": True, "stage": "ocr"}
+    with patch("processing.services._run_stage") as run_stage:
+        answer = client.post(
+            reverse("api:page_guides_override", args=[page.pk]),
+            json.dumps(body),
+            content_type="application/json",
+        ).json()
+    page.refresh_from_db()
+    assert page.guides_override == {"header_cut": 0.07}  # the old footnote line went, the drag stayed
+    assert answer["guides"]["lines"]["header"]["y"] == 0.07 and run_stage.call_count == 1
+    # the reset alone still clears the override, and the order of the two lines is still checked
+    with patch("processing.services._run_stage"):
+        services.set_page_guides(page, {}, reset=True, stage="ocr")
+    assert Page.objects.get(pk=page.pk).guides_override is None
+    with pytest.raises(ValidationError):
+        services.set_page_guides(page, {"header_cut": 0.4, "footnote_line": 0.3}, reset=True, stage="ocr")

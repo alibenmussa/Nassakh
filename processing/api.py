@@ -156,7 +156,8 @@ def book_guides(request: Request, book_id: int) -> Response:
 @api_view(["POST"])
 @permission_classes([IsEditor])
 def book_guides_preview(request: Request, book_id: int) -> Response:
-    """What a book-guides change would do (pages changed, cut, kept, locked, re-read, minutes)."""
+    """What a book-guides change, or `reset: true`, would do (pages changed, cut, kept, locked, re-read,
+    minutes)."""
     book = get_object_or_404(Book, pk=book_id)
     data = _body(request)
     try:
@@ -166,6 +167,7 @@ def book_guides_preview(request: Request, book_id: int) -> Response:
             data.get("reset_overrides") or (),
             from_page=data.get("from_page"),
             stage=_stage(data),
+            reset=bool(data.get("reset")),  # «إزالة الضبط العام», as `book_guides` applies it
         )
     except ValidationError as exc:
         return Response({"errors": list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)

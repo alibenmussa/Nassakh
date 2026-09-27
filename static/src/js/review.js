@@ -2501,7 +2501,10 @@
         if (!picks.length) { f.error = 'لم يُحدَّد موضع للتصحيح.'; return false; }
         f.busy = true;
         f.error = '';
-        const res = await api(this.fixUrls.apply, { method: 'POST', body: { from: f.from, to, picks } });
+        // the options the list was made with: the server's default is whole words, so a form listed with «كلمة كاملة»
+        // off («والسعودي») would be skipped as changed since the list opened
+        const { match_tashkeel, fold_alef, whole_word } = f.options;
+        const res = await api(this.fixUrls.apply, { method: 'POST', body: { from: f.from, to, picks, match_tashkeel, fold_alef, whole_word } });
         f.busy = false;
         if (!res.ok || !res.data) { f.error = res.message; return false; }
         const d = res.data;

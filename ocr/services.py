@@ -1063,8 +1063,11 @@ def select_reading(
     The primary when it passes the sanity check (alternatives from the secondary when that passes too),
     else the secondary when it passes, else the primary when both only differ from Tesseract
     (`COMPARISON_REASONS`) but agree with each other (`models_agree`), else Tesseract's text with
-    `fallback`. When the model not chosen looped, its clean start (`looped_prefix_of`) is the second
-    reading, flagged `alt_partial` (with `partial`; without, the rule before 7b: no second reading).
+    `fallback`. When the secondary looped under the primary's text, its clean start
+    (`looped_prefix_of`) is the second reading, flagged `alt_partial` (with `partial`; without, the rule
+    before 7b: no second reading). The secondary's text never gets the looped primary's start: review
+    names `t` the primary and `alt` the secondary on every page, so it would name the two the wrong way
+    round; that text is one model's reading.
     """
     reference = (
         tesseract.parsed_text if tesseract is not None and tesseract.status == OcrRun.Status.OK else ""
@@ -1086,10 +1089,7 @@ def select_reading(
         alt = prefix(secondary, s_reason)
         return Selection(primary.parsed_text, alt or None, False, p_reason, primary.engine_name, bool(alt))
     if s_ok:
-        alt = prefix(primary, p_reason)
-        return Selection(
-            secondary.parsed_text, alt or None, False, f"primary:{p_reason}", secondary.engine_name, bool(alt)
-        )
+        return Selection(secondary.parsed_text, None, False, f"primary:{p_reason}", secondary.engine_name)
     if (
         p_reason in COMPARISON_REASONS
         and s_reason in COMPARISON_REASONS
@@ -1677,8 +1677,9 @@ def _keep_reviewed_lines(page: Page) -> None:
     New OCR lines cannot be matched to reviewed ones (review renumbers, deletes and inserts lines),
     so the lines stay exactly as they are, with their own order and region. The final text and
     `n_unresolved` are rebuilt from them as the review screen does, the text becomes final, and the
-    page is `reviewed` again when it carries an approval stamp (else `ocr_done`). The new runs stay
-    on the page for the runs list; flags and review history are left alone.
+    page is `reviewed` again when it carries an approval stamp (else `ocr_done`; the stamp is read from
+    the database: `page` may predate a long pass). The new runs stay on the page for the runs list;
+    flags and review history are left alone.
     """
     from review.services import refresh_page_text  # the review app owns the text of reviewed lines
 
@@ -1687,6 +1688,7 @@ def _keep_reviewed_lines(page: Page) -> None:
         page.text_state = Page.TextState.FINAL
         fields = ["text_state"]
         if not page.is_excluded:
+            page.reviewed_at = Page.objects.filter(pk=page.pk).values_list("reviewed_at", flat=True).first()
             approved = page.reviewed_at is not None
             page.status = Page.Status.REVIEWED if approved else Page.Status.OCR_DONE
             page.error_from = ""
@@ -1774,7 +1776,9 @@ def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
     No model is called: Tesseract only reads the rescue bands (`rescue_lines`) and the lines are
     built from the runs already stored (`compose_page`). With `save` the runs are saved and the page
     is finalised again (`finalize_page`); without it nothing is written. Raises `OcrError` for a page
-    that `rebuild_skip_reason` refuses (callers check it first to list those pages).
+    that `rebuild_skip_reason` refuses (callers check it first to list those pages), and when it
+    refuses it once the rescue has read (a resolve or an approval made meanwhile): the check runs again
+    on the page row locked as review locks it, and nothing is written.
     """
     reason = rebuild_skip_reason(page)
     if reason:
@@ -1789,9 +1793,17 @@ def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
         if tess is not None and tess.status == OcrRun.Status.OK:
             pairs.append((target, tess))
     if save:
-        with transaction.atomic(), tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
-            rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp))
-            composed = finalize_page(page)
+        with tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
+            rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp), save=False)
+        with transaction.atomic():
+            # the rescue took seconds: review may have resolved or approved meanwhile (it locks this row too)
+            fresh = Page.objects.select_for_update(of=("self",)).get(pk=page.pk)
+            reason = rebuild_skip_reason(fresh)
+            if reason:
+                raise OcrError(f"لا يمكن إعادة بناء أسطر هذه الصفحة ({reason}).")
+            for _target, run in pairs:  # the runs as the rescue left them (unchanged ones as they were)
+                run.save(update_fields=["params", "parsed_text"])
+            composed = finalize_page(fresh)
     else:
         with tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
             rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp), save=False)

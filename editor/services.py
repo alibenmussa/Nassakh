@@ -413,14 +413,17 @@ def _take(
 ) -> ManuscriptSnapshot:
     """Save a copy of the document and its base (D78). `run_id` stamps the copy's `attrs.runId`, so a
     restore puts that run back as the baseline (an apply of review changes moves the baseline without
-    writing the document)."""
+    writing the document). A text still as assembled is its own base (`_mark_edited` writes it only at the
+    first edit): the copy taken before that edit, or a «حفظ نسخة» of it, carries it, so restoring one (the
+    replace toast's «تراجع») leaves an edited text with a base, not a book merged as edited before 7c."""
     document = copy.deepcopy(manuscript.document or {})
+    base = (manuscript.document or {}) if manuscript.origin == Manuscript.Origin.ASSEMBLY else manuscript.base
     if run_id is not None and isinstance(document, dict):
         document["attrs"] = {**(document.get("attrs") or {}), "runId": run_id}
     snapshot = ManuscriptSnapshot.objects.create(
         manuscript=manuscript,
         document=document,
-        base=copy.deepcopy(manuscript.base),
+        base=copy.deepcopy(base),
         version=manuscript.version,
         label=label[:MAX_LABEL],
         reason=reason,
@@ -1197,7 +1200,8 @@ def compute_plan(book: Book, manuscript: Manuscript, wanted: list[int] | None = 
                 "reason_label": REASON_LABELS[reasons[number]],
                 "chapter": owners[0] if owners else None,
                 "chapter_title": titles.get(owners[0], "") if owners else "",
-                "items": [item["id"] for item in items if item["page"] == number],
+                # every item touching the page: a paragraph over two drift pages is under both rows
+                "items": [item["id"] for item in items if number in item["pages"]],
             }
         )
     moved = set(pages) | set(classified["approvals"])
@@ -1235,9 +1239,10 @@ def compute_plan(book: Book, manuscript: Manuscript, wanted: list[int] | None = 
 
 def run_changes_plan(plan_id: int):
     """Run a queued plan (the task's job): `compute_plan` for the plan's pages, stored on the plan; a plan of
-    a batch (`settle`) then applies «نصّي» to the pages left with no item (and the approval-only pages), so
-    their baseline moves. Any failure → error with an Arabic headline, the manuscript untouched. A plan
-    that is not queued any more is left alone."""
+    a batch (`settle`) then applies «نصّي» to the pages no item touches (a row lists every item on its page,
+    a paragraph from the page before included) and the approval-only pages, so their baseline moves. Any
+    failure → error with an Arabic headline, the manuscript untouched. A plan that is not queued any more is
+    left alone."""
     from .models import ChangesPlan
 
     plan = ChangesPlan.objects.filter(pk=plan_id).first()
@@ -1262,7 +1267,9 @@ def run_changes_plan(plan_id: int):
         empty = [row["number"] for row in data["pages"] if not row["items"]]
         if results.get("settle") and (empty or data["approvals"]):
             try:
-                apply_review_changes(book, plan.pk, {}, empty, plan.created_by, keep_all=True, snapshot=False)
+                apply_review_changes(
+                    book, plan.pk, {}, empty, plan.created_by, keep_all=True, snapshot=False, settle=True
+                )
             except EditorError as exc:  # the text moved meanwhile: the pages stay in «تغييرات المراجعة»
                 log.info("review changes plan %s of book %s not settled: %s", plan.pk, book.pk, exc)
     except Exception as exc:  # noqa: BLE001 - reported on the plan, the manuscript stays
@@ -1349,17 +1356,20 @@ def apply_review_changes(
     user,
     keep_all: bool = False,
     snapshot: bool = True,
+    settle: bool = False,
 ) -> dict:
     """Take a plan's changes into the edited book (D78), in one transaction on the locked book and
     manuscript.
 
-    `pages` are the page rows taken now (None: all of them); an item applies when its `page` is one of
-    them, with its choice from `choices` (item id → theirs | mine | merged; its `default` when left out;
-    every choice `mine` with `keep_all`). The approval-only pages come along. Steps: the plan must be fresh
-    (`PlanStale`, 409: the manuscript's version, or a page taken whose lines or approval moved); an `edit`
-    snapshot «قبل أخذ تغييرات المراجعة · ص …» with the base and the baseline (unless `snapshot` is false);
-    `merge.apply` and the document written (version + 1) only when an item changes it; the base moved over
-    the pages taken (`merge.splice_base`); one `done` `AssemblyRun` (`settings.scope = "changes"`) whose
+    `pages` are the page rows taken now (None: all of them); an item applies when one of its `pages` is one
+    of them (a paragraph over two drift pages is listed under both rows and comes with either), with its
+    choice from `choices` (item id → theirs | mine | merged; its `default` when left out; every choice `mine`
+    with `keep_all`). The approval-only pages come along, except those an item left out touches (no page of
+    an item left out moves). Steps: the plan must be fresh (`PlanStale`, 409: the manuscript's version, or a
+    page taken whose lines or approval moved); an `edit` snapshot «قبل أخذ تغييرات المراجعة · ص …» with the
+    base and the baseline (unless `snapshot` is false); `merge.apply` and the document written (version + 1)
+    only when an item changes it; the base moved over the pages taken, never an approval-only one
+    (`merge.splice_base`); one `done` `AssemblyRun` (`settings.scope = "changes"`) whose
     `included` is the manuscript run's with the pages taken at their planned signatures, the warnings and
     seams of those pages the fresh ones, `stats.applied`; D36 for the reviewed pages still at the planned
     signature; the focus chapter's re-layout (D47). Returns `{version, snapshot, chapters: [{id, version,
@@ -1392,9 +1402,17 @@ def apply_review_changes(
         data, results = plan.plan or {}, plan.results or {}
         rows = [row["number"] for row in data.get("pages") or []]
         taken = set(rows) if asked is None else set(rows) & set(asked)
-        if asked is not None and not taken:
-            raise EditorError(NO_PAGES_TAKEN)  # an explicit page list that names none of the plan's pages
-        approvals = set(data.get("approvals") or [])
+        if asked is not None and not taken and not settle:
+            # a request naming none of the plan's pages; the plan's own settle (`settle`) may take no page
+            # and only absorb the approvals
+            raise EditorError(NO_PAGES_TAKEN)
+        # An item applies when one of its pages is taken (it is listed under each of their rows). The pages
+        # of an item left out never move: an approval-only page it touches keeps its baseline too.
+        touching = {
+            item["id"]: set(item.get("pages") or [item.get("page")]) for item in data.get("items") or []
+        }
+        held = set().union(*(pages for pages in touching.values() if not pages & taken))
+        approvals = set(data.get("approvals") or []) - held
         moved = taken | approvals
         sigs = {pk: info for pk, info in (data.get("sigs") or {}).items() if info.get("number") in moved}
         changed = _moved_since(sigs)
@@ -1403,7 +1421,7 @@ def apply_review_changes(
         work = results.get("items") or {}
         items, final = [], {}
         for item in data.get("items") or []:
-            if item.get("page") not in taken:
+            if not touching[item["id"]] & taken:
                 continue
             choice = merge.MINE if keep_all else choices.get(item["id"], item["default"])
             if choice not in item["choices"]:
@@ -1428,11 +1446,14 @@ def apply_review_changes(
             )
         fresh = results.get("fresh") or {}
         lines = {int(k): tuple(v) for k, v in (results.get("lines") or {}).items()}
+        # The base moves over the pages taken only. An approval-only page's text did not change, and the
+        # paragraph it shares with a drift page left out (or outside the plan: a fix batch's) must keep its
+        # base, or review's change there would read as agreed and never reach the book.
         if manuscript.base is None:
             unknown = set(review_drift(book, manuscript)["pages"]) - moved
-            new_base = merge.splice_base(None, fresh, moved, unknown=unknown, lines=lines)
+            new_base = merge.splice_base(None, fresh, taken, unknown=unknown, lines=lines)
         else:
-            new_base = merge.splice_base(manuscript.base, fresh, moved, lines=lines)
+            new_base = merge.splice_base(manuscript.base, fresh, taken, lines=lines)
         base_run = manuscript.run
         included = dict(base_run.included or {}) if base_run is not None else {}
         for key, info in list(included.items()):
@@ -2236,17 +2257,26 @@ PANEL_TABS: tuple[str, ...] = (
 _RE_BLOCK = re.compile(r"[hpn][0-9]+(?:-[0-9]+)?|e[0-9]+")
 
 
+FIND_FLAGS: tuple[str, ...] = ("match_tashkeel", "fold_alef", "whole_word")
+
+
 def _find_prefill(find: dict | None) -> dict | None:
-    """The book page's find & replace, filled in from review (`?q=&r=&fix=`, D79); None without a query."""
+    """The book page's find & replace, filled in from review (`?q=&r=&fix=&match_tashkeel=&fold_alef=
+    &whole_word=`, D79): `{query, replacement, fix, options}`, `options` the review sheet's three flags when
+    the address carries them (the page replaces with them, not with its own defaults), else None; None
+    without a query."""
     find = find if isinstance(find, dict) else {}
     query = " ".join(str(find.get("q") or "").split())[:MAX_QUERY]
     if not query:
         return None
     batch = str(find.get("fix") or "")
+    given = any(find.get(flag) not in (None, "") for flag in FIND_FLAGS)
+    options = _find_options(find) if given else None
     return {
         "query": query,
         "replacement": " ".join(str(find.get("r") or "").split())[:MAX_QUERY],
         "fix": batch if _RE_BATCH.fullmatch(batch) else None,
+        "options": {flag: getattr(options, flag) for flag in FIND_FLAGS} if options is not None else None,
     }
 
 
@@ -2288,8 +2318,9 @@ def page_config(
     `tab`, the panel tab asked for with `?tab=` (one of `PANEL_TABS`, else None: the panel opens the tab
     remembered for the mode; the export page's readiness links use it, PHASE6_SPEC §6.5). 7c: `block`, the
     block asked for with `?block=` when it is in the document (the page opens on its chapter, lands on its
-    page and lights it), and `findPrefill` `{query, replacement, fix}` for `?tab=find&q=&r=&fix=` (review's
-    «تصحيح في كل الكتاب» on an edited book, D79), else None."""
+    page and lights it), and `findPrefill` `{query, replacement, fix, options}` for `?tab=find&q=&r=&fix=`
+    and the sheet's flags (`_find_prefill`; review's «تصحيح في كل الكتاب» on an edited book, D79), else
+    None."""
     from books.services import page_url_templates
     from core.decorators import ROLE_EDITOR, has_role
 

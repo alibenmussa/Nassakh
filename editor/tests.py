@@ -1536,6 +1536,7 @@ def test_uncertain_readings_come_in_the_manuscripts_digits_and_keep_the_diacriti
 import copy  # noqa: E402
 import os  # noqa: E402
 import pathlib  # noqa: E402
+import re  # noqa: E402
 
 from django.db.models import F  # noqa: E402
 from django.utils import timezone  # noqa: E402
@@ -1789,8 +1790,9 @@ def changes_contract(user, reader, client, monkeypatch) -> dict:
         client, "POST", apply_url, {"choices": {}, "pages": [1]}
     )
     Manuscript.objects.filter(book=book).update(version=F("version") - 1)
+    take = next(item for item in plan.plan["items"] if item["kind"] == "take")
     requests["POST …/apply/ with a choice the item does not offer"] = api_call(
-        client, "POST", apply_url, {"choices": {"i1": "merged"}, "pages": [1]}
+        client, "POST", apply_url, {"choices": {take["id"]: "merged"}, "pages": [1]}
     )
     requests["POST …/apply/ as a proofreader"] = api_call(
         logged(reader), "POST", apply_url, {"choices": {}, "pages": [1]}
@@ -1838,11 +1840,13 @@ def changes_contract(user, reader, client, monkeypatch) -> dict:
         client, "POST", apply_url, {"choices": {}, "pages": [1, 2]}
     )
     review_edit(40021, "ورحل إلى الشرق فأقام به مدة ثم عاد إلى بلده.", user)
-    # the defaults, i3 on «المراجعة»
+    # the defaults, the conflict of page 2 on «المراجعة»
     plan = _plan_now(book, user)
     apply_url = reverse("api:review_changes_apply", args=[40, plan.pk])
-    requests["POST /api/books/40/review-changes/<plan_id>/apply/ (the defaults, i3 on «المراجعة»)"] = (
-        api_call(client, "POST", apply_url, {"choices": {"i3": "theirs"}, "pages": [1, 2, 3, 4, 5, 7]})
+    conflict = next(item for item in plan.plan["items"] if item["kind"] == "conflict")
+    label = "POST /api/books/40/review-changes/<plan_id>/apply/ (the defaults, the conflict on «المراجعة»)"
+    requests[label] = api_call(
+        client, "POST", apply_url, {"choices": {conflict["id"]: "theirs"}, "pages": [1, 2, 3, 4, 5, 7]}
     )
     plans["GET … (after an apply)"] = client.get(plan_url).json()
     requests["POST … on an unedited manuscript"] = api_call(
@@ -1909,7 +1913,14 @@ def page_config_contract(user) -> dict:
         None,
         "layout",
         tab="find",
-        find={"q": "السعودي", "r": "المسعودي", "fix": "6c1b9b52-0000-4000-8000-000000000001"},
+        find={
+            "q": "السعودي",
+            "r": "المسعودي",
+            "fix": "6c1b9b52-0000-4000-8000-000000000001",
+            "match_tashkeel": "0",
+            "fold_alef": "1",
+            "whole_word": "1",
+        },
     )
     urls = changes["urls"]
     return {
@@ -1923,7 +1934,7 @@ def page_config_contract(user) -> dict:
                 key: urls[key] for key in ("reviewChanges", "reviewChangesApply", "toFootnote", "stages")
             },
         },
-        "GET /books/42/layout/?tab=find&q=…&r=…&fix=<batch> → config": {
+        "GET /books/42/layout/?tab=find&q=…&r=…&fix=<batch>&<the sheet's options> → config": {
             "tab": found["tab"],
             "block": found["block"],
             "findPrefill": found["findPrefill"],
@@ -2039,9 +2050,11 @@ def test_the_plan_task_runs_end_to_end_and_an_apply_takes_it_all(editor_user, qu
     plan = _plan_now(book, editor_user)
     assert plan.status == "done" and plan.manuscript_version == before.version
     assert [row["number"] for row in plan.plan["pages"]] == [1, 2, 3, 4, 5, 7]
-    assert "fresh" in plan.results and set(plan.results["items"]) == {f"i{n}" for n in range(1, 8)}
+    ids = [item["id"] for item in plan.plan["items"]]
+    assert "fresh" in plan.results and len(ids) == 7 and set(plan.results["items"]) == set(ids)
+    conflict = next(item for item in plan.plan["items"] if item["kind"] == "conflict")
     runs = AssemblyRun.objects.filter(book=book).count()
-    result = services.apply_review_changes(book, plan.pk, {"i3": "theirs"}, None, editor_user)
+    result = services.apply_review_changes(book, plan.pk, {conflict["id"]: "theirs"}, None, editor_user)
     manuscript = Manuscript.objects.get(book=book)
     assert result["version"] == before.version + 1 == manuscript.version and result["reload"] is True
     assert result["applied"]["pages"] == [1, 2, 3, 4, 5, 6, 7] and result["applied"]["written"] is True
@@ -2097,7 +2110,7 @@ def test_keep_all_moves_the_baseline_and_writes_no_document(editor_user, quiet):
     plan = _plan_now(book, editor_user)
     [item] = plan.plan["items"]
     assert (item["kind"], item["page"]) == ("merged", 7)  # the kept «ألف» stays, the new words come in
-    [node] = plan.results["items"]["i1"]["merged"]
+    [node] = plan.results["items"][item["id"]]["merged"]
     assert doc.plain_text(node) == "ثم ألف كتابه الكبير في تاريخ البلاد."
 
 
@@ -2110,6 +2123,11 @@ def test_an_apply_naming_none_of_the_plans_pages_is_refused(editor_user, quiet):
         with pytest.raises(services.EditorError, match="لم تُحدَّد صفحة"):
             services.apply_review_changes(book, plan.pk, {}, pages, editor_user, keep_all=True)
     assert ManuscriptSnapshot.objects.filter(manuscript__book=book).count() == snapshots  # no empty snapshot
+    # the plan's own settle (a fix batch) may take no page and only absorb the approvals
+    result = services.apply_review_changes(
+        book, plan.pk, {}, [], editor_user, keep_all=True, snapshot=False, settle=True
+    )
+    assert result["applied"]["written"] is False
 
 
 def test_a_stale_plan_is_refused_for_the_version_and_for_a_page_reviewed_again(editor_user, quiet):
@@ -2218,6 +2236,7 @@ def test_the_book_page_opens_on_the_block_asked_for(editor_user):
         "query": "نص",
         "replacement": "نصوص",
         "fix": None,
+        "options": None,  # no flags in the address: the book page's own find options
     }
 
 
@@ -2228,10 +2247,201 @@ def test_the_review_changes_command_prints_the_plan(editor_user, capsys):
     review_changes_40(editor_user)
     call_command("review_changes", str(book.pk), "--dry-run", "--pages", "1,2")
     out = capsys.readouterr().out
-    assert "dry run" in out and "i1 take" in out and "i3 conflict" in out and "p7" not in out
+    assert "dry run" in out and "p7" not in out
+    assert re.search(r"\bi[0-9a-f]{12} take\b", out) and re.search(r"\bi[0-9a-f]{12} conflict\b", out)
     assert not ChangesPlan.objects.exists()
     call_command("review_changes", str(book.pk))
     assert ChangesPlan.objects.get().status == "done"
+
+
+# ---------------------------------------------------------------- 7c review: the merge's pages, ids and base
+
+# «وبداية فقرة تمتد من الصفحة الأولى إلى الثانية وتنتهي هنا.» runs from page 1 onto page 2 (no sentence end)
+SPAN_LINES = {
+    1: [
+        (50011, "الفصل الأول", "heading"),
+        (50012, "فقرة أولى في الصفحة الأولى.", "body"),
+        (50013, "وبداية فقرة تمتد من الصفحة", "body"),
+    ],
+    2: [
+        (50021, "الأولى إلى الثانية وتنتهي هنا.", "body"),
+        (50022, "فقرة أخيرة في الصفحة الثانية.", "body"),
+    ],
+}
+
+
+def owner_edit(book, user, block_id: str, words: str) -> None:
+    """The owner retypes one paragraph of the book's first chapter on the book page."""
+    first = doc.chapters_of(Manuscript.objects.get(book=book).document)[0].id
+    chapter = services.chapter_document(book, first)
+    for node in chapter["content"]["content"]:
+        if doc.node_id(node) == block_id:
+            node["content"] = [text(words)]
+    services.save_chapter(book, first, chapter["content"], chapter["version"], user)
+
+
+def test_a_paragraph_over_two_drift_pages_is_listed_under_both_and_taken_with_either(editor_user, quiet):
+    book = round_trip_book(editor_user, 50, SPAN_LINES, edit=False)
+    owner_edit(book, editor_user, "p50022", "فقرة أخيرة محرَّرة في الصفحة الثانية.")
+    review_edit(50012, "فقرة أولى في الصفحةِ الأولى.", editor_user)
+    review_edit(50021, "الأولى إلى الثانية وتنتهي هاهنا.", editor_user)  # the paragraph's page-2 half
+    plan = _plan_now(book, editor_user)
+    first, span = plan.plan["items"]
+    assert (first["pages"], span["pages"]) == ([1], [1, 2])
+    rows = [(row["number"], row["items"]) for row in plan.plan["pages"]]
+    assert rows == [(1, [first["id"], span["id"]]), (2, [span["id"]])]
+    # page 1 unticked: the paragraph comes in with page 2; page 1's own paragraph and baseline wait
+    services.apply_review_changes(book, plan.pk, {}, [2], editor_user)
+    assert "وبداية فقرة تمتد من الصفحة الأولى إلى الثانية وتنتهي هاهنا." in texts_of(book)
+    assert services.review_drift(book)["pages"] == [1]
+    again = _plan_now(book, editor_user)
+    assert [(item["kind"], item["pages"]) for item in again.plan["items"]] == [("take", [1])]
+    services.apply_review_changes(book, again.pk, {}, None, editor_user)
+    assert "فقرة أولى في الصفحةِ الأولى." in texts_of(book) and services.review_drift(book)["pages"] == []
+
+
+SETTLE_LINES = {
+    1: [
+        (60011, "الفصل الأول", "heading"),
+        (60012, "ذكر السعودي في الصفحة الأولى.", "body"),
+        (60013, "وبداية فقرة تمتد من الصفحة", "body"),
+    ],
+    2: [
+        (60021, "الأولى إلى الثانية ذكر فيها السعودي أيضا.", "body"),
+        (60022, "فقرة أخيرة في الصفحة الثانية.", "body"),
+    ],
+}
+
+
+def test_a_fix_batch_never_settles_a_page_that_a_waiting_paragraph_runs_onto(editor_user, quiet):
+    from review import corrections
+
+    book = round_trip_book(editor_user, 60, SETTLE_LINES, edit=False)
+    services.find_replace(book, None, "أخيرة", "آخرة", {}, replace=True, user=editor_user)
+    review_edit(60013, "وبدايةُ فقرة تمتد من الصفحة", editor_user)  # waits in «تغييرات المراجعة»
+    found = corrections.find_occurrences(book, "السعودي", corrections.options_of({}))
+    picks = [
+        {"line_id": o["line_id"], "index": o["index"], "t": o["word"]}
+        for page in found["results"]
+        for o in page["lines"]
+    ]
+    fixed = corrections.fix_everywhere(book, "السعودي", "المسعودي", picks, editor_user)
+    services.find_replace(
+        book, None, "السعودي", "المسعودي", {"whole_word": True}, replace=True, user=editor_user
+    )
+    plan = _plan_now(book, editor_user, fix=fixed["batch"])
+    [span] = plan.plan["items"]
+    assert span["kind"] == "merged" and span["pages"] == [1, 2]
+    assert [row["items"] for row in plan.plan["pages"]] == [[span["id"]], [span["id"]]]
+    assert services.review_drift(book)["pages"] == [1, 2]  # nothing settled: the paragraph is on both
+    later = _plan_now(book, editor_user)
+    [item] = later.plan["items"]
+    [node] = later.results["items"][item["id"]]["merged"]
+    assert doc.plain_text(node).startswith("وبدايةُ فقرة") and "المسعودي" in doc.plain_text(node)
+
+
+APPROVAL_LINES = {
+    1: [(61011, "الفصل الأول", "heading"), (61012, "فقرة في الصفحة الأولى.", "body")],
+    5: [(61051, "وبداية فقرة تمتد من الصفحة", "body")],
+    6: [(61061, "الخامسة إلى السادسة وتنتهي هنا.", "body")],  # page 6: not reviewed at the assembly
+    7: [(61071, "ذكر السعودي في الصفحة السابعة.", "body")],
+}
+
+
+def test_an_approval_a_settle_absorbs_leaves_the_base_of_a_waiting_paragraph(editor_user, quiet):
+    from review import corrections
+
+    book = round_trip_book(editor_user, 61, APPROVAL_LINES, edit=False)
+    owner_edit(book, editor_user, "p61012", "فقرة محرَّرة في الصفحة الأولى.")
+    review_edit(61051, "وبدايةُ فقرة تمتد من الصفحة", editor_user)  # page 5 waits
+    review_services.approve_page(Page.objects.get(pk=6106), editor_user, force=True)
+    assert services.review_drift(book)["approvals"] == [6]
+    pick = [{"line_id": 61071, "index": 1, "t": "السعودي"}]
+    fixed = corrections.fix_everywhere(book, "السعودي", "المسعودي", pick, editor_user)
+    services.find_replace(
+        book, None, "السعودي", "المسعودي", {"whole_word": True}, replace=True, user=editor_user
+    )
+    _plan_now(book, editor_user, fix=fixed["batch"])  # page 7 agrees: settled, the approval with it
+    drift = services.review_drift(book)
+    assert drift["pages"] == [5] and drift["approvals"] == []
+    [item] = _plan_now(book, editor_user).plan["items"]  # page 6's half never moved the base of page 5's
+    assert (item["kind"], item["pages"]) == ("take", [5, 6])
+    assert ["ins", "وبدايةُ"] in item["diff"]
+
+
+def test_a_choice_kept_across_a_new_plan_stays_on_its_paragraph(editor_user, quiet):
+    book = round_trip_book(editor_user)
+    review_changes_40(editor_user)
+    plan = _plan_now(book, editor_user)
+    items = plan.plan["items"]
+    conflict = next(item for item in items if item["kind"] == "conflict" and item["block"] == "p40022")
+    # the owner types review's words into page 1's paragraph by hand (goToItem, edit, autosave): its item goes
+    owner_edit(book, editor_user, "p40012", "كان الشيخ فقيهاً، فاضلاً، زاهداً في الدنيا.")
+    with pytest.raises(services.PlanStale):
+        services.apply_review_changes(book, plan.pk, {conflict["id"]: "theirs"}, None, editor_user)
+    again = _plan_now(book, editor_user)
+    assert [item["id"] for item in again.plan["items"]] == [i["id"] for i in items if i["block"] != "p40012"]
+    # the book page keeps {id: choice} for the ids that remain: «المراجعة» still means p40022
+    services.apply_review_changes(book, again.pk, {conflict["id"]: "theirs"}, None, editor_user)
+    texts = texts_of(book)
+    assert "وله كتب كثيرة في الفقه واللغة سنة 1965." in texts
+    assert not any(t.startswith("وكانت وفاته") for t in texts)  # the paragraph the owner deleted stays so
+
+
+def test_undoing_the_first_edit_keeps_the_assembled_text_as_the_base(editor_user, quiet):
+    book = round_trip_book(editor_user, edit=False)
+    assembled = copy.deepcopy(Manuscript.objects.get(book=book).document)
+    kept = services.snapshot(book, "قبل التحرير", user=editor_user)  # «حفظ نسخة» of the unedited text
+    assert ManuscriptSnapshot.objects.get(pk=kept["id"]).base == assembled
+    out = services.find_replace(book, None, "الشيخ", "العالم", {}, replace=True, user=editor_user)
+    services.restore(book, out["snapshot"], editor_user)  # the replace toast's «تراجع»
+    manuscript = Manuscript.objects.get(book=book)
+    assert manuscript.origin == "editor" and manuscript.base == assembled
+    review_edit(40012, "كان الشيخ فقيهاً، فاضلا، زاهدا في الدنيا.", editor_user)
+    plan = _plan_now(book, editor_user)
+    assert plan.plan["base"] == "stored" and [item["kind"] for item in plan.plan["items"]] == ["take"]
+    services.apply_review_changes(book, plan.pk, {}, None, editor_user)  # «أخذ التغييرات (1)», the defaults
+    assert "كان الشيخ فقيهاً، فاضلا، زاهدا في الدنيا." in texts_of(book)
+
+
+def test_the_book_side_of_a_fix_everywhere_replaces_with_the_sheets_options(editor_user, quiet):
+    from urllib.parse import parse_qsl, urlsplit
+
+    from review import corrections
+
+    lines = {1: [(80011, "الفصل الأول", "heading"), (80012, "ذكر السعودي أخبار السعودية في كتابه.", "body")]}
+    book = round_trip_book(editor_user, 80, lines, edit=False)
+    services.find_replace(book, None, "كتابه", "كتبه", {}, replace=True, user=editor_user)  # edited
+    pick = [{"line_id": 80012, "index": 1, "t": "السعودي"}]
+    fixed = corrections.fix_everywhere(book, "السعودي", "المسعودي", pick, editor_user)  # the sheet's defaults
+    query = dict(parse_qsl(urlsplit(fixed["find_url"]).query))
+    assert {k: query.get(k) for k in ("match_tashkeel", "fold_alef", "whole_word")} == {
+        "match_tashkeel": "0",
+        "fold_alef": "1",
+        "whole_word": "1",
+    }
+    prefill = services._find_prefill(query)
+    assert prefill["options"] == {"match_tashkeel": False, "fold_alef": True, "whole_word": True}
+    options = prefill["options"]
+    out = services.find_replace(
+        book, None, prefill["query"], prefill["replacement"], options, replace=True, user=editor_user
+    )
+    assert out["replaced"] == 1 and "ذكر المسعودي أخبار السعودية في كتبه." in texts_of(book)
+    loose = corrections.find_url(book, "a", "b", BATCH, doc.FindOptions(whole_word=False))
+    assert services._find_prefill(dict(parse_qsl(urlsplit(loose).query)))["options"]["whole_word"] is False
+    assert services._find_prefill({"q": "نص", "r": "نصوص"})["options"] is None  # a link without options
+
+
+def test_a_review_undo_after_an_apply_reads_as_review(editor_user, quiet):
+    book = round_trip_book(editor_user)
+    review_edit(40012, "كان الشيخ فقيهاً، فاضلا، زاهدا في الدنيا.", editor_user)
+    plan = _plan_now(book, editor_user)
+    services.apply_review_changes(book, plan.pk, {}, None, editor_user)
+    assert services.review_drift(book)["reasons"] == {}
+    review_services.undo_last(Page.objects.get(pk=4001), editor_user)  # the reviewer takes the edit back
+    assert services.review_drift(book)["reasons"] == {"1": "review"}
+    machine_rewrite(40071, "ثم ألّف كتابه.")  # a machine pass is still «إعادة المعالجة»
+    assert services.review_drift(book)["reasons"] == {"1": "review", "7": "processing"}
 
 
 # ====================================================================== D80: the cover

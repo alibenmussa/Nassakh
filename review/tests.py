@@ -1795,6 +1795,9 @@ def fix_contract(user, client) -> dict:
     body = {
         "from": "السعودي",
         "to": "المسعودي",
+        "match_tashkeel": False,
+        "fold_alef": True,
+        "whole_word": True,
         "picks": [
             {"line_id": 42012, "index": 3, "t": "«السعودي»"},
             {"line_id": 42021, "index": 1, "t": "السعودي،"},
@@ -1826,6 +1829,9 @@ def fix_contract(user, client) -> dict:
     edited = {
         "from": "السعودي",
         "to": "المسعودي",
+        "match_tashkeel": False,
+        "fold_alef": True,
+        "whole_word": True,
         "picks": [{"line_id": 42012, "index": 3, "t": "«السعودي»"}],
     }
     response = client.post(fix_url, edited, content_type="application/json")
@@ -1965,3 +1971,30 @@ def test_occurrences_ignore_diacritics_fold_alef_and_match_parts_of_words_when_a
     )
     with pytest.raises(services.ReviewError):
         corrections.find_occurrences(book, "", corrections.options_of({}))
+
+
+# ---------------------------------------------------------------- 7 review: a resolution before a suggestion
+
+
+@pytest.mark.django_db
+def test_a_resolution_before_a_suggestion_keeps_the_suggestion_after_that_word(reviewer):
+    # review draws the ▏ after word `index`; the word before it resolved to another reading, «إدراج» must
+    # still put the words there, not after another «الشيخ» of the line (`gap_anchor` re-anchors by `after_t`)
+    from ocr.models import TextGap
+
+    book = Book.objects.create(title="ك", status=Book.Status.READY_FOR_REVIEW)
+    page = make_page(book, 1, with_lines=False)
+    body = Region.objects.create(page=page, kind="body", bbox=[0, 0, W, 150], order=0)
+    words = [tok("قال"), tok("الشيخ", "low", alt="الشيح", tess="الشيح"), tok("ثم"), tok("الشيخ"), tok("كذا")]
+    line = make_line(page, 0, body, words)
+    suggestion = TextGap.objects.create(page=page, line=line, index=1, after_t="الشيخ", text="رحمه الله")
+    services.refresh_page_text(page)
+    services.resolve_token(line, 1, "secondary", user=reviewer)
+    suggestion.refresh_from_db()
+    assert (suggestion.index, suggestion.after_t) == (1, "الشيح")
+    services.undo_last(page, reviewer)  # undo puts the word and the suggestion's anchor back
+    suggestion.refresh_from_db()
+    assert (suggestion.index, suggestion.after_t) == (1, "الشيخ")
+    services.resolve_token(Line.objects.get(pk=line.pk), 1, "secondary", user=reviewer)
+    line, _ = services.accept_gap(TextGap.objects.get(pk=suggestion.pk), user=reviewer)
+    assert line.text == "قال الشيح رحمه الله ثم الشيخ كذا"

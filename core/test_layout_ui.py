@@ -2964,17 +2964,19 @@ const toastStore = () => stores.bookToast;
   out.polled = { gets: calls.filter((x) => x[1] === '/api/books/1/review-changes/' && x[0] === 'GET').length, state: c.changes.state };
   out.rows = c.changesRows.map((r) => [r.number, r.reason, c.reasonLabel(r), r.chapter_title, r.items.map((it) => [it.id, it.kind, it.chip, c.choiceOf(it), it.ask])]);
   out.apply = { label: c.changesApplyLabel, count: c.changesApplyCount };
-  // «نصّي | المراجعة» on the conflict i3: «المراجعة»; the apply sends only the choices that differ from the default
-  const i3 = c.changesItems.get('i3');
+  // «نصّي | المراجعة» on page 2's conflict: «المراجعة»; the apply sends only the choices that differ from the default
+  // (the ids are digests of the items: the two conflicts are page 2's and page 3's deleted paragraph)
+  const [I3, I4] = done.plan.items.filter((it) => it.kind === 'conflict').map((it) => it.id);
+  const i3 = c.changesItems.get(I3);
   c.setChoice(i3, 'theirs');
   out.defaultBody = c.applyBody(false);
   // «خذ ما جاء من المراجعة في هذه الصفحة» / «أبقِ نصّي» per page, and a page left out
   const row3 = c.changesRows.find((r) => r.number === 3);
   c.setPageChoice(row3, 'theirs');
-  const pageTheirs = c.choiceOf(c.changesItems.get('i4'));
+  const pageTheirs = c.choiceOf(c.changesItems.get(I4));
   c.setPageChoice(row3, 'mine');
-  out.page = { theirs: pageTheirs, mine: c.choiceOf(c.changesItems.get('i4')) };
-  applyAnswer = pickOf(CR, '(the defaults, i3 on «المراجعة»)');
+  out.page = { theirs: pageTheirs, mine: c.choiceOf(c.changesItems.get(I4)) };
+  applyAnswer = pickOf(CR, '(the defaults, the conflict on «المراجعة»)');
   calls.length = 0;
   const applied = await c.applyChanges(false); await settle();
   out.applied = { post: posts().find((p) => p[0].includes('/apply/')), chapters: gets().includes('/api/books/1/chapters/'), toast: toastStore().message, has: toastStore().hasAction, version: applied.version, flash: c.appliedBlocks ? [...c.appliedBlocks].sort() : null, stages: typeof window.NassakhStages };
@@ -3005,11 +3007,11 @@ const toastStore = () => stores.bookToast;
   const s = mk({ urls, drift: done.drift }); await settle();
   planPost = pickOf(CR, '{} (all drift pages)'); planGets = [done];
   s.setTab('changes'); await settle();
-  s.setChoice(s.changesItems.get('i3'), 'theirs');
+  s.setChoice(s.changesItems.get(I3), 'theirs');
   applyAnswer = pickOf(CR, 'stale version');
   calls.length = 0; toasts.length = 0;
   await s.applyChanges(false); await settle();
-  out.stale = { toast: toasts.slice(-1)[0], replanned: posts().filter((p) => p[0] === '/api/books/1/review-changes/').length, kept: s.choiceOf(s.changesItems.get('i3')) };
+  out.stale = { toast: toasts.slice(-1)[0], replanned: posts().filter((p) => p[0] === '/api/books/1/review-changes/').length, kept: s.choiceOf(s.changesItems.get(I3)) };
   drop();
   // a failed plan; a book edited before 7c (every item «للمقارنة», starting on «نصّي»); nothing to take («تم»)
   const f = mk({ urls, drift: done.drift }); await settle();
@@ -3158,10 +3160,11 @@ def test_book_page_review_changes_the_address_and_the_note_under_node(tmp_path):
     }
     assert all(row[2] == labels[row[1]] for row in out["rows"])  # the chips' words (§5.6)
     assert out["apply"] == {"label": f"أخذ التغييرات ({len(items)})", "count": len(items)}
-    defaults = _pick(requests, "(the defaults, i3 on «المراجعة»)")
+    defaults = _pick(requests, "(the defaults, the conflict on «المراجعة»)")
     assert out["defaultBody"] == defaults["request"]
     assert out["page"] == {"theirs": "theirs", "mine": "mine"}
-    assert out["applied"]["post"][1] == {"choices": {"i3": "theirs"}, "pages": [1, 2, 3, 4, 5, 7]}
+    conflict = next(item for item in plan["items"] if item["kind"] == "conflict")
+    assert out["applied"]["post"][1] == {"choices": {conflict["id"]: "theirs"}, "pages": [1, 2, 3, 4, 5, 7]}
     assert out["applied"]["post"][0] == apply_url
     assert out["applied"]["chapters"] is True and out["applied"]["version"] == defaults["response"]["version"]
     assert out["applied"]["toast"] == "أُخذت تغييرات 6 صفحات من المراجعة" and out["applied"]["has"] is True
@@ -3248,3 +3251,100 @@ def test_book_page_templates_for_review_changes_and_the_note(editor):
     assert ".lp-line.is-applied { animation: lp-applied 600ms ease-out; }" in css
     assert ".bp-diff del { color: var(--color-danger-text); background: var(--color-danger-bg);" in css
     assert ".bp-diff ins {" in css and "text-decoration: underline" in css
+
+
+CHANGES_FIXES_SCENARIO = r"""
+const contract = JSON.parse(readFileSync(process.argv[4], 'utf8'));
+const pickOf = (obj, label) => Object.entries(obj).find(([k]) => k.includes(label))[1];
+const CP = contract['changes_plan.json']; const CR = contract['changes_requests.json'];
+const out = {};
+const baseFetch = globalThis.fetch;
+let planGets = []; let applyAnswers = [];
+globalThis.fetch = async (url, init = {}) => {
+  const method = init.method || 'GET';
+  const body = init.body ? JSON.parse(init.body) : null;
+  if (url === '/api/books/1/review-changes/') {
+    calls.push([method, url, body]);
+    if (method === 'POST') return reply(202, pickOf(CR, '{} (all drift pages)').response);
+    return reply(200, planGets.length > 1 ? planGets.shift() : planGets[0]);
+  }
+  if (/^\/api\/books\/1\/review-changes\/\d+\/apply\/$/.test(url)) { calls.push([method, url, body]); const a = applyAnswers.shift(); return reply(a.status, a.response); }
+  return baseFetch(url, init);
+};
+const posts = () => calls.filter((c) => c[0] === 'POST').map((c) => [c[1], c[2]]);
+const urls = { ...fixture.config.urls, drift: '/api/books/1/drift/', reviewChanges: '/api/books/1/review-changes/', reviewChangesApply: '/api/books/1/review-changes/__pid__/apply/' };
+(async () => {
+  // the contract's plan, with page 1's paragraph running onto page 2 (listed under both rows, as compute_plan does)
+  const done = JSON.parse(JSON.stringify(pickOf(CP, 'done, a stored base')));
+  const take = done.plan.items.find((it) => it.kind === 'take');
+  const merged = done.plan.items.find((it) => it.kind === 'merged');
+  const [conflict] = done.plan.items.filter((it) => it.kind === 'conflict');
+  take.pages = [1, 2];
+  const row2 = done.plan.pages.find((r) => r.number === 2);
+  row2.items = [take.id, ...row2.items];
+  planGets = [done];
+  const c = mk({ urls, drift: done.drift }); await settle();
+  c.setTab('changes'); await settle();
+  out.count = { count: c.changesApplyCount, label: c.changesApplyLabel, items: done.plan.items.length };
+  // «خذ ما جاء من المراجعة في هذه الصفحة» on page 2: a merged paragraph keeps the owner's own edits («merged»)
+  c.setPageChoice(c.changesRows.find((r) => r.number === 2), 'theirs');
+  out.page = { merged: c.choiceOf(c.changesItems.get(merged.id)), conflict: c.choiceOf(c.changesItems.get(conflict.id)), take: c.choiceOf(c.changesItems.get(take.id)) };
+  out.body = c.applyBody(false);
+  // a 409: the comparison again; the pages left out stay out and the choices stay on their items
+  c.togglePage(c.changesRows.find((r) => r.number === 3));
+  applyAnswers = [pickOf(CR, 'stale version'), pickOf(CR, '{pages: [2]}')];
+  planGets = [done];
+  calls.length = 0;
+  await c.applyChanges(false); await settle();
+  out.stale = { pages: c.changesRows.filter((r) => !r.taken).map((r) => r.number), conflict: c.choiceOf(c.changesItems.get(conflict.id)), replanned: posts().filter((p) => p[0] === '/api/books/1/review-changes/').length };
+  calls.length = 0;
+  await c.applyChanges(false); await settle();
+  out.again = posts().find((p) => p[0].includes('/apply/'))[1];
+  drop();
+  // the find prefill of a fix everywhere: the review sheet's options replace the book page's defaults
+  const opts = { match_tashkeel: false, fold_alef: true, whole_word: true };
+  const pf = mk({ urls, tab: 'find', findPrefill: { query: 'السعودي', replacement: 'المسعودي', fix: null, options: opts } }); await settle();
+  server.find = (body) => reply(200, { matches: [], total: 1, replaced: body.replace ? 1 : 0, snapshot: 5 });
+  calls.length = 0;
+  await pf.replaceAll(); await settle();
+  const sent = calls.find((x) => x[1] === '/api/books/1/find-replace/' && x[2] && x[2].replace);
+  out.prefill = { options: pf.findOptions(), sent: sent && [sent[2].match_tashkeel, sent[2].fold_alef, sent[2].whole_word] };
+  const plain = mk({ urls, tab: 'find', findPrefill: { query: 'نص', replacement: 'نصوص', fix: null, options: null } }); await settle();
+  out.plain = plain.findOptions();
+  server.find = null;
+  drop();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+
+
+def test_book_page_review_changes_fixes_under_node(tmp_path):
+    """7c review fixes on the contract's plan: an item over two pages counts once in «أخذ التغييرات (n)»;
+    «خذ ما جاء من المراجعة في هذه الصفحة» gives a merged paragraph «merged» (review's change with the owner's
+    edits kept), never «theirs»; a 409 re-plan keeps the pages left out and the choices; a fix everywhere's
+    find prefill brings the review sheet's options (a link without them leaves the page's own)."""
+    folder = _node_tmp(tmp_path)
+    fixture = _component_fixture()
+    (folder / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False))
+    (folder / "contract.json").write_text(json.dumps(_contract_all(), ensure_ascii=False))
+    base = COMPONENT_HARNESS.split("\nconst out = {};\n")[0]
+    out = _run_node(
+        folder,
+        "changes_fixes.mjs",
+        base + CHANGES_FIXES_SCENARIO,
+        str(ROOT),
+        str(folder / "fixture.json"),
+        str(folder / "contract.json"),
+    )
+    items = out["count"]["items"]
+    assert out["count"] == {"count": items, "label": f"أخذ التغييرات ({items})", "items": items}
+    assert out["page"] == {"merged": "merged", "conflict": "theirs", "take": "theirs"}
+    assert "merged" not in out["body"]["choices"].values() and "theirs" in out["body"]["choices"].values()
+    assert out["stale"]["pages"] == [3] and out["stale"]["conflict"] == "theirs"
+    assert out["stale"]["replanned"] == 1
+    assert 3 not in out["again"]["pages"] and "theirs" in out["again"]["choices"].values()
+    assert out["prefill"] == {
+        "options": {"matchTashkeel": False, "foldAlef": True, "wholeWord": True},
+        "sent": [False, True, True],
+    }
+    assert out["plain"] == {"matchTashkeel": False, "foldAlef": True, "wholeWord": False}

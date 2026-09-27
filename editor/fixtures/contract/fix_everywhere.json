@@ -21,6 +21,9 @@
   "request": {
    "from": "السعودي",
    "to": "المسعودي",
+   "match_tashkeel": false,
+   "fold_alef": true,
+   "whole_word": true,
    "picks": [
     {
      "line_id": 42012,
@@ -96,6 +99,9 @@
   "request": {
    "from": "السعودي",
    "to": "المسعودي",
+   "match_tashkeel": false,
+   "fold_alef": true,
+   "whole_word": true,
    "picks": [
     {
      "line_id": 42012,
@@ -113,7 +119,7 @@
     1
    ],
    "edited": true,
-   "find_url": "/books/42/layout/?tab=find&q=%D8%A7%D9%84%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&r=%D8%A7%D9%84%D9%85%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&fix=6c1b9b52-0000-4000-8000-000000000001",
+   "find_url": "/books/42/layout/?tab=find&q=%D8%A7%D9%84%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&r=%D8%A7%D9%84%D9%85%D8%B3%D8%B9%D9%88%D8%AF%D9%8A&fix=6c1b9b52-0000-4000-8000-000000000001&match_tashkeel=0&fold_alef=1&whole_word=1",
    "message": "صُحّح موضع واحد في صفحة واحدة"
   }
  },

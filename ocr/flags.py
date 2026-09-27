@@ -7,7 +7,8 @@ Every region has up to three readers: Qari v0.3 (the primary, whose tokens make 
 - `second_readings` gives Qari v0.2's reading of each primary token. Punctuation runs are split off
   both sides first (`split_pieces`), words are compared leniently and marks only against marks, and
   the secondary pieces are glued back in the primary token's shape, so «القرآن.» equals «القرآن .»
-  (the whitespace alignment it replaces flagged the «.»: 95 punctuation flags, 89 of them right).
+  (the whitespace alignment it replaces flagged the «.»: 95 punctuation flags, 89 of them right); a
+  word whose only counterpart is a mark has no reading (v0.2 skipped it).
 - `classify` gives the reasons a token is doubtful (`why`), first match first; an empty list is sure:
   `script` (letters of another script, a stray symbol, Arabic and Latin in one token), punctuation
   (never), a Western number all three readers read alike (sure, 70 of 70 right; any other number is
@@ -202,9 +203,10 @@ def second_readings(primary: list[str], secondary: list[str]) -> list[str | None
     The pieces of both readings are aligned (`align_pieces`); a primary token's reading is its pieces'
     counterparts glued back in its own shape: a word piece without one adds nothing, a mark without one
     stays the primary's (so the reading can replace the token without losing its punctuation). None
-    when none of its pieces has a counterpart. So «القرآن.» against «القرآن .» reads «القرآن.»,
-    «الكتاب،» against «الكتب.» reads «الكتب،», and «،» against «.» has no reading (marks only equal
-    marks; punctuation is never flagged).
+    when none of its word pieces has a counterpart (a mark alone is no reading of a word), or for a
+    mark, none of its pieces. So «القرآن.» against «القرآن .» reads «القرآن.», «الكتاب،» against
+    «الكتب.» reads «الكتب،», «الكتاب،» against «،» (v0.2 skipped the word, kept its comma) has no
+    reading, and «،» against «.» has none either (marks only equal marks; punctuation is never flagged).
     """
     if not secondary:
         return [None] * len(primary)
@@ -216,7 +218,8 @@ def second_readings(primary: list[str], secondary: list[str]) -> list[str | None
     out: list[str | None] = []
     for i in range(len(primary)):
         found = per_token.get(i) or []
-        if not any(b is not None for _, b in found):
+        words = [(a, b) for a, b in found if norm_token(aligned.primary[a][0])]
+        if not any(b is not None for _, b in words or found):
             out.append(None)
             continue
         parts = []
@@ -318,10 +321,11 @@ def vote_reading(token: dict) -> str | None:
 
     `lenient(tess) == lenient(alt) != lenient(t)`. Never for a number (`digit`, or any digit in it), a
     number Kraken read (`src == "kraken"`) or a lone letter that may be a digit (D51): the numbers pass
-    decides those. A token already resolved or voted is left alone.
+    decides those; never for a reading that is punctuation only (no word to put in the text). A token
+    already resolved or voted is left alone.
     """
     t, alt, tess = str(token.get("t") or ""), token.get("alt"), token.get("tess")
-    if token.get("res") or token.get("pick") or not alt or not tess:
+    if token.get("res") or token.get("pick") or not alt or not tess or not lenient(alt):
         return None
     if (
         token.get("digit")

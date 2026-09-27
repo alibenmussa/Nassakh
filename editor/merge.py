@@ -9,9 +9,11 @@ Three documents meet here, all in the manuscript's ProseMirror shape (`editor.do
 - **F** (`fresh`): `assembly.pipeline.assemble` on the lines as they are now.
 
 `plan(M, B, F, pages)` compares only the blocks of the pages asked for (S) and returns one item per cluster
-that differs; `apply(M, items, choices)` replaces those blocks and leaves every other block the very same
-object, so chapter versions do not move without an edit; `splice_base(B, F, pages)` moves the base over the
-pages taken.
+that differs (`page` the first page of S it touches, `pages` every page it touches: a paragraph over two
+drift pages belongs to both; `id` a digest of the item, the same in every plan while the item does not
+change: `item_id`); `apply(M, items, choices)` replaces those blocks and leaves every other block the very
+same object, so chapter versions do not move without an edit; `splice_base(B, F, pages)` moves the base over
+the pages taken.
 
 **Select and cluster.** A top-level body block (after the leading `title`) is selected when one of its
 `sourcePages`, one of its notes' `sourcePage`, or (with `lines`, the page of each line id) the page of one of
@@ -64,6 +66,7 @@ from __future__ import annotations
 
 import copy
 import difflib
+import hashlib
 import json
 from dataclasses import dataclass, field
 
@@ -706,11 +709,34 @@ def plan(
         )
         item["work"].update(m=[offset + i for i in cluster.m], anchor=list(anchor) if anchor else None)
         item["_order"] = (in_s[0], at if at is not None else len(content), cluster.f[0] if cluster.f else 0)
+        item["id"] = item_id(item["kind"], sides)
         items.append(item)
     items.sort(key=lambda it: it.pop("_order"))
-    for n, item in enumerate(items, start=1):
-        item["id"] = f"i{n}"
+    seen: set[str] = set()
+    for item in items:  # clusters never share a line, so a repeat is a digest collision: made unique
+        first, n = item["id"], 1
+        while item["id"] in seen:
+            n += 1
+            item["id"] = f"{first}-{n}"
+        seen.add(item["id"])
     return items
+
+
+def item_id(kind: str, sides: Sides) -> str:
+    """An item's id from what it is, not from its place in the plan: «i» and a digest of its kind, its
+    source lines, the ids of its book blocks and the tokens of its three sides. A new plan (after a 409, or
+    the tab opened again) gives an item that did not change the same id, so the book page keeps the owner's
+    choice on it; an item whose text moved on either side gets a new id and its choice goes back to the
+    default. (Positional ids, i1 i2 …, shifted onto other paragraphs as soon as one item went away.)"""
+    blocks = (*sides.m, *sides.b, *sides.f)
+    identity = [
+        kind,
+        sorted(set().union(*(lines_of(block) for block in blocks))),
+        [doc.node_id(block) for block in sides.m],
+        [keys(tokens(side)) for side in (sides.m, sides.b, sides.f)],
+    ]
+    raw = json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
+    return "i" + hashlib.blake2b(raw.encode("utf-8"), digest_size=6).hexdigest()
 
 
 def _anchor_id(content: list, anchor) -> str | None:

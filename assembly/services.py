@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 from django.contrib.auth.models import AnonymousUser
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -819,34 +819,39 @@ def read_at(info: dict, finished_at: datetime | None) -> datetime | None:
 def stale_reasons(included: dict, rows, options: Settings, finished_at: datetime | None = None) -> dict:
     """`stale_pages`' sibling (D78): `{pages, reasons, approvals}` — `pages` the content drift
     (`drift_pages`), `reasons` page number (a string key) → `review` (a line-changing `LineRevision`
-    created after the page was read, undone ones included: an undo is a change too), `processing` (the
-    lines changed with no such revision: a re-run, the numbers pass), `added` or `removed` (the page's
-    eligibility changed), and
+    created after the page was read, undone ones included: an undo is a change too; or an undone one whose
+    line changed after the read: an undo makes no revision, it restores the line, so a reviewer taking an
+    edit back after an apply is review's too), `processing` (the lines changed with no such revision: a
+    re-run, which deletes the lines its undone revisions pointed to, the numbers pass), `added` or `removed`
+    (the page's eligibility changed), and
     `approvals` the pages whose only change is the reviewed flag. The time a page was read is its entry's
     `at`, else `finished_at` (the run's). One query for the signatures, one more for the revisions when a
-    page's lines changed."""
+    page's lines changed. (An undo of an insert or a delete leaves no line to date: it still reads as
+    processing.)"""
     from review.models import LineRevision  # other app: lazy import
 
     changes = _classify(included, rows, options)
     known = {int(k): v for k, v in (included or {}).items() if str(k).isdigit() and isinstance(v, dict)}
     content = {pk: number for number, (kind, pk) in changes.items() if kind == CONTENT and pk is not None}
     last: dict[int, datetime] = {}
+    undone: dict[int, datetime] = {}  # the newest change of a line an undone revision points to
     if content:
-        revisions = (
+        revisions = list(
             LineRevision.objects.filter(page_id__in=list(content))
             .exclude(action__in=NOT_LINE_CHANGES)
             .values("page_id")
-            .annotate(last=Max("created_at"))
+            .annotate(last=Max("created_at"), undone=Max("line__updated_at", filter=Q(undone=True)))
         )
         last = {row["page_id"]: row["last"] for row in revisions}
+        undone = {row["page_id"]: row["undone"] for row in revisions if row["undone"] is not None}
     reasons: dict[str, str] = {}
     for number, (kind, pk) in sorted(changes.items()):
         if kind == APPROVAL:
             continue
         if kind == CONTENT:
             seen = read_at(known.get(pk, {}), finished_at)
-            newest = last.get(pk)
-            kind = "review" if newest is not None and (seen is None or newest > seen) else "processing"
+            stamps = [stamp for stamp in (last.get(pk), undone.get(pk)) if stamp is not None]
+            kind = "review" if stamps and (seen is None or max(stamps) > seen) else "processing"
         reasons[str(number)] = kind
     return {
         "pages": sorted(int(n) for n in reasons),

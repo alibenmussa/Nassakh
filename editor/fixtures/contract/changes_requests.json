@@ -45,7 +45,7 @@
  "POST …/apply/ with a choice the item does not offer": {
   "request": {
    "choices": {
-    "i1": "merged"
+    "i7b4cd888f203": "merged"
    },
    "pages": [
     1
@@ -201,10 +201,10 @@
    ]
   }
  },
- "POST /api/books/40/review-changes/<plan_id>/apply/ (the defaults, i3 on «المراجعة»)": {
+ "POST /api/books/40/review-changes/<plan_id>/apply/ (the defaults, the conflict on «المراجعة»)": {
   "request": {
    "choices": {
-    "i3": "theirs"
+    "i579aba25871e": "theirs"
    },
    "pages": [
     1,

@@ -345,6 +345,13 @@ def _shift_gaps(line: Line, mapping: dict[int, int], tokens: list[dict]) -> None
             gap.save(update_fields=["index", "after_t"])
 
 
+def _follow_words(line: Line) -> None:
+    """The open suggestions of `line` after a word changed in place (a resolution, «تصحيح في كل الكتاب»):
+    `after_t` follows its token's new text, so `gap_anchor` keeps them where review draws them."""
+    tokens = line.tokens or []
+    _shift_gaps(line, {k: k for k in range(len(tokens))}, tokens)
+
+
 def _aligned(old: list[dict], new: list[dict]) -> dict[int, int]:
     """Old → new token indices of an edited line: the pairs `retokenize` aligns."""
     pairs = align_tokens([str(t.get("t") or "") for t in old], [str(t.get("t") or "") for t in new])
@@ -875,7 +882,8 @@ def resolve_token(
     before, the vote's included), `secondary` takes `alt` (with the vote, D71, the reading already
     in the text: Enter confirms it), `tess` takes Tesseract's word, `typed` takes `text`, `sug` the
     year read from the number in words (§4.8). Sets `res` to the choice (the token's `conf` is
-    kept). `expected` is the word the client saw at `index`; when it is not there any more,
+    kept); a suggestion after the word follows its new reading (`_follow_words`). `expected` is the
+    word the client saw at `index`; when it is not there any more,
     `ReviewConflict` (the indices moved). Raises `ReviewError` (Arabic) on a bad index / choice or a
     missing alternative.
     """
@@ -915,6 +923,7 @@ def resolve_token(
     _set_tokens(line, tokens)
     line.updated_by = _user_or_none(user)
     line.save(update_fields=["tokens", "text", "n_low", "updated_by", "updated_at"])
+    _follow_words(line)
     _record(page, LineRevision.Action.RESOLVE, line, before, line_snapshot(line), user)
     refresh_page_text(page)
     return line

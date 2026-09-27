@@ -1320,7 +1320,13 @@ def _minutes(book: Book, pages: int) -> int:
 
 
 def preview_book_guides(
-    book: Book, changes: Mapping, reset_overrides=(), *, from_page=None, stage: str | None = None
+    book: Book,
+    changes: Mapping,
+    reset_overrides=(),
+    *,
+    from_page=None,
+    stage: str | None = None,
+    reset: bool = False,
 ) -> dict:
     """What a book-guides change would do, without writing anything (§3.12 «معاينة»).
 
@@ -1328,11 +1334,15 @@ def preview_book_guides(
     (in «المعالجة» against their stored regions, locked pages apart), those that would then show
     `line_cut` or `text_hidden`, those whose own override keeps a set key, the approved / review-work
     pages that stay (only in «المعالجة»), how many pages are re-read and the model time (null in
-    «التخطيط»). A constant number of queries whatever the page count.
+    «التخطيط»). With `reset` it previews «إزالة الضبط العام» (`reset_book_guides`'s plan; `changes`
+    are ignored). A constant number of queries whatever the page count.
     """
     awaits = check_stage(book.pk, stage)
     pages, regions_of, review_pages, guides = _load_book_pages(book, awaits)
-    plan = _plan_change(book, guides, pages, changes, reset_overrides, from_page)
+    if reset:
+        plan = _plan_reset(book)
+    else:
+        plan = _plan_change(book, guides, pages, changes, reset_overrides, from_page)
     rows = _evaluate(plan, awaits, pages, regions_of, review_pages, guides)
     changed = [r for r in rows if r["changed"] and not r["locked"]]
     reocr = 0 if awaits else len(changed)
@@ -1522,7 +1532,8 @@ def set_page_guides(
     """Merge a change into the page's override (a drag, «+ ترويسة», «إزالة من هذه الصفحة», «التلقائي»).
 
     `set_` keys are validated by `clean_guides(partial=True)` (a null keeps its meaning: "none on this
-    page"), `unset` keys are removed, `reset` clears the override. In «التخطيط» only the value is
+    page"), `unset` keys are removed, `reset` clears the override before `set_` applies (a started
+    book's pending «التلقائي» followed by a drag saves both at once). In «التخطيط» only the value is
     saved; in «المعالجة» approved pages and pages with review work are refused (422) and the page is
     re-derived and re-read when its regions changed. Returns `{regions, ocr_enqueued, undo}`, the undo
     (`{"replace": <override before>}`) only in «التخطيط».
@@ -1530,17 +1541,17 @@ def set_page_guides(
     awaits = check_stage(page.book_id, stage)
     _refuse_locked(page, awaits)
     before = page.guides_override
+    clean = clean_guides(set_ if isinstance(set_, Mapping) else {}, partial=True)
+    clean.pop("reference_page", None)
     if reset:
         override: dict = {}
     else:
-        clean = clean_guides(set_ if isinstance(set_, Mapping) else {}, partial=True)
-        clean.pop("reference_page", None)
         drop = set(_clean_keys(unset))
         override = {k: v for k, v in (before or {}).items() if k not in drop}
-        override.update(clean)
-        header, footnote = override.get("header_cut"), override.get("footnote_line")
-        if header is not None and footnote is not None and header >= footnote:
-            raise ValidationError(["يجب أن يكون حدّ الترويسة أعلى من خط الحاشية."])
+    override.update(clean)
+    header, footnote = override.get("header_cut"), override.get("footnote_line")
+    if header is not None and footnote is not None and header >= footnote:
+        raise ValidationError(["يجب أن يكون حدّ الترويسة أعلى من خط الحاشية."])
     regions, changed = _save_override(page, override, awaits)
     return {"regions": regions, "ocr_enqueued": changed, "undo": {"replace": before} if awaits else None}
 

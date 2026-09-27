@@ -43,7 +43,10 @@ digits altogether («(٨٤٧–٨٦١م)» → «(هـ – م)»), so the word h
 On 77 labelled letters of six books (playground/digits/REPORT.md, round 3): 45 of 56 numbers read,
 40 of 41 of known value exact, none of 13 real letters changed; the three digit-less dates exact.
 
-Pure functions up to `replace_date`; the service (`read_page_numbers`) does the I/O.
+A line's open suggestions (`ocr.TextGap`, D72) follow its words (`token_moves`): a date's tokens become
+one, and a rewritten word is what a suggestion after it now comes after.
+
+Pure functions up to `token_moves`; the service (`read_page_numbers`) does the I/O.
 """
 
 from __future__ import annotations
@@ -537,6 +540,28 @@ def replace_date(tokens: list[dict], first: int, last: int, reading: str) -> dic
     return token
 
 
+def token_moves(before: list[int], tokens: list[dict], dates=()) -> dict[int, int]:
+    """Old → new indices of a line's tokens after the pass (`before`: the `id()` of each token as read,
+    `dates`: the line's digit-less dates, `(first, last)` as read).
+
+    Tokens change in place, and `replace_date` puts one new token where a date's tokens were, right
+    after the last token kept before them: those tokens all go to it, so a suggestion after the date
+    stays after it (`review.services._shift_gaps` takes the mapping)."""
+    now = {id(token): j for j, token in enumerate(tokens)}
+    first_of = {i: first for first, last in dates for i in range(first, last + 1)}
+    moves: dict[int, int] = {}
+    at = -1  # the new index of the last token placed
+    for i, key in enumerate(before):
+        if key in now:
+            at = now[key]
+        elif i not in first_of:
+            continue  # not the pass's doing: a token gone
+        elif first_of[i] == i:
+            at += 1  # a joined date: its one token
+        moves[i] = at
+    return moves
+
+
 # ====================================================================== the pass (I/O)
 
 STYLE_SAMPLE_DIGITS = 200  # the book's style is decided from its first numbers, this many digits
@@ -735,7 +760,7 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
     from books.models import Page
     from ocr.models import Line, OcrRun
     from ocr.services import count_unresolved
-    from review.services import refresh_page_text  # the review app owns the text of a page's lines
+    from review.services import _shift_gaps, refresh_page_text  # the review app owns a page's lines
 
     from .engines import registry
 
@@ -752,6 +777,7 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         result.skipped = "no image"
         return result
     lines = _unreviewed_lines(page)
+    as_read = {line.pk: [id(token) for token in line.tokens or []] for line in lines}  # `token_moves`
     requests, index = page_areas(page, lines)
     weak, weak_index = page_weak_boxes(page, lines)
     plans = page_letters(page, lines)
@@ -808,10 +834,13 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         ]
         if kept:
             check_years(lines)  # §4.8: Kraken rewrote digits; only the kept lines are saved below
+        dates_of = {plan.line.pk: plan.dates for plan in plans}
         for line in kept:
             line.text = " ".join(token["t"] for token in line.tokens)
             line.n_low = count_unresolved(line.tokens)
             line.save(update_fields=["tokens", "text", "n_low", "updated_at"])
+            moves = token_moves(as_read[line.pk], line.tokens, dates_of.get(line.pk, ()))
+            _shift_gaps(line, moves, line.tokens)  # its suggestions follow the words (D72)
             numbers, letters, dates = counts[line.pk]
             result.applied += numbers + letters + dates
             result.letters += letters

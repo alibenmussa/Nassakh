@@ -22,7 +22,7 @@ Western digits (`assembly.render.ar_count`).
   page and lights it, 7c);
 - `missing_text` (warn, D75): pages of the book (those its assembly run included; every page not
   excluded before the first run) with an open suggestion of words a model may have skipped (an open
-  `ocr.TextGap`, D72) → «المراجعة»;
+  `ocr.TextGap` on a line, D72) → «المراجعة»;
 - `review_drift` (warn): pages whose text changed in review after the manuscript was built
   (`editor.services.review_drift`) → «تغييرات المراجعة» (`?tab=changes`, D78);
 - `assembly_running` (warn): an assembly of the book is queued or running;
@@ -227,8 +227,9 @@ SINGLE_READERS: frozenset[str] = frozenset({"one", "tesseract"})  # `Page.readin
 
 def trust_pages(book: Book, manuscript) -> TrustPages:
     """`TrustPages` of the book (two queries): the pages its manuscript's run included (every page not
-    excluded when there is no run) with an open `ocr.TextGap`, and those still `ocr_done` whose
-    `reading.readers` is one model or Tesseract alone."""
+    excluded when there is no run) with an open `ocr.TextGap` on a line (review's rule: a gap whose line
+    was deleted is neither drawn nor counted), and those still `ocr_done` whose `reading.readers` is one
+    model or Tesseract alone."""
     from assembly.pipeline import UNREVIEWED_STATUS
     from books.models import Page
     from ocr.models import TextGap
@@ -238,7 +239,7 @@ def trust_pages(book: Book, manuscript) -> TrustPages:
     if run is not None:
         pages = pages.filter(pk__in=[int(key) for key in (run.included or {}) if str(key).isdigit()])
     gaps = (
-        TextGap.objects.filter(page__in=pages, status=TextGap.Status.OPEN)
+        TextGap.objects.filter(page__in=pages, status=TextGap.Status.OPEN, line__isnull=False)
         .order_by("page__number")
         .values_list("page__number", flat=True)
         .distinct()

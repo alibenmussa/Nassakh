@@ -37,7 +37,10 @@ def _context(request: HttpRequest, book_id: int, page: str) -> dict:
         request.GET.get("mode"),
         tab=request.GET.get("tab"),
         block=request.GET.get("block"),
-        find={key: request.GET.get(key) for key in ("q", "r", "fix")},
+        find={
+            key: request.GET.get(key)
+            for key in ("q", "r", "fix", "match_tashkeel", "fold_alef", "whole_word")
+        },
     )
     return {"book": book, "config": config, "exists": config["exists"], "can_edit": config["canEdit"]}
 

@@ -788,12 +788,13 @@
         },
 
         // ---------------------------------------------------------- Esc, errors, the toast
-        // Esc in the mode: a move in progress or not saved, then the band menu, then the draft (§3.12).
+        // Esc in the mode, the top layer first (§3.12): a move in progress or not saved, the band menu, the page's
+        // unsaved change (a started book), then the draft.
         escape() {
           if (this.drag) { const pid = this.drag.pid; this.endDrag(); this.dash.rerenderGuides(pid); return true; }
           if (keyMove) { const pid = keyMove.pid; clearTimeout(keyMove.timer); keyMove = null; this.dash.rerenderGuides(pid); return true; }
-          if (this.pageId && this.cancelPending(this.pageId)) return true;
           if (this.closeMenu()) return true;
+          if (this.pageId && this.cancelPending(this.pageId)) return true;
           return this.dropDraft();
         },
         failed(err, quiet) {

@@ -375,3 +375,23 @@ def test_the_year_check_leaves_resolved_tokens_short_words_and_small_numbers_alo
     assert flags.year_check([small]) == 0
     far = [num("٢٤٣"), *words("في", "سنة", "ثلاث", "واربعين")]  # other words between: no year in words
     assert flags.year_check([far]) == 0
+
+
+# ---------------------------------------------------------------- 7 review: a mark alone reads no word
+
+
+def test_a_mark_is_no_second_reading_of_a_word_the_second_model_skipped():
+    # v0.2 skipped «الكتاب» but kept its comma: the comma is no reading of the word (D71: sure with Tesseract)
+    assert flags.second_readings(["قال", "الكتاب،", "ثم"], ["قال،", "ثم"]) == ["قال", None, "ثم"]
+    assert flags.second_readings(["قال", "،", "ثم"], ["قال", "،", "ثم"]) == ["قال", "،", "ثم"]  # a mark's own
+    primary, skipped = "قال الكتاب، ثم ذهب إلى السوق", "قال، ثم ذهب إلى السوق"
+    word = tokens_of(primary, skipped, primary)["الكتاب،"]
+    assert (word["alt"], word["conf"], word.get("why")) == (None, "high", None)
+    # without Tesseract's support it is one model's word, not a disagreement over a comma
+    word = tokens_of(primary, skipped, "قال الوزير، ثم ذهب إلى السوق")["الكتاب،"]
+    assert (word["alt"], word["why"]) == (None, ["alone"])
+
+
+def test_the_vote_never_puts_a_mark_in_place_of_a_word():
+    token = {"t": "الكتاب،", "alt": "،", "tess": ".", "conf": "low", "digit": False, "why": ["disagree"]}
+    assert flags.vote_reading(token) is None and not voted(token)[1]

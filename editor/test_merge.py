@@ -385,7 +385,7 @@ def test_untouched_blocks_are_the_same_objects_and_all_mine_changes_nothing():
 def test_apply_refuses_a_choice_the_item_does_not_offer():
     items = one([para("p1", A, lines=[1])], [para("p1", A, lines=[1])], [para("p1", A2, lines=[1])])
     with pytest.raises(ValueError):
-        merge.apply(document(para("p1", A, lines=[1])), items, {"i1": "merged"})
+        merge.apply(document(para("p1", A, lines=[1])), items, {items[0]["id"]: "merged"})
 
 
 def test_inserts_go_after_the_anchor_before_the_successor_or_at_the_chapter_end():
@@ -447,9 +447,40 @@ def test_after_an_apply_and_the_base_splice_a_new_plan_has_no_items():
     items = merge.plan(mine, base, fresh, [1, 2])
     assert [i["kind"] for i in items] == ["take", "merged", "conflict"]
     for choice in ("mine", "theirs"):
-        new, _stats = merge.apply(mine, items, {"i3": choice})
+        new, _stats = merge.apply(mine, items, {items[2]["id"]: choice})
         spliced = merge.splice_base(base, fresh, [1, 2])
         assert merge.plan(new, spliced, fresh, [1, 2]) == []
+
+
+def test_item_ids_follow_the_item_and_not_its_place_in_the_plan():
+    base = document(
+        heading("h1", "ف", lines=[1]),
+        para("p2", A, lines=[2]),
+        para("p3", B, lines=[3], pages=(2,)),
+        para("p4", "وله كتب سنة 1966.", lines=[4], pages=(2,)),
+    )
+    mine = copy.deepcopy(base)
+    mine["content"][3]["content"][0]["text"] = B.replace("بلده", "بلاده")
+    mine["content"][4]["content"][0]["text"] = "وله كتب سنة 1967."
+    fresh = copy.deepcopy(base)
+    fresh["content"][2]["content"][0]["text"] = A2
+    fresh["content"][3]["content"][0]["text"] = B.replace("المشرق", "الشرق")
+    fresh["content"][4]["content"][0]["text"] = "وله كتب سنة 1965."
+    first = merge.plan(mine, base, fresh, [1, 2])
+    assert [i["kind"] for i in first] == ["take", "merged", "conflict"]
+    assert len({i["id"] for i in first}) == 3 and all(len(i["id"]) == 13 for i in first)
+    assert [i["id"] for i in merge.plan(mine, base, fresh, [1, 2])] == [i["id"] for i in first]
+    # the owner types review's words into the first paragraph: its item goes, the others keep their ids
+    edited = copy.deepcopy(mine)
+    edited["content"][2]["content"][0]["text"] = A2
+    again = merge.plan(edited, base, fresh, [1, 2])
+    assert [(i["kind"], i["id"]) for i in again] == [(i["kind"], i["id"]) for i in first[1:]]
+    new, _stats = merge.apply(edited, again, {first[2]["id"]: "theirs"})  # the choice kept by id
+    assert texts(new)[2:] == [B.replace("المشرق", "الشرق").replace("بلده", "بلاده"), "وله كتب سنة 1965."]
+    # a paragraph whose text changed again is a new item: its choice goes back to the default
+    edited["content"][4]["content"][0]["text"] = "وله كتب سنة 1968."
+    third = merge.plan(edited, base, fresh, [1, 2])
+    assert third[0]["id"] == first[1]["id"] and third[1]["id"] not in {i["id"] for i in first}
 
 
 # ====================================================================== the base

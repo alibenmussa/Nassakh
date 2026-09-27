@@ -34,7 +34,7 @@ from django.utils import timezone
 import numpy as np
 import pymupdf
 
-from books.models import Book, Page
+from books.models import ALL_PAGES_FAILED_MESSAGES, Book, Page
 from core.arabic import arabic_ratio, normalize_ws, to_western_digits
 from core.images import fit_width
 from core.serializers import flag_items, region_items
@@ -710,7 +710,9 @@ def toggle_exclude(page: Page) -> Page:
     A page re-included into a book whose processing has started continues from its completed
     stage (preprocess, layout or OCR is enqueued), so the book never waits for work nobody runs.
     In a book that awaits «بدء المعالجة» (D64) a prepared page simply joins the waiting pages and an
-    unprepared one is only prepared; nothing is queued for OCR.
+    unprepared one is only prepared; nothing is queued for OCR. A book in `error` because every page
+    failed (`ALL_PAGES_FAILED_MESSAGES`) is re-derived like any other (the «تراجع» of an exclusion
+    brings back its one good page); an ingest error stays.
     """
     page.is_excluded = not page.is_excluded
     if page.is_excluded:
@@ -721,8 +723,11 @@ def toggle_exclude(page: Page) -> Page:
         page.status = page._completed_status()
     page.save(update_fields=["is_excluded", "status", "error_from", "error_message"])
     book = page.book
-    # A book that has not started yet stays `uploaded`; otherwise the derived status may change.
-    if book.status in (Book.Status.UPLOADED, Book.Status.ERROR):
+    # A book that has not started yet stays `uploaded`, an ingest error stays; otherwise the derived status
+    # may change (the all-failed error is `refresh_status`'s own).
+    if book.status == Book.Status.UPLOADED or (
+        book.status == Book.Status.ERROR and book.error_message not in ALL_PAGES_FAILED_MESSAGES
+    ):
         return page
     next_stage = None if page.is_excluded else _NEXT_STAGE.get(page.status)
     if next_stage is not None and book.awaits_ocr_start:

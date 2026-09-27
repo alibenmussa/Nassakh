@@ -902,10 +902,20 @@ def test_clear_only_when_every_page_of_the_book_is_reviewed(book):
 # ---------------------------------------------------------------------- D75: doubtful text
 
 
-def gap(page: ScanPage, status: str = "open") -> None:
-    from ocr.models import TextGap
+def gap(page: ScanPage, status: str = "open"):
+    """A suggestion on a line of `page` (a gap belongs to a line, D72)."""
+    from ocr.models import Line, TextGap
 
-    TextGap.objects.create(page=page, text="تعالى بطرابلس ونشأ بها", status=status, support=0.4)
+    line = Line.objects.create(page=page, order=page.lines.count(), text="قال", tokens=[{"t": "قال"}])
+    return TextGap.objects.create(
+        page=page,
+        line=line,
+        index=0,
+        after_t="قال",
+        text="تعالى بطرابلس ونشأ بها",
+        status=status,
+        support=0.4,
+    )
 
 
 def test_missing_text_lists_the_pages_with_an_open_suggestion(book):
@@ -930,6 +940,18 @@ def test_missing_text_lists_the_pages_with_an_open_suggestion(book):
     assert "clear" not in found
     codes = [item["code"] for item in readiness.book_readiness(Book.objects.get(pk=book.pk))]
     assert codes[:2] == ["pages_missing", "missing_text"]  # after the Phase 6 review's rows
+
+
+def test_missing_text_leaves_out_a_suggestion_whose_line_was_deleted(book):
+    """Review deleted the line (the gap's `line` is null, SET_NULL): it no longer counts the gap, nor draws
+    it, so the row would stay with nothing to act on; readiness follows review's rule."""
+    from ocr.models import Line
+
+    pages = paged(book, {1: "ocr_done", 2: "ocr_done"}, included=(1, 2))
+    gap(pages[1])
+    Line.objects.filter(pk=gap(pages[2]).line_id).delete()
+    trust = readiness.trust_pages(Book.objects.get(pk=book.pk), Manuscript.objects.get(book=book))
+    assert trust.missing_text == [1]
 
 
 def test_single_reader_counts_the_unreviewed_pages_one_model_read(book):

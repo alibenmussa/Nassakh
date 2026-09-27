@@ -46,13 +46,18 @@
    "stages": "/api/books/40/stages/"
   }
  },
- "GET /books/42/layout/?tab=find&q=…&r=…&fix=<batch> → config": {
+ "GET /books/42/layout/?tab=find&q=…&r=…&fix=<batch>&<the sheet's options> → config": {
   "tab": "find",
   "block": null,
   "findPrefill": {
    "query": "السعودي",
    "replacement": "المسعودي",
-   "fix": "6c1b9b52-0000-4000-8000-000000000001"
+   "fix": "6c1b9b52-0000-4000-8000-000000000001",
+   "options": {
+    "match_tashkeel": false,
+    "fold_alef": true,
+    "whole_word": true
+   }
   }
  },
  "PANEL_TABS": [

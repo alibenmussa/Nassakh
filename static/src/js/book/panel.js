@@ -107,7 +107,9 @@
         if (this.uncertain.count && this.tab === 'uncertain') this.loadUncertain();
         this.bindLiveDrift();
         // the address (§5.4): `?block=` lands on the paragraph once the pages are there; `?tab=find&q=&r=&fix=` fills
-        // find & replace (fix everywhere on an edited book, §5.7); `?tab=changes` compares at once
+        // find & replace (fix everywhere on an edited book, §5.7) with the review sheet's options when it carries them
+        // (the page's own whole-word-off default would also replace «السعودية» for «السعودي»); `?tab=changes`
+        // compares at once
         this.pendingBlock = typeof cfg.block === 'string' && cfg.block ? cfg.block : null;
         if (this.pendingBlock && this.pages.length) this.landBlock(); // the first pages landed already (the stage inits first)
         const pre = cfg.findPrefill;
@@ -116,6 +118,8 @@
           this.find.replacement = String(pre.replacement || '');
           this.find.scope = 'book';
           this.find.fixBatch = pre.fix || null;
+          const o = pre.options;
+          if (o) Object.assign(this.find, { matchTashkeel: Boolean(o.match_tashkeel), foldAlef: Boolean(o.fold_alef), wholeWord: Boolean(o.whole_word) });
           this.tab = 'find';
           this.scheduleFind();
         }
@@ -927,7 +931,8 @@
       // 700 ms. Rows are the plan's pages (a checkbox: taken now or not), items the paragraphs with their chip and
       // diff; a conflict and a `choose` item ask «نصّي | المراجعة» (default «نصّي»). «أخذ التغييرات (3)» applies the
       // checked pages (a snapshot first: the toast's «تراجع» restores it), «الاحتفاظ بنصّي في الكل» moves the baseline
-      // without writing the text. A 409 plans again and keeps the choices of the items that remain.
+      // without writing the text. A 409 plans again and keeps the choices of the items that remain (ids are digests
+      // of the items) and the pages left out.
       get hasChangesTab() {
         const p = this.changes.plan;
         return Boolean(this.drift.edited && (this.drift.pages || []).length) || Boolean(p && (p.status === 'queued' || p.status === 'running' || (p.status === 'done' && !p.applied && (p.items || []).length)));
@@ -947,18 +952,26 @@
         return (p.pages || []).map((row) => Object.assign({}, row, { items: (row.items || []).map((id) => items.get(id)).filter(Boolean), taken: this.changes.pages[row.number] !== false }));
       },
       get changesTaken() { return this.changesRows.filter((r) => r.taken); },
-      // «أخذ التغييرات (3)»: the items of the pages taken
-      get changesApplyCount() { return this.changesTaken.reduce((n, r) => n + r.items.length, 0); },
+      // the items of the pages taken, once each: a paragraph over two pages is listed under both rows and
+      // comes with either (the server applies an item when one of its `pages` is taken)
+      get changesTakenItems() { return [...new Map(this.changesTaken.flatMap((r) => r.items.map((it) => [it.id, it]))).values()]; },
+      // «أخذ التغييرات (3)»
+      get changesApplyCount() { return this.changesTakenItems.length; },
       get changesApplyLabel() {
         if (this.changes.busy === 'apply') return 'تُؤخذ…';
         return `أخذ التغييرات (${this.changesApplyCount})`;
       },
       choiceOf(item) { const c = this.changes.choices[item.id]; return c && (item.choices || []).includes(c) ? c : item.default; },
       setChoice(item, choice) { if ((item.choices || []).includes(choice)) this.changes.choices = Object.assign({}, this.changes.choices, { [item.id]: choice }); },
-      // «خذ ما جاء من المراجعة في هذه الصفحة» / «أبقِ نصّي في هذه الصفحة»
+      // «خذ ما جاء من المراجعة في هذه الصفحة» / «أبقِ نصّي في هذه الصفحة». Review's side of a merged paragraph
+      // is «merged» (review's change with the owner's own edits kept, what its diff shows): its «theirs», the
+      // whole fresh paragraph, would drop those edits with no control on screen to say so.
       setPageChoice(row, choice) {
         const next = Object.assign({}, this.changes.choices);
-        row.items.forEach((it) => { if ((it.choices || []).includes(choice)) next[it.id] = choice; });
+        row.items.forEach((it) => {
+          const c = choice === 'theirs' && it.kind === 'merged' ? 'merged' : choice;
+          if ((it.choices || []).includes(c)) next[it.id] = c;
+        });
         this.changes.choices = next;
         this.changes.pages = Object.assign({}, this.changes.pages, { [row.number]: true });
       },
@@ -1023,17 +1036,22 @@
       },
       adoptPlan(plan, stale) {
         const failed = plan && plan.status === 'error';
-        // the choices of the items that remain survive a new plan (item ids are stable in order)
+        // a new plan (a 409, the tab again) keeps the choices of the items that remain and the pages left out
+        // that remain: an item's id is a digest of the item, so an id seen again is the same paragraph with the
+        // same change (one that changed has a new id, and its default)
         const ids = new Set(((plan && plan.items) || []).map((it) => it.id));
+        const numbers = new Set(((plan && plan.pages) || []).map((r) => r.number));
         const choices = {};
         Object.entries(this.changes.choices).forEach(([id, c]) => { if (ids.has(id)) choices[id] = c; });
+        const pages = {};
+        Object.entries(this.changes.pages).forEach(([n, on]) => { if (numbers.has(Number(n))) pages[n] = on; });
         this.changes = Object.assign({}, this.changes, {
           plan: plan || null,
           stale: Boolean(stale),
           state: failed ? 'error' : plan ? 'ready' : 'idle',
           error: failed ? plan.error || 'تعذّرت المقارنة؛ بقي الكتاب كما هو.' : '',
           choices,
-          pages: {},
+          pages,
         });
       },
       // the apply's body: the checked pages; only the choices that differ from the item's default
@@ -1041,7 +1059,7 @@
         const pages = this.changesTaken.map((r) => r.number);
         if (keepAll) return { keep_all: true, pages };
         const choices = {};
-        this.changesTaken.forEach((row) => row.items.forEach((it) => { const c = this.choiceOf(it); if (c !== it.default) choices[it.id] = c; }));
+        this.changesTakenItems.forEach((it) => { const c = this.choiceOf(it); if (c !== it.default) choices[it.id] = c; });
         return { choices, pages };
       },
       async applyChanges(keepAll) {
@@ -1052,7 +1070,7 @@
         if (ctx.ed) await this.closeBlock({ commit: true });
         await this.saveNow();
         if (this.editDirty) { U.toast('تعذّر الحفظ قبل أخذ التغييرات'); return false; }
-        const taken = this.changesTaken.flatMap((r) => r.items);
+        const taken = this.changesTakenItems;
         this.changes.busy = keepAll ? 'keep' : 'apply';
         const r = await U.api(U.fill(urls.reviewChangesApply, plan.id), { method: 'POST', body });
         this.changes.busy = '';

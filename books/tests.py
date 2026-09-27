@@ -2691,3 +2691,47 @@ def test_tile_contract():
     }
     write_contract("tile.json", contract)
     assert contract == contract_fixture("tile.json")
+
+
+# ---------------------------------------------------------------- 7 review: «تراجع» of an exclusion
+
+
+@pytest.mark.parametrize("awaits", [True, False])
+def test_reincluding_a_page_brings_an_all_failed_book_back(awaits):
+    # the toast's «تراجع» re-includes the one good page of a book whose other pages failed: every included
+    # page had failed, so the book was «تعذّر تجهيز/معالجة كل صفحات الكتاب»; with the page back it is not
+    done = {} if awaits else {"text_state": Page.TextState.FINAL}
+    status = Page.Status.PREPROCESSED if awaits else Page.Status.OCR_DONE
+    book, (good, bad) = _book_with_pages(2, status=status)
+    Page.objects.filter(pk=good.pk).update(**done)
+    Preprocess.objects.create(page=good)
+    Book.objects.filter(pk=book.pk).update(
+        awaits_ocr_start=awaits, status=Book.Status.NEEDS_GUIDES if awaits else Book.Status.READY_FOR_REVIEW
+    )
+    failure = {"status": Page.Status.ERROR, "error_from": "preprocess", "error_message": "x"}
+    Page.objects.filter(pk=bad.pk).update(**failure)
+    good.refresh_from_db()
+    services.toggle_exclude(good)
+    book.refresh_from_db()
+    failed = ALL_PAGES_FAILED_LAYOUT if awaits else ALL_PAGES_FAILED
+    assert (book.status, book.error_message) == (Book.Status.ERROR, failed)
+    good.refresh_from_db()
+    with patch("books.services.chain") as chain:
+        services.toggle_exclude(good)
+    chain.assert_not_called()  # a prepared page in «التخطيط», a read page after it: nothing to run
+    good.refresh_from_db()
+    book.refresh_from_db()
+    assert good.status == (Page.Status.PREPROCESSED if awaits else Page.Status.OCR_DONE)
+    assert book.status == (Book.Status.NEEDS_GUIDES if awaits else Book.Status.READY_FOR_REVIEW)
+    assert book.error_message == ""
+
+
+def test_an_ingest_error_stays_when_a_page_is_reincluded():
+    book, pages = _book_with_pages(2, status=Page.Status.PREPROCESSED)
+    Preprocess.objects.create(page=pages[0])
+    Book.objects.filter(pk=book.pk).update(status=Book.Status.ERROR, error_message="تعذّر قراءة ملف PDF.")
+    pages[0].refresh_from_db()
+    services.toggle_exclude(pages[0])
+    services.toggle_exclude(pages[0])
+    book.refresh_from_db()
+    assert (book.status, book.error_message) == (Book.Status.ERROR, "تعذّر قراءة ملف PDF.")

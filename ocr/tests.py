@@ -33,6 +33,7 @@ from ocr.engines.fake import FakeEngine
 from ocr.engines.qari import max_new_tokens_for, read_model_info, resolve_device
 from ocr.engines.tesseract import TesseractEngine, parse_image_to_data
 from ocr.models import Line, OcrRun
+from ocr.test_numbers import FakeKraken, numbers_page, word  # noqa: F401 - numbers_page: a fixture
 from processing.models import Preprocess, Region
 
 W, H = 120, 200
@@ -1842,13 +1843,7 @@ def test_select_text_offers_the_clean_start_of_a_looped_run_as_a_partial_second_
     assert services.select_text(good, looped, tess)[1] == chosen.alt
     before = services.select_reading(good, looped, tess, partial=False)  # the rule before 7b
     assert before.alt is None and not before.alt_partial
-    # the primary looped, the secondary passed: the primary's clean start is the second reading
-    chosen = services.select_reading(
-        OcrRun(engine_name="qari_v03", raw_output=raw, parsed_text=raw, looped=True),
-        OcrRun(engine_name="qari_v02", parsed_text=REF_20),
-        tess,
-    )
-    assert chosen.source == "qari_v02" and chosen.alt_partial and chosen.alt.startswith("كلمة0")
+    # the primary looped, the secondary passed: no second reading (test_a_looped_primary_gives_…)
 
 
 # the secondary read «إن الكتب مفيد» where the primary skipped it (Tesseract has it: a group), and
@@ -2022,3 +2017,119 @@ def test_the_numbers_pass_checks_the_years_again_after_kraken(page):
     line.tokens[0]["t"] = "٢٤٢"  # as Kraken read it
     assert numbers.check_years(lines) == 1
     assert line.tokens[0]["res"] == "words" and "sug" not in line.tokens[0]
+
+
+# ---------------------------------------------------------------- 7 review: rebuild_lines while review works
+
+
+def _review_during_the_rescue(monkeypatch, act) -> None:
+    """`rescue_lines` runs as stored, then the reviewer acts (`act()`) while it would still be reading."""
+    real = services.rescue_lines
+
+    def rescue(*args, **kwargs):
+        added = real(*args, **kwargs)
+        act()
+        return added
+
+    monkeypatch.setattr(services, "rescue_lines", rescue)
+
+
+def test_a_resolve_made_during_the_rescue_stops_the_rebuild(page, monkeypatch):
+    from review import services as review
+    from review.models import LineRevision
+
+    region, fakes = _old_page(page)
+    run = page.ocr_runs.get(engine_name="tesseract", region=region)
+    assert services.rebuild_skip_reason(page) == ""
+    first = page.lines.order_by("order").first()
+    _review_during_the_rescue(monkeypatch, lambda: review.resolve_token(first, 0, "typed", text="كتب"))
+    with registry.override(fakes), pytest.raises(services.OcrError, match="has review revisions"):
+        services.rebuild_page_lines(page, save=True)
+    revision = LineRevision.objects.get(page=page)
+    assert not revision.undone  # the resolution stays and can still be undone
+    assert page.lines.count() == 2 and page.lines.order_by("order").first().tokens[0]["t"] == "كتب"
+    fresh = page.ocr_runs.get(pk=run.pk)
+    assert fresh.params == run.params and fresh.parsed_text == run.parsed_text  # the rescue was not saved
+
+
+def test_an_approval_made_during_the_rescue_stays(page, monkeypatch):
+    from review import services as review
+
+    _, fakes = _old_page(page)
+    _review_during_the_rescue(monkeypatch, lambda: review.approve_page(page, None, force=True))
+    with registry.override(fakes), pytest.raises(services.OcrError, match="status reviewed"):
+        services.rebuild_page_lines(page, save=True)
+    page.refresh_from_db()
+    assert page.status == Page.Status.REVIEWED and page.reviewed_at is not None
+    assert page.lines.count() == 2
+
+
+def test_keeping_reviewed_lines_reads_the_approval_from_the_database(page):
+    # a pass that read the page before it was approved still finalises it as approved
+    add_regions(page)
+    with registry.override(engines()):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    stale = Page.objects.get(pk=page.pk)
+    page.lines.update(is_reviewed=True)
+    Page.objects.filter(pk=page.pk).update(status=Page.Status.REVIEWED, reviewed_at="2026-09-27T10:00:00Z")
+    assert stale.reviewed_at is None
+    services.finalize_page(stale)
+    page.refresh_from_db()
+    assert page.status == Page.Status.REVIEWED and page.reviewed_at is not None
+
+
+# ---------------------------------------------------------------- 7 review: which model a second reading is
+
+
+def test_a_looped_primary_gives_the_secondarys_text_no_second_reading():
+    # review names `t` Qari v0.3 and `alt` Qari v0.2 on every page: v0.3's clean start offered as the second
+    # reading of v0.2's text would be named the wrong way round, so the text stands alone (one reader)
+    tess = OcrRun(engine_name="tesseract", parsed_text=REF_20)
+    raw = "كلمة0 كلمة1 كلمه2 كلمة3 " + "واخذ عن جماعة من الفضلاء " * 8
+    chosen = services.select_reading(
+        OcrRun(engine_name="qari_v03", raw_output=raw, parsed_text=raw, looped=True),
+        OcrRun(engine_name="qari_v02", parsed_text=REF_20),
+        tess,
+    )
+    assert chosen.source == "qari_v02" and chosen.text == REF_20
+    assert chosen.alt is None and not chosen.alt_partial and chosen.reason == "primary:loop"
+
+
+# ---------------------------------------------------------------- 7 review: the numbers pass moves the gaps
+
+
+def test_the_numbers_pass_moves_a_lines_suggestions_with_its_words(numbers_page):  # noqa: F811
+    from ocr import numbers as nb
+    from ocr.models import TextGap
+
+    page, line, _reviewed = numbers_page
+    line.tokens = [
+        word("المنصور", [80, 10, 95, 20]),
+        word("(ع"),
+        word("ه"),
+        word("–"),
+        word("ه"),
+        word("م)"),
+        word("بأيدي", [60, 10, 75, 20]),
+        word("(ه)", [45, 10, 55, 20]),
+        word("(هـ)", [30, 10, 40, 20]),
+    ]
+    line.save(update_fields=["tokens"])
+    after_date = TextGap.objects.create(page=page, line=line, index=5, after_t="م)", text="رحمه الله")
+    after_letter = TextGap.objects.create(page=page, line=line, index=7, after_t="(ه)", text="تعالى")
+    last = TextGap.objects.create(page=page, line=line, index=8, after_t="(هـ)", text="كذا")
+    engine = FakeKraken(
+        {
+            (0, 8, 100, 22): "المنصور (٧٥٤-٧٧٥م) بأيدي (٥) (هـ)",
+            (45, 10, 55, 20): "(٥)",
+            (30, 10, 40, 20): "(هـ)",
+        }
+    )
+    done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
+    assert (done.letters, done.dates) == (1, 1)
+    line.refresh_from_db()
+    assert [t["t"] for t in line.tokens] == ["المنصور", "(٧٥٤–٧٧٥م)", "بأيدي", "(٥)", "(هـ)"]
+    # the date's five tokens became one: what came after it stays after it; a rewritten word is followed
+    places = {gap.pk: (gap.index, gap.after_t) for gap in TextGap.objects.filter(line=line)}
+    assert places == {after_date.pk: (1, "(٧٥٤–٧٧٥م)"), after_letter.pk: (3, "(٥)"), last.pk: (4, "(هـ)")}

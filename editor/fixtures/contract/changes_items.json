@@ -1,6 +1,6 @@
 {
  "take": {
-  "id": "i1",
+  "id": "i7b4cd888f203",
   "kind": "take",
   "default": "theirs",
   "chip": "من المراجعة",
@@ -42,7 +42,7 @@
   "base": "stored"
  },
  "merged": {
-  "id": "i2",
+  "id": "i1c046e0c1c9d",
   "kind": "merged",
   "default": "merged",
   "chip": "مع تعديلك",
@@ -85,7 +85,7 @@
   "base": "stored"
  },
  "conflict": {
-  "id": "i3",
+  "id": "i579aba25871e",
   "kind": "conflict",
   "default": "mine",
   "chip": "تعارض",
@@ -128,7 +128,7 @@
   "base": "stored"
  },
  "conflict_deleted": {
-  "id": "i4",
+  "id": "i017d42cc3017",
   "kind": "conflict",
   "default": "mine",
   "chip": "تعارض",
@@ -161,7 +161,7 @@
   "base": "stored"
  },
  "insert": {
-  "id": "i5",
+  "id": "i86994f572e80",
   "kind": "insert",
   "default": "theirs",
   "chip": "فقرة جديدة",
@@ -189,7 +189,7 @@
   "base": "stored"
  },
  "remove": {
-  "id": "i6",
+  "id": "ic92ba727fae3",
   "kind": "remove",
   "default": "theirs",
   "chip": "تُحذف",
@@ -219,7 +219,7 @@
   "base": "stored"
  },
  "take_processing": {
-  "id": "i7",
+  "id": "i3d2d02dc07e2",
   "kind": "take",
   "default": "theirs",
   "chip": "من المراجعة",
@@ -261,7 +261,7 @@
   "base": "stored"
  },
  "choose": {
-  "id": "i1",
+  "id": "i20a451cbcd52",
   "kind": "choose",
   "default": "mine",
   "chip": "للمقارنة",

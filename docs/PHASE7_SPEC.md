@@ -1757,11 +1757,13 @@ A template test asserts that the retired strings are absent from every template 
 A plan item, as the UI reads it:
 
 ```json
-{"id": "i3", "kind": "merged", "default": "merged", "page": 12, "pages": [12, 13], "chapter": "h812",
+{"id": "i7c2e91a04b3f", "kind": "merged", "default": "merged", "page": 12, "pages": [12, 13], "chapter": "h812",
  "chapter_title": "الفصل الثالث", "block": "p815",
  "diff": [["eq", "… وكان"], ["del", "فقيها"], ["ins", "فقيهاً"], ["eq", "، فاضلاً …"]], "conflicts": [], "base": "stored"}
 ```
 
+The id is stable across plans (review 2026-09-27: a digest of the item's kind, source lines, book blocks and
+words, `merge.item_id`), so a choice survives a 409 re-plan; an item is listed under every page it touches.
 `diff` compares mine with the default result by word, with 5 words of context. A conflict carries `{mine, theirs}`
 snippets. The result nodes stay server-side; the client never sends document JSON.
 
