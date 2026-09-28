@@ -19,6 +19,7 @@ from ocr import numbers as nb
 from ocr.alignment import (
     WEAK,
     Band,
+    align_tokens,
     build_lines,
     clip_overruns,
     covered_bands,
@@ -484,3 +485,22 @@ def test_the_first_lines_before_the_first_anchor_take_the_empty_lines_and_bands_
     # more leading lines than places: the topmost join the top place
     built = build_lines("سطر أول\n– ٤ –\nمعاوية بن حديج\nابن جفنة بن\nصحابي حضر", None, tess, bands=bands)
     assert texts(built) == ["سطر أول – ٤ –", "معاوية بن حديج", "ابن جفنة بن", "صحابي حضر"]
+
+
+# ------------------------------------------------------ 9. the word pairing keeps the most words in order
+
+
+def test_a_word_equal_to_a_later_word_is_not_paired_across_the_words_between():
+    """Book 29 p. 243: «علي» (the name) equals «على» (the preposition) leniently; SequenceMatcher paired
+    them across «من الآستانة», which then could not pair in order. The longest common subsequence keeps
+    those pairs and leaves the name unpaired."""
+    a = "علي عشقر عين من الآستانة واليا على طرابلس بعد حسن".split()
+    b = "oe من الآستانة Ul, على طرايلس بعد حسن".split()
+    pairs = dict(p for p in align_tokens(a, b) if p[0] is not None)
+    assert pairs[3] == 1 and pairs[4] == 2 and pairs[6] == 4 and pairs[8] == 6 and pairs[9] == 7
+    assert pairs[0] is None  # «علي» is not «على»
+    # an ordinary line pairs as before (SequenceMatcher's blocks), a misread word one for one
+    a = "قال الأمير في سنة ثم انتهى".split()
+    b = "قال الامبر في سنة ثم انتهى".split()
+    assert align_tokens(a, b) == [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+    assert align_tokens(["كلمة"], []) == [(0, None)] and align_tokens([], ["كلمة"]) == [(None, 0)]

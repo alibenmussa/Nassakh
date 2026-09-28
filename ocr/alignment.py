@@ -160,7 +160,18 @@ def align_tokens(
     nb = [key(t) for t in b]
     pairs: list[Pair] = []
     matcher = difflib.SequenceMatcher(None, na, nb, autojunk=False)
-    for tag, i0, i1, j0, j1 in matcher.get_opcodes():
+    opcodes = matcher.get_opcodes()
+    equal = sum(i1 - i0 for tag, i0, i1, _j0, _j1 in opcodes if tag == "equal")
+    # SequenceMatcher takes the longest block first, the earliest when all are single words: a word equal
+    # to a later word of the other side («علي» the name, «على» the preposition; ي and ى fold) is paired
+    # across the words between, which then cannot pair in order (book 29 p. 243: the heading's first word
+    # anchored on the body line, the body line's words left without boxes). When more words pair in order
+    # (the longest common subsequence), that pairing is used instead; otherwise the blocks stay as they were.
+    if 0 < equal < min(len(na), len(nb)):
+        matches = _lcs_matches(na, nb)
+        if len(matches) > equal:
+            return _pairs_from_matches(na, nb, matches, min_ratio)
+    for tag, i0, i1, j0, j1 in opcodes:
         if tag == "equal":
             pairs.extend(zip(range(i0, i1), range(j0, j1), strict=True))
         elif tag == "delete":
@@ -169,6 +180,53 @@ def align_tokens(
             pairs.extend((None, j) for j in range(j0, j1))
         else:
             pairs.extend(_pair_block(na, nb, i0, i1, j0, j1, min_ratio))
+    return pairs
+
+
+def _lcs_matches(na: list[str], nb: list[str]) -> list[tuple[int, int]]:
+    """The pairs `(i, j)` of a longest common subsequence of `na` and `nb` (equal keys, empty keys never
+    match), in order; runs of neighbours are kept together where the length allows."""
+    n, m = len(na), len(nb)
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        row, below = dp[i], dp[i + 1]
+        ai = na[i]
+        for j in range(m - 1, -1, -1):
+            if ai and ai == nb[j]:
+                row[j] = below[j + 1] + 1
+            else:
+                row[j] = below[j] if below[j] >= row[j + 1] else row[j + 1]
+    out: list[tuple[int, int]] = []
+    i = j = 0
+    while i < n and j < m:
+        if na[i] and na[i] == nb[j] and dp[i][j] == dp[i + 1][j + 1] + 1:
+            out.append((i, j))
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def _pairs_from_matches(
+    na: list[str], nb: list[str], matches: list[tuple[int, int]], min_ratio: int
+) -> list[Pair]:
+    """`align_tokens`' pairs from in-order exact matches: the gaps between them paired as replaced blocks
+    (`_pair_block`), one-sided gaps left unpaired."""
+    pairs: list[Pair] = []
+    i0 = j0 = 0
+    for i, j in [*matches, (len(na), len(nb))]:
+        if i > i0 and j > j0:
+            pairs.extend(_pair_block(na, nb, i0, i, j0, j, min_ratio))
+        elif i > i0:
+            pairs.extend((x, None) for x in range(i0, i))
+        elif j > j0:
+            pairs.extend((None, y) for y in range(j0, j))
+        if i < len(na):
+            pairs.append((i, j))
+        i0, j0 = i + 1, j + 1
     return pairs
 
 
