@@ -1,5 +1,6 @@
 """OCR tasks (spec §7): `ocr_page_fast` (default queue), `ocr_page_full` and `warm_up_engines` (gpu queue),
-`read_numbers` (default queue, D50: Kraken reads the Arabic-Indic numbers of a finalised page).
+`read_numbers` (default queue, D50: Kraken reads the Arabic-Indic numbers of a finalised page, then
+its footnote call marks, D83).
 
 Tasks call the services and return the `page_id` they received so they chain
 (`layout_page → ocr_page_fast → ocr_page_full`). `OSError` is retried twice (network/storage
@@ -16,6 +17,7 @@ import logging
 from collections.abc import Callable
 
 from celery import shared_task
+from django.conf import settings
 
 from books.models import Page
 
@@ -100,6 +102,14 @@ def read_numbers(self, page_id: int) -> int:
         raise  # retried once
     except Exception:  # noqa: BLE001 - Qari's numbers stay; the log says why
         log.exception("read_numbers: page %s failed", page_id)
+    if settings.NASSAKH.get("CALLS_PASS", True):
+        from . import calls  # the call pass (D83): the raised «(١)» of a footnote call, read from the ink
+
+        try:
+            found = calls.read_page_calls(page)
+            log.info("read_calls: page %s: %s", page_id, found.as_dict())
+        except Exception:  # noqa: BLE001 - the page keeps its text; the log says why
+            log.exception("read_calls: page %s failed", page_id)
     return page_id
 
 

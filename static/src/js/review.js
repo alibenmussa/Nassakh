@@ -985,7 +985,9 @@
           case 'single':
             return tok.tess ? `قرأ هذه المنطقةَ نموذجٌ واحد، ويقرأ Tesseract هنا «${tok.tess}».` : 'قرأ هذه المنطقةَ نموذجٌ واحد.';
           case 'missing': return `كلمات أضافتها القراءة الثانية: قرأها ${S} وTesseract ولم يقرأها ${P}.`;
-          default: return !why.length && tok.digit ? 'رقم: قابِله بالصورة.' : '';
+          default:
+            if (tok.call) return 'علامة حاشية قرأها Kraken من الصورة: قابِلها بالصورة.';
+            return !why.length && tok.digit ? 'رقم: قابِله بالصورة.' : '';
         }
       },
       get reason() { return this.reasonOf(); },

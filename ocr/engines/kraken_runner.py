@@ -6,7 +6,8 @@ environment (`make kraken` → `.venv-kraken/`) and the project talks to it thro
     <kraken python> ocr/engines/kraken_runner.py < request.json > response.json
 
 request:  {"model": "<.mlmodel path>", "pages": [{"image": "<gray page image>",
-           "lines": [{"id": <any>, "bbox": [x0, y0, x1, y1], "margin_x": <optional>}]}]}
+           "lines": [{"id": <any>, "bbox": [x0, y0, x1, y1], "margin_x": <optional>,
+                      "scale": <optional integer: the crop is upscaled by it before reading>}]}]}
 response: {"ok": true, "model": "<file name>", "seconds": <float>,
            "lines": [{"id": <as given>, "text": "<the line, logical order>",
                       "chars": [[<char>, x0, x1, <confidence 0–1>], ...]}]}
@@ -48,12 +49,13 @@ def padded(
     return max(0, x0 - pad_x), max(0, y0 - pad), min(width, x1 + pad_x), min(height, y1 + pad)
 
 
-def char_rows(prediction: str, cuts, confidences, dx: int) -> list[list]:
-    """`[char, x0, x1, confidence]` per character, x in page pixels (the crop starts at `dx`)."""
+def char_rows(prediction: str, cuts, confidences, dx: int, scale: float = 1.0) -> list[list]:
+    """`[char, x0, x1, confidence]` per character, x in page pixels (the crop starts at `dx` and was
+    upscaled by `scale`)."""
     rows: list[list] = []
     for i, char in enumerate(prediction):
         polygon = cuts[i] if cuts is not None and i < len(cuts) else None
-        xs = [float(point[0]) for point in polygon] if polygon else []
+        xs = [float(point[0]) / scale for point in polygon] if polygon else []
         conf = float(confidences[i]) if confidences is not None and i < len(confidences) else 0.0
         if xs:
             rows.append([char, round(min(xs) + dx, 1), round(max(xs) + dx, 1), round(conf, 3)])
@@ -101,9 +103,12 @@ def read(request: dict) -> dict:
                 if crop.width < 4 or crop.height < 4:
                     out.append({"id": line.get("id"), "text": "", "chars": []})
                     continue
+                scale = max(1, int(line.get("scale") or 1))
+                if scale > 1:
+                    crop = crop.resize((crop.width * scale, crop.height * scale), Image.LANCZOS)
                 record = next(iter(rpred.rpred(net, crop, _segmentation(*crop.size), bidi_reordering="R")))
                 prediction = record.prediction or ""
-                rows = char_rows(prediction, record.cuts, record.confidences, box[0])
+                rows = char_rows(prediction, record.cuts, record.confidences, box[0], scale)
                 out.append({"id": line.get("id"), "text": prediction, "chars": rows})
     name = str(request["model"]).rsplit("/", 1)[-1]
     return {"ok": True, "model": name, "seconds": round(time.time() - started, 3), "lines": out}

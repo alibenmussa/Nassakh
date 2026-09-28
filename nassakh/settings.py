@@ -170,6 +170,7 @@ NASSAKH = {
     # The numbers pass (D50): Kraken, in its own environment (`make kraken`), reads the Arabic-Indic
     # numbers of each finalised page of a book that prints them.
     "NUMBERS_PASS": env.bool("NUMBERS_PASS", default=True),
+    "CALLS_PASS": env.bool("CALLS_PASS", default=True),
     "KRAKEN_PYTHON": Path(BASE_DIR, env("KRAKEN_PYTHON", default=".venv-kraken/bin/python")),
     "KRAKEN_MODEL": Path(BASE_DIR, env("KRAKEN_MODEL", default="models/kraken/all_arabic_scripts.mlmodel")),
     "KRAKEN_TIMEOUT_S": env.int("KRAKEN_TIMEOUT_S", default=120),

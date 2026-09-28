@@ -433,3 +433,28 @@ the line continues its note; it had made a second note «١» on p. 82 and a not
 false notes 2 → 0, 30 repaired links; the empty-bracket and quote-stroke links were checked against the ink (p. 22,
 132, 160, 181, 205, 214: a raised «(١)» or «(٢)» every time). What is left are calls the models dropped altogether:
 those are read from the ink (D83, the call pass), not guessed by the linker.
+
+## D83 — The call pass: the raised «(١)» of a footnote call is read from the ink by Kraken (2026-09-28, `docs/NOTE_CALLS_SPEC.md`)
+After D82 book 29 still had 31 orphan notes, mostly calls no model wrote at all: the small raised «(١)» is a third of the
+line's height and sits above the x-height, and Qari and Tesseract skip it or box it into the neighbouring word. Like the
+numbers pass (D50) the call pass (`ocr.calls`, run at the end of the `read_numbers` task, `manage.py read_calls
+--book ID [--page N] [--dry-run] [--sample DIR]`, setting `CALLS_PASS`) crops the mark and lets Kraken read it. What it
+looks for is bounded by the page: the numbers its footnote markers call for and its body does not hold in brackets
+(a page without notes reads nothing). Candidates are a boxed token the models wrote for a call («(ا)», «(”)», «()»,
+«(١١)») and clusters of two to four small ink components no sure word box covers, 0.9–1.6 line heights tall, whose
+bottom lies above the centre of the line's core rows (letters sit on the baseline, dots and hamzas are too short), 1–3.5
+line heights wide, searched five line heights left of the line box too (the call after the last boxed word lies outside
+it). A cluster whose word before is a misread call token is that token's true ink and replaces it; one among unboxed
+words is placed by the gap's other ink, and dropped when it is not understood or may be a small number's own digits
+(a year read as «(۱)» on p. 100). Each crop is read as it is and upscaled by two: on 50 candidates the two readings
+differed on 27, each right where the other was wrong, so the best-formed acceptable reading wins (both brackets, one,
+none; a reading «n1» is n when n is wanted and no note is n1: the «(» stroke of this print reads as a one on Kraken as
+on the models, D82). The written token is «(N)», Kraken's, low (D17), with the ink's box and `call: true` (review
+names it a call mark); the linker then links it as any printed call. Measured on the book (in memory on a copy of the
+database): 59 pages wanted a call, 50 candidates, 30 accepted (20 from the ink, 10 misread tokens), 11 dropped as not
+understood, 5 not wanted, 3 not a call, 1 duplicate; every one of the 30 accepted crops is a printed bracketed call
+mark by eye (`p64` was written «(١١)» because the note's own marker reads «(١١)»; the linker links it all the same).
+Orphans on the book: 114 notes, 63 → 31 (D82) → 23 on 18 pages; unmatched markers 18 → 10 → 8; marker-less notes linked by
+place 9 → 14 (their calls exist now). Whole book: 84 s of Kraken on the CPU worker (one
+process per page that wants a call). Not done: a note whose own marker the models misread («(١١)», «(٢١)» on p. 29, 64)
+is not re-read; a call the ink filter drops (words on both sides, a number in the gap) stays for the reviewer.
