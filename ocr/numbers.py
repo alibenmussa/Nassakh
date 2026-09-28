@@ -630,11 +630,12 @@ class PageNumbers:
     applied: int = 0
     letters: int = 0
     dates: int = 0
+    printed: str = ""  # the printed page number Kraken read in the page-number region ('' when none)
     seconds: float = 0.0
     skipped: str = ""
 
     def as_dict(self) -> dict:
-        keys = ("style", "areas", "applied", "letters", "dates", "seconds", "skipped")
+        keys = ("style", "areas", "applied", "letters", "dates", "printed", "seconds", "skipped")
         return {k: getattr(self, k) for k in keys}
 
 
@@ -765,6 +766,39 @@ def check_years(lines: list) -> int:
     return changed
 
 
+PRINTED_ID = "printed"
+PRINTED_PAD = 8  # pixels of paper kept around the page-number region, as the OCR crops it
+
+
+def printed_number_area(bbox, width: int, height: int, pad: int = PRINTED_PAD) -> list[int]:
+    """The page-number region's box with `pad` pixels of paper around it, inside the image."""
+    x0, y0, x1, y1 = (int(v) for v in bbox)
+    return [max(0, x0 - pad), max(0, y0 - pad), min(int(width), x1 + pad), min(int(height), y1 + pad)]
+
+
+def printed_number_request(page, pre) -> dict | None:
+    """The runner request for the page's page-number region (None without one). Tesseract and both
+    models misread an isolated Arabic-Indic number (`ocr.services.read_page_number` votes; on a printed
+    hijri history the vote agreed on 21 of 147 pages, several of them wrong), so in an Arabic-Indic book
+    Kraken reads the region too and its number, when it reads as one, is the page's (full-book test,
+    2026-09-28)."""
+    from processing.models import Region
+
+    region = page.regions.filter(kind=Region.Kind.PAGE_NUMBER).order_by("order").first()
+    if region is None or not region.bbox:
+        return None
+    return {"id": PRINTED_ID, "bbox": printed_number_area(region.bbox, pre.output_width, pre.output_height)}
+
+
+def printed_number_from(row: dict | None) -> str:
+    """The Western page number in Kraken's reading of the page-number region ('' unless the reading is
+    only a page number, «— ٢١ —», «٢١»)."""
+    from ocr.services import page_number_digits
+
+    text = " ".join(str((row or {}).get("text") or "").split()).translate(KRAKEN_DIGITS)
+    return page_number_digits(text) or ""
+
+
 def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumbers:
     """The numbers pass on one finalised page (module docstring). `style`: the book's, when the caller
     knows it (a whole book at once); `engine`: a Kraken engine (tests pass a fake). A line the reviewer
@@ -797,7 +831,10 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
     requests, index = page_areas(page, lines)
     weak, weak_index = page_weak_boxes(page, lines)
     plans = page_letters(page, lines)
+    printed = printed_number_request(page, pre)
     requests_all = requests + weak + [request for plan in plans for request in plan.requests()]
+    if printed:
+        requests_all.append(printed)
     result.areas = len(requests_all)
     if not requests_all:
         return result
@@ -840,8 +877,13 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
     for plan in plans:
         letters, dates = read_letters(plan, by_id)
         gave(plan.line, letters=letters, dates=dates)
+    printed_number = printed_number_from(by_id.get(PRINTED_ID)) if printed else ""
     with transaction.atomic():
         locked = Page.objects.select_for_update(of=("self",)).get(pk=page.pk)  # as review does
+        if printed_number and locked.reviewed_at is None and printed_number != locked.printed_number:
+            Page.objects.filter(pk=page.pk).update(printed_number=printed_number)
+            page.printed_number = printed_number
+            result.printed = printed_number
         now = dict(
             Line.objects.filter(pk__in=list(changed), is_reviewed=False).values_list("pk", "updated_at")
         )
@@ -866,6 +908,8 @@ def read_page_numbers(page, engine=None, style: str | None = None) -> PageNumber
         params = {"areas": result.areas, "applied": result.applied, "style": result.style}
         if result.letters or result.dates:
             params.update(letters=result.letters, dates=result.dates)
+        if result.printed:
+            params["printed"] = result.printed
         if len(kept) < len(changed):
             params["left_to_reviewer"] = len(changed) - len(kept)  # changed or removed while Kraken read
         OcrRun.objects.create(

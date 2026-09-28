@@ -21,7 +21,7 @@ from ocr import numbers as nb
 from ocr.engines import kraken_runner
 from ocr.engines.kraken import KrakenEngine, KrakenError
 from ocr.models import Line, OcrRun
-from processing.models import Preprocess
+from processing.models import Preprocess, Region
 
 # ---------------------------------------------------------------- the book's printed digits
 
@@ -358,6 +358,27 @@ def numbers_page(db):
         n_low=1,
     )
     return page, line, reviewed
+
+
+def test_the_pass_reads_the_printed_page_number_in_its_region(numbers_page):
+    """Kraken reads the page-number region too: its number becomes the page's printed number (the vote of
+    Tesseract and the models misreads isolated Arabic-Indic digits); a reading that is not a number (a
+    short last line the layout took for the number) leaves the page's number alone."""
+    page, line, reviewed = numbers_page
+    Region.objects.create(page=page, kind=Region.Kind.PAGE_NUMBER, bbox=[40, 80, 60, 95], order=1)
+    area = tuple(nb.printed_number_area([40, 80, 60, 95], 100, 100))
+    assert area == (32, 72, 68, 100)
+    engine = FakeKraken({(60, 10, 75, 20): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢", area: "— ٢١ —"})
+    done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
+    assert (done.areas, done.applied, done.printed) == (3, 2, "21")
+    page.refresh_from_db()
+    assert page.printed_number == "21"
+    assert OcrRun.objects.filter(page=page, engine_name="kraken").latest("id").params["printed"] == "21"
+    page.printed_number = "7"
+    page.save(update_fields=["printed_number"])
+    done = nb.read_page_numbers(page, engine=FakeKraken({area: "والسلام"}), style=nb.ARABIC_INDIC)
+    page.refresh_from_db()
+    assert (done.areas, done.printed, page.printed_number) == (1, "", "7")
 
 
 def test_the_pass_reads_the_numbers_of_unreviewed_lines_and_records_the_run(numbers_page):
