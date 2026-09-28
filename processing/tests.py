@@ -1603,3 +1603,25 @@ def test_a_pending_automatic_then_a_drag_saves_the_dragged_line(book, users, cli
     assert Page.objects.get(pk=page.pk).guides_override is None
     with pytest.raises(ValidationError):
         services.set_page_guides(page, {"header_cut": 0.4, "footnote_line": 0.3}, reset=True, stage="ocr")
+
+
+def test_a_sparse_page_stays_white_and_keeps_its_lines():
+    """A page with under 1 % ink (a chapter's last lines, a title or dedication page on a clean bitonal scan):
+    `flatten_background` stretched from its 1st percentile, which is paper, and turned the whole page black
+    (book 29, 58 of 294 pages; book 19 p. 62). The page keeps its paper white and its lines are found."""
+    page = np.full((2258, 1617), 255, dtype=np.uint8)
+    for top in (200, 290, 380, 470):  # four short lines of text, about 0.6 % ink
+        for left in range(800, 1380, 34):
+            page[top : top + 26, left : left + 18] = 0
+    assert (page < 128).mean() < 0.01
+    flat, _ = pipeline.flatten_background(page)
+    assert flat.mean() > 240
+    result = pipeline.run_pipeline(page)
+    assert np.median(result.gray) > 240 and np.median(result.bw) > 240  # paper, not black (cropped tight)
+    assert result.n_lines == 4 and pipeline.FLAG_NO_LINES not in result.flags
+    # a blank page is left as it is, and a dense page is untouched by the guard
+    blank, _ = pipeline.flatten_background(np.full((400, 300), 255, dtype=np.uint8))
+    assert blank.mean() > 250
+    dense = np.full((400, 300), 255, dtype=np.uint8)
+    dense[50:350:20, 20:280] = 0
+    assert pipeline.flatten_background(dense)[0].mean() < 255

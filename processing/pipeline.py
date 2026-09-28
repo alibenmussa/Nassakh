@@ -34,6 +34,8 @@ DEFAULT_NLM_H = 6
 DEFAULT_SAUVOLA_K = 0.2
 DEFAULT_MAX_SKEW_DEG = 5.0
 DEFAULT_CROP_MARGIN_FRAC = 0.02
+# `flatten_background`: a 1st percentile above this is paper, not ink (a page with under 1 % ink).
+SPARSE_PAPER_LEVEL = 250.0
 
 FLAG_LARGE_SKEW = "large_skew"
 FLAG_LOW_CONFIDENCE = "deskew_low_confidence"
@@ -209,6 +211,12 @@ def flatten_background(gray: np.ndarray) -> tuple[np.ndarray, int]:
     norm = cv2.divide(gray.astype(np.float32), np.maximum(bg.astype(np.float32), 1.0), scale=255.0)
     norm = np.clip(norm, 0, 255)
     lo = float(np.percentile(norm, 1.0))
+    if lo > SPARSE_PAPER_LEVEL:
+        # A page with under 1 % ink (a chapter's last lines, a title or dedication page, a clean bitonal
+        # scan): its 1st percentile is paper, and stretching from it turned the whole page black. Take the
+        # dark end from the pixels darker than paper instead; a blank page is left as it is.
+        dark = norm[norm < SPARSE_PAPER_LEVEL]
+        lo = float(np.percentile(dark, 1.0)) if dark.size else 0.0
     norm = np.clip((norm - lo) * (255.0 / max(255.0 - lo, 1.0)), 0, 255)
     return norm.astype(np.uint8), int(k)
 
