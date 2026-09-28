@@ -412,3 +412,24 @@ boxes and marks; Word opens with a one-page section holding the cover rasterised
 restarting at 1; the EPUB has `cover.xhtml` first and the rasterised cover as its `cover-image`. Images are
 `editor.BookImage` rows (checked, oriented, sRGB, stored by content hash, never deleted), the pipeline body images
 will reuse. Readiness warns of a missing cover image and of a low resolution.
+
+## D82 — A misread footnote call is linked to the note it can only be; a year at a note line's start is not a marker (2026-09-28)
+On book 29 («ولاة طرابلس», 294 pages, 114 notes) 63 notes were orphans (`docs/FULLBOOK_TEST_2026-09-28.md`, finding 1):
+the small raised «(١)» of a call comes out of the models as an alef «(ا)» / «(أ)» (12, three glued to the word:
+«أرطاة(ا)»), a quote stroke «(”)» (5), empty brackets «( )» (8), a number with a «١» hung on it, «(١١)» «(٢١)» for
+(١) (٢) (9), or nothing at all (27). Three linker rules in `assembly.pipeline`, each conservative: a call that has its
+note is never taken from it, nothing links across pages, and every repaired link warns `note_call_repaired`
+(«قُرئت «11» في المتن؛ رُبطت بالحاشية؛ تحقّق منها»; the note's own marker is printed). (1) `two_digit_call`: a
+one-digit note left without a call takes its page's unused bracketed «(n١)» when no note of the page is numbered n1
+(«(٤١)» for (٢), «(١١٧)», a bare or glued «١١» stay as they are). (2) `lookalike_calls`: a bracket holding an alef, a
+quote stroke or nothing (`LOOKALIKE`, glued forms too) is a candidate without a number; a page's lookalikes pair one
+to one with its notes still without a call (a small number, or the marker-less note that heads the page) only when
+they are as many and each lies where its note's call must be: after the calls of the notes before it and before
+those of the notes after it. It runs after D74's positional link, so a strong «(١)» wins over a «(ا)» for a
+marker-less note; an unpaired lookalike stays text silently (it may be a real «(أ)»). (3) `split_note_marker`: a
+bare number that starts a footnote line and is followed by an era sign («١ م ه ولم ترض», «٦٤ ه وعمره») is a year,
+the line continues its note; it had made a second note «١» on p. 82 and a note «64» on p. 112. Measured on the book
+(the harness runs the pipeline in memory on a copy of the database): orphans 63 → 31, unmatched markers 18 → 10,
+false notes 2 → 0, 30 repaired links; the empty-bracket and quote-stroke links were checked against the ink (p. 22,
+132, 160, 181, 205, 214: a raised «(١)» or «(٢)» every time). What is left are calls the models dropped altogether:
+those are read from the ink (D83, the call pass), not guessed by the linker.

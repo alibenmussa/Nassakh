@@ -683,6 +683,210 @@ def test_a_number_after_a_closing_quote_is_a_marker_and_warns_when_unmatched():
     assert warning["message"] == "علامة الحاشية «1» في الصفحة 1 بلا حاشية مقابلة."
 
 
+# ---------------------------------------------------------------- D82: calls the models misread
+
+
+@pytest.mark.parametrize(
+    "body, read",
+    [
+        ("ودان جيشا بقيادة بسر بن أبي أرطاة(ا) ، ففتحها سنة ٢٢ هـ", "(ا)"),  # book 29 p. 11, glued
+        ("صفوان بن أبي مالك (أ) والي", "(أ)"),  # p. 34
+        ("وبين زوجه ( خَوْد ) (”) وامتنعت", "(”)"),  # p. 160: a quote stroke
+        ("وكان قائدهم ( مراد الارنؤوطي ) ( “ ) .", "(“)"),  # p. 195
+        ("من قبل مسلمة بن مخلد ( ) .", "()"),  # p. 22: nothing inside the brackets
+    ],
+)
+def test_a_bracketed_lookalike_glyph_is_the_call_of_the_one_note_it_can_only_be(body, read):
+    """The models write the small raised «(١)» as an alef, a quote stroke or empty brackets (D82,
+    book 29: 12 letters, 8 empty pairs, 5 quote strokes among 63 orphans)."""
+    result = run([pg(1, [ln(body, id=10), ln("(١) حاشية", kind="footnote", id=11)])])
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is False and note["attrs"]["marker"] == "١"
+    text = text_of(blocks_of(result)[0])
+    assert "[1]" in text and not re.search(r"[(\[]\s*[اأ”“]?\s*[)\]]", text)
+    (warning,) = [w for w in result.warnings if w["code"] == "note_call_repaired"]
+    assert (
+        warning["message"]
+        == f"علامة الحاشية «1» في الصفحة 1 قُرئت «{read}» في المتن؛ رُبطت بالحاشية؛ تحقّق منها."
+    )
+    assert warning["marker"] == "1" and warning["lineIds"] == [11] and warning["blockId"] == "p10"
+    assert "note_orphan" not in codes(result) and "marker_unmatched" not in codes(result)
+
+
+def test_the_glued_lookalike_call_sits_right_after_its_word():
+    result = run(
+        [pg(1, [ln("بقيادة بسر بن أبي أرطاة(ا) ، ففتحها", id=10), ln("(١) حاشية", kind="footnote")])]
+    )
+    assert text_of(blocks_of(result)[0]) == "بقيادة بسر بن أبي أرطاة[1]، ففتحها"
+
+
+def test_a_lookalike_never_steals_a_call_and_never_guesses_between_notes():
+    # note (١) has its own call: the «(ا)» stays text, silently (it may be a real letter)
+    called = run([pg(1, [ln("الأول (١) ثم (ا) بعده", id=10), ln("(١) حاشية", kind="footnote", id=11)])])
+    assert text_of(blocks_of(called)[0]) == "الأول[1] ثم (ا) بعده"
+    assert "note_call_repaired" not in codes(called) and "marker_unmatched" not in codes(called)
+    # two notes without a call and one lookalike: which one it is cannot be told
+    two = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (”) وكلام آخر", id=20),
+                    ln("(١) الأولى", kind="footnote", id=21),
+                    ln("(٢) الثانية", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(two)] == [True, True]
+    assert "note_call_repaired" not in codes(two)
+    # two lookalikes for two notes pair in reading order
+    paired = run(
+        [
+            pg(
+                1,
+                [
+                    ln("الأول ( ) ثم الثاني (ا) هنا", id=30),
+                    ln("(١) الأولى", kind="footnote", id=31),
+                    ln("(٢) الثانية", kind="footnote", id=32),
+                ],
+            )
+        ]
+    )
+    assert text_of(blocks_of(paired)[0]) == "الأول[1] ثم الثاني[2] هنا"
+    assert codes(paired).count("note_call_repaired") == 2
+
+
+def test_a_lookalike_must_lie_where_its_note_call_would_be():
+    """Notes (١) (٢): the (١) call is read; the lookalike before it cannot be (٢)'s call."""
+    page = pg(
+        1,
+        [
+            ln("مقدّمة (ا) ثم الأول (١) ونهاية", id=40),
+            ln("(١) الأولى", kind="footnote", id=41),
+            ln("(٢) الثانية", kind="footnote", id=42),
+        ],
+    )
+    result = run([page])
+    assert [n["attrs"]["orphan"] for n in notes_of(result)] == [False, True]
+    assert "note_call_repaired" not in codes(result)
+    after = pg(
+        1,
+        [
+            ln("الأول (١) ثم كلام (ا) ونهاية", id=50),
+            ln("(١) الأولى", kind="footnote", id=51),
+            ln("(٢) الثانية", kind="footnote", id=52),
+        ],
+    )
+    result = run([after])
+    assert text_of(blocks_of(result)[0]) == "الأول[1] ثم كلام[2] ونهاية"
+
+
+def test_a_lookalike_at_a_block_start_is_a_marker_left_in_the_body_not_a_call():
+    page = _stray_page(
+        ln("متن الصفحة بلا علامة.", id=60),
+        ln("(أ) البند الأول من قائمة", id=61),
+        ln("(١) حاشية", kind="footnote", id=62),
+    )
+    result = run([page])
+    assert len(blocks_of(result)) == 2  # the lettered item is its own paragraph
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is True and "note_call_repaired" not in codes(result)
+
+
+def test_a_note_without_a_marker_takes_a_lookalike_only_after_the_strong_calls():
+    """Book 29 p. 84: the footnote's own «(١)» was dropped too; the body has «(ا)» alone."""
+    alone = run([pg(1, [ln("وُرُو بن سعيد (ا)", id=70), ln("حاشية بلا علامة", kind="footnote", id=71)])])
+    (note,) = notes_of(alone)
+    assert note["attrs"]["orphan"] is False and note["attrs"]["marker"] is None
+    (warning,) = [w for w in alone.warnings if w["code"] == "note_call_repaired"]
+    assert (
+        warning["message"]
+        == "علامة حاشية بلا علامة في الصفحة 1 قُرئت «(ا)» في المتن؛ رُبطت بالحاشية؛ تحقّق منها."
+    )
+    both = run([pg(1, [ln("كلام (ا) ثم (١) هنا", id=72), ln("حاشية بلا علامة", kind="footnote", id=73)])])
+    assert text_of(blocks_of(both)[0]) == "كلام (ا) ثم[1] هنا"  # D74's positional link wins
+    assert "note_marker_missing" in codes(both) and "note_call_repaired" not in codes(both)
+
+
+@pytest.mark.parametrize(
+    "body, note, read",
+    [
+        ("ولسّى عبيدة بن عبد الرحمن (١١) على", "(١) حاشية", "11"),  # book 29 p. 33
+        ("وثلاثة أشهر (٢١). وتولى الحكم", "(٢) حاشية", "21"),  # p. 73
+        ("قال في الكتاب [٣١] كذا", "[3] حاشية", "31"),
+    ],
+)
+def test_a_call_read_with_a_one_hung_on_it_is_the_uncalled_one_digit_note_of_its_page(body, note, read):
+    result = run([pg(1, [ln(body, id=80), ln(note, kind="footnote", id=81)])])
+    (footnote,) = notes_of(result)
+    assert footnote["attrs"]["orphan"] is False and footnote["attrs"]["marker"] == note[1]
+    text = text_of(blocks_of(result)[0])
+    assert "[1]" in text and read not in text and "١" not in text
+    (warning,) = [w for w in result.warnings if w["code"] == "note_call_repaired"]
+    assert f"قُرئت «{read}» في المتن" in warning["message"] and warning["lineIds"] == [81]
+    assert "marker_unmatched" not in codes(result) and "note_orphan" not in codes(result)
+
+
+def test_the_two_digit_repair_stays_narrow():
+    # the page has a note (١١) of its own: «(١١)» is its call, note (١) stays an orphan
+    own = run(
+        [
+            pg(
+                1,
+                [
+                    ln("الأول (١١) ثم", id=90),
+                    ln("(١) الأولى", kind="footnote", id=91),
+                    ln("(١١) الحادية عشرة", kind="footnote", id=92),
+                ],
+            )
+        ]
+    )
+    assert {n["attrs"]["marker"]: n["attrs"]["orphan"] for n in notes_of(own)} == {"١": True, "١١": False}
+    assert "note_call_repaired" not in codes(own)
+    # a second digit other than «١» («(٤١)» for (٢), p. 114), a three-digit «(١١٧)», a bare «١١»,
+    # a glued «كتاب١١»: none is the note's call
+    for body in ("كلام (٤١) هنا", "كلام (١١٧) هنا", "كلام ١١ هنا", "كتاب١١ هنا", "كلام (١) هنا"):
+        result = run([pg(1, [ln(body, id=93), ln("(٢) حاشية", kind="footnote", id=94)])])
+        (footnote,) = notes_of(result)
+        assert footnote["attrs"]["orphan"] is True, body
+        assert "note_call_repaired" not in codes(result), body
+    # note (١) has its call: a leftover «(١١)» is not taken for it (it warns as before)
+    called = run([pg(1, [ln("الأول (١) ثم (١١) بعده", id=95), ln("(١) حاشية", kind="footnote", id=96)])])
+    assert text_of(blocks_of(called)[0]) == "الأول[1] ثم (11) بعده"
+    assert codes(called).count("marker_unmatched") == 1 and "note_call_repaired" not in codes(called)
+    # never across pages
+    pages = [
+        pg(1, [ln("كلام (١١) هنا", id=97)]),
+        pg(2, [ln("متن الثانية.", id=98), ln("(١) حاشية", kind="footnote", id=99)]),
+    ]
+    result = run(pages)
+    (footnote,) = notes_of(result)
+    assert footnote["attrs"]["orphan"] is True and "note_call_repaired" not in codes(result)
+
+
+def test_a_year_at_the_start_of_a_footnote_line_is_not_a_marker():
+    """Book 29 p. 82: the note's second line starts «١ م ه ولم ترض» (a year); it read as a second
+    note «١» and hung as an orphan. A bare number followed by an era sign continues the note."""
+    assert split_note_marker("١ م ه ولم ترض زناتة") == (None, 0)
+    assert split_note_marker("٦٤ ه وعمره ٩٠ سنة") == (None, 0)
+    assert split_note_marker("1 هـ ، ثم") == (None, 0)
+    assert split_note_marker("(١) م ه كلام")[0] == "١"  # bracketed: a marker whatever follows
+    assert split_note_marker("١ ملك كلام")[0] == "١"  # a word, not an era sign
+    page = pg(
+        1,
+        [
+            ln("فلفل وباديس بن المنصور (١) دامت نحو سنتين", id=100),
+            ln("(١) باديس بن المنصور لما انتقل الى مصر سنة", kind="footnote", id=101),
+            ln("١ م ه ولم ترض زناتة بهذا التعيين .", kind="footnote", id=102),
+        ],
+    )
+    result = run([page])
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is False and note["attrs"]["sourceLineIds"] == [101, 102]
+    assert "note_orphan" not in codes(result)
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -1365,6 +1569,10 @@ def test_the_trailing_run_of_marker_initial_paragraphs_ends_the_page():
 
 def test_the_new_warning_codes_sort_after_the_orphans():
     assert pipeline.CODE_ORDER.index("note_marker_missing") == pipeline.CODE_ORDER.index("note_orphan") + 1
+    assert (
+        pipeline.CODE_ORDER.index("note_call_repaired")
+        == pipeline.CODE_ORDER.index("note_marker_missing") + 1
+    )
     assert pipeline.CODE_ORDER.index("stray_note") < pipeline.CODE_ORDER.index("uncertain_words")
 
 

@@ -35,6 +35,7 @@ WARNING_LABELS: dict[str, str] = {
     "marker_unmatched": "علامات بلا حاشية",
     "note_orphan": "حواشٍ بلا علامة في المتن",
     "note_marker_missing": "حواشٍ بلا علامة رُبطت بموضعها",
+    "note_call_repaired": "حواشٍ رُبطت بعلامة قُرئت خطأ",
     "stray_note": "فقرات تبدأ بعلامة حاشية",
     "page_pending": "صفحات قيد المعالجة لم تُضمَّن",
     "page_error": "صفحات متعطّلة لم تُضمَّن",

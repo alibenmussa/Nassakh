@@ -110,6 +110,7 @@ CODE_ORDER: tuple[str, ...] = (
     "marker_unmatched",
     "note_orphan",
     "note_marker_missing",
+    "note_call_repaired",
     "stray_note",
     "uncertain_words",
 )
@@ -1150,6 +1151,14 @@ _RE_GLUED = re.compile(
 _AFTER_MARKER = rf"(?=\s|$|[{re.escape(MARKS + CLOSE_BRACKETS)}»”{PLACEHOLDERS}])"
 _RE_STANDALONE = re.compile(rf"(?<=\s)({_DIGIT_RUN}{{1,2}}){_AFTER_MARKER}")
 _RE_ALEF = re.compile(rf"(?:(?<=\s)|(?<=[»”])){ALEF}(?=\s|$|[.،؛:{PLACEHOLDERS}])")
+# A bracketed glyph the models write for the small raised «(١)» of a call (D82): an alef, a quote
+# stroke, or nothing at all («(ا)», «(أ)», «(”)», «( )»; book 29). Glued to its word too («أرطاة(ا)»).
+LOOKALIKE_GLYPHS = "اأإآ”“\"'’‘"
+_RE_LOOKALIKE = re.compile(rf"[\(\[]\s*([{LOOKALIKE_GLYPHS}]?)\s*[\)\]]")
+LOOKALIKE = "lookalike"
+REPAIR_MAX = (
+    9  # a call read with a «١» hung on a one-digit note number (D82): «(١١)» for (١) … «(٩١)» for (٩)
+)
 # A standalone number right after a closing quote or bracket («دينار » ١ ،») is printed as a marker.
 STRONG_STYLES: frozenset[str] = frozenset({"bracket", "superscript", "glued", "quoted"})
 # A note without a marker takes a call by its place only when the call is bracketed or superscript and
@@ -1205,11 +1214,16 @@ def split_note_marker(text: str) -> tuple[str | None, int]:
     """`(marker, length)` of the marker that starts a footnote line (`(None, 0)` when there is none).
 
     Marker: `(n)`, `[n]`, `n`, `n-`, `n.` … with 1–3 Western or Arabic-Indic digits or `*`, `**`,
-    `***` (spec regex), plus a lone alef read for `١`.
+    `***` (spec regex), plus a lone alef read for `١`. A bare number followed by an era sign («١ م ه
+    ولم ترض»: a year at the start of a note's second line, book 29 p. 82) is text, not a marker (D82).
     """
     match = NOTE_MARKER.match(text or "")
     if not match:
         return None, 0
+    if not any(char in "([" for char in match.group(0)):
+        following = text[match.end() :].split()
+        if following and following[0].rstrip("،,؛;") in ERA_WORDS:
+            return None, 0
     return match.group(1), match.end()
 
 
@@ -1300,8 +1314,10 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
     `(n)` `[n]` `(*)`; superscript digits; a digit run glued to the end of a word (`الفيل٢`, also
     after a closing quote `»١` or a period `الخ .1`); a standalone token of 1–2 digits
     (`الفيل ٢ مرحلة`; `quoted` right after a closing quote or bracket, `دينار » ١ ،`); a lone
-    alef (`» ا .`, the OCR's `١`). Overlapping matches keep the first style in that order. A
-    standalone number that starts a list item (`3 ـ كتاب`) or is a year (`سنة 21 ه`) is text.
+    alef (`» ا .`, the OCR's `١`); a bracketed lookalike glyph (`(ا)`, `(”)`, `( )`: the models'
+    readings of a small raised call, `LOOKALIKE`, key '' since its number is unknown; D82).
+    Overlapping matches keep the first style in that order. A standalone number that starts a list
+    item (`3 ـ كتاب`) or is a year (`سنة 21 ه`) is text.
     """
     text = rich.text
     found: list[tuple[int, int, str, str]] = []
@@ -1316,6 +1332,8 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
 
     for match in _RE_BRACKETED.finditer(text):
         add(match.start(), match.end(), match.group(1), "bracket")
+    for match in _RE_LOOKALIKE.finditer(text):
+        add(match.start(), match.end(), match.group(1), LOOKALIKE)
     for match in _RE_SUPERSCRIPT.finditer(text):
         add(match.start(), match.end(), match.group(), "superscript")
     for match in _RE_GLUED.finditer(text):
@@ -1338,9 +1356,8 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
         if page is None:
             continue
         rank = 0 if style in STRONG_STYLES else (1 if _before_mark(text, end) else 2)
-        out.append(
-            Candidate(block_index, start, end, cut, marker_key(marker), marker, style, page, line, rank)
-        )
+        key = "" if style == LOOKALIKE else marker_key(marker)
+        out.append(Candidate(block_index, start, end, cut, key, marker, style, page, line, rank))
     return out
 
 
@@ -1411,6 +1428,108 @@ def open_calls_before(
     return [cand for cand in pool if positional_call(cand, blocks, keys)]
 
 
+def two_digit_call(
+    note: Note, notes: Sequence[Note], cands: Sequence[Candidate], used: set[int], blocks: Sequence[Block]
+) -> int | None:
+    """The index of the bracketed call «(n١)» that is `note`'s call read with a «١» hung on it (D82):
+    `note` has a one-digit number n (1–`REPAIR_MAX`) and no call, no note of its page is numbered n1,
+    and the page's body holds an unused bracketed «(n1)» that does not start its block. None otherwise.
+    Book 29: «(١١)», «(٢١)» for the printed (١), (٢) on nine pages; a «(٤١)» for (٢) is left alone."""
+    if note.key is None or not note.key.isdigit() or not 1 <= int(note.key) <= REPAIR_MAX:
+        return None
+    wanted = note.key + "1"
+    if any(other.key == wanted for other in notes):
+        return None
+    return next(
+        (
+            i
+            for i, cand in enumerate(cands)
+            if i not in used
+            and cand.style == "bracket"
+            and cand.key == wanted
+            and not is_leading(cand, blocks)
+        ),
+        None,
+    )
+
+
+def lookalike_calls(
+    notes: Sequence[Note],
+    unlinked: Sequence[Note],
+    cands: Sequence[Candidate],
+    used: set[int],
+    linked_at: dict[int, int],
+    blocks: Sequence[Block],
+) -> list[tuple[Note, int]]:
+    """The page's lookalike calls (`LOOKALIKE`: «(ا)», «(”)», «( )») paired with the notes they can
+    only be (D82), as `(note, candidate index)`; empty unless every pair is certain.
+
+    The notes still without a call whose number is small (1–`POSITIONAL_MAX`, or a marker-less note,
+    which heads its page's notes) and the page's unused lookalikes, in reading order, pair one to one
+    only when they are as many, and each lookalike lies after the calls of the notes before its note
+    and before the calls of the notes after it (`linked_at`: note → the index of its call). A lookalike
+    at a block's start is a marker left in the body, never a call.
+    """
+    wanting = [
+        note
+        for note in unlinked
+        if note.key is None or (note.key.isdigit() and 1 <= int(note.key) <= POSITIONAL_MAX)
+    ]
+    looks = [
+        i
+        for i, cand in enumerate(cands)
+        if i not in used and cand.style == LOOKALIKE and not is_leading(cand, blocks)
+    ]
+    if not wanting or len(wanting) != len(looks):
+        return []
+    order = {id(note): k for k, note in enumerate(notes)}
+    pairs = list(zip(wanting, looks, strict=True))
+    for note, i in pairs:
+        for other in notes:
+            at = linked_at.get(id(other))
+            if at is None:
+                continue
+            if order[id(other)] < order[id(note)] and at > i:
+                return []
+            if order[id(other)] > order[id(note)] and at < i:
+                return []
+    return pairs
+
+
+def _repaired_warning(page_number: int, note: Note, cand: Candidate, block_id: str | None) -> AssemblyWarning:
+    read = f"({cand.marker})" if cand.style == LOOKALIKE else digits_in(cand.marker)
+    which = f"علامة الحاشية «{digits_in(note.marker)}»" if note.marker else "علامة حاشية بلا علامة"
+    return AssemblyWarning(
+        "note_call_repaired",
+        "warning",
+        page_number,
+        f"{which} في الصفحة {page_number} قُرئت «{read}» في المتن؛ رُبطت بالحاشية؛ تحقّق منها.",
+        block_id,
+        note.line_ids,
+        marker=note.key,
+    )
+
+
+@dataclass
+class _PageLinks:
+    """The linking state of one page: its candidates, the ones `used`, each linked note's call
+    (`linked_at`: id(note) → index in `cands`), and the book-wide `chosen` links by block."""
+
+    cands: Sequence[Candidate]
+    chosen: dict[int, list[tuple[Candidate, Note]]]
+    used: set[int] = field(default_factory=set)
+    linked_at: dict[int, int] = field(default_factory=dict)
+
+    def take(self, note: Note, pick: int, ref: str | None) -> Candidate:
+        """Link `note` to candidate `pick`; `ref` is the reference the document prints for it."""
+        self.used.add(pick)
+        cand = self.cands[pick]
+        self.linked_at[id(note)] = pick
+        note.ref = ref
+        self.chosen.setdefault(cand.block, []).append((cand, note))
+        return cand
+
+
 def link_footnotes(
     blocks: list[Block],
     notes_by_page: dict[int, list[Note]],
@@ -1422,12 +1541,15 @@ def link_footnotes(
     A candidate is linked only when a note of the same page carries that number (or `*`); each note
     takes the first unused matching candidate of the page, bracketed / superscript / glued / quoted
     ones first, then standalone digits and alefs before a mark or the end, then those before a
-    word. Then the k-th note without a marker takes the k-th call still open on its page that it may
-    take by place (`positional_call`, in reading order) with the warning `note_marker_missing` (D74;
-    only a page's first note lines lack a marker, so k is 1 in practice); a note left without either is an
-    orphan (in the order of the page's notes). A strong candidate left over on a page that has notes →
-    `marker_unmatched` (the text stays as printed). `by_page` is `page_candidates` when the caller has
-    it.
+    word. A one-digit note left without a call takes its page's bracketed «(n١)» when no note is
+    numbered so (`two_digit_call`, D82). Then the k-th note without a marker takes the k-th call still
+    open on its page that it may take by place (`positional_call`, in reading order) with the warning
+    `note_marker_missing` (D74; only a page's first note lines lack a marker, so k is 1 in practice).
+    Then the notes still without a call pair with the page's lookalike glyphs when they can only be
+    theirs (`lookalike_calls`, D82). A repaired link warns `note_call_repaired` (the note's own marker
+    is printed); a note left without any call is an orphan (in the order of the page's notes). A strong
+    candidate left over on a page that has notes → `marker_unmatched` (the text stays as printed).
+    `by_page` is `page_candidates` when the caller has it.
     """
     if by_page is None:
         by_page = page_candidates(blocks, line_page)
@@ -1437,7 +1559,8 @@ def link_footnotes(
     for page_number in sorted(notes_by_page):
         notes = notes_by_page[page_number]
         cands = by_page.get(page_number, [])
-        used: set[int] = set()
+        links = _PageLinks(cands, chosen)
+        used, linked_at, take = links.used, links.linked_at, links.take
         unlinked: list[Note] = []
         for note in notes:
             pick = None
@@ -1456,21 +1579,22 @@ def link_footnotes(
             if pick is None:
                 unlinked.append(note)
                 continue
-            used.add(pick)
-            cand = cands[pick]
-            note.ref = cand.marker
-            chosen.setdefault(cand.block, []).append((cand, note))
+            take(note, pick, cands[pick].marker)
+        for note in list(unlinked):
+            pick = two_digit_call(note, notes, cands, used, blocks)
+            if pick is not None:
+                cand = take(note, pick, note.marker)
+                unlinked.remove(note)
+                warnings.append(_repaired_warning(page_number, note, cand, blocks[cand.block].id))
         keys = [note.key for note in notes if note.key is not None]
         free = [i for i, cand in enumerate(cands) if i not in used and positional_call(cand, blocks, keys)]
+        still: list[Note] = []
         for note in unlinked:
             if note.key is not None or not free:
-                orphans.append(note)
+                still.append(note)
                 continue
             pick = free.pop(0)
-            used.add(pick)
-            cand = cands[pick]
-            note.ref = cand.marker
-            chosen.setdefault(cand.block, []).append((cand, note))
+            cand = take(note, pick, cands[pick].marker)
             shown = digits_in(cand.marker.translate(_SUPERSCRIPT_DIGITS))
             warnings.append(
                 AssemblyWarning(
@@ -1483,6 +1607,11 @@ def link_footnotes(
                     marker=cand.key,
                 )
             )
+        for note, pick in lookalike_calls(notes, still, cands, used, linked_at, blocks):
+            cand = take(note, pick, note.marker)
+            still.remove(note)
+            warnings.append(_repaired_warning(page_number, note, cand, blocks[cand.block].id))
+        orphans.extend(still)
         if notes:
             for i, cand in enumerate(cands):
                 if i not in used and cand.style in STRONG_STYLES:
