@@ -2133,3 +2133,17 @@ def test_the_numbers_pass_moves_a_lines_suggestions_with_its_words(numbers_page)
     # the date's five tokens became one: what came after it stays after it; a rewritten word is followed
     places = {gap.pk: (gap.index, gap.after_t) for gap in TextGap.objects.filter(line=line)}
     assert places == {after_date.pk: (1, "(٧٥٤–٧٧٥م)"), after_letter.pk: (3, "(٥)"), last.pk: (4, "(هـ)")}
+
+
+def test_a_repeated_unit_is_read_once_before_the_sanity_check():
+    """A model that wrote a footnote line twice (book 29 p. 112) passes the check on the text read once,
+    and that text is the region's; the run keeps its raw text."""
+    head = "(1) كنديته أبو زكرا ، وهو مؤسس الدولة الخفصية ، عين أم كيراً على"
+    rest = "افريقية من قبل الموحدين في رجب سنة واستقل بافريقية عنهم"
+    raw = f"{head} {head} {rest}"
+    primary = OcrRun(engine_name="qari_v03", parsed_text=raw)
+    secondary = OcrRun(engine_name="qari_v02", parsed_text=f"{head} {rest}")
+    tess = OcrRun(engine_name="tesseract", parsed_text=f"{head} {rest}")
+    chosen = services.select_reading(primary, secondary, tess)
+    assert chosen.source == "qari_v03" and chosen.text == f"{head} {rest}" and chosen.alt == f"{head} {rest}"
+    assert primary.parsed_text == raw

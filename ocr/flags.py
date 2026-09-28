@@ -559,6 +559,60 @@ def looped_prefix(raw: str, hit_cap: bool = False) -> str:
     return plain if len(plain.split()) >= PREFIX_MIN_WORDS else ""
 
 
+# ---------------------------------------------------------------- a unit the model wrote twice
+
+REPEAT_MIN_WORDS = 6
+REPEAT_MAX_WORDS = 40
+_WORD_SPAN = re.compile(r"\S+")
+_ARABIC_LETTER = re.compile(r"[\u0621-\u063A\u0641-\u064A\u0671-\u06D3]")
+
+
+def strip_repeat(text: str, reference: str = "") -> tuple[str, int]:
+    """`text` with a unit the model wrote twice in a row cut to one copy, and the unit's words (0 when
+    nothing was cut).
+
+    A model sometimes writes a footnote line, or a sentence, a second time before going on — one
+    repeat, which the loop detector does not catch (it looks for a unit repeated to the end), on 12 of
+    the first 162 pages of a printed hijri history (full-book test, 2026-09-28), half of them in runs
+    that passed the sanity check: the duplicate reached the text as a dozen «alone» words. A unit of
+    `REPEAT_MIN_WORDS` to `REPEAT_MAX_WORDS` words that recurs at once, or after one token that is no
+    word (the marker «(٢)» the repeat starts with), is cut with that token, unless `reference`
+    (Tesseract's reading) holds the unit twice as well: then the print repeats it. The longest unit
+    wins; the text's other whitespace (its line breaks) stays as it is.
+    """
+    text = str(text or "")
+    ref = normalize(reference or "", "lenient")
+    for _ in range(4):  # a run may repeat more than one unit
+        spans = [(m.start(), m.end()) for m in _WORD_SPAN.finditer(text)]
+        words = [text[a:b] for a, b in spans]
+        n = len(words)
+        cut = None
+        for i in range(n):
+            for length in range(min(REPEAT_MAX_WORDS, (n - i) // 2), REPEAT_MIN_WORDS - 1, -1):
+                for gap in (0, 1):
+                    j = i + length + gap
+                    if j + length > n or words[i : i + length] != words[j : j + length]:
+                        continue
+                    if gap and _ARABIC_LETTER.search(words[i + length]):
+                        continue  # a word between the copies: not a repeat of this unit
+                    unit = normalize(" ".join(words[i : i + length]), "lenient")
+                    if unit and ref.count(unit) >= 2:
+                        continue  # printed twice
+                    cut = (i + length if gap else j, j + length)
+                    break
+                if cut:
+                    break
+            if cut:
+                break
+        if not cut:
+            return text, 0
+        first, last = cut
+        # the whitespace after the cut unit stays (a line break there keeps the next line's start)
+        text = (text[: spans[first][0]].rstrip() + text[spans[last - 1][1] :]).strip()
+        return text, last - first - (1 if last - first > length else 0)
+    return text, 0
+
+
 # ---------------------------------------------------------------- helpers for the popover and reports
 
 

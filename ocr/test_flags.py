@@ -395,3 +395,30 @@ def test_a_mark_is_no_second_reading_of_a_word_the_second_model_skipped():
 def test_the_vote_never_puts_a_mark_in_place_of_a_word():
     token = {"t": "الكتاب،", "alt": "،", "tess": ".", "conf": "low", "digit": False, "why": ["disagree"]}
     assert flags.vote_reading(token) is None and not voted(token)[1]
+
+
+# ---------------------------------------------------------------- a unit the model wrote twice
+
+
+def test_a_unit_the_model_wrote_twice_is_read_once():
+    """Book 29 (full-book test, 2026-09-28): a footnote line written twice before the model went on."""
+    unit = "بقي يخلف والياً على هذه المقاطعات الى أن مات المعز وتولى بعــده"
+    twice = f"(١) {unit} (٢) {unit} (٣) في هذا التاريخ خلاف بين المؤرخين ."
+    tess = "(١) بقي يخلف واليا على هذه المقاطمات الى أن مات المعز وتولى يده\nالعزيز بالل فطلب منه\n(؟) في هذا"
+    text, cut = flags.strip_repeat(twice, tess)
+    assert (
+        cut == 12 and text == f"(١) {unit} (٣) في هذا التاريخ خلاف بين المؤرخين ."
+    )  # the marker goes with it
+    head = "(1) كنديته أبو زكرا ، وهو مؤسس الدولة الخفصية ، عين أم كيراً على"
+    text, cut = flags.strip_repeat(f"{head} {head} افريقية من قبل الموحدين", "")
+    assert (text, cut) == (f"{head} افريقية من قبل الموحدين", 14)
+    # a line break elsewhere stays; a word between the copies is no repeat; short repeats are left alone
+    text, cut = flags.strip_repeat(f"سطر أول\n{head} {head}\nسطر أخير", "")
+    assert text == f"سطر أول\n{head}\nسطر أخير" and cut == 14
+    kept = f"{head} افريقية {head}"
+    assert flags.strip_repeat(kept, "") == (kept, 0)
+    short = "قال ثم قال ثم قال ثم قال ثم قال ثم"
+    assert flags.strip_repeat(short, "") == (short, 0)
+    # printed twice (Tesseract shows the unit twice): kept
+    assert flags.strip_repeat(f"{head} {head}", f"{head} {head}") == (f"{head} {head}", 0)
+    assert flags.strip_repeat("", "") == ("", 0)

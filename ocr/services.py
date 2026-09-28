@@ -1073,36 +1073,40 @@ def select_reading(
         tesseract.parsed_text if tesseract is not None and tesseract.status == OcrRun.Status.OK else ""
     )
 
+    # a unit a model wrote twice in a row is read once (`flags.strip_repeat`); the run keeps its raw text
+    texts = {
+        id(run): (flags.strip_repeat(run.parsed_text, reference)[0] if run is not None else "")
+        for run in (primary, secondary)
+    }
+
     def passes(run: OcrRun | None) -> tuple[bool, str]:
         if run is None:
             return False, "missing"
-        return _run_passes(run, reference)
+        if run.status != OcrRun.Status.OK:
+            return False, "error"
+        return sanity_check(texts[id(run)], reference, run.looped)
 
     def prefix(run: OcrRun | None, reason: str) -> str:
         return looped_prefix_of(run) if partial and reason == "loop" else ""
 
     p_ok, p_reason = passes(primary)
     s_ok, s_reason = passes(secondary)
+    p_text, s_text = texts[id(primary)], texts[id(secondary)]
     if p_ok:
         if s_ok:
-            return Selection(primary.parsed_text, secondary.parsed_text, False, p_reason, primary.engine_name)
+            return Selection(p_text, s_text, False, p_reason, primary.engine_name)
         alt = prefix(secondary, s_reason)
-        return Selection(primary.parsed_text, alt or None, False, p_reason, primary.engine_name, bool(alt))
+        return Selection(p_text, alt or None, False, p_reason, primary.engine_name, bool(alt))
     if s_ok:
-        return Selection(secondary.parsed_text, None, False, f"primary:{p_reason}", secondary.engine_name)
+        return Selection(s_text, None, False, f"primary:{p_reason}", secondary.engine_name)
     if (
         p_reason in COMPARISON_REASONS
         and s_reason in COMPARISON_REASONS
-        and word_f1(
-            normalize(primary.parsed_text, "lenient").split(),
-            normalize(secondary.parsed_text, "lenient").split(),
-        )
+        and word_f1(normalize(p_text, "lenient").split(), normalize(s_text, "lenient").split())
         >= MODELS_AGREE_F1
     ):
         # Both differ from Tesseract only, and agree with each other: trust the models (D16).
-        return Selection(
-            primary.parsed_text, secondary.parsed_text, False, "models_agree", primary.engine_name
-        )
+        return Selection(p_text, s_text, False, "models_agree", primary.engine_name)
     source = tesseract.engine_name if tesseract is not None else ""
     return Selection(reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source)
 
