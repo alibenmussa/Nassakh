@@ -1230,6 +1230,13 @@ def build_lines(
                         key = (max(above) if above else -1) + 0.5 + t * 1e-3
                         slots_above.append((float(band.y0), key, [band.x0, band.lo, band.x1, band.hi]))
                 slots_above.sort()
+                if head and len(slots_above) > len(head):
+                    a, b = head[0]
+                    k = a
+                    while k < b and is_special(p_tokens[k]):
+                        k += 1
+                    if a < k < b:  # «– ١٢١ – علي عشقر» on one primary line: the number is a line of its own
+                        head = [(a, k), (k, b)] + head[1:]
                 if head and slots_above:
                     pairs = list(zip(reversed(head), reversed(slots_above), strict=False))
                     if len(head) > len(slots_above):  # more lines than places: the rest join the top one
@@ -1255,6 +1262,49 @@ def build_lines(
                 slots = _without_bracketed(words, slots)
             if not any(_LATIN.search(p_tokens[r]) for r in range(s, i)):
                 slots = [(k, _by_position(words, idx)) for k, idx in slots]
+            if (
+                edges[0] is not None
+                and edges[1] is not None
+                and edges[0] != edges[1]
+                and all(k in edges for k, _ in slots)
+            ):
+                # No evidence on a line between two anchored lines (at most garbage words on their own lines),
+                # and a band no Tesseract line covers lies between them: a printed line Tesseract never read
+                # (a heading in large type, book 29 p. 243 «علي عشقر» after the number «– ١٢١ –» matched
+                # Tesseract's «-191-», with «oe» opening the body line). The run is what the primary read
+                # there: its whole primary lines, else the words that go on with the line above.
+                top, bottom = _box(source[edges[0]]), _box(source[edges[1]])
+                between_bands = [
+                    (t, band)
+                    for t, band in enumerate(all_bands)
+                    if top
+                    and bottom
+                    and band.y0 >= top[3]
+                    and band.y1 <= bottom[1]
+                    and not _covered(band, source)
+                ]
+                if between_bands:
+                    parts = _head_lines(p_line_no, s, i)
+                    if not parts:
+                        e = s
+                        while e < i and p_line_no[e] == p_line_no[s]:
+                            e += 1
+                        parts = (
+                            [(s, e)] if e > s and (s == 0 or p_line_no[s - 1] == p_line_no[s]) else [(s, i)]
+                        )
+                    for x, (a, b) in enumerate(parts):
+                        t, band = between_bands[min(x, len(between_bands) - 1)]
+                        key = edges[0] + 0.5 + t * 1e-3
+                        synthetic[key] = [band.x0, band.lo, band.x1, band.hi]
+                        for r in range(a, b):
+                            line_of[r] = key
+                            if _chars([p_tokens[r]]):
+                                unseen[r] = True
+                    placed_idx = {r for a, b in parts for r in range(a, b)}
+                    for r in range(s, i):  # the run's ends on the neighbours' primary lines stay with them
+                        if r not in placed_idx:
+                            line_of[r] = edges[0] if r < parts[0][0] else edges[1]
+                    continue
             placed = _place_run(len(units), slots, edges)
             plain = _units(p_tokens[s:i], abbreviations=False)
             if plain != units:  # an abbreviation and its number go together; no other word moves line

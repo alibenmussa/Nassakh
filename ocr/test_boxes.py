@@ -472,6 +472,15 @@ def test_the_first_lines_before_the_first_anchor_take_the_empty_lines_and_bands_
     plain = [tess[1], tess[2]]
     built = build_lines("– ٤ –\nابن جفنة بن\nصحابي حضر", None, plain, bands=bands[2:])
     assert texts(built) == ["– ٤ – ابن جفنة بن", "صحابي حضر"]
+    # book 29 p. 243: the primary wrote «– ١٢١ – علي عشقر» on one line; the number has a place of its own
+    # (Tesseract's «-191-»), the name the empty band below it, the body goes on as read
+    named = [
+        line(w("-191-", 470, 670, 30, 85)),
+        line(w("من", 900, 950, 560, 600), w("الآستانة", 800, 880, 560, 600), w("واليا", 700, 780, 560, 600)),
+    ]
+    heading = [band(40, 60, 470, 670), band(312, 321, 486, 675), band(565, 575, 40, 1037)]
+    built = build_lines("– ١٢١ – علي عشقر\nعين من الآستانة واليا", None, named, bands=heading)
+    assert texts(built) == ["– ١٢١ –", "علي عشقر", "عين من الآستانة واليا"]
     # more leading lines than places: the topmost join the top place
     built = build_lines("سطر أول\n– ٤ –\nمعاوية بن حديج\nابن جفنة بن\nصحابي حضر", None, tess, bands=bands)
     assert texts(built) == ["سطر أول – ٤ –", "معاوية بن حديج", "ابن جفنة بن", "صحابي حضر"]

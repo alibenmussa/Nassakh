@@ -1635,7 +1635,7 @@ def test_a_short_line_the_detector_missed_is_found_in_the_gap(page):
     assert page.lines.count() == 3 and len(_rescue_calls(fakes["tesseract"])) == 1
 
 
-def test_a_noisy_reading_adds_nothing_and_the_page_is_flagged_merged(page):
+def test_a_noisy_reading_adds_nothing_and_line_b_stands_without_boxes(page):
     region = _inked_page(page)
     fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7("ee TT", conf=30))
     with registry.override(fakes):
@@ -1645,8 +1645,13 @@ def test_a_noisy_reading_adds_nothing_and_the_page_is_flagged_merged(page):
     assert run.params["rescue"] == {"tried": 1, "added": 0} and len(run.params["lines"]) == 2
     page.refresh_from_db()
     lines = list(page.lines.order_by("order"))
-    assert lines[0].text == "قال الأمير في سنة وهذا سطر ثانٍ من المتن"  # still two printed lines in one
-    assert "lines_merged" in page.attention_flags
+    # line B is a line of its own on the empty band (its words unboxed), no longer glued onto line A
+    assert [line.text for line in lines] == [
+        "قال الأمير في سنة",
+        "وهذا سطر ثانٍ من المتن",
+        "ثم انتهى الكلام هنا",
+    ]
+    assert all(t["bbox"] is None for t in lines[1].tokens) and "lines_merged" not in page.attention_flags
     from core.templatetags.nassakh import FLAG_LABELS
 
     assert FLAG_LABELS["lines_merged"] == "سطران مطبوعان في سطر واحد"
@@ -1735,14 +1740,16 @@ def test_reads_as_text_rejects_specks_and_accepts_words():
 
 
 def _old_page(page: Page) -> tuple[Region, dict[str, FakeEngine]]:
-    """A page OCR'd before the rescue existed: Tesseract missed line B and nothing read it again."""
+    """A page OCR'd before the rescue existed: Tesseract missed line B and nothing read it again. Since the
+    linking places a run between two anchored lines on the empty band between them (2026-09-28), line B is
+    a line from the start, without boxes; the rescue gives it Tesseract's words."""
     region = _inked_page(page)
     fakes = _rescue_engines(_tess_body([(TESS_A, BAND_A), (TESS_C, BAND_C)]), _psm7(""))
     with registry.override(fakes):
         services.run_fast_ocr(page)
         services.run_full_ocr(page)
     page.refresh_from_db()
-    assert page.lines.count() == 2 and page.status == Page.Status.OCR_DONE
+    assert page.lines.count() == 3 and page.status == Page.Status.OCR_DONE
     fakes["tesseract"].responder = lambda path, cap: (
         _psm7(TESS_B) if path.stem.startswith("rescue") else pytest.fail("only rescue crops are read")
     )
@@ -1775,7 +1782,7 @@ def test_rebuild_lines_rescues_and_rebuilds_without_calling_a_model(page):
     run = page.ocr_runs.get(engine_name="tesseract", region=region)
     assert run.params["rescue"] == {"tried": 1, "added": 1}
     row = next(line for line in out.splitlines() if line.split()[:2] == [str(page.book_id), "1"])
-    assert row.split() == [str(page.book_id), "1", "2", "->", "3", "1", "->", "0", "1", "0"]
+    assert row.split() == [str(page.book_id), "1", "3", "->", "3", "1", "->", "0", "1", "0"]
 
 
 def test_rebuild_lines_dry_run_writes_nothing(page):
@@ -1789,7 +1796,7 @@ def test_rebuild_lines_dry_run_writes_nothing(page):
     assert list(page.lines.order_by("order").values_list("id", "text", "tokens")) == lines_before
     run_after = page.ocr_runs.get(pk=run_before.pk)
     assert run_after.params == run_before.params and run_after.parsed_text == run_before.parsed_text
-    assert page.attention_flags == flags and "lines_merged" in flags
+    assert page.attention_flags == flags
 
 
 def test_rebuild_lines_lists_and_skips_reviewed_edited_and_unfinished_pages(page, book):
@@ -2047,7 +2054,7 @@ def test_a_resolve_made_during_the_rescue_stops_the_rebuild(page, monkeypatch):
         services.rebuild_page_lines(page, save=True)
     revision = LineRevision.objects.get(page=page)
     assert not revision.undone  # the resolution stays and can still be undone
-    assert page.lines.count() == 2 and page.lines.order_by("order").first().tokens[0]["t"] == "كتب"
+    assert page.lines.count() == 3 and page.lines.order_by("order").first().tokens[0]["t"] == "كتب"
     fresh = page.ocr_runs.get(pk=run.pk)
     assert fresh.params == run.params and fresh.parsed_text == run.parsed_text  # the rescue was not saved
 
@@ -2061,7 +2068,7 @@ def test_an_approval_made_during_the_rescue_stays(page, monkeypatch):
         services.rebuild_page_lines(page, save=True)
     page.refresh_from_db()
     assert page.status == Page.Status.REVIEWED and page.reviewed_at is not None
-    assert page.lines.count() == 2
+    assert page.lines.count() == 3
 
 
 def test_keeping_reviewed_lines_reads_the_approval_from_the_database(page):
