@@ -330,6 +330,18 @@ def is_letter_digit(token: dict) -> bool:
     return bool(LETTER_TOKEN.match(str(token.get("t") or "")))
 
 
+def is_era_sign(tokens: list[dict], i: int) -> bool:
+    """«ه» / «هـ» right after a word holding digits is the hijri era sign of that year («سنة ٢٩ هـ»), never a
+    digit Qari wrote as a letter. Kraken reads that sign as «٥» or «٨» in its own area, so `shows_letter` does
+    not catch it; taken for a digit, the year gained a digit and the sign became one (book 29, 2026-09-28:
+    «٢٩ هـ» → «٢٩٩ ٨», «٤٥ هـ» → «٥ ٤٥»). A letter after anything else («(ه) الخزر», «سنة ه») stays a
+    candidate."""
+    match = LETTER_TOKEN.match(str(tokens[i].get("t") or ""))
+    if not match or not match.group(2).startswith("ه") or i == 0:
+        return False
+    return bool(_DIGIT.search(str(tokens[i - 1].get("t") or "")))
+
+
 def digitless_dates(tokens: list[dict]) -> list[tuple[int, int]]:
     """`(first, last)` of each bracketed date Qari wrote without its digits, «(هـ – م)», «(ع ه – ه م)»:
     a bracket group of at most `DATE_MAX_TOKENS` tokens with a dash or a slash, ending in «م» or «هـ»,
@@ -696,7 +708,11 @@ def page_letters(page, lines: list | None = None) -> list[LineLetters]:
         tokens = line.tokens or []
         dates = digitless_dates(tokens)
         in_dates = {i for first, last in dates for i in range(first, last + 1)}
-        letters = [i for i, token in enumerate(tokens) if i not in in_dates and is_letter_digit(token)]
+        letters = [
+            i
+            for i, token in enumerate(tokens)
+            if i not in in_dates and is_letter_digit(token) and not is_era_sign(tokens, i)
+        ]
         if not (letters or dates):
             continue
         areas = {i: area for i in letters if (area := letter_area(tokens, i, line.bbox))}

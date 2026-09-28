@@ -159,6 +159,14 @@ def test_lone_letters_that_look_like_digits_and_digitless_dates_are_found():
     for text in ("(د)", "اب", "هو", "١", "(٥)", "ج"):
         assert not nb.is_letter_digit(word(text)), text
     assert not nb.is_letter_digit(word("ا", res="typed"))  # the reviewer's word stays
+    # «هـ» after a year is its era sign, not a «٥» (book 29: «سنة ٢٩ هـ» became «٢٩٩ ٨»)
+    for year in ("29", "٢٩", "٤٥", "(٧٧٥"):
+        line = [word("سنة"), word(year), word("هـ"), word("من")]
+        assert nb.is_era_sign(line, 2), year
+    assert nb.is_era_sign([word("٥٢"), word("ه.")], 1)
+    assert not nb.is_era_sign([word("سنة"), word("ه")], 1)  # no year before it: a letter for «٥»
+    assert not nb.is_era_sign([word("(ه)"), word("الخزر")], 0)
+    assert not nb.is_era_sign([word("٢٩"), word("ع")], 1)  # «ع» for «٤» stays a candidate
     line = [word(t) for t in ("المنصور", "(ع", "ه", "–", "ه", "م)", "بأيدي", "(هـ", "–", "م)", "و", "(٧٧٥م)")]
     assert nb.digitless_dates(line) == [(1, 5), (7, 9)]  # «(٧٧٥م)» has its digits
     assert nb.digitless_dates([word("(الكتاب"), word("الأبيض)")]) == []  # a dash is needed, and «م»/«هـ»
