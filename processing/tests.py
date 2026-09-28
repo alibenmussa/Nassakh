@@ -1625,3 +1625,41 @@ def test_a_sparse_page_stays_white_and_keeps_its_lines():
     dense = np.full((400, 300), 255, dtype=np.uint8)
     dense[50:350:20, 20:280] = 0
     assert pipeline.flatten_background(dense)[0].mean() < 255
+
+
+def test_short_lines_the_threshold_missed_join_the_bands():
+    """A chapter number and a one-word last line sit under the profile threshold (their peak is a fraction
+    of a full line's) and were glued onto the next line by the OCR linking (full-book test, 2026-09-28).
+    `short_lines` adds them as core bands; the footnote rule, the page number and the marks of the full
+    lines are never added, and the other detections are unchanged."""
+    page = np.full((2200, 1600), 255, dtype=np.uint8)
+    pitch = 80
+
+    def line(top, left, right, glyph_h=26):
+        for x in range(left, right, 30):
+            page[top : top + glyph_h, x : x + 20] = 0
+        page[top + glyph_h + 6 : top + glyph_h + 9, left + 40 : left + 46] = 0  # a dot under it
+
+    line(300, 700, 900)  # «– ٤ –», centred, short
+    for i in range(8):
+        line(500 + i * pitch, 200, 1400)  # the body
+    line(500 + 8 * pitch, 1100, 1400)  # a one-word last line
+    page[1300:1306, 900:1400] = 0  # the footnote rule
+    for i in range(2):
+        line(1340 + i * pitch, 200, 1400, glyph_h=20)  # the footnotes
+    line(2000, 760, 840)  # the page number
+    result = pipeline.run_pipeline(page)
+    tops = [ln["y0"] for ln in result.line_boxes]
+    assert any(295 <= y <= 330 for y in tops), tops  # the chapter number
+    assert any(1135 <= y <= 1170 for y in tops), tops  # the one-word last line
+    assert not any(1295 <= y <= 1310 for y in tops), tops  # never the rule
+    assert not any(y >= 1990 for y in tops), tops  # never the page number
+    assert result.n_lines == len(result.line_boxes) == 12
+    heights = [ln["y1"] - ln["y0"] for ln in result.line_boxes]
+    assert max(heights) <= 40, heights  # every band is a core, none a whole cluster with its marks
+    # a page with the same body and nothing short adds nothing
+    plain = np.full((2200, 1600), 255, dtype=np.uint8)
+    for i in range(8):
+        for x in range(200, 1400, 30):
+            plain[500 + i * pitch : 526 + i * pitch, x : x + 20] = 0
+    assert pipeline.run_pipeline(plain).n_lines == 8

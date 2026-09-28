@@ -342,6 +342,77 @@ def detect_lines(ink: np.ndarray) -> tuple[list[LineBox], float]:
     return lines, round(med, 1)
 
 
+# `short_lines`: a candidate cluster of ink rows must lie this many line pitches from every detected line
+# (any closer, it is that line's marks or descenders), be this tall (a rule is thinner, a paragraph taller),
+# this wide (a speck, an ornament), and not be a rule (one of its rows inked across its whole width).
+SHORT_LINE_CLEAR = 0.45
+SHORT_LINE_HEIGHT = (0.12, 1.3)
+SHORT_LINE_WIDTH = 0.8
+SHORT_LINE_JOIN = 0.35  # rows closer than this (in pitches) belong to one cluster
+SHORT_LINE_INK = 0.015  # of the profile's peak: the least ink a row of a short line shows
+RULE_FILL = 0.98
+
+
+def short_lines(
+    ink: np.ndarray, lines: list[LineBox], page_number_box: Box | None = None, rule_y: int | None = None
+) -> list[LineBox]:
+    """The short lines `detect_lines` misses: a chapter number «– ٤ –», a centred heading, a one-word last
+    line of a paragraph, a list item (full-book test, 2026-09-28). Their peak in the projection profile
+    sits under its threshold, so their text was glued onto the next line. They are found again at a low
+    threshold, as clusters of inked rows that lie clear of every detected line by `SHORT_LINE_CLEAR` line
+    pitches, above the last detected line (a page number, a signature mark below it never becomes text),
+    off the page-number box and the footnote rule, and not a rule themselves. Each one is returned as a
+    core band like the others (the rows at half its own peak), so the OCR line linking treats it alike.
+    Empty with fewer than two detected lines (no pitch to measure by)."""
+    if len(lines) < 2:
+        return []
+    ys = sorted((int(ln["y0"]), int(ln["y1"])) for ln in lines)
+    pitches = sorted(b[0] - a[0] for a, b in zip(ys, ys[1:], strict=False))
+    pitch = float(pitches[len(pitches) // 2])
+    if pitch <= 0:
+        return []
+    h = ink.shape[0]
+    prof = (ink > 0).sum(axis=1).astype(np.float32)
+    k = max(3, h // 400) | 1
+    prof_s = np.convolve(prof, np.ones(k) / k, mode="same")
+    low = max(2.0, SHORT_LINE_INK * float(prof_s.max()))
+    last_y0 = ys[-1][0]
+    clusters: list[list[int]] = []
+    for a, b in _runs(prof_s > low):
+        if b > last_y0:
+            break
+        if clusters and a - clusters[-1][1] < SHORT_LINE_JOIN * pitch:
+            clusters[-1][1] = b
+        else:
+            clusters.append([a, b])
+    out: list[LineBox] = []
+    for a, b in clusters:
+        clear = min(0 if (a < y1 and b > y0) else min(abs(a - y1), abs(b - y0)) for y0, y1 in ys)
+        if clear < SHORT_LINE_CLEAR * pitch:
+            continue
+        if not (SHORT_LINE_HEIGHT[0] * pitch <= b - a <= SHORT_LINE_HEIGHT[1] * pitch):
+            continue
+        if rule_y is not None and a <= rule_y < b:
+            continue
+        rows = ink[a:b] > 0
+        cols = np.where(rows.any(axis=0))[0]
+        if cols.size == 0 or cols[-1] - cols[0] < SHORT_LINE_WIDTH * pitch:
+            continue
+        if rows.sum(axis=1).max() >= RULE_FILL * (cols[-1] - cols[0] + 1):
+            continue
+        if page_number_box and not (b <= page_number_box[1] or a >= page_number_box[3]):
+            continue
+        core = prof_s[a:b] >= 0.5 * prof_s[a:b].max()  # the band is the cluster's dense core, like the others
+        c0, c1 = max(_runs(core), key=lambda r: r[1] - r[0])
+        core_cols = np.where((ink[a + c0 : a + c1] > 0).any(axis=0))[0]
+        if core_cols.size == 0:
+            continue
+        out.append(
+            {"x0": int(core_cols[0]), "y0": int(a + c0), "x1": int(core_cols[-1]) + 1, "y1": int(a + c1)}
+        )
+    return out
+
+
 def _text_block_width(lines: list[LineBox], fallback: int) -> int:
     """Width of the text block spanned by `lines` (`fallback` when there are none)."""
     if not lines:
@@ -847,6 +918,12 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
         flags.append(FLAG_NO_LINES)
     if any(s["kind"] == STRIP_TEXT for s in strips):
         flags.append(FLAG_EDGE_STRIP)
+
+    # the short lines the threshold missed join the bands the OCR links its lines to (never the detections
+    # above, which keep seeing what they saw)
+    extra = short_lines(ink_c, lines, pn_box, rule_y)
+    if extra:
+        lines = sorted(lines + extra, key=lambda ln: ln["y0"])
 
     auto_params = {
         "angle": auto_angle,
