@@ -335,6 +335,33 @@ def _proportional(n: int, counts: list[int]) -> list[int]:
     return alloc
 
 
+def _head_lines(line_no: list[int], start: int, stop: int) -> list[tuple[int, int]]:
+    """The whole primary lines among the tokens `start..stop` as `(first, end)` pairs, top to bottom: a
+    line is whole when none of its tokens lies outside the run (the run's last line usually goes on to
+    the first anchored word and is not one)."""
+    out = []
+    a = start
+    while a < stop:
+        b = a
+        while b < stop and line_no[b] == line_no[a]:
+            b += 1
+        whole = (a == 0 or line_no[a - 1] != line_no[a]) and (b == len(line_no) or line_no[b] != line_no[a])
+        if whole:
+            out.append((a, b))
+        a = b
+    return out
+
+
+def _covered(band: Band, lines: list[dict]) -> bool:
+    """Does a Tesseract line cover the band (`BAND_COVER` of its core rows)?"""
+    height = max(1, band.y1 - band.y0)
+    for line in lines:
+        box = _box(line)
+        if box and min(box[3], band.y1) - max(box[1], band.y0) >= BAND_COVER * height:
+            return True
+    return False
+
+
 def _place_run(n: int, slots: list[tuple[int, list[int]]], edges: tuple[int | None, int | None]) -> list:
     """Line, Tesseract word (or None) and `seen` flag for each of the `n` words (`_units`) of a run.
 
@@ -808,6 +835,9 @@ def build_lines(
     if not p_tokens:
         return []
     n = len(p_tokens)
+    p_line_no: list[int] = []  # the primary's own line of each token (its line breaks)
+    for k, raw_line in enumerate(primary_text.split("\n")):
+        p_line_no.extend([k] * len(raw_line.split()))
 
     from . import flags  # the policy (D71) imports this module's alignment
 
@@ -831,7 +861,9 @@ def build_lines(
     inserted = dict(inserted or {})
 
     source = list(tesseract_lines or [])
-    lines_in = fit_lines(source, page_bands(bands))
+    all_bands = page_bands(bands)
+    lines_in = fit_lines(source, all_bands)
+    synthetic: dict[float, list] = {}  # a band no Tesseract line covers that took primary lines: its box
     line_of: list[int | None] = [None] * n
     bbox_of: list[list | None] = [None] * n
     tess_of: list[str | None] = [None] * n  # Tesseract's reading when it differs from the primary
@@ -1177,6 +1209,41 @@ def build_lines(
                 while s < i and p_tokens[s] and set(p_tokens[s]) <= _ENDERS:
                     line_of[s] = edges[0]
                     s += 1
+            if ja is None and jb is not None:
+                # The region's first lines before its first anchored word: the primary's own line breaks
+                # name them (a chapter number, a heading, which Tesseract read as garbage or not at all),
+                # and their places are the lines without an anchored word and the bands no Tesseract line
+                # covers above the first anchored line, bottom-aligned (full-book test, 2026-09-28: every
+                # chapter opening's number and heading were glued onto its first body line).
+                k_first = words[jb][0]
+                first_box = _box(source[k_first])
+                head = _head_lines(p_line_no, s, i)
+                matched_now = {j for j in word_of if j is not None}
+                slots_above: list[tuple[float, float, list | None]] = []  # (y, line key, a band's box)
+                for k in range(k_first):
+                    if all(j not in matched_now for j in by_line.get(k, [])):
+                        box = _box(source[k])
+                        slots_above.append((float(box[1]) if box else -1.0, float(k), None))
+                for t, band in enumerate(all_bands):
+                    if first_box and band.y1 <= first_box[1] and not _covered(band, source):
+                        above = [k for k in range(len(source)) if (b := _box(source[k])) and b[3] <= band.y0]
+                        key = (max(above) if above else -1) + 0.5 + t * 1e-3
+                        slots_above.append((float(band.y0), key, [band.x0, band.lo, band.x1, band.hi]))
+                slots_above.sort()
+                if head and slots_above:
+                    pairs = list(zip(reversed(head), reversed(slots_above), strict=False))
+                    if len(head) > len(slots_above):  # more lines than places: the rest join the top one
+                        pairs += [(line, slots_above[0]) for line in head[: len(head) - len(slots_above)]]
+                    for (a, b), (_, key, box) in pairs:
+                        for r in range(a, b):
+                            line_of[r] = key
+                            if _chars([p_tokens[r]]):
+                                unseen[r] = True
+                        if box is not None:
+                            synthetic[key] = box
+                        else:  # its garbage words are no evidence for the tokens that follow
+                            taken.update(by_line.get(int(key), []))
+                    s = head[-1][1]
             units = _units(p_tokens[s:i])
             if not units:  # punctuation only: it ends the previous line (or opens the first)
                 for r in range(s, i):
@@ -1212,6 +1279,7 @@ def build_lines(
                         take(r, j)
         place_marks()
         line_bboxes = {k: line.get("bbox") for k, line in enumerate(lines_in)}
+        line_bboxes.update(synthetic)
         rescued = {k for k, line in enumerate(lines_in) if line.get("rescued")}
         two_bands = {k for k, line in enumerate(lines_in) if line.get("two_bands")}
         matched = {j for j in word_of if j is not None}

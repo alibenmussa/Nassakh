@@ -448,3 +448,30 @@ def test_merging_two_words_keeps_the_weak_mark_of_either_box():
     assert merged.tokens[0]["bq"] == WEAK
     clean = Line.objects.create(page=page, order=1, bbox=[0, 30, 100, 50], text="قال ثم", tokens=tokens[1:])
     assert "bq" not in review.merge_tokens(clean, 0).tokens[0]
+
+
+# ---------------------------------------------------------------- 8. the first lines before the first anchor
+
+
+def test_the_first_lines_before_the_first_anchor_take_the_empty_lines_and_bands_above_it():
+    """Book 29 p. 20 (full-book test, 2026-09-28): Tesseract read the chapter number «– ٤ –» as garbage and
+    the heading not at all, so the primary's first two lines had no anchor and were glued onto the first
+    body line. The primary's own line breaks name them; the garbage line and the band no Tesseract line
+    covers above the first anchored line are their places, bottom-aligned."""
+    bands = [band(10, 20, 150, 250), band(70, 80, 100, 300), band(130, 140), band(190, 200)]
+    tess = [
+        line(w("—$-—-", 150, 250, 5, 25)),  # the chapter number as Tesseract saw it
+        line(w("ابن", 320, 380, 125, 145), w("جفنة", 240, 300, 125, 145), w("بن", 180, 220, 125, 145)),
+        line(w("صحابي", 300, 380, 185, 205), w("حضر", 200, 280, 185, 205)),
+    ]
+    built = build_lines("– ٤ –\nمعاوية بن حديج\nابن جفنة بن\nصحابي حضر", None, tess, bands=bands)
+    assert texts(built) == ["– ٤ –", "معاوية بن حديج", "ابن جفنة بن", "صحابي حضر"]
+    assert built[1]["bbox"] == [100, 45, 300, 105]  # the band's rows halfway to its neighbours
+    assert built[0]["n_anchored"] == 0 and built[1]["n_unseen"] == 3  # Tesseract never saw them
+    # no empty line or band above the first anchor: the leading tokens stay on the first line, as before
+    plain = [tess[1], tess[2]]
+    built = build_lines("– ٤ –\nابن جفنة بن\nصحابي حضر", None, plain, bands=bands[2:])
+    assert texts(built) == ["– ٤ – ابن جفنة بن", "صحابي حضر"]
+    # more leading lines than places: the topmost join the top place
+    built = build_lines("سطر أول\n– ٤ –\nمعاوية بن حديج\nابن جفنة بن\nصحابي حضر", None, tess, bands=bands)
+    assert texts(built) == ["سطر أول – ٤ –", "معاوية بن حديج", "ابن جفنة بن", "صحابي حضر"]
