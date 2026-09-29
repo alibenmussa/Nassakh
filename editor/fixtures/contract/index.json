@@ -37,7 +37,7 @@
    "current": "true for the step of the screen shown (aria-current=\"page\")"
   },
   "rules": {
-   "pages": "todo: nothing extracted; active: extracting (no page yet: «تُستخرج الصفحات…») or preparing; attention: a page failed before the start; done: every page prepared, or «المعالجة» started (then the link is `?view=guides`)",
+   "pages": "todo: nothing extracted; active: extracting (no page yet: «تُستخرج الصفحات…») or preparing; attention: a page failed before the start; done: every page prepared, or «المعالجة» started (then the link is `/guides/`, D84)",
    "ocr": "todo while the book awaits «بدء المعالجة»; active while pages are read; attention: pages in error; done: every page read or later",
    "review": "blocked before the first page is read; the link is `review:next` while a page waits, else review of the first page; todo: none reviewed; active: some; done: all",
    "manuscript": "todo: none; active: an assembly queued or running; attention: the newest run failed; stale: out of date and not edited (content: «تغيّر نص…», approvals only: «اعتُمدت…»); done: fresh, or edited («النص يُحرَّر الآن في «الكتاب»»)",

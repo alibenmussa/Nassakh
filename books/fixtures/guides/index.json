@@ -6,7 +6,7 @@
     "started": "«المعالجة» started (flag False), reviewing, manual guides header_cut 0.062; page 1 approved (locked approved), 2 has a reviewed line (locked review), 3–5 ocr_done, 6 excluded, 7 ocr_done with override {header_cut 0.05, footnote_line 0.805} (doubt line_cut); regions derived"
   },
   "files": {
-    "dashboard_config.json": "the keys `book_dashboard(book, view)` adds to `config`, per state: uploaded, processing, needs_guides, error (all awaiting the start), started_view_guides (`?view=guides` on a started book) and started (outside the mode: only guidesMode / layoutStage false and the re-run estimates; everything else is today's config)",
+    "dashboard_config.json": "the keys `book_dashboard(book, view)` adds to `config`, per state: uploaded, processing, needs_guides, error (all awaiting the start), started_view_guides (the «التخطيط» mode of a started book (`/guides/`, D84)) and started (outside the mode: only guidesMode / layoutStage false and the re-run estimates; everything else is today's config)",
     "progress.json": "the `_progress_payload` part of `api:book_progress` (also each row of the books list): + `layout_stage` (the book awaits «بدء المعالجة») and `waiting` (awaits and needs_guides); in «التخطيط» `percent` is the prepared share of the non-excluded pages",
     "sheet_guides_blocks.json": "the `guides` block of a sheet item, per state (computed before derivation, derived after, locked approved / review, uploaded page, page override)",
     "sheets_guides.json": "GET api:book_sheets?from=1&to=2&guides=1 on the layout book: today's items with `lines` and `provisional_lines` empty (not loaded) and the `guides` block",
@@ -38,7 +38,7 @@
       "reextract": "error: «إعادة استخراج الصفحات» posts guidesUrls.extract",
       "startOcr": "needs_guides: «بدء المعالجة» posts guidesUrls.startOcr",
       "startOcrDisabled": "processing: «بدء المعالجة» disabled, title «يُتاح بعد اكتمال تجهيز الصفحات»",
-      "back": "`?view=guides` on a started book: «العودة إلى الصفحات» links to guidesUrls.back"
+      "back": "the «التخطيط» mode of a started book (`/guides/`, D84): «العودة إلى الصفحات» links to guidesUrls.back"
     },
     "template filter": "undo_action: `{{ message|undo_action }}` gives the URL of a message whose extra_tags carry `undo:<url>` ('' otherwise); the toast posts it with `next`"
   },
@@ -78,7 +78,7 @@
     "guides_stats": "as config.guidesStats",
     "rerun_stages": "[{value, label}] filtered: in «التخطيط» only preprocess, and only when needs_guides or error with pages; else today's five",
     "rerun": "as config.rerun",
-    "guides_url": "the «⋯» «التخطيط» link: /books/<id>/?view=guides",
+    "guides_url": "the «⋯» «التخطيط» link: /books/<id>/guides/",
     "start_ocr_url / delete_url / extract_url": "the POST targets"
   }
 }

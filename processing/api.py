@@ -1,6 +1,5 @@
 """JSON endpoints of the processing app (DRF function views, session auth).
 
-- POST /api/pages/<id>/preprocess/        manual parameters → re-run preprocessing → new image URLs (editor)
 - POST /api/pages/<id>/guides/            the page's layout override: today's replace body, a merge
   (`{merge: true, set, unset, reset, stage}`) or an undo (`{replace, stage}`) (editor)
 - GET  /api/books/<id>/guides/[?from&to]  `services.book_guides_state` (grid, filmstrip, chips)
@@ -54,31 +53,6 @@ def _stage(data: dict) -> str | None:
 
 def _page(request: Request, page_id: int) -> Page:
     return get_object_or_404(Page.objects.select_related("book"), pk=page_id)
-
-
-@api_view(["POST"])
-@permission_classes([IsEditor])
-def page_preprocess(request: Request, page_id: int) -> Response:
-    """Re-run preprocessing with manual parameters (or `reset: true` for the automatic values).
-
-    Runs synchronously for ordinary page sizes and returns the new state (image URLs carry a
-    version query so the browser reloads them); very large originals are queued instead (202). In
-    «التخطيط» the book status is refreshed afterwards (a failed page prepared again joins the
-    waiting pages).
-    """
-    page = _page(request, page_id)
-    data = _body(request)
-    try:
-        manual = None if data.get("reset") else services.clean_manual_params(data)
-        payload, queued = services.rerun_preprocess(page, manual)
-    except ValidationError as exc:
-        return Response({"errors": list(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
-    except services.ProcessingError as exc:
-        return Response({"errors": [str(exc)]}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
-    if not queued:
-        services.refresh_waiting_book(page.book_id)
-    payload["queued"] = queued
-    return Response(payload, status=status.HTTP_202_ACCEPTED if queued else status.HTTP_200_OK)
 
 
 @api_view(["POST"])

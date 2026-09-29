@@ -475,7 +475,6 @@
             statusLabel: this.page.status_label || '',
             dashboardUrl: this.nav.dashboard_url || '',
             back: this.back,
-            detailUrl: this.detailUrl,
             jumping: this.jumping,
             hasPrev: Boolean(this.nav.prev_url),
             hasNext: Boolean(this.nav.next_url),
@@ -512,12 +511,6 @@
         if (!url || !q || /[?&]from=/.test(url)) return url;
         const [path, hash] = String(url).split('#');
         return `${path}${path.includes('?') ? '&' : '?'}${q}${hash !== undefined ? `#${hash}` : ''}`;
-      },
-      // «تفاصيل المعالجة» (§5.4): the page detail, for editors (`nav.detail_url`; the dashboard's address otherwise)
-      get detailUrl() {
-        if (this.nav && this.nav.detail_url !== undefined) return this.nav.detail_url || '';
-        if (!this.canEdit || !this.nav || !this.nav.dashboard_url || !this.page.number) return '';
-        return `${String(this.nav.dashboard_url).replace(/\/?$/, '/')}pages/${this.page.number}/`;
       },
       get isError() { return this.page.status === 'error'; },
       get isPending() { return !this.isError && this.page.text_state !== 'final'; },

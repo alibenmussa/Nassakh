@@ -37,7 +37,7 @@ import pymupdf
 from books.models import ALL_PAGES_FAILED_MESSAGES, Book, Page
 from core.arabic import arabic_ratio, normalize_ws, to_western_digits
 from core.images import fit_width
-from core.serializers import flag_items, region_items
+from core.serializers import flag_items
 from core.storage import book_source_path, save_array
 from core.templatetags.nassakh import status_dot
 
@@ -1108,7 +1108,7 @@ def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> di
         "rerun_url": reverse("books:rerun", args=[page.book_id, page.number]),
         "thumb_url": _file_url(preprocess.thumbnail) if preprocess else None,
         "scan_thumb_url": _file_url(page.scan_thumbnail),
-        "url": reverse("books:page_detail", args=[page.book_id, page.number]),
+        "url": sheet_url(page.book_id, page.number),
         "n_unresolved": page.n_unresolved,
         # How the page was read (D73): the half-disc marks one reader ('' before 7b).
         "readers": _readers(page),
@@ -1124,11 +1124,16 @@ def page_tile(page: Page, sequence_issue: str = "", compact: bool = False) -> di
 
 
 def primary_url(page: Page) -> str:
-    """Where a page's tile leads (D76): review when its text is final and it is not excluded, else the page
-    detail («تفاصيل المعالجة»)."""
+    """Where a page's tile leads (D76, D84): review when its text is final and it is not excluded, else the
+    page's sheet in the «التخطيط» mode."""
     if page.text_state == Page.TextState.FINAL and not page.is_excluded:
         return reverse("review:page", args=[page.book_id, page.number])
-    return reverse("books:page_detail", args=[page.book_id, page.number])
+    return sheet_url(page.book_id, page.number)
+
+
+def sheet_url(book_id: int, number: int) -> str:
+    """The page's sheet in the «التخطيط» mode: `/books/<id>/guides/#sheet-<n>` (D84)."""
+    return f"{reverse('books:guides', args=[book_id])}#sheet-{number}"
 
 
 def _compact_tile(page: Page, sequence_issue: str, failed: bool, retry_stage: str) -> dict:
@@ -1205,15 +1210,15 @@ def attention_pages(book: Book) -> list[dict]:
                 "sequence_issue": issues.get(page.pk, ""),
                 "error": page.status == Page.Status.ERROR,
                 "error_headline": _headline(page.error_message),
-                "url": reverse("books:page_detail", args=[book.pk, page.number]),
+                "url": primary_url(page),
             }
         )
     return items
 
 
 def guides_url(book: Book) -> str:
-    """URL of the «التخطيط» mode of the dashboard (the «⋯» item «التخطيط», D67)."""
-    return reverse("books:detail", args=[book.pk]) + "?view=guides"
+    """URL of the «التخطيط» mode of the dashboard (the «⋯» item «التخطيط», D67; its own address, D84)."""
+    return reverse("books:guides", args=[book.pk])
 
 
 def has_guides(book: Book) -> bool:
@@ -1237,15 +1242,14 @@ def _url_template(name: str, book_id: int) -> str:
 def page_url_templates(book: Book) -> dict[str, str]:
     """Per-page URLs of the dashboard with `__n__` for the page number (pages ingested after load)."""
     return {
-        "page": _url_template("books:page_detail", book.pk),
+        "page": f"{reverse('books:guides', args=[book.pk])}#sheet-{PAGE_NUMBER_SLOT}",
         "review": _url_template("review:page", book.pk),
         "rerun": _url_template("books:rerun", book.pk),
         "exclude": _url_template("books:toggle_exclude", book.pk),
     }
 
 
-GUIDES_VIEW = "guides"  # `?view=guides`: the «التخطيط» mode on a book whose «المعالجة» started
-GUIDES_VIEW_QUERY = f"view={GUIDES_VIEW}"
+GUIDES_VIEW = "guides"  # `book_dashboard(book, GUIDES_VIEW)`: the «التخطيط» mode once «المعالجة» started
 
 
 def start_action(book: Book, guides_mode: bool) -> str:
@@ -1405,132 +1409,6 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
         "config": config,
         "stage_steps": config["stageBar"],
         **context,
-    }
-
-
-def page_neighbours(page: Page) -> tuple[Page | None, Page | None]:
-    """`(previous, next)` pages by book order (None at the ends)."""
-    siblings = Page.objects.filter(book_id=page.book_id)
-    previous = siblings.filter(number__lt=page.number).order_by("-number").first()
-    following = siblings.filter(number__gt=page.number).order_by("number").first()
-    return previous, following
-
-
-def page_images(page: Page) -> dict:
-    """URLs of the three image tabs (`original`, `gray` = display image, `bw`), None when missing."""
-    preprocess = _preprocess_of(page)
-    gray = None
-    bw = None
-    if preprocess is not None:
-        gray = _file_url(preprocess.display_image) or _file_url(preprocess.gray_image)
-        bw = _file_url(preprocess.bw_image)
-    return {"original": _file_url(page.original_image), "gray": gray, "bw": bw}
-
-
-def page_regions(page: Page) -> list[dict]:
-    """Regions of the page as plain dicts (bbox in gray-image pixel space) for the overlay.
-
-    Before its regions exist (in «التخطيط») the page shows the bands `layout_page` will write:
-    the same dicts with `id` null and `computed: true`.
-    """
-    rows = list(page.regions.all())
-    if rows:
-        return region_items(rows)
-    pre = _preprocess_of(page)
-    if pre is None or not pre.output_height or not pre.output_width:
-        return []
-    from processing import services as processing  # other app: lazy imports
-    from processing.models import LayoutGuides, Region
-
-    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
-    specs = processing.page_bands(
-        pre, processing.guides_values(guides), processing.is_manual(guides), page.guides_override
-    )
-    labels = dict(Region.Kind.choices)
-    return [
-        {
-            "id": None,
-            "kind": kind,
-            "label": str(labels.get(kind, kind)),
-            "bbox": box,
-            "order": order,
-            "source": Region.Source.GUIDES,
-            "computed": True,
-        }
-        for order, (kind, box) in enumerate(specs)
-    ]
-
-
-def page_status(page: Page) -> dict:
-    """Payload of `/api/pages/<id>/status/`: status, text state, texts, flags and error."""
-    active = page.status in ACTIVE_PAGE_STATUSES and page.book.status in ACTIVE_BOOK_STATUSES
-    return {
-        "id": page.pk,
-        "number": page.number,
-        "status": page.status,
-        "status_label": page.get_status_display(),
-        "dot": status_dot(page.status),
-        "text_state": page.text_state,
-        "text_state_label": page.get_text_state_display(),
-        "provisional_text": page.provisional_text,
-        "final_text": page.final_text,
-        "flags": list(page.attention_flags or []),
-        "flag_labels": [item["label"] for item in flag_items(page.attention_flags)],
-        "printed_number": page.printed_number,
-        "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
-        "error_detail": _detail(page.error_message) if page.status == Page.Status.ERROR else "",
-        "error_from": page.error_from if page.status == Page.Status.ERROR else "",
-        "is_excluded": page.is_excluded,
-        "active": active,
-        "images": page_images(page),
-    }
-
-
-def page_detail_context(page: Page) -> dict:
-    """Everything the page-detail template needs, including the Alpine component's config."""
-    previous, following = page_neighbours(page)
-    preprocess = _preprocess_of(page)
-    images = page_images(page)
-    size = (
-        [preprocess.output_width, preprocess.output_height]
-        if preprocess is not None and preprocess.output_width and preprocess.output_height
-        else None
-    )
-    book = page.book
-    stages = LAYOUT_STAGES if book.awaits_ocr_start else STAGES
-    regions = page_regions(page)
-    prev_url = reverse("books:page_detail", args=[book.pk, previous.number]) if previous else None
-    next_url = reverse("books:page_detail", args=[book.pk, following.number]) if following else None
-    return {
-        "book": book,
-        "page": page,
-        "prev_page": previous,
-        "next_page": following,
-        "prev_url": prev_url,
-        "next_url": next_url,
-        "page_images": images,
-        "page_regions": regions,
-        "page_flags": flag_items(page.attention_flags),
-        "page_state": page_status(page),
-        "error_headline": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
-        "error_detail": _detail(page.error_message) if page.status == Page.Status.ERROR else "",
-        "retry_stage": page.error_from
-        if page.status == Page.Status.ERROR and page.error_from in STAGES
-        else None,
-        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in stages],
-        "layout_stage": bool(book.awaits_ocr_start),
-        "total_pages": Page.objects.filter(book_id=page.book_id).count(),
-        "dpi": int(round(page.dpi)) if page.dpi else 0,
-        "source_page": page.source_index + 1,
-        "viewer": {
-            "pageId": page.pk,
-            "images": images,
-            "size": size,
-            "regions": regions,
-            "prevUrl": prev_url,
-            "nextUrl": next_url,
-            "initialTab": "gray" if images["gray"] else "original",
-        },
     }
 
 
@@ -1789,7 +1667,7 @@ def _sheet(
         "is_excluded": page.is_excluded,
         "printed_number": page.printed_number,
         "error": _headline(page.error_message) if page.status == Page.Status.ERROR else "",
-        "url": reverse("books:page_detail", args=[book.pk, page.number]),
+        "url": sheet_url(book.pk, page.number),
         "review_url": reverse("review:page", args=[book.pk, page.number]),
     }
 
@@ -1958,7 +1836,7 @@ def _step(key: str, url: str | None, state: str, detail: str, hint: str, count: 
 def _pages_step(facts: StageFacts) -> dict:
     book = facts.book
     dashboard = reverse("books:detail", args=[book.pk])
-    url = dashboard if book.awaits_ocr_start else f"{dashboard}?{GUIDES_VIEW_QUERY}"
+    url = dashboard if book.awaits_ocr_start else guides_url(book)
     if not facts.total:
         if book.status == Book.Status.ERROR:
             return _step(

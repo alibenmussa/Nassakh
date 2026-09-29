@@ -53,19 +53,6 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
 
       <button type="button" class="btn-icon rv-help" title="اختصارات لوحة المفاتيح (?)" aria-label="اختصارات لوحة المفاتيح" @click="act('openSheet')"><span aria-hidden="true">?</span></button>
 
-      {# «⋯» (§5.4): the page's technical details, for editors #}
-      <div class="menu-anchor" x-data="{ open: false }" x-show="b.detailUrl" @keydown.escape.window="open = false">
-        <button type="button" class="btn-icon" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" aria-label="المزيد من الإجراءات" title="المزيد">
-          <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
-        </button>
-        <div class="menu menu-popover rv-bar-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
-          <a class="menu-item" role="menuitem" :href="b.detailUrl" data-detail-link>
-            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
-            <span>تفاصيل المعالجة</span>
-          </a>
-        </div>
-      </div>
-
       <template x-if="b.reviewed">
         <span class="rv-reviewed">
           <span class="rv-reviewed-mark" aria-hidden="true"><svg class="icon icon-sm"><use href="#i-check"/></svg></span>

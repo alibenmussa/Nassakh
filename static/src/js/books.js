@@ -536,7 +536,7 @@ document.addEventListener('alpine:init', () => {
       p.review_url = p.review_url || fill(urls.review, n);
       p.rerun_url = p.rerun_url || fill(urls.rerun, n);
       p.exclude_url = p.exclude_url || fill(urls.exclude, n);
-      // D76 (§5.4): where the tile and the sheet title lead: review once the text is final, else the page detail
+      // D76 (§5.4), D84: where the tile and the sheet title lead: review once the text is final, else the page's sheet
       p.primary_url = raw.primary_url || (p.text_state === 'final' && !p.is_excluded ? p.review_url : p.url);
       if (!(p.n_flags > 0)) p.flag_labels = [];
       else if (!Array.isArray(p.flag_labels)) p.flag_labels = before && Array.isArray(before.flag_labels) ? before.flag_labels : [];
@@ -1729,8 +1729,6 @@ document.addEventListener('alpine:init', () => {
       if (el.style.getPropertyValue('--sheet-ar') !== ar) el.style.setProperty('--sheet-ar', ar);
       const title = q(el, '.sheet-title');
       if (title) { title.setAttribute('href', p.primary_url || p.url || '#'); setText(q(title, 'bdi'), p.number); }
-      const detail = q(el, '.sheet-detail');
-      if (detail) { detail.setAttribute('href', p.url || '#'); detail.setAttribute('aria-label', `تفاصيل المعالجة للصفحة ${p.number}`); }
       const dot = q(el, '.sheet-head .dot');
       if (dot) dot.className = `dot ${p.dot || 'dot-neutral'}`;
       setText(q(el, '.sheet-status'), p.status_label || '');
@@ -1808,8 +1806,6 @@ document.addEventListener('alpine:init', () => {
       setHidden(q(el, '.page-tile-excluded'), !p.is_excluded);
       const review = q(el, '.page-tile-review');
       if (review) { review.setAttribute('href', p.review_url || '#'); review.setAttribute('aria-label', `مراجعة الصفحة ${p.number}`); setHidden(review, !(p.text_state === 'final' && !p.is_excluded)); }
-      const detail = q(el, '.page-tile-detail');
-      if (detail) { detail.setAttribute('href', p.url || '#'); detail.setAttribute('aria-label', `تفاصيل المعالجة للصفحة ${p.number}`); }
       setHidden(q(el, '.tile-mark-check'), !p.is_reviewed);
       const count = q(el, '.tile-mark-count');
       if (count) { setHidden(count, p.is_reviewed || !(p.n_unresolved > 0)); setText(count, p.n_unresolved || 0); count.setAttribute('title', `علامات لم تُحسم: ${p.n_unresolved || 0}`); }
@@ -2318,109 +2314,4 @@ document.addEventListener('alpine:init', () => {
     if (!el) return null;
     try { return JSON.parse(el.textContent); } catch (e) { return null; }
   };
-
-  // ---------------------------------------------------------------- page detail viewer
-  const TAB_LABELS = { original: 'الأصل', gray: 'المُجهَّزة', bw: 'أبيض وأسود' };
-  const TAB_KEYS = { 1: 'original', 2: 'gray', 3: 'bw' };
-
-  Alpine.data('pageDetail', (cfg = {}) => ({
-    images: cfg.images || {},
-    regions: cfg.regions || [],
-    size: cfg.size || null, // [width, height] of the gray image (region coordinate space)
-    prevUrl: cfg.prevUrl || null,
-    nextUrl: cfg.nextUrl || null,
-    tab: 'original',
-    showRegions: true,
-    state: readJson('page-state') || {}, // /api/pages/<id>/status/ payload, kept live by the text panel poll
-    stageLabels: readJson('page-stage-labels') || {},
-    live: false, // true once a status poll has arrived (the server-rendered flags step aside)
-
-    init() {
-      const wanted = cfg.initialTab || 'gray';
-      this.tab = this.has(wanted) ? wanted : (this.has('original') ? 'original' : wanted);
-    },
-    // Designed failure: `error` = Arabic headline, `error_detail` = technical detail.
-    get errorLines() {
-      return String(this.state.error || '').split('\n');
-    },
-    get errorHeadline() {
-      return this.errorLines[0].trim() || 'فشلت معالجة هذه الصفحة.';
-    },
-    get errorDetail() {
-      // The status API sends the detail in `error_detail`; older payloads carried it after line 1.
-      if (this.state.error_detail) return String(this.state.error_detail).trim();
-      return this.errorLines.slice(1).join('\n').trim();
-    },
-    get retryStage() {
-      const stage = this.state.error_from || '';
-      return this.stageLabels[stage] ? stage : '';
-    },
-    get errorStageLabel() {
-      return this.stageLabels[this.state.error_from] || this.state.error_from || '';
-    },
-    // The text panel re-broadcasts each status poll, so the state card never contradicts it.
-    onPageState(detail) {
-      if (!detail || String(detail.id) !== String(cfg.pageId)) return;
-      const before = this.state.status;
-      this.state = { ...this.state, ...detail };
-      this.live = true;
-      const hadGray = this.has('gray');
-      if (detail.images) this.onPageUpdated({ pageId: cfg.pageId, images: detail.images });
-      if (before === 'uploaded' && detail.status !== 'uploaded' && detail.status !== 'error' && !hadGray) {
-        // Preprocessing just finished: reload once so the gray-image size and regions arrive too.
-        window.location.reload();
-      }
-    },
-    has(key) {
-      return Boolean(this.images[key]);
-    },
-    select(key) {
-      if (this.has(key)) this.tab = key;
-    },
-    get src() {
-      return this.images[this.tab] || null;
-    },
-    get alt() {
-      return `صورة الصفحة — ${TAB_LABELS[this.tab] || ''}`;
-    },
-    get overlayVisible() {
-      return this.showRegions && this.tab !== 'original' && Boolean(this.size) && this.regions.length > 0;
-    },
-    boxStyle(r) {
-      if (!this.size || !r.bbox || r.bbox.length !== 4) return 'display:none';
-      const [W, H] = this.size;
-      const [x0, y0, x1, y1] = r.bbox;
-      const pct = (v, total) => `${Math.max(0, Math.min(100, (100 * v) / total))}%`;
-      // Physical `left`/`top`: image pixels do not flip with the writing direction.
-      return `left:${pct(x0, W)};top:${pct(y0, H)};width:${pct(x1 - x0, W)};height:${pct(y1 - y0, H)}`;
-    },
-    // The preprocess panel (processing.js) dispatches this after a re-run: new derived images,
-    // a new gray-image size (the region coordinate space) and the re-derived regions.
-    onPageUpdated(detail) {
-      if (!detail || String(detail.pageId) !== String(cfg.pageId)) return;
-      const images = detail.images || {};
-      if (images.display || images.gray) this.images = { ...this.images, gray: images.display || images.gray };
-      if (images.bw) this.images = { ...this.images, bw: images.bw };
-      if (detail.output && detail.output.width && detail.output.height) {
-        this.size = [detail.output.width, detail.output.height];
-      }
-      if (Array.isArray(detail.regions)) this.regions = detail.regions;
-      if (this.tab === 'original' && this.has('gray')) this.tab = 'gray';
-    },
-    // Keyboard follows the RTL reading direction: → goes back to the previous page, ← forward.
-    onKey(e) {
-      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      const t = e.target;
-      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
-      if (e.key === 'ArrowRight' && this.prevUrl) {
-        e.preventDefault();
-        window.location.assign(this.prevUrl);
-      } else if (e.key === 'ArrowLeft' && this.nextUrl) {
-        e.preventDefault();
-        window.location.assign(this.nextUrl);
-      } else if (TAB_KEYS[e.key]) {
-        this.select(TAB_KEYS[e.key]);
-      }
-    },
-  }));
 });

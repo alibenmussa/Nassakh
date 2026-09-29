@@ -348,28 +348,6 @@ def test_dashboard_stays_light_with_800_sheet_placeholders(editor_client):
 # ---------------------------------------------------------------- text panel (§2) and page detail
 
 
-def test_text_panel_uses_the_decode_host_and_keeps_the_final_markup():
-    book, pages = _book([(Page.Status.LAYOUT_DONE, "provisional")])
-    html = render_to_string("ocr/_text_panel.html", {"page": pages[0], "book": book, "role": "editor"})
-    assert 'x-ref="decode"' in html and "data-decode-host" in html and 'x-show="showDecode"' in html
-    assert 'x-text="provisional"' not in html  # never the plain Tesseract text (D23)
-    assert 'aria-live="polite" x-text="liveText"' in html
-    assert "x-show=\"view === 'final'\"" in html and "'tok-low'" in html and "tok-pop" in html
-    assert html.count("x-transition.opacity.duration.200ms") >= 3 and "spinner" not in html
-
-
-def test_page_detail_offers_the_review_entry_point_when_the_route_exists(editor_client):
-    book, pages = _book([(Page.Status.OCR_DONE, "final")])
-    body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
-    # D76: the stage bar leads everywhere; «لوحة الكتاب» is retired (§5.2)
-    assert "لوحة الكتاب" not in body and 'data-stage-bar data-rail data-current="ocr"' in body
-    url = _optional("review:page", book.pk, 1)
-    if url:
-        assert "مراجعة الصفحة" in body and f'href="{url}"' in body and body.count("btn-primary") == 1
-    else:
-        assert "مراجعة الصفحة" not in body
-
-
 def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
     css = CSS.read_text(encoding="utf-8")
     # the mirror: same box, flex column with space-between, justified text, font from the page (§4)
@@ -440,7 +418,7 @@ def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
     assert re.search(r"[^{}]*\.decode-w\.is-landed[^{}]*\{animation:none\}", reduced)
 
 
-# ---------------------------------------------------------------- Node: decode.js, books.js, ocr.js
+# ---------------------------------------------------------------- Node: decode.js, books.js
 
 HARNESS = r"""
 // tiny DOM: enough for decode.js (text nodes, spans, classList, custom properties) and the Alpine components
@@ -813,29 +791,10 @@ out.keys = [dash.keyAction({ key: 'g', code: 'KeyG' }, false), dash.keyAction({ 
 const dAuth = mk();
 globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async () => ({}) });
 
-// --- ocr.js: the text panel attaches the decode effect and holds the final markup until the wave lands
+// --- the auth loss, then the page viewer
 (async () => {
   await dAuth.poll();
   out.auth = [dAuth.pollState, dAuth.stopped];
-  const tphost = new Element('div');
-  const tp = reg.textPanel({ statusUrl: '/s', textUrl: '/t', runsUrl: '/r' });
-  tp.$refs = { decode: tphost };
-  tp.apply({ status: 'layout_done', active: true, text_state: 'provisional', provisional_text: 'نص مبدئي من تسراكت' });
-  tp.afterUpdate();
-  out.tpAttached = [tp.decodeMode, tphost.classList.contains('is-decoding'), tp.view, tp.showDecode];
-  tp.apply({ status: 'ocr_done', active: false, text_state: 'final' });
-  tp.apply({ lines: [{ id: 1, order: 0, n_low: 1, tokens: [{ t: 'نص', conf: 'high' }, { t: 'نهائي', conf: 'low' }] }] });
-  tp.afterUpdate();
-  out.tpResolving = [tp.resolving, tp.view, tphost.classList.contains('is-resolving')];
-  run(tphost, 3000);
-  out.tpDone = [tp.resolving, tp.view, linesOf(tphost)[0].words.map((w) => w.t).join(' ')];
-  // a page that stopped (error) shows Tesseract's text plainly instead of drifting forever
-  const host2 = new Element('div');
-  const tp2 = reg.textPanel({ statusUrl: '/s', textUrl: '/t', runsUrl: '/r' });
-  tp2.$refs = { decode: host2 };
-  tp2.apply({ status: 'error', active: false, text_state: 'provisional', provisional_text: 'نص مبدئي' });
-  tp2.afterUpdate();
-  out.tpStatic = [tp2.decodeMode, host2.classList.contains('is-static'), host2.textContent];
 
   // --- D33 the page viewer: one sheet at a time, turned with a timed transition, filter-aware sequence.
   // The stub DOM: shells (each with a body) in a stack, a film track whose thumbs books.js clones from the
@@ -1027,7 +986,7 @@ globalThis.fetch = () => Promise.resolve({ ok: false, status: 403, json: async (
 def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_path):
     harness = tmp_path / "harness.js"
     harness.write_text(HARNESS, encoding="utf-8")
-    files = [str(JS / name) for name in ("ui.js", "keys.js", "decode.js", "books.js", "ocr.js")]
+    files = [str(JS / name) for name in ("ui.js", "keys.js", "decode.js", "books.js")]
     run = subprocess.run(["node", str(harness), *files], capture_output=True, text=True, timeout=120)
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout.strip().splitlines()[-1])
@@ -1398,12 +1357,6 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert out["keys"] == ["jump", None, "nextSheet", "blur", None, None, "toggleView", "jump", None]
     assert out["auth"] == ["auth", True]
 
-    # --- ocr.js text panel
-    assert out["tpAttached"] == ["provisional", True, "provisional", True]
-    assert out["tpResolving"] == [True, "provisional", True]
-    assert out["tpDone"] == [False, "final", "نص نهائي"]
-    assert out["tpStatic"] == ["static", True, "نص مبدئي"]
-
 
 # ------------------------------------------------------------ «التخطيط» mode (PHASE7_SPEC §3.12–§3.14, D67)
 
@@ -1577,13 +1530,13 @@ def test_guides_view_on_a_started_book_and_the_plain_dashboard(editor_client):
     )
     url = reverse("books:detail", args=[book.pk])
     plain = editor_client.get(url).content.decode()
-    # outside the mode: no mode markup at all; «⋯» «التخطيط» opens `?view=guides`
+    # outside the mode: no mode markup at all; «⋯» «التخطيط» opens `/guides/` (D84)
     for needle in ("is-guides", "sheet-guides", "bookGuides", "gd-", "startOcr", "العودة إلى الصفحات"):
         assert needle not in plain, needle
     assert _config(plain)["guidesMode"] is False
     item = _between(plain, "data-guides-menu-item", "</a>")
-    assert "<span>التخطيط</span>" in item and f'href="{url}?view=guides"' in plain
-    body = editor_client.get(url + "?view=guides").content.decode()
+    assert "<span>التخطيط</span>" in item and f'href="{url}guides/"' in plain
+    body = editor_client.get(url + "guides/").content.decode()
     config = _config(body)
     assert config["guidesMode"] is True and config["layoutStage"] is False and config["startAction"] == "back"
     assert 'class="bk-dashboard is-guides' in body
@@ -1620,14 +1573,6 @@ def test_books_list_waits_for_the_start_instead_of_a_full_bar(editor_client):
     row = _between(body, "<tbody>", "</tbody>")
     assert "بانتظار «بدء المعالجة»" in row and 'role="progressbar"' not in row and "dot-warning" in row
     assert "تم التخطيط" in row
-
-
-def test_page_detail_and_the_preprocess_panel_speak_of_preparation(editor_client):
-    book, _ = _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.UPLOADED])
-    body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
-    assert ">المُجهَّزة</button>" in body and "'تتوافر بعد تجهيز الصفحة'" in body
-    assert "لا صورة لهذا العرض بعد؛ تُنشأ صور الصفحة بعد تجهيزها." in body
-    assert "المعالجة الأولية" not in body and "المعالَجة" not in body
 
 
 # ---------------------------------------------------------- «التخطيط» mode under Node, on the §3.11 fixtures
@@ -2403,31 +2348,26 @@ def test_reader_mark_on_tiles_and_thumbs_under_node(editor_client, tmp_path):
 
 
 @pytest.mark.django_db
-def test_tiles_and_sheets_lead_to_review_with_the_processing_details_beside(editor_client, client):
+def test_tiles_and_sheets_lead_to_review_or_to_the_page_sheet(editor_client, client):
     book, _ = _book([(Page.Status.OCR_DONE, "final"), (Page.Status.LAYOUT_DONE, "provisional")])
     body = editor_client.get(reverse("books:detail", args=[book.pk])).content.decode()
     review = [_optional("review:page", book.pk, n) or f"/books/{book.pk}/review/{n}/" for n in (1, 2)]
-    detail = [reverse("books:page_detail", args=[book.pk, n]) for n in (1, 2)]
+    detail = [f"/books/{book.pk}/guides/#sheet-{n}" for n in (1, 2)]  # D84: the page's sheet
     grid = body[body.index('<div class="page-grid"') : body.index('<p class="bk-empty-filter')]
     tiles = grid.split('<div class="page-tile')[1:]
-    # the link's address: review once the text is final, else the page detail (a new tab or ⌘-click)
+    # the link's address: review once the text is final, else the page's sheet (a new tab or ⌘-click)
     assert f'<a class="page-tile-link" href="{review[0]}"' in tiles[0]
     assert f'<a class="page-tile-link" href="{detail[1]}"' in tiles[1]
-    # on hover (always on touch): «مراجعة» (hidden until the text is final) and «تفاصيل المعالجة» for editors
+    # on hover (always on touch): «مراجعة», hidden until the text is final; no «تفاصيل المعالجة» (D84)
     assert (
         f'class="btn btn-sm page-tile-review" href="{review[0]}" aria-label="مراجعة الصفحة 1">مراجعة</a>'
         in tiles[0]
     )
     assert f'class="btn btn-sm page-tile-review" href="{review[1]}" hidden' in tiles[1]
-    assert (
-        f'class="btn-icon btn-icon-sm page-tile-detail" href="{detail[0]}" title="تفاصيل المعالجة"'
-        in tiles[0]
-    )
-    assert '<use href="#i-sliders"/>' in tiles[0]
-    # the sheet's title leads to review too; «تفاصيل المعالجة» sits in its head
+    assert "page-tile-detail" not in tiles[0] and "#i-sliders" not in tiles[0]
+    # the sheet's title leads to review too; nothing else sits in its head
     sheet = _shell(body, 0)
-    assert f'<a class="sheet-title num" href="{review[0]}">' in sheet
-    assert f'class="btn-icon btn-icon-sm sheet-detail" href="{detail[0]}" title="تفاصيل المعالجة"' in sheet
+    assert f'<a class="sheet-title num" href="{review[0]}">' in sheet and "sheet-detail" not in sheet
     # D33's plain click still opens the viewer; a modifier-click follows the link
     js = (ROOT / "static" / "src" / "js" / "books.js").read_text(encoding="utf-8")
     assert "e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;" in js
@@ -2437,7 +2377,7 @@ def test_tiles_and_sheets_lead_to_review_with_the_processing_details_beside(edit
         in css
     )
     assert "@media (hover: none) { .page-tile-actions { opacity: 1; } }" in css
-    # a proofreader: review, no processing details
+    # a proofreader: review, nothing technical
     client.force_login(_user("reader7c", "proofreader"))
     reader = client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "page-tile-review" in reader and "page-tile-detail" not in reader and "sheet-detail" not in reader

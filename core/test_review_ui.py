@@ -2033,8 +2033,6 @@ const settleSlide = async () => { await flush(); await flush(); await flush(); }
   const sw0 = k.swapped; key('v');
   calls.length = 0; key('c');
   out.keys = { tabs: [tab0, tab1, k.tab], swapped: [sw0, k.swapped], copied: calls.some((x) => x[0] === 'copy') };
-  // the detail page («تفاصيل المعالجة») for editors, none for a reader
-  out.detail = [k.detailUrl, make(Object.assign(withNav(none), { can_edit: false })).detailUrl];
   console.log(JSON.stringify(out));
 })().catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 """  # noqa: E501
@@ -2229,7 +2227,6 @@ def test_review_leads_back_to_its_origin_and_names_the_next_step(tmp_path):
     assert out["jump"] == {"jumping": True, "page": 3, "after": False}
     assert out["jumpUnknown"] == "لا صفحة بهذا الرقم"
     assert out["keys"] == {"tabs": ["display", "scan", "display"], "swapped": [False, True], "copied": True}
-    assert out["detail"] == [f"{_entry(nav, 'GET /books/40/review/2/')['dashboard_url']}pages/3/", ""]
 
 
 def test_review_templates_carry_the_origin_the_panels_and_the_fix_sheet():
@@ -2237,7 +2234,7 @@ def test_review_templates_carry_the_origin_the_panels_and_the_fix_sheet():
     bar = body[body.index('x-data="reviewBar"') : body.index('id="review-config"')]
     assert '<template x-if="b.back">' in bar and "data-back-link" in bar and 'x-text="b.back.label"' in bar
     assert 'class="rv-jump" x-show="b.jumping"' in bar and "act('jumpTo', $el.value)" in bar
-    assert "تفاصيل المعالجة" in bar and ':href="b.detailUrl" data-detail-link' in bar
+    assert "تفاصيل المعالجة" not in bar and "detailUrl" not in bar  # D84: the page screen is gone
     assert (
         'data-stage-bar data-rail data-current="review"' in body and 'class="review-screen" data-rail' in body
     )

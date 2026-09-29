@@ -1577,7 +1577,8 @@ the dashboard at 1180 px (compact):
   - The tile link (`_page_tile.html:8`) and the sheet title (`_page_sheet.html:8`) point to it, so a new tab or a
     modifier-click reaches review. D33's plain click that opens the viewer stays (`books.js:1120–1131`).
   - A hover action «مراجعة» (always visible on touch) opens review. «تفاصيل المعالجة» (`i-sliders`, editors only) opens
-    the page detail, and also sits in the sheet header and in review's «⋯».
+    the page detail, and also sits in the sheet header and in review's «⋯». *Superseded by D84 (2026-09-29): the page
+    screen is removed; `primary_url` falls back to the page's sheet at `/books/<id>/guides/#sheet-<n>`.*
 - **Per-book memory.** The view and filter choice are remembered per book (`VIEW_KEY + bookId`, `books.js:28`).
 - **Addresses.**
   - `addressQuery()` (`book/edit.js:151`) builds `?mode=edit&tab=<tab>`, and `setTab` rewrites the address the same way

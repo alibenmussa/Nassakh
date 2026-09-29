@@ -3,7 +3,6 @@
 @import "tailwindcss";
 @import "./components/books.css";
 @import "./components/processing.css";
-@import "./components/ocr.css";
 @import "./components/theatre.css";
 @import "./components/review.css";
 @import "./components/manuscript.css";

@@ -54,20 +54,23 @@ def book_create(request: HttpRequest) -> HttpResponse:
 def book_detail(request: HttpRequest, book_id: int) -> HttpResponse:
     """Book dashboard: header, actions, stage progress, attention list and the pages grid.
 
-    It opens in the «التخطيط» mode while the book awaits «بدء المعالجة», and with `?view=guides`.
+    It opens in the «التخطيط» mode while the book awaits «بدء المعالجة»; once «المعالجة» started that mode
+    has its own address, `/books/<id>/guides/` (`book_guides`, D84); the old `?view=guides` goes there.
     """
     book = get_object_or_404(Book, pk=book_id)
-    return render(request, "books/detail.html", services.book_dashboard(book, request.GET.get("view")))
+    if request.GET.get("view") == services.GUIDES_VIEW:
+        return redirect(services.guides_url(book), permanent=True)
+    return render(request, "books/detail.html", services.book_dashboard(book))
 
 
 @login_required
-def page_detail(request: HttpRequest, book_id: int, number: int) -> HttpResponse:
-    """One page: image tabs with region overlay, preprocessing and text panels, runs, re-run menu."""
-    page = get_object_or_404(Page.objects.select_related("book"), book_id=book_id, number=number)
-    context = services.page_detail_context(page)
-    current = "pages" if page.book.awaits_ocr_start else "ocr"  # as page_detail.html's stage bar include
-    context["stage_steps"] = services.book_stages(page.book, current)  # the stage bar (D76)
-    return render(request, "books/page_detail.html", context)
+def book_guides(request: HttpRequest, book_id: int) -> HttpResponse:
+    """The «التخطيط» mode of the dashboard at its own address (D84): every page as a sheet with its guides;
+    `#sheet-<n>` opens at a page. Before «بدء المعالجة» the dashboard itself is this mode."""
+    book = get_object_or_404(Book, pk=book_id)
+    if book.awaits_ocr_start:
+        return redirect("books:detail", book.pk)
+    return render(request, "books/detail.html", services.book_dashboard(book, services.GUIDES_VIEW))
 
 
 @role_required("editor")
@@ -165,10 +168,10 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
 
 
 def _redirect_back(request: HttpRequest, book_id: int, number: int | None = None) -> HttpResponse:
-    """Redirect to a same-site `next` when given, else to the page detail or the dashboard."""
+    """Redirect to a same-site `next` when given, else to the page's sheet or the dashboard."""
     next_url = request.POST.get("next") or request.GET.get("next") or ""
     if next_url.startswith("/") and not next_url.startswith("//"):
         return redirect(next_url)
     if number is not None:
-        return redirect("books:page_detail", book_id, number)
+        return redirect(services.sheet_url(book_id, number))
     return redirect("books:detail", book_id)

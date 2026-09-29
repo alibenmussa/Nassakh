@@ -674,7 +674,10 @@ def test_rerun_book_resets_pages_so_the_book_waits_for_its_last_page():
         services.run_stage(pages[1], "ocr_full")
     pages[1].refresh_from_db()
     assert (pages[1].status, pages[1].text_state) == ("layout_done", "provisional")
-    assert services.page_status(pages[1])["active"] is True
+    assert (
+        pages[1].status in services.ACTIVE_PAGE_STATUSES
+        and pages[1].book.status in services.ACTIVE_BOOK_STATUSES
+    )
 
 
 def test_rerun_book_resumes_a_book_parked_in_needs_guides_by_an_earlier_version():
@@ -709,17 +712,6 @@ def test_re_including_an_unprocessed_page_enqueues_its_pipeline():
     with patch("books.services.chain") as chain:
         services.toggle_exclude(pages[0])
     chain.assert_not_called()
-
-
-def test_page_status_returns_the_headline_and_the_detail_apart():
-    # F26: the banner shows the Arabic headline only
-    _, pages = _book_with_pages(1)
-    pages[0].set_error("ocr_full", "تعذّر التعرّف على النص.\nOSError: [Errno 2] No such file")
-    state = services.page_status(pages[0])
-    assert state["error"] == "تعذّر التعرّف على النص."
-    assert state["error_detail"] == "OSError: [Errno 2] No such file"
-    # F43: the page detail enables its image tabs live from the same payload
-    assert state["images"] == {"original": None, "gray": None, "bw": None}
 
 
 def test_books_overview_uses_a_constant_number_of_queries(django_assert_max_num_queries):
@@ -805,7 +797,7 @@ def test_smoke_pipeline_command_runs_a_pdf_through_the_pipeline(tmp_path):
         ("books:list", {}),
         ("books:create", {}),
         ("books:detail", {"book_id": 1}),
-        ("books:page_detail", {"book_id": 1, "number": 1}),
+        ("books:guides", {"book_id": 1}),
     ],
 )
 def test_html_views_require_login(client, name, kwargs):
@@ -816,7 +808,7 @@ def test_html_views_require_login(client, name, kwargs):
 
 @pytest.mark.parametrize(
     "name, kwargs",
-    [("api:book_progress", {"book_id": 1}), ("api:page_status", {"page_id": 1})],
+    [("api:book_progress", {"book_id": 1}), ("api:book_stages", {"book_id": 1})],
 )
 def test_api_views_require_login(client, name, kwargs):
     response = client.get(reverse(name, kwargs=kwargs))
@@ -963,7 +955,7 @@ def test_detail_shows_the_empty_state_before_ingest_and_the_dashboard_after(edit
     # two server-rendered tiles plus the inert <template id="tile-shell"> clone for later pages
     assert body.count('<div class="page-tile') == 3 and 'id="tile-shell"' in body
     assert body.count('data-page-id="') - body.count('data-page-id=""') == 4  # 2 tiles + 2 sheets
-    assert reverse("books:page_detail", args=[book.pk, 1]) in body
+    assert reverse("books:guides", args=[book.pk]) in body  # «⋯» «التخطيط» and the sheet addresses (D84)
     assert reverse("books:toggle_exclude", args=[book.pk, 1]) in body
     assert reverse("books:rerun", args=[book.pk]) in body and "إعادة التشغيل" in body
     config = _json_config(body, "dashboard-config")
@@ -994,46 +986,6 @@ def test_detail_shows_error_banner_and_restart(editor_client):
         config["errorHeadline"] == "تعذّر استخراج الصفحات." and "RuntimeError: boom" in config["errorDetail"]
     )
     assert config["barState"] == "danger"
-
-
-def test_page_detail_renders_neighbours_partials_and_viewer_config(editor_client):
-    book = make_book(make_scan_pdf(3))
-    pages = services.ingest_book(book)
-    page = pages[1]
-    Preprocess.objects.create(page=page, output_width=1000, output_height=1500)
-    Region.objects.create(page=page, kind=Region.Kind.BODY, bbox=[10, 20, 900, 1200], order=0)
-    Region.objects.create(page=page, kind=Region.Kind.FOOTNOTE, bbox=[10, 1250, 900, 1480], order=1)
-    Page.objects.filter(pk=page.pk).update(attention_flags=["edge_strip_removed"])
-
-    response = editor_client.get(reverse("books:page_detail", args=[book.pk, 2]))
-    assert response.status_code == 200
-    body = response.content.decode()
-    prev_url = reverse("books:page_detail", args=[book.pk, 1])
-    next_url = reverse("books:page_detail", args=[book.pk, 3])
-    assert f'href="{prev_url}"' in body and f'href="{next_url}"' in body
-    assert "pageDetail(" in body and 'id="viewer-config"' in body
-    assert "الأصل" in body and "المُجهَّزة" in body and "أبيض وأسود" in body
-    assert page.original_image.url in body
-    assert "أُزيل شريط من حافة الصفحة" in body  # flag label
-    viewer = _json_config(body, "viewer-config")
-    assert viewer["prevUrl"] == prev_url and viewer["nextUrl"] == next_url
-    assert viewer["size"] == [1000, 1500]
-    assert viewer["images"]["original"] == page.original_image.url and viewer["images"]["gray"] is None
-    assert [(r["kind"], r["label"], r["bbox"]) for r in viewer["regions"]] == [
-        ("body", "متن", [10, 20, 900, 1200]),
-        ("footnote", "حاشية", [10, 1250, 900, 1480]),
-    ]
-    assert viewer["initialTab"] == "original"
-    assert "تشغيلات المحرّكات" in body
-    assert reverse("books:rerun", args=[book.pk, 2]) in body
-    assert reverse("books:toggle_exclude", args=[book.pk, 2]) in body
-    assert "2 / 3" in body
-
-    # First and last pages have only one neighbour.
-    first = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
-    assert f'href="{reverse("books:page_detail", args=[book.pk, 2])}"' in first
-    assert first.count('aria-disabled="true"') == 1
-    assert editor_client.get(reverse("books:page_detail", args=[book.pk, 9])).status_code == 404
 
 
 def test_toggle_exclude_view_flips_and_redirects_back(editor_client):
@@ -1075,7 +1027,7 @@ def test_rerun_view_for_the_book_and_for_one_page(editor_client):
     with patch("books.services.run_stage") as run_stage:
         response = editor_client.post(reverse("books:rerun", args=[book.pk, 2]) + "?stage=ocr_full")
     assert run_stage.call_args.args[0].pk == pages[1].pk and run_stage.call_args.args[1] == "ocr_full"
-    assert response["Location"] == reverse("books:page_detail", args=[book.pk, 2])
+    assert response["Location"] == services.sheet_url(book.pk, 2)
 
     with patch("books.tasks.rerun_book_from.delay") as delay:
         response = editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "nope"}, follow=True)
@@ -1121,7 +1073,7 @@ def test_dashboard_attention_list_offers_a_retry_for_a_failed_page(editor_client
     assert response["Location"] == reverse("books:detail", args=[book.pk])
 
 
-def test_api_progress_and_page_status(editor_client):
+def test_api_progress(editor_client):
     book, pages = _book_with_pages(3)
     Page.objects.filter(pk=pages[0].pk).update(
         status=Page.Status.OCR_DONE,
@@ -1141,18 +1093,7 @@ def test_api_progress_and_page_status(editor_client):
     assert data["by_status"]["ocr_done"] == 1 and data["by_status"]["error"] == 1
     assert [p["number"] for p in data["pages"]] == [1, 2, 3]
     assert data["pages"][1]["error"] is True and data["pages"][1]["dot"] == "dot-danger"
-    assert data["pages"][0]["url"] == reverse("books:page_detail", args=[book.pk, 1])
-
-    status = editor_client.get(reverse("api:page_status", args=[pages[0].pk])).json()
-    assert status["status"] == "ocr_done" and status["text_state"] == "final"
-    assert status["final_text"] == "النص النهائي" and status["provisional_text"] == "نص مبدئي"
-    assert status["flags"] == [] and status["error"] == "" and status["active"] is False
-
-    status = editor_client.get(reverse("api:page_status", args=[pages[1].pk])).json()
-    assert status["error"] == "فشل" and status["error_from"] == "ocr_full"
-    status = editor_client.get(reverse("api:page_status", args=[pages[2].pk])).json()
-    assert status["active"] is True  # uploaded page in an active book
-    assert editor_client.get(reverse("api:page_status", args=[99999])).status_code == 404
+    assert data["pages"][0]["url"] == services.sheet_url(book.pk, 1)
 
 
 # ---------------------------------------------------------------- printed page numbers
@@ -1200,14 +1141,6 @@ def test_page_sequence_issues_tolerates_unread_numbers_and_ignores_excluded_page
     issues = services.page_sequence_issues(book)
     assert list(issues.values()) == ["ترقيم غير متسلسل: بعد 13 جاءت 15"]
     assert services.page_sequence_issues(book_2) == {}
-
-
-def test_page_detail_shows_the_printed_number(editor_client):
-    book = make_book(make_scan_pdf(1))
-    page = services.ingest_book(book)[0]
-    Page.objects.filter(pk=page.pk).update(printed_number="41")
-    body = editor_client.get(reverse("books:page_detail", args=[book.pk, 1])).content.decode()
-    assert "الرقم المطبوع:" in body and ">41</bdi>" in body
 
 
 # ---------------------------------------------------------------- Phase 3: review state and stacked sheets
@@ -1516,13 +1449,13 @@ def test_dashboard_config_carries_status_labels_dots_and_url_templates():
     assert config["statusLabels"]["ocr_done"] == Page.Status.OCR_DONE.label
     assert config["statusDots"]["error"] == "dot-danger"
     assert config["urls"] == {
-        "page": "/books/10/pages/__n__/",
+        "page": "/books/10/guides/#sheet-__n__",
         "review": "/books/10/review/__n__/",
         "rerun": "/books/10/pages/__n__/rerun/",
         "exclude": "/books/10/pages/__n__/exclude/",
     }
     n = 7
-    assert config["urls"]["page"].replace("__n__", str(n)) == reverse("books:page_detail", args=[10, n])
+    assert config["urls"]["page"].replace("__n__", str(n)) == services.sheet_url(10, n)
     assert config["urls"]["review"].replace("__n__", str(n)) == reverse("review:page", args=[10, n])
 
 
@@ -2285,26 +2218,23 @@ def test_dashboard_offers_only_the_preprocess_rerun_while_the_book_waits():
     assert [s["value"] for s in context["rerun_stages"]] == list(services.STAGES)
     assert not context["guides_mode"] and context["start_action"] == ""
     assert services.book_dashboard(started, "guides")["guides_mode"] is True
-    assert context["guides_url"] == f"/books/{started.pk}/?view=guides"
+    assert context["guides_url"] == f"/books/{started.pk}/guides/"
 
 
-def test_dashboard_view_param_opens_the_mode_on_a_started_book(editor_client):
+def test_the_guides_address_opens_the_mode_and_the_old_query_redirects_there(editor_client):
+    # D84: the «التخطيط» mode has its own address; `?view=guides` (old links) goes there for good
     book, _ = guides_book("started")
+    url = reverse("books:guides", args=[book.pk])
     with patch("books.services.book_dashboard", wraps=services.book_dashboard) as dashboard:
-        editor_client.get(reverse("books:detail", args=[book.pk]) + "?view=guides")
+        assert editor_client.get(url).status_code == 200
     assert dashboard.call_args.args[1] == "guides"
-
-
-def test_page_detail_draws_computed_bands_before_the_regions_exist():
-    book, pages = guides_book("layout")
-    context = services.page_detail_context(pages[0])
-    assert [r["kind"] for r in context["page_regions"]] == ["body", "footnote", "page_number"]
-    assert all(r["computed"] and r["id"] is None for r in context["page_regions"])
-    assert context["page_regions"][1]["bbox"] == [0, 2343, 1000, 2916]
-    assert [s["value"] for s in context["rerun_stages"]] == ["preprocess"] and context["layout_stage"]
-    started, spages = guides_book_replace("started")
-    regions = services.page_detail_context(Page.objects.get(pk=spages[2].pk))["page_regions"]
-    assert regions[0]["id"] is not None and "computed" not in regions[0]
+    response = editor_client.get(reverse("books:detail", args=[book.pk]) + "?view=guides")
+    assert response.status_code == 301 and response["Location"] == url
+    Book.objects.filter(pk=book.pk).update(
+        awaits_ocr_start=True
+    )  # before «بدء المعالجة» the dashboard is the mode
+    response = editor_client.get(url)
+    assert response.status_code == 302 and response["Location"] == reverse("books:detail", args=[book.pk])
 
 
 def test_labels_of_the_split():
@@ -2351,8 +2281,8 @@ def test_the_mode_markup_shows_only_in_the_mode(editor_client):
     url = reverse("books:detail", args=[started.pk])
     body = editor_client.get(url).content.decode()
     assert "is-guides" not in body and "bookGuides(" not in body and 'id="sheet-guides"' not in body
-    assert f'href="{url}?view=guides"' in body  # «⋯» «التخطيط»
-    body = editor_client.get(url + "?view=guides").content.decode()
+    assert f'href="{url}guides/"' in body  # «⋯» «التخطيط»
+    body = editor_client.get(url + "guides/").content.decode()
     assert "bk-dashboard is-guides" in body and 'x-data="bookGuides()"' in body
 
 
@@ -2634,7 +2564,7 @@ def test_the_stage_bar_marks_the_current_step_and_links_the_guides_view_after_th
     assert [s["key"] for s in steps] == list(services.STAGE_KEYS)
     assert [s["label"] for s in steps] == ["التخطيط", "المعالجة", "المراجعة", "المخطوطة", "الكتاب", "الإخراج"]
     assert [s["current"] for s in steps] == [False, False, True, False, False, False]
-    assert steps[0]["url"] == f"/books/{STAGE_BOOK}/?view=guides"
+    assert steps[0]["url"] == f"/books/{STAGE_BOOK}/guides/"
     assert steps[2]["url"] == f"/books/{STAGE_BOOK}/review/next/"
     unknown = editor_client.get(reverse("api:book_stages", args=[STAGE_BOOK]) + "?current=zz").json()
     assert unknown["current"] is None and not any(step["current"] for step in unknown["steps"])
@@ -2664,8 +2594,8 @@ def test_the_tile_leads_to_review_once_the_text_is_final():
     Page.objects.filter(pk=pages[1].pk).update(text_state=Page.TextState.FINAL, is_excluded=True)
     tiles = {tile["number"]: tile for tile in services.page_tiles(book)}
     assert tiles[1]["primary_url"] == f"/books/{book.pk}/review/1/"
-    assert tiles[2]["primary_url"] == f"/books/{book.pk}/pages/2/"  # excluded
-    assert tiles[3]["primary_url"] == f"/books/{book.pk}/pages/3/"  # no final text yet
+    assert tiles[2]["primary_url"] == f"/books/{book.pk}/guides/#sheet-2"  # excluded: its sheet (D84)
+    assert tiles[3]["primary_url"] == f"/books/{book.pk}/guides/#sheet-3"  # no final text yet
     assert "primary_url" not in services.page_tiles(book, compact=True)[0]
 
 

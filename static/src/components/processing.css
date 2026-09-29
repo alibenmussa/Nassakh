@@ -275,28 +275,6 @@
   .bk-dialog-text .meta { display: block; margin-top: 4px; }
   .bk-dialog-work { margin: 0; font-size: 13px; font-weight: 500; color: var(--color-warning-text); }
 
-  /* ---------------------------------------------------------- preprocess panel (page detail) */
-  .pp-panel { display: flex; flex-direction: column; gap: 12px; }
-  .pp-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .pp-crop-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .pp-crop-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .pp-crop-cell .input { padding-inline: 6px; font-variant-numeric: tabular-nums; text-align: end; }
-  .pp-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .pp-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .pp-stats {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px 12px;
-    margin: 0;
-    padding-top: 10px;
-    border-top: 1px solid var(--color-border);
-  }
-  .pp-stats div { display: flex; justify-content: space-between; gap: 8px; }
-  .pp-stats dt { font-size: 12px; color: var(--color-text-3); }
-  .pp-stats dd { margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--color-text-2); }
-  .pp-flags { display: flex; flex-wrap: wrap; gap: 6px; }
-  .spinner-sm { width: 14px; height: 14px; }
-
   @media (prefers-reduced-motion: reduce) {
     .gd-band, .guide-handle, .gd-grip { transition: none; }
     .gd-page.is-sweep::after { display: none; }

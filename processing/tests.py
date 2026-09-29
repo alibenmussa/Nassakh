@@ -466,7 +466,7 @@ def users(db):
 
 @pytest.fixture
 def urls():
-    """The real URLconf (the books app now provides `books:list` / `books:detail` / `books:page_detail`)."""
+    """The real URLconf (the books app now provides `books:list` / `books:detail` / `books:guides`)."""
     clear_url_caches()
     yield
     clear_url_caches()
@@ -917,75 +917,44 @@ def test_preprocess_task_unexpected_failure_sets_an_arabic_error(page_with_origi
 # ---------------------------------------------------------------- views
 
 
-@pytest.mark.django_db
-def test_guides_screen_requires_an_editor(client, book, users, urls):
-    url = reverse("processing:guides", kwargs={"book_id": book.pk})
-    response = client.get(url)
-    assert response.status_code == 302 and reverse("accounts:login") in response["Location"]
-    client.force_login(users.plain)
-    assert client.get(url).status_code == 403
-
-
-@pytest.mark.django_db
-def test_guides_url_redirects_to_the_dashboard(client, book, users, urls):
-    # D67: the guides screen is gone; its address lands on the dashboard («التخطيط» mode)
-    client.force_login(users.editor)
-    url = reverse("processing:guides", kwargs={"book_id": book.pk})
-    response = client.get(url)
-    assert response.status_code == 302 and response["Location"] == f"/books/{book.pk}/?view=guides"
-    response = client.get(url + "?page=4")
-    assert response["Location"] == f"/books/{book.pk}/?view=guides#sheet-4"
-    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True)
-    response = client.get(url + "?page=²")
-    assert response["Location"] == f"/books/{book.pk}/"
-    assert client.post(url, {"footnote_line": "0.8"}).status_code == 405  # the form's POST branch is gone
-    assert not LayoutGuides.objects.filter(book=book).exists()
-
-
 # ---------------------------------------------------------------- API
 
 
 @pytest.mark.django_db
-def test_api_page_preprocess_reruns_with_manual_params(client, page_with_original, users):
+def test_rerun_preprocess_with_manual_params(page_with_original):
+    # D84: the page screen and its API are gone; the service stays for the worker and the sheets
+    from django.core.exceptions import ValidationError
+
     page = page_with_original
-    url = reverse("api:page_preprocess", kwargs={"page_id": page.pk})
-    assert client.post(url, "{}", content_type="application/json").status_code == 403
-    client.force_login(users.plain)
-    assert client.post(url, "{}", content_type="application/json").status_code == 403
-
-    client.force_login(users.editor)
-    response = client.post(
-        url, json.dumps({"angle": 1.0, "sauvola_k": 0.25}), content_type="application/json"
+    payload, queued = services.rerun_preprocess(
+        page, services.clean_manual_params({"angle": 1.0, "sauvola_k": 0.25})
     )
-    assert response.status_code == 200, response.content
-    data = response.json()
+    assert queued is False
     assert (
-        data["is_manual"] is True and data["params"]["angle"] == 1.0 and data["params"]["sauvola_k"] == 0.25
+        payload["is_manual"] is True
+        and payload["params"]["angle"] == 1.0
+        and payload["params"]["sauvola_k"] == 0.25
     )
-    assert data["images"]["display"].startswith(f"/media/books/{page.book_id}/pages/0001/display.webp?v=")
-    assert data["images"]["thumb"].endswith(".webp?v=" + data["images"]["display"].rsplit("=", 1)[1])
-    assert data["status"] == "preprocessed" and data["queued"] is False
-    assert data["frame"] == {"width": 900, "height": 1200}
-    assert data["output"]["width"] > 0 and data["stats"]["n_lines"] >= 18
-    assert data["regions"] == []  # never laid out: regions are not invented
+    assert payload["images"]["display"].startswith(f"/media/books/{page.book_id}/pages/0001/display.webp?v=")
+    assert payload["images"]["thumb"].endswith(".webp?v=" + payload["images"]["display"].rsplit("=", 1)[1])
+    assert payload["status"] == "preprocessed"
+    assert payload["frame"] == {"width": 900, "height": 1200}
+    assert payload["output"]["width"] > 0 and payload["stats"]["n_lines"] >= 18
+    assert payload["regions"] == []  # never laid out: regions are not invented
 
-    bad = client.post(url, json.dumps({"angle": 50}), content_type="application/json")
-    assert bad.status_code == 400 and "زاوية" in bad.json()["errors"][0]
+    with pytest.raises(ValidationError, match="زاوية"):
+        services.clean_manual_params({"angle": 50})
 
-    reset = client.post(url, json.dumps({"reset": True}), content_type="application/json").json()
+    reset, _queued = services.rerun_preprocess(page, None)
     assert reset["is_manual"] is False and abs(reset["params"]["angle"] - (-1.0)) <= 0.3
 
 
 @pytest.mark.django_db
-def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
-    client, page_with_original, users
-):
+def test_rerun_preprocess_re_derives_existing_regions_and_queues_huge_pages(page_with_original):
     page = page_with_original
-    client.force_login(users.editor)
     services.preprocess_page(page)
     services.derive_regions(page)
-    url = reverse("api:page_preprocess", kwargs={"page_id": page.pk})
-    data = client.post(url, json.dumps({"angle": 0.0}), content_type="application/json").json()
+    data, _queued = services.rerun_preprocess(page, services.clean_manual_params({"angle": 0.0}))
     assert [r["kind"] for r in data["regions"]] == ["body"]
     assert data["regions"][0]["bbox"][2] == data["output"]["width"]
 
@@ -994,9 +963,9 @@ def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
     Page.objects.filter(pk=page.pk).update(width=5000, height=5000)
     old_width = data["output"]["width"]
     box = [0, 0, old_width // 2, data["output"]["height"]]
-    queued = client.post(url, json.dumps({"crop_box": box}), content_type="application/json")
-    assert queued.status_code == 202 and queued.json()["queued"] is True
-    assert queued.json()["detail"] == "الصورة كبيرة؛ أُرسلت المعالجة إلى العامل الخلفي."
+    page = Page.objects.get(pk=page.pk)  # the size just stored
+    payload, queued = services.rerun_preprocess(page, services.clean_manual_params({"crop_box": box}))
+    assert queued is True and payload["detail"] == "الصورة كبيرة؛ أُرسلت المعالجة إلى العامل الخلفي."
     page.refresh_from_db()
     new_width = page.preprocess.output_width
     assert new_width < old_width
@@ -1004,22 +973,20 @@ def test_api_page_preprocess_re_derives_existing_regions_and_queues_huge_pages(
     assert all(r.bbox[2] <= new_width for r in page.regions.all())
     assert page.regions.get(kind="body").bbox[2] == new_width
 
-    reset = client.post(url, json.dumps({"reset": True}), content_type="application/json")
-    assert reset.status_code == 202
+    _payload, queued = services.rerun_preprocess(page, None)
+    assert queued is True
     page.refresh_from_db()
     assert page.preprocess.is_manual is False
 
     # an excluded page is refused instead of being turned back into `preprocessed` (F19)
     Page.objects.filter(pk=page.pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
-    refused = client.post(url, "{}", content_type="application/json")
-    assert refused.status_code == 422 and "مستثناة" in refused.json()["errors"][0]
+    with pytest.raises(services.ProcessingError, match="مستثناة"):
+        services.rerun_preprocess(Page.objects.get(pk=page.pk), None)
     assert Page.objects.get(pk=page.pk).status == Page.Status.EXCLUDED
 
     missing = Page.objects.create(book=page.book, number=7, source_index=6)
-    gone = client.post(
-        reverse("api:page_preprocess", kwargs={"page_id": missing.pk}), "{}", content_type="application/json"
-    )
-    assert gone.status_code == 422 and "صورة أصلية" in gone.json()["errors"][0]
+    with pytest.raises(services.ProcessingError, match="صورة أصلية"):
+        services.rerun_preprocess(missing, None)
 
 
 @pytest.mark.django_db
@@ -1052,28 +1019,6 @@ def test_api_page_guides_override(client, book, users):
 
 
 # ---------------------------------------------------------------- templates
-
-
-@pytest.mark.django_db
-def test_preprocess_panel_partial_renders_config_for_a_page(book, urls):
-    from django.template.loader import render_to_string
-
-    page = make_page(book, 1, rule_y=1200)
-    html = render_to_string("processing/_preprocess_panel.html", {"page": page, "book": book})
-    assert 'id="preprocess-config"' in html and "preprocessPanel(" in html
-    assert "إعادة التجهيز" in html and "استعادة القيم التلقائية" in html
-    config = json_block(html, "preprocess-config")
-    assert config["api_url"] == f"/api/pages/{page.pk}/preprocess/"
-    assert config["has_preprocess"] is True and config["stats"]["footnote_rule_y"] == 1200
-    assert config["guides"]["page_number_zone"] == "bottom"
-
-    empty = render_to_string("processing/_preprocess_panel.html", {"page": None, "book": None})
-    assert "لا توجد صفحة" in empty and "preprocess-config" not in empty
-
-    bare = Page.objects.create(book=book, number=5, source_index=4)
-    html2 = render_to_string("processing/_preprocess_panel.html", {"page": bare, "book": book})
-    config2 = json_block(html2, "preprocess-config")
-    assert config2["has_preprocess"] is False and "تشغيل التجهيز" in html2
 
 
 # ---------------------------------------------------------------- review regressions
@@ -1127,12 +1072,6 @@ def test_approved_pages_keep_their_regions_when_guides_or_preprocessing_change(c
     url = reverse("api:page_guides_override", kwargs={"page_id": approved.pk})
     response = client.post(url, json.dumps({"footnote_line": 0.7}), content_type="application/json")
     assert response.status_code == 422 and "أعد فتحها" in response.json()["errors"][0]
-    response = client.post(
-        reverse("api:page_preprocess", kwargs={"page_id": approved.pk}),
-        json.dumps({"reset": True}),
-        content_type="application/json",
-    )
-    assert response.status_code == 422
     approved.refresh_from_db()
     assert approved.status == Page.Status.REVIEWED and approved.guides_override is None
     assert _kinds_and_boxes_stored(approved) == before
@@ -1169,7 +1108,7 @@ def _kinds_and_boxes_stored(page: Page) -> list[tuple[str, list[int]]]:
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("name", ["api:page_preprocess", "api:page_guides_override"])
+@pytest.mark.parametrize("name", ["api:page_guides_override"])
 def test_mutating_json_routes_require_the_editor_role(client, book, users, name):
     # F56: anonymous and non-editor users are refused before anything runs
     page = make_page(book, 1)
@@ -1505,7 +1444,7 @@ def test_preprocess_task_refreshes_a_waiting_book_and_layout_page_waits(book):
 
 
 @pytest.mark.django_db
-def test_preprocess_api_refreshes_a_waiting_book(client, page_with_original, users):
+def test_a_page_prepared_again_revives_a_waiting_book(page_with_original):
     from books.models import ALL_PAGES_FAILED_LAYOUT
 
     page = page_with_original
@@ -1513,11 +1452,9 @@ def test_preprocess_api_refreshes_a_waiting_book(client, page_with_original, use
         awaits_ocr_start=True, status=Book.Status.ERROR, error_message=ALL_PAGES_FAILED_LAYOUT
     )
     page.set_error("preprocess", "فشل")
-    client.force_login(users.editor)
-    response = client.post(
-        reverse("api:page_preprocess", kwargs={"page_id": page.pk}), "{}", content_type="application/json"
-    )
-    assert response.status_code == 200, response.content
+    _payload, queued = services.rerun_preprocess(page, None)
+    assert queued is False
+    services.refresh_waiting_book(page.book_id)  # what the sheet's «تجهيز الصفحة» path does after the run
     book = Book.objects.get(pk=page.book_id)
     assert book.status == Book.Status.NEEDS_GUIDES and book.error_message == ""
 

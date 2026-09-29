@@ -6,9 +6,9 @@ turns accent only as it reaches 100 %; marks are the review filmstrip's. Footer:
 the link's title; a half-disc before the dot marks a page one model read (D73, `t.readers`, patched by
 `patchReader`). In the «التخطيط» mode (PHASE7 §3.12) the thumbnail carries the page's bands (`.gd-bands`, patched by
 `patchTileGuides`) and an amber mark on the pages worth a look. D76 (PHASE7 §5.4): the link's address is the page's
-`primary_url` (review once its text is final, else the page detail), so a new tab or a modifier-click reaches review;
-a plain click still opens the viewer (D33). On hover (always on touch) «مراجعة» opens review and, for editors,
-«تفاصيل المعالجة» the page detail. Context: t (tile dict or None), book, role, request, guides_mode.{% endcomment %}
+`primary_url` (review once its text is final, else the page's sheet in «التخطيط», D84), so a new tab or a
+modifier-click reaches review; a plain click still opens the viewer (D33). On hover (always on touch) «مراجعة»
+opens review. Context: t (tile dict or None), book, role, request, guides_mode.{% endcomment %}
 <div class="page-tile{% if t.is_excluded %} is-excluded{% endif %}{% if t.error %} is-error{% endif %}"{% if t %} data-page-id="{{ t.id }}" data-number="{{ t.number }}" data-status="{{ t.status }}"{% else %} data-page-id="" data-number="" data-status=""{% endif %}>
   <a class="page-tile-link" href="{% firstof t.primary_url t.url %}" title="الصفحة {{ t.number }} — {{ t.status_label }}" aria-label="الصفحة {{ t.number }} — {{ t.status_label }}">
     <span class="page-tile-thumb">
@@ -35,11 +35,6 @@ a plain click still opens the viewer (D33). On hover (always on touch) «مرا�
   {% if not guides_mode %}
   <span class="page-tile-actions">
     <a class="btn btn-sm page-tile-review" href="{{ t.review_url }}"{% if t.text_state != 'final' or t.is_excluded %} hidden{% endif %}{% if t %} aria-label="مراجعة الصفحة {{ t.number }}"{% endif %}>مراجعة</a>
-    {% if role == 'admin' or role == 'editor' %}
-    <a class="btn-icon btn-icon-sm page-tile-detail" href="{{ t.url }}" title="تفاصيل المعالجة"{% if t %} aria-label="تفاصيل المعالجة للصفحة {{ t.number }}"{% else %} aria-label="تفاصيل المعالجة"{% endif %}>
-      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-sliders"/></svg>
-    </a>
-    {% endif %}
   </span>
   {% endif %}
   {% if role == 'admin' or role == 'editor' %}

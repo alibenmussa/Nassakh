@@ -438,8 +438,6 @@ PAGE_TEMPLATE = """
   {% include "partials/_progress.html" with percent=0 thin=True state="success" %}
   {% include "partials/_empty_state.html" with title="لا كتب بعد" action_url="/b/new/" action_label="جديد" %}
   {% include "partials/_empty_state.html" with title="فارغ" text="ابدأ برفع ملف PDF." icon="i-book" %}
-  {% include "processing/_preprocess_panel.html" with page=None book=None %}
-  {% include "ocr/_text_panel.html" with page=None book=None %}
 {% endblock %}
 """
 
@@ -478,7 +476,7 @@ def test_base_layout_renders_shell_nav_and_partials(users):
     assert 'href="/admin/"' in html and "المستخدمون" in html  # admin link for admins
     assert 'action="/accounts/logout/"' in html and "تسجيل الخروج" in html
     assert "dist/app.css" in html and "vendor/alpine.min.js" in html
-    assert "src/js/books.js" in html and "src/js/processing.js" in html and "src/js/ocr.js" in html
+    assert "src/js/books.js" in html and "src/js/processing.js" in html
     # messages: success → toast, error → banner
     assert 'class="toast"' in html and "تم الحفظ" in html
     assert "banner banner-danger" in html and "حدث خطأ" in html

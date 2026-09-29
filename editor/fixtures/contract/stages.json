@@ -48,7 +48,7 @@
    "done_started": {
     "key": "pages",
     "label": "التخطيط",
-    "url": "/books/41/?view=guides",
+    "url": "/books/41/guides/",
     "state": "done",
     "state_label": "مكتملة",
     "detail": "تم التخطيط · 8 صفحات",
@@ -434,7 +434,7 @@
     {
      "key": "pages",
      "label": "التخطيط",
-     "url": "/books/41/?view=guides",
+     "url": "/books/41/guides/",
      "state": "done",
      "state_label": "مكتملة",
      "detail": "تم التخطيط · 8 صفحات",
@@ -506,7 +506,7 @@
     {
      "key": "pages",
      "label": "التخطيط",
-     "url": "/books/41/?view=guides",
+     "url": "/books/41/guides/",
      "state": "done",
      "state_label": "مكتملة",
      "detail": "تم التخطيط · 8 صفحات",
@@ -578,7 +578,7 @@
     {
      "key": "pages",
      "label": "التخطيط",
-     "url": "/books/41/?view=guides",
+     "url": "/books/41/guides/",
      "state": "done",
      "state_label": "مكتملة",
      "detail": "تم التخطيط · 8 صفحات",

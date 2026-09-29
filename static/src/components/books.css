@@ -6,11 +6,6 @@
   .stack-lg { display: flex; flex-direction: column; gap: 24px; }
   .stack-sm { display: flex; flex-direction: column; gap: 6px; }
   .page-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .title-sep { color: var(--color-text-3); margin-inline: 6px; font-weight: 400; }
-  /* Long titles truncate; the page number before them always stays visible. */
-  .page-title:has(.title-main) { display: flex; align-items: baseline; min-width: 0; }
-  .title-page { flex: none; }
-  .title-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .req { color: var(--color-text-3); margin-inline-start: 3px; }
   .check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-text); cursor: pointer; }
   .check input { width: 15px; height: 15px; margin: 0; }
@@ -140,50 +135,18 @@
   .page-tile.is-excluded .page-tile-img { filter: grayscale(1); }
   .page-tile.is-error .page-tile-thumb { box-shadow: 0 0 0 2px var(--color-danger), var(--shadow-md); }
 
-  /* ------------------------------------------------------------ page detail */
+  /* ------------------------------------------------------------ pager, viewer, region boxes (sheets) */
   .pager { display: inline-flex; align-items: center; gap: 6px; }
   .pager .btn[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
-  .pager-count { min-width: 56px; text-align: center; }
-  .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px; align-items: start; }
   .side-panel { min-width: 0; }
   .viewer { position: sticky; top: calc(var(--topbar-height) + 24px); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-  .viewer-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .viewer-toolbar .segmented > button:disabled { opacity: 0.45; cursor: default; }
-  .viewer-dims { margin-inline-start: auto; }
-  .viewer-stage {
-    position: relative;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    background: var(--color-bg-subtle);
-    overflow: hidden;
-    max-height: calc(100dvh - var(--topbar-height) - 120px);
-    overflow-y: auto;
-  }
-  .viewer-stage.is-empty { min-height: 320px; display: grid; place-items: center; }
-  .viewer-canvas { position: relative; display: block; line-height: 0; }
-  .viewer-img { display: block; width: 100%; height: auto; background: #fff; }
-  .viewer-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 32px; text-align: center; color: var(--color-text-2); font-size: 13px; }
-  .viewer-hint { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   /* The overlay shares the image box; boxes are placed with physical left/top percentages. */
-  .region-layer { position: absolute; inset: 0; pointer-events: none; }
   .region-box {
     position: absolute;
     box-sizing: border-box;
     border: 1.5px solid hsl(var(--region-h) 60% 52%);
     background: hsl(var(--region-h) 60% 52% / 0.08);
     --region-h: 215;
-  }
-  .region-label {
-    position: absolute;
-    top: 0;
-    left: 0;
-    padding: 1px 6px;
-    border-radius: 0 0 var(--radius-xs) 0;
-    background: hsl(var(--region-h) 60% 42%);
-    color: #fff;
-    font-size: 10.5px;
-    line-height: 1.4;
-    white-space: nowrap;
   }
   .region-body { --region-h: 215; }
   .region-heading { --region-h: 262; }
@@ -192,16 +155,10 @@
   .region-footnote { --region-h: 140; }
   .region-poetry { --region-h: 320; }
   .region-other { --region-h: 0; border-color: hsl(0 0% 55%); background: hsl(0 0% 55% / 0.08); }
-  .region-other .region-label { background: hsl(0 0% 45%); }
-  .flag-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-  .runs-table td { height: 40px; padding-block: 4px; }
-  .runs-table th, .runs-table td { padding-inline: 8px; }
 
   /* ------------------------------------------------------------ responsive */
   @media (max-width: 1180px) {
-    .detail-layout { grid-template-columns: minmax(0, 1fr); }
     .viewer { position: static; }
-    .viewer-stage { max-height: none; overflow-y: visible; }
   }
   @media (max-width: 560px) {
     .field-row { grid-template-columns: minmax(0, 1fr); }

@@ -112,14 +112,13 @@ def test_the_shell_places_the_bar_between_the_title_and_the_actions_and_loads_it
 
 def test_every_book_screen_includes_the_bar_with_its_step():
     """The dashboard («التخطيط» in the mode, else «المعالجة»), review, the manuscript, the book page, the
-    export page and the page detail; the h1 holds the title only (the page detail keeps its page number)."""
+    export page; the h1 holds the title only."""
     screens = {
         "books/detail.html": 'current=guides_mode|yesno:"pages,ocr"',
         "review/review.html": 'current="review"',
         "assembly/manuscript.html": 'current="manuscript"',
         "editor/layout.html": 'current="book"',
         "publishing/export.html": 'current="export"',
-        "books/page_detail.html": 'current=book.awaits_ocr_start|yesno:"pages,ocr"',
     }
     for name, current in screens.items():
         text = (ROOT / "templates" / name).read_text(encoding="utf-8")
@@ -128,8 +127,7 @@ def test_every_book_screen_includes_the_bar_with_its_step():
             in text
         ), name
         assert "data-rail" in text, name  # the root folds the sidebar into the rail too (§5.2)
-        if name != "books/page_detail.html":
-            assert "{% block title %}{{ book.title }}{% endblock %}" in text, name
+        assert "{% block title %}{{ book.title }}{% endblock %}" in text, name
 
 
 # ---------------------------------------------------------------- the look and the collapse (layout.css)

@@ -153,12 +153,12 @@ from its last completed stage.
 | Where | What it does |
 |---|---|
 | Dashboard `/books/<id>/` → «⋯» → a stage «…» | a dialog first names the pages that run, the approved pages kept and the model time (`books.services.rerun_estimate`); then all non-excluded, unapproved pages from that stage (`books.tasks.rerun_book_from`). In «التخطيط» only «إعادة تجهيز الصفحات…» is offered, and it stops again at «تم التخطيط» |
-| Page detail `/books/<id>/pages/<n>/` → «إعادة التشغيل» | this page from the chosen stage (`books.services.run_stage(page, stage)`) |
+| Sheet in «التخطيط» `/books/<id>/guides/#sheet-<n>` and the attention list → «إعادة …» | this page from its failed stage (`books.services.run_stage(page, stage)`; the page screen that offered any stage is gone, D84) |
 | Page detail error banner → «إعادة المحاولة من هذه المرحلة» | the failed stage again |
 | Dashboard → «تحتاج انتباهًا» → «إعادة <stage>» on a failed page | the failed stage again, then back to the dashboard (same `books:rerun` with `next`) |
 | Page detail → panel «تجهيز الصفحة» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
 | Dashboard → «⋯» → «التخطيط» (`?view=guides`) → «تطبيق على كل الصفحات» | a preview first (pages that change, lines cut, pages with their own override, pages re-read); on a started book only the changed pages that are unapproved and have no review work are re-derived and re-read. The old address `/books/<id>/guides/` redirects there |
-| Dashboard / page detail → «استثناء الصفحة» | excludes a page from every stage and from the book's progress; the toast's «تراجع» brings it back (so does toggling again) |
+| Dashboard sheet → «استثناء» | excludes a page from every stage and from the book's progress; the toast's «تراجع» brings it back (so does toggling again) |
 
 **After upgrading to per-page footnote / page-number detection** (migrations `processing/0003`, `books/0003`):
 existing books still carry regions from the old book-level guides and no detection results. Re-run each book from
@@ -185,7 +185,7 @@ media/books/{book_id}/pages/{n:04d}/thumb.webp         ≤ 240 px, grids
 
 Media is served by Django at `/media/<path>` to signed-in users only (`core.views.protected_media`, also with
 `DEBUG=false`). Every engine call is an `OcrRun` row (engine, model revision, prompt, raw output, duration,
-sanity-check result) visible on the page detail screen and at `/api/pages/<id>/runs/`.
+sanity-check result) visible at `/api/pages/<id>/runs/`.
 
 `/api/pages/<id>/status/` and `/api/pages/<id>/text/` return a failure as `error` (the Arabic headline) plus
 `error_detail` (the technical lines); the status payload also carries `images` (the three image-tab URLs).
@@ -298,7 +298,7 @@ PageDown / PageUp, Home / End, a trackpad swipe or the wheel over the page (one 
 jump field (`G`), or the thumbnails in the side panel. The side panel also holds the summary (stage counts, review
 state, «تحتاج انتباهًا»). The filter chips decide which pages the viewer walks through.
 The page on screen is kept in the address (`#sheet-N`, shareable, survives a reload); a click on a grid card opens
-it in the viewer (⌘-click opens the page detail). Sheets are fetched in batches from `/api/books/<id>/sheets/?from=<n>&to=<n>` (at most 40 pages per
+it in the viewer (⌘-click follows the link: review, or the page's sheet in «التخطيط»). Sheets are fetched in batches from `/api/books/<id>/sheets/?from=<n>&to=<n>` (at most 40 pages per
 call, line boxes as 0..1 ratios of the page). The review summary «مُراجَعة X من Y صفحة» and the button
 «الصفحة التالية للمراجعة» come from `book_progress["review"]` (`review.services.book_review_summary`).
 Each page takes its aspect ratio from its tile's `width`/`height` (cleaned image, else the scan), so it fits the
@@ -338,7 +338,7 @@ The «?» button shows the full sheet.
   `Page.n_unresolved` per page (kept by `finalize_page` and every review action). Resolving sets `res`
   (`primary | secondary | tess | typed`) but keeps `conf`, so the word stays marked as once uncertain; the primary
   reading is kept in the token's `orig` when another one replaced it, so the readings popovers (review screen and
-  page detail) still offer «النموذج الأول» after a resolution; a resolved word loses its amber underline everywhere.
+  the text API) still offer «النموذج الأول» after a resolution; a resolved word loses its amber underline everywhere.
 - Every action rebuilds `Page.final_text` from the lines: body lines, a blank line, footnote lines, Western digits.
   `Line.ocr_text` never changes; diacritics are kept exactly as typed or read.
 - Editing a line re-tokenises it on whitespace and aligns the new words to the old ones: unchanged words keep their
@@ -778,7 +778,7 @@ book page, the export page) shows the book's six steps in its top bar: «الت�
 - An edited book's review shows «يُحرَّر هذا الكتاب في «الكتاب»؛ تصله تغييرات هذه الصفحة من «تغييرات المراجعة».».
 - Tiles lead to review (`primary_url`: review when the page's text is final and the page is not excluded, else the
   page's details). A plain click still opens the viewer, and a new tab or a modifier-click opens review. The hover
-  actions are «مراجعة» and «تفاصيل المعالجة» (editors). The dashboard remembers its view and filter per book.
+  action is «مراجعة» (the page screen «تفاصيل المعالجة» was removed, D84). The dashboard remembers its view and filter per book.
 
 **Names (D77).** «تحويل إلى كتاب» is «تجميع المخطوطة»; WeasyPrint's pagination is «ترتيب الصفحات» («تُرتَّب صفحات
 الكتاب…», «لم تُرتَّب الصفحات…», `PreviewRender` «قيد الترتيب»); «الإخراج» means files only. `core/test_stage_bar.py` fails

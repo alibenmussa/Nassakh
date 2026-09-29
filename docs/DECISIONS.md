@@ -458,3 +458,21 @@ Orphans on the book: 114 notes, 63 → 31 (D82) → 23 on 18 pages; unmatched ma
 place 9 → 14 (their calls exist now). Whole book: 84 s of Kraken on the CPU worker (one
 process per page that wants a call). Not done: a note whose own marker the models misread («(١١)», «(٢١)» on p. 29, 64)
 is not re-read; a call the ink filter drops (words on both sides, a number in the gap) stays for the reviewer.
+
+## D84 — The page screen is removed; the «التخطيط» mode has its own address (2026-09-29)
+
+`/books/<id>/pages/<n>/` («تفاصيل المعالجة»: image tabs, the manual preprocessing parameters, a re-run of any
+stage for one page, the OCR text panel and the engine runs) is gone, with its API routes `/api/pages/<id>/status/`
+and `/api/pages/<id>/preprocess/`, the `processing_tags` template tag, `ocr.js` and `ocr.css`. The owner: the
+screen let anyone change a page after processing, and it is not a screen to hand a publisher. What it offered
+lives on where it belongs: the sheet in the «التخطيط» mode (guides, «بضبط خاص», «تجهيز الصفحة» on an error,
+«استثناء»), the attention list (a retry from the failed stage), review (the text, the readings). A per-page re-run
+of an arbitrary stage is no longer offered.
+
+The «التخطيط» mode of a started book was `/books/<id>/?view=guides`; a mode behind a query looked like a
+technicality. It is now `/books/<id>/guides/` (`books:guides`, `book_guides`), `#sheet-<n>` opening at a page;
+the old query redirects there for good (301), and before «بدء المعالجة» the address redirects to the dashboard,
+which is the mode then. `primary_url` (D76) falls back to the page's sheet (`sheet_url`), as do the tile link, the
+attention list, the stage bar's «التخطيط» step and the redirect after a per-page action. The
+«تفاصيل المعالجة» icons on tiles and sheets and the «⋯» menu of review that held only that item are removed.
+`processing.urls` keeps its API routes only.

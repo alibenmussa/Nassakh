@@ -16,7 +16,6 @@ from unittest import mock
 from celery.exceptions import Retry
 from django.contrib.auth.models import User
 from django.core.files.base import ContentFile
-from django.template.loader import render_to_string
 from django.urls import reverse
 
 import numpy as np
@@ -1125,43 +1124,6 @@ def _panel_payload(html: str) -> dict:
     match = re.search(r'<script type="application/json">(.*?)</script>', html, re.S)
     assert match, "the partial should embed its initial JSON payload"
     return json.loads(match.group(1))
-
-
-def test_text_panel_renders_provisional_state_and_polling_config(page, book):
-    add_regions(page)
-    with registry.override(engines()):
-        services.run_fast_ocr(page)
-    html = render_to_string("ocr/_text_panel.html", {"page": page, "book": book})
-    assert "نص مبدئي (Tesseract)" in html
-    assert "text-text-3" in html and "tok-low" in html
-    # readings popover on uncertain words: present, view-only (no form controls inside it)
-    assert 'class="tok-pop"' in html and "قراءات هذه الكلمة" in html and "tokenOptions(hover.tok)" in html
-    assert "showTok($event, tok)" in html and 'role="tooltip"' in html
-    assert f"statusUrl: '/api/pages/{page.pk}/status/'" in html
-    assert (
-        f"textUrl: '/api/pages/{page.pk}/text/'" in html and f"runsUrl: '/api/pages/{page.pk}/runs/'" in html
-    )
-    assert 'x-data="textPanel(' in html
-    assert "تشغيلات المحرّكات" in html
-    payload = _panel_payload(html)
-    assert payload["text_state"] == "provisional" and payload["status"] == "layout_done"
-    assert payload["provisional_text"] == TESS_BODY + "\n\n" + TESS_FOOT
-    assert payload["lines"] == [] and len(payload["runs"]) == 4
-
-
-def test_text_panel_embeds_final_lines(page, book):
-    add_regions(page)
-    with registry.override(engines()):
-        services.run_fast_ocr(page)
-        services.run_full_ocr(page)
-    payload = _panel_payload(render_to_string("ocr/_text_panel.html", {"page": page, "book": book}))
-    assert payload["text_state"] == "final" and len(payload["lines"]) == 3 and payload["n_low"] == 3
-    assert payload["lines"][0]["tokens"][6]["alt"] == "الكتب"
-
-
-def test_text_panel_renders_nothing_without_a_page():
-    html = render_to_string("ocr/_text_panel.html", {"page": None, "book": None})
-    assert html.strip() == ""
 
 
 def test_run_fast_ocr_reads_the_page_number_padded_upscaled_single_line(page):

@@ -2,17 +2,17 @@
  "page_tile (full): the new key": {
   "a page with final text": {
    "primary_url": "/books/40/review/1/",
-   "url": "/books/40/pages/1/",
+   "url": "/books/40/guides/#sheet-1",
    "review_url": "/books/40/review/1/"
   },
   "a page still processing (no final text)": {
-   "primary_url": "/books/40/pages/8/",
-   "url": "/books/40/pages/8/",
+   "primary_url": "/books/40/guides/#sheet-8",
+   "url": "/books/40/guides/#sheet-8",
    "review_url": "/books/40/review/8/"
   },
   "an excluded page": {
-   "primary_url": "/books/40/pages/5/",
-   "url": "/books/40/pages/5/",
+   "primary_url": "/books/40/guides/#sheet-5",
+   "url": "/books/40/guides/#sheet-5",
    "review_url": "/books/40/review/5/"
   }
  },

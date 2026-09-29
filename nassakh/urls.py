@@ -5,8 +5,6 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 - `/admin/`                 Django admin (users and groups are managed here for now)
 - `/accounts/`              login / logout                       namespace `accounts`
 - `/books/`                 books app HTML routes                namespace `books`
-- `/books/`                 processing HTML routes (the retired guides address, which redirects to the
-                            dashboard's «التخطيط» mode)          namespace `processing`
 - `/books/`                 review screens (Phase 3)             namespace `review`
 - `/books/`                 manuscript view (Phase 4)            namespace `assembly`
 - `/books/`                 editor and layout pages (Phase 5)    namespace `editor`
@@ -46,7 +44,6 @@ urlpatterns = [
     path("", include("core.urls")),
     path("accounts/", include("accounts.urls")),
     path("books/", include("books.urls")),
-    path("books/", include("processing.urls")),
     path("books/", include("review.urls")),
     path("books/", include("assembly.urls")),
     path("books/", include("editor.urls")),
