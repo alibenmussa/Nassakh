@@ -1343,6 +1343,17 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
             key = marker_key(marker)
             if key.isdigit() and len(key) >= 2 and key not in _next_keys(notes, carry):
                 marker = None  # a hadith's number «١٩ ـ» at a line's start, out of the notes' sequence (D87)
+        elif marker is not None:
+            key = marker_key(marker)
+            numbered = [int(n.key) for n in notes if n.key and n.key.isdigit()]
+            if (
+                key.isdigit()
+                and len(key) >= 2
+                and numbered
+                and int(key) != numbered[-1] + 1
+                and key != f"{numbered[-1] + 1}1"  # «(٢١)» for «(٢)»: `_repair_sequence` reads it
+            ):
+                marker = None  # «(١٨) (٢٣٠/٢)» after «(١)»: a reference, not note 18 (book 31 p. 107, D87)
         if marker is not None:
             current = Note(
                 id=note_id(line.id),

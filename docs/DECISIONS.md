@@ -559,7 +559,12 @@ more than the note before in a book numbering on — are that note's continuatio
 book 31 joined the notes they continue; its orphans 53 → 34). The linker also takes the quote-stroke readings of a
 call when the call pass found no ink for them («صَدَقَةٌ ” “ .», «المخالفة"٢"،», «الأصول»"ا".»; a quoted title stays
 text), and a bare number of two or three digits at a note line's start that is out of the notes' sequence is a
-hadith's number («١٩ ـ»), on any page.
+hadith's number («١٩ ـ»), on any page; so is a bracketed one after the page's first numbered note that is not
+the next number («(١٨) (٢٣٠/٢)» after «(١)», book 31 p. 107). A next note merged into the line before is split
+off at a bracketed next number after a sentence's end, and a second call with the number of a note already
+linked is a leftover for the notes still without a call (book 32 p. 4: «(1)» … «(1)» for (١) … (٢)).
+`manage.py read_calls --redo` undoes the calls an earlier pass wrote (`calls.undo_page_calls`) before reading
+again, so books read before this decision get the new pass on the models' own text.
 
 ## D88 — A short line of text stops the walk for the page number from the page's edge (2026-09-30)
 

@@ -1077,6 +1077,63 @@ def read_page_calls(
     return result
 
 
+def undo_calls(tokens: list[dict]) -> tuple[list[dict], dict[int, int]]:
+    """A line's tokens without the calls a pass wrote (`call` tokens the reviewer has not resolved), and the
+    old → new index of each token kept: an inserted call is dropped, a replacing one gives back what the
+    models wrote (`qari`) in its box — a reading once glued to its word comes back as a token of its own,
+    which the pass reads as the same call."""
+    out: list[dict] = []
+    moves: dict[int, int] = {}
+    for i, token in enumerate(tokens):
+        if token.get("call") and not token.get("res"):
+            qari = str((token.get("qari") or {}).get("t") or "").strip()
+            if not qari:
+                continue
+            token = {
+                "t": qari,
+                "alt": None,
+                "tess": None,
+                "conf": "low",
+                "digit": False,
+                "bbox": token.get("bbox"),
+            }
+        moves[i] = len(out)
+        out.append(token)
+    return out, moves
+
+
+def undo_page_calls(page) -> int:
+    """Undo the calls an earlier pass wrote on a page (`undo_calls`), so the pass reads the models' text again
+    (`read_calls --redo`, D87). Never on an approved page or a reviewed line; the lines' suggestions follow
+    their words. Returns how many call tokens were undone."""
+    from django.db import transaction
+
+    from books.models import Page
+    from ocr.models import Line
+    from ocr.services import count_unresolved
+    from review.services import _shift_gaps, refresh_page_text
+
+    undone = 0
+    with transaction.atomic():
+        locked = Page.objects.select_for_update(of=("self",)).get(pk=page.pk)
+        if locked.reviewed_at is not None:
+            return 0
+        for line in Line.objects.filter(page=page, is_reviewed=False):
+            tokens = line.tokens or []
+            clean, moves = undo_calls(tokens)
+            if len(moves) == len(tokens) and all(clean[j] is tokens[i] for i, j in moves.items()):
+                continue
+            undone += sum(1 for t in tokens if t.get("call") and not t.get("res"))
+            line.tokens = clean
+            line.text = " ".join(token["t"] for token in clean)
+            line.n_low = count_unresolved(clean)
+            line.save(update_fields=["tokens", "text", "n_low", "updated_at"])
+            _shift_gaps(line, moves, clean)
+        if undone:
+            refresh_page_text(page)
+    return undone
+
+
 def _median_height(lines: list) -> float:
     heights = sorted(int(line.bbox[3]) - int(line.bbox[1]) for line in lines if line.bbox)
     return float(heights[len(heights) // 2]) if heights else 20.0

@@ -1,15 +1,18 @@
-"""`manage.py read_calls --book ID [--page N] [--dry-run] [--sample DIR]`: the call pass (D83) on pages
-already OCR'd.
+"""`manage.py read_calls --book ID [--page N] [--dry-run] [--redo] [--sample DIR]`: the call pass (D83, v2
+D87) on pages already OCR'd.
 
 New pages get it after the numbers pass (`ocr.tasks.read_numbers`); this runs it on a book's finalised
 pages now, synchronously, and prints per page the wanted numbers and each candidate with Kraken's
 reading and whether it was accepted. `--dry-run` writes nothing; `--sample DIR` saves the crop of every
-accepted call as a PNG for a check by eye. Reviewed lines and approved pages are never touched.
+accepted call as a PNG for a check by eye; `--redo` first undoes the calls an earlier pass wrote
+(`calls.undo_page_calls`), so a book read before D87 gets the new pass on the models' own text (with
+`--dry-run` the undo is rolled back). Reviewed lines and approved pages are never touched.
 """
 
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
 from books.models import Book, Page
 from ocr import calls, numbers
@@ -24,6 +27,7 @@ class Command(BaseCommand):
         parser.add_argument("--page", type=int, help="only this page number")
         parser.add_argument("--dry-run", action="store_true", help="read and report, write nothing")
         parser.add_argument("--sample", help="folder for a PNG crop of every accepted call")
+        parser.add_argument("--redo", action="store_true", help="undo the calls an earlier pass wrote first")
 
     def handle(self, *args, **options) -> None:
         book = Book.objects.filter(pk=options["book"]).first()
@@ -41,19 +45,21 @@ class Command(BaseCommand):
             pages = pages.filter(number=options["page"])
         style = numbers.book_style(book)
         self.stdout.write(f"book {book.pk} «{book.title}»: prints {style or 'unknown'} digits")
-        if style != numbers.ARABIC_INDIC:
-            self.stdout.write("nothing to read: the call pass is for books printed with Arabic-Indic digits")
-            return
-        candidates = accepted = applied = 0
+        candidates = accepted = applied = undone = 0
         for page in pages:
             try:
-                done = calls.read_page_calls(
-                    page,
-                    engine=engine,
-                    style=style,
-                    dry_run=options["dry_run"],
-                    sample_dir=options.get("sample"),
-                )
+                with transaction.atomic():
+                    if options["redo"]:
+                        undone += calls.undo_page_calls(page)
+                    done = calls.read_page_calls(
+                        page,
+                        engine=engine,
+                        style=style,
+                        dry_run=options["dry_run"],
+                        sample_dir=options.get("sample"),
+                    )
+                    if options["dry_run"]:
+                        transaction.set_rollback(True)
             except KrakenError as exc:
                 self.stderr.write(f"page {page.number}: {exc}")
                 continue
@@ -70,6 +76,11 @@ class Command(BaseCommand):
                 where = f"line {cand.line.order} {cand.source} {cand.bbox}"
                 self.stdout.write(f"  {where}: read «{cand.reading}» → {cand.status}")
         verb = "would write" if options["dry_run"] else "wrote"
+        redo = (
+            f", {'would undo' if options['dry_run'] else 'undid'} {undone} earlier" if options["redo"] else ""
+        )
         self.stdout.write(
-            self.style.SUCCESS(f"done: {candidates} candidates, {accepted} accepted, {verb} {applied} calls")
+            self.style.SUCCESS(
+                f"done: {candidates} candidates, {accepted} accepted, {verb} {applied} calls{redo}"
+            )
         )

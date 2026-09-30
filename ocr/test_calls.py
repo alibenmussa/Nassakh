@@ -445,3 +445,24 @@ def test_as_many_call_shapes_as_notes_are_numbered_by_order_whatever_kraken_read
     lost = shapes()
     assert calls.number_calls(lost, ["1", "3", "4", "5"], []) == 3
     assert [c.number for c in lost] == ["1", "", "", "4", "5"]
+
+
+def test_the_calls_a_pass_wrote_are_undone_and_the_pass_reads_the_models_text_again(calls_page):
+    """`read_calls --redo` (D87): a book read before the pass's second version gets it on the models' text."""
+    page, line, _note = calls_page
+    engine = FakeKraken({(150, 36, 194, 56): "(١)"})
+    calls.read_page_calls(page, engine=engine, style="arabic_indic")
+    line.refresh_from_db()
+    assert line.text == "كلام ثم (١)"
+    assert calls.undo_page_calls(page) == 1
+    line.refresh_from_db()
+    assert line.text == "كلام ثم ( )" and not any(t.get("call") for t in line.tokens)
+    assert calls.undo_page_calls(page) == 0
+    tokens = [
+        {"t": "أ"},
+        {"t": "(١)", "call": True, "qari": {"t": ""}},
+        {"t": "ب"},
+        {"t": "(٢)", "call": True, "res": "ok"},
+    ]
+    clean, moves = calls.undo_calls(tokens)
+    assert [t["t"] for t in clean] == ["أ", "ب", "(٢)"] and moves == {0: 0, 2: 1, 3: 2}

@@ -832,7 +832,6 @@ def test_a_call_read_with_a_one_hung_on_it_is_the_uncalled_one_digit_note_of_its
 
 
 def test_the_two_digit_repair_stays_narrow():
-    # the page has a note (١١) of its own: «(١١)» is its call, note (١) stays an orphan
     own = run(
         [
             pg(
@@ -845,8 +844,9 @@ def test_the_two_digit_repair_stays_narrow():
             )
         ]
     )
-    assert {n["attrs"]["marker"]: n["attrs"]["orphan"] for n in notes_of(own)} == {"١": True, "١١": False}
-    assert "note_call_repaired" not in codes(own)
+    # D87: «(١١)» after «(١)» is out of the page's sequence: a reference in note 1, whose call «(١١)» is
+    assert [(n["attrs"]["marker"], n["attrs"]["orphan"]) for n in notes_of(own)] == [("١", False)]
+    assert notes_of(own)[0]["attrs"]["sourceLineIds"] == [91, 92]
     # «(٤١)» (above the positional range: it may be a page reference; the call pass reads the ink), a
     # three-digit «(١١٧)», a bare «١١», a glued «كتاب١١»: none is taken for the call
     for body in ("كلام (٤١) هنا", "كلام (١١٧) هنا", "كلام ١١ هنا", "كتاب١١ هنا"):
@@ -2774,6 +2774,21 @@ def test_a_bare_number_in_the_notes_of_a_bracketed_page_is_a_marker_only_in_sequ
     )
     (note,) = notes_of(hadith)
     assert note["attrs"]["sourceLineIds"] == [41, 51, 52]
+    # book 31 p. 107: a bracketed reference «(١٨)» after the page's «(١)» is text too
+    reference = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) هنا", id=60),
+                    ln("(١) كتاب الزكاة", kind="footnote", id=61),
+                    ln("(١٨) (٢٣٠/٢) .", kind="footnote", id=62),
+                ],
+            )
+        ]
+    )
+    (note,) = notes_of(reference)
+    assert note["attrs"]["sourceLineIds"] == [61, 62] and note["attrs"]["orphan"] is False
 
 
 def test_a_carried_note_line_read_with_a_number_above_the_pages_first_marker_continues():
