@@ -46,6 +46,9 @@ RULE_FILL = 0.9  # a band whose densest row is inked across this share of its co
 RULE_RATIO = 12  # ... that is this many times as wide as it is tall ...
 RULE_SHARE = 0.2  # ... and spans this share of its region's width is a rule, not a line of text
 APART = 0.6  # a Tesseract line without a band is a missed printed line this many pitches from every band
+# ... or, read at this mean word confidence or more, this many pitches of the region's lines so read (the
+# bands' pitch is twice the print's where the detector missed every other line: book 29 p. 23)
+MISSED_CONF = 60
 CORE_SHARE = 0.5  # rows with at least this share of the densest row's ink are a line's core
 SNAP_WINDOW = 0.2  # a boundary is looked for this many line heights either side of Kraken's space
 SNAP_DISTANCE = 0.15  # a blank run counts this much less per pixel away from the middle of Kraken's space
@@ -142,6 +145,27 @@ def _texty(line: dict) -> bool:
     )
 
 
+def _confident(line: dict) -> bool:
+    """A Tesseract line read at a mean word confidence of `MISSED_CONF` or more: print, not a picture's
+    noise."""
+    confs = [float(w.get("conf") or 0) for w in line.get("words") or []]
+    return bool(confs) and sum(confs) / len(confs) >= MISSED_CONF
+
+
+def _lines_pitch(lines: list[dict], gray: np.ndarray | None, rules: set[tuple[int, int]]) -> float:
+    """The pitch of Tesseract's lines: their ink cores, the pieces of one printed line (cores sharing rows)
+    taken as one."""
+    cores: list[list[int]] = []
+    for line in lines:
+        y0, y1 = ink_core(gray, [int(v) for v in line["bbox"]], rules)
+        near = next((c for c in cores if min(c[1], y1) > max(c[0], y0)), None)
+        if near is None:
+            cores.append([y0, y1])
+        else:
+            near[0], near[1] = min(near[0], y0), max(near[1], y1)
+    return line_pitch([{"y0": y0, "y1": y1} for y0, y1 in cores])
+
+
 def region_crops(
     bands: list[dict] | None, tess_lines: list[dict] | None, bbox: list[int], gray: np.ndarray | None
 ) -> list[Crop]:
@@ -151,11 +175,12 @@ def region_crops(
     pixels). A band belongs to the region when its middle row lies in it and its columns overlap it; it is
     read in its columns and in the rows of the Tesseract lines fitted to it (`alignment.fit_lines`), or of
     its own reach without them (a line the detector missed, in its Tesseract line's rows). A band that is a
-    printed rule (`is_rule`) is not read: a Tesseract line
-    fitted to it counts as a line without a band. Such a line is one the detector missed only when its ink
-    (its core, the rules' rows aside) lies `APART` pitches or more from every band (else it is a raised call
-    or the marks above a thin band); two such lines whose cores share rows (one printed line in two pieces)
-    are read as one.
+    printed rule (`is_rule`) is not read: a Tesseract line fitted to it counts as a line without a band. Such
+    a line is one the detector missed only when its ink (its core, the rules' rows aside) lies `APART`
+    pitches or more from every band (else it is a raised call or the marks above a thin band): the bands'
+    pitch, or, for a line Tesseract read with confidence (`MISSED_CONF`), the pitch of the region's lines so
+    read (`_lines_pitch`), shorter where the detector missed every other line. Two such lines whose cores
+    share rows (one printed line in two pieces) are read as one.
     """
     rx0, ry0, rx1, ry1 = (int(v) for v in bbox)
     valid = _valid_bands(bands)
@@ -170,6 +195,8 @@ def region_crops(
     # the region's pitch, or the page's when that is shorter (a region's missed bands make its own too long)
     pitches = [p for p in (line_pitch(inside), line_pitch(valid)) if p]
     apart = APART * (min(pitches) if pitches else 3.0 * max(1, median_h))
+    confident = [ln for ln in lines if _confident(ln)]
+    printed = APART * _lines_pitch(confident, gray, rules)  # 0 with fewer than two such lines
     cores: list[dict] = []
     used: set[int] = set()  # the Tesseract lines that stand for a band already
     for b in inside:
@@ -197,7 +224,8 @@ def region_crops(
         box = [int(v) for v in lines[k]["bbox"]]  # its own rows, not those of the rule it was fitted to
         y0, y1 = ink_core(gray, box, rules)
         mid = (y0 + y1) / 2
-        if any(abs(mid - (c["y0"] + c["y1"]) / 2) < apart for c in cores):
+        near_band = min((abs(mid - (c["y0"] + c["y1"]) / 2) for c in cores), default=float("inf"))
+        if near_band < apart and not (printed and near_band >= printed and _confident(lines[k])):
             continue  # on a band's printed line: a raised call, the marks above a thin core
         near = next((m for m in missed if min(m["y1"], y1) > max(m["y0"], y0)), None)
         if near is None:

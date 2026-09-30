@@ -283,6 +283,21 @@ def test_a_tesseract_line_on_a_band_s_printed_line_is_not_read_as_a_line_of_its_
     ]
 
 
+def test_a_line_between_two_bands_a_double_pitch_apart_is_read_when_tesseract_read_it_with_confidence():
+    short = [("فأبلى", 300, 370)]
+    gray = draw([(LINE_A, CORE_A), (short, (90, 104)), (LINE_B, (140, 154))])
+    bands = [BANDS[0], {"x0": 60, "y0": 140, "x1": 370, "y1": 154}]  # the detector missed the short line
+    lines = [tess_line(LINE_A, CORE_A), tess_line(short, (90, 104)), tess_line(LINE_B, (140, 154))]
+    # 50 px from the band below: under 0.6 of the bands' pitch (110), not of the print's (55)
+    crops = boxes.region_crops(bands, lines, [0, 0, W, H], gray)
+    assert [(c.y0, c.y1, c.line) for c in crops] == [(30, 44, False), (90, 104, True), (140, 154, False)]
+    # read at a noise's confidence, it is no line of its own
+    for word in lines[1]["words"]:
+        word["conf"] = 40.0
+    crops = boxes.region_crops(bands, lines, [0, 0, W, H], gray)
+    assert [(c.y0, c.y1, c.line) for c in crops] == [(30, 44, False), (140, 154, False)]
+
+
 def test_the_line_builder_takes_kraken_s_boxes_and_tesseract_s_readings():
     gray = page_image()
     tesseract = [
