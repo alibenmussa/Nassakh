@@ -34,7 +34,7 @@ page break into one note, and drops notes that were Tesseract's noise (D89).
 
 ## What changed
 
-Commits 2c8c6e7, 7b90576 and 76a6282; decisions D87, D88 and D89 in `docs/DECISIONS.md`, the pass in
+Commits 2c8c6e7, 7b90576, 76a6282 and 982085d; decisions D87, D88 and D89 in `docs/DECISIONS.md`, the pass in
 `docs/NOTE_CALLS_SPEC.md`.
 
 1. **The call is found by its shape (D87).** A pair of raised brackets sized by the line pitch, not by the thin
