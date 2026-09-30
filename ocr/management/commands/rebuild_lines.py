@@ -3,8 +3,9 @@
 Rebuilds OCR lines from the stored runs (D39): re-runs the line rescue (`ocr.services.rescue_lines`) on
 each page's stored Tesseract runs and re-finalises its lines from the stored OCR runs, so flag policy v2
 (D71: reasons, the vote), the groups and suggestions of words only the second model read (D72) and the
-looped-prefix readings (D73) are recomputed; no OCR model is called, and the numbers pass is scheduled
-again (`finalize_page`). Only pages in `ocr_done` whose lines are untouched OCR output are rebuilt
+looped-prefix readings (D73) are recomputed; no OCR model is called (Kraken reads the printed lines for the
+word boxes where no stored `boxes` run read the same lines, D92), and the numbers pass is scheduled again
+(`finalize_page`). Only pages in `ocr_done` whose lines are untouched OCR output are rebuilt
 (`ocr.services.rebuild_skip_reason`); reviewed or edited pages are listed and skipped. A book whose
 manuscript was edited on the book page (`assembly.services.is_edited`) is refused unless
 `--include-edited`: a rebuild there would flood the round trip with changes (§2.6). With `--dry-run`

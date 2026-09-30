@@ -9,9 +9,10 @@ Flow per page (spec §6-§7):
     run_full_ocr    primary and secondary Qari on the OCR-able regions (gray crops, footnotes at 2x,
                     running header / page number skipped) → OcrRuns → finalize_page.
     finalize_page   per region, picks the text from the latest runs (primary → secondary → Tesseract
-                    fallback with the `ocr_fallback` flag, D16), anchors the tokens to Tesseract's
-                    lines (D12), stores Line rows, `final_text` (Western digits, D6), `ocr_done`
-                    (`compose_page` builds the same result in memory without saving it).
+                    fallback with the `ocr_fallback` flag, D16), anchors the tokens to the printed lines
+                    Kraken read (their words' boxes, D92; Tesseract's lines without Kraken, D12), stores
+                    Line rows, `final_text` (Western digits, D6), `ocr_done` (`compose_page` builds the
+                    same result in memory without saving it).
 
 All coordinates stored on runs and lines are in gray-image pixel space.
 """
@@ -39,7 +40,7 @@ from core.arabic import normalize, normalize_ws, parse_output, to_western_digits
 from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
-from . import chooser, flags
+from . import boxes, chooser, flags
 from .alignment import build_lines, merged_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
@@ -117,6 +118,7 @@ ENGINE_LABELS: dict[str, str] = {
     "qari_v03": "Qari v0.3",
     "qari_v02": "Qari v0.2",
     "tesseract": "Tesseract",
+    "kraken": "Kraken",
     "pdf_text": "طبقة النص (PDF)",
     "fake": "محرّك تجريبي",
 }
@@ -167,6 +169,8 @@ class RegionText:
     source: str
     alt_partial: bool = False
     unreadable: str = ""  # D89: why Tesseract's text of a failed region was dropped ('' when it was not)
+    # D92: Kraken's lines of the region, which give the words their boxes (None: Tesseract's do)
+    box_lines: list[dict] | None = None
 
 
 @dataclass
@@ -1561,7 +1565,14 @@ def build_region(
     """
     single = one_model(rt)
     built = build_lines(
-        rt.text, rt.alt_text, rt.tess_lines, bands, gray, single=single, partial=rt.alt_partial
+        rt.text,
+        rt.alt_text,
+        rt.tess_lines,
+        bands,
+        gray,
+        single=single,
+        partial=rt.alt_partial,
+        box_lines=rt.box_lines,
     )
     primary = rt.text.split()
     secondary = (rt.alt_text or "").split()
@@ -1589,6 +1600,7 @@ def build_region(
             single=single,
             partial=rt.alt_partial,
             inserted={i: next_group + n for i, n in inserted.items()},
+            box_lines=rt.box_lines,
         )
     gaps = [(position[run.at - 1] if run.at > 0 else -1, run) for run in unsupported]
     if rt.fallback:
@@ -1602,12 +1614,153 @@ def build_region(
     return RegionBuild(built, groups, gaps, readers)
 
 
-def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> ComposedPage:
+# ---------------------------------------------------------------- word boxes from Kraken (D92)
+
+
+def kraken_boxes_on() -> bool:
+    """Whether the words take Kraken's boxes (`NASSAKH["KRAKEN_BOXES"]`, env `KRAKEN_BOXES`, D92)."""
+    return bool(nassakh().get("KRAKEN_BOXES", True))
+
+
+def wants_boxes(rt: RegionText) -> bool:
+    """A region whose words take Kraken's boxes: the models' text (not Tesseract's fallback, not the text
+    layer), with the setting on and no lines attached yet."""
+    return (
+        kraken_boxes_on()
+        and rt.box_lines is None
+        and not rt.fallback
+        and rt.source != TEXT_LAYER_SOURCE
+        and bool(rt.text.strip())
+    )
+
+
+def _region_key(target: Target) -> int | None:
+    return target.region.pk if target.region is not None else None
+
+
+def _box_runs(page: Page) -> dict[int | None, OcrRun]:
+    """The newest successful Kraken `boxes` run of each region of the page (None: the page-level target)."""
+    out: dict[int | None, OcrRun] = {}
+    for run in page.ocr_runs.filter(status=OcrRun.Status.OK).order_by("-created_at", "-id"):
+        params = run.params or {}
+        if params.get("pass") != boxes.PASS:
+            continue
+        if params.get("scope") == REGION_SCOPE and run.region_id is not None:
+            out.setdefault(run.region_id, run)
+        elif params.get("scope") == PAGE_SCOPE and run.region_id is None:
+            out.setdefault(None, run)
+    return out
+
+
+def _crop_list(crops: list[boxes.Crop]) -> list[list]:
+    return [c.as_list() for c in crops]
+
+
+def _stored_lines(run: OcrRun, crops: list[boxes.Crop], gray: np.ndarray) -> list[dict] | None:
+    """A stored `boxes` run's lines when it read `crops` (shaped again from its answer when the shaping
+    changed since), None when it read other lines."""
+    params = run.params or {}
+    if params.get("crops") != _crop_list(crops):
+        return None
+    if params.get("shape") == boxes.SHAPE:
+        return list(params.get("lines") or [])
+    try:
+        raw = json.loads(run.raw_output or "[]")
+    except json.JSONDecodeError:
+        return None
+    return boxes.shape_lines(raw, crops, gray)
+
+
+def _gray_path(pre: Preprocess, gray: np.ndarray, tmpdir: Path) -> str:
+    """A file Kraken's runner can open for the gray image (a copy for a storage without paths)."""
+    try:
+        return pre.gray_image.path
+    except (NotImplementedError, AttributeError, ValueError):
+        return str(_save_temp(gray, tmpdir, "gray"))
+
+
+def attach_box_lines(
+    page: Page, region_texts: list[RegionText], bands: list[dict], gray: np.ndarray, save: bool = False
+) -> int:
+    """Give each of `region_texts` Kraken's lines (`RegionText.box_lines`, D92); returns how many got them.
+
+    A region's printed lines are `boxes.region_crops` (its line bands and the Tesseract lines no band holds).
+    Its stored `boxes` run serves when it read the same lines; the others are read in one Kraken call for the
+    page (`boxes.read_boxes`) and, with `save`, stored as one run per region (engine `kraken`, variant `gray`,
+    `params`: scope and kind as any run of the region, `"pass": "boxes"`, the lines read (`crops`), the shaped
+    `lines`, `shape`; `raw_output`: Kraken's characters). A region Kraken cannot read (not set up, failed, no
+    word read) keeps Tesseract's boxes; nothing here stops a page.
+    """
+    stored = _box_runs(page)
+    to_read: dict[int, tuple[RegionText, list[boxes.Crop]]] = {}
+    attached = 0
+    for n, rt in enumerate(region_texts):
+        crops = boxes.region_crops(bands, rt.tess_lines, rt.target.bbox, gray)
+        if not crops:
+            continue
+        run = stored.get(_region_key(rt.target))
+        lines = _stored_lines(run, crops, gray) if run is not None else None
+        if lines is None:
+            to_read[n] = (rt, crops)
+        elif lines:
+            rt.box_lines = lines
+            attached += 1
+    if not to_read:
+        return attached
+    try:
+        engine = registry.get_engine("kraken")
+        with tempfile.TemporaryDirectory(prefix="nassakh-boxes-") as tmp:
+            path = _gray_path(page.preprocess, gray, Path(tmp))
+            read, raw, seconds = boxes.read_boxes(engine, path, gray, {n: c for n, (_, c) in to_read.items()})
+    except Exception as exc:  # noqa: BLE001 - the boxes are a bonus: Tesseract's stand
+        log.warning("page %s: Kraken could not read the word boxes (%s); Tesseract's are used", page.pk, exc)
+        return attached
+    total = sum(len(crops) for _, crops in to_read.values()) or 1
+    runs: list[OcrRun] = []
+    for n, (rt, crops) in to_read.items():
+        if read[n]:
+            rt.box_lines = read[n]
+            attached += 1
+        if save:
+            runs.append(
+                OcrRun(
+                    page=page,
+                    region=rt.target.region,
+                    engine_name=engine.name[:40],
+                    model_id=(engine.model_id or "")[:200],
+                    model_revision=(engine.model_revision or "")[:64],
+                    backend=(engine.backend or "")[:20],
+                    input_variant="gray",
+                    raw_output=json.dumps(raw[n], ensure_ascii=False),
+                    parsed_text="\n".join(row["text"] for row in raw[n] if row["text"]),
+                    params={
+                        "scope": rt.target.scope,
+                        "kind": rt.target.kind,
+                        "pass": boxes.PASS,
+                        "shape": boxes.SHAPE,
+                        "crops": _crop_list(crops),
+                        "lines": read[n],
+                    },
+                    duration_ms=int(round(1000 * seconds * len(crops) / total)),
+                    finish="n/a",
+                )
+            )
+    if runs:
+        OcrRun.objects.bulk_create(runs)
+    return attached
+
+
+def compose_page(
+    page: Page, region_texts: list[RegionText] | None = None, save_boxes: bool = False
+) -> ComposedPage:
     """Build the lines and the final text of a page from its runs without touching the database.
 
     `region_texts` defaults to `_collect_region_texts(page)` (the latest runs); a dry run passes
-    its own. Tesseract's word boxes are fitted to the page's printed lines (its line bands; its gray
-    image splits the ink Tesseract read as one word, `_page_geometry` and `alignment.build_lines`).
+    its own. The words take their boxes from Kraken's reading of each model region's printed lines
+    (`attach_box_lines`, D92: its stored run when it read the same lines, else read now and stored only
+    with `save_boxes`), else from Tesseract's; either reader's boxes are fitted to the page's printed
+    lines (its line bands; its gray image splits the ink read as one word, `_page_geometry` and
+    `alignment.build_lines`).
     Each region is built with flag policy v2 and the words only the second model read (`build_region`:
     groups in the text, suggestions in `gaps`); tokens then go through the word-chooser hook
     (`ocr.chooser`, D26: the vote by default). A first or last line of the page that is only a page
@@ -1628,7 +1781,11 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
     total_tokens = anchored = 0
     has_geometry = False
     order = 0
-    bands, gray = _page_geometry(page) if any(rt.tess_lines for rt in region_texts) else ([], None)
+    wanted = [rt for rt in region_texts if wants_boxes(rt)]
+    needs = wanted or any(rt.tess_lines for rt in region_texts)
+    bands, gray = _page_geometry(page) if needs else ([], None)
+    if wanted and gray is not None:
+        attach_box_lines(page, wanted, bands, gray, save=save_boxes)
     builds: list[RegionBuild] = []
     next_group = 1
     for rt in region_texts:
@@ -1649,9 +1806,10 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
     dropped = {flat[i] for i in drop}
     for r, (rt, build) in enumerate(zip(region_texts, builds, strict=True)):
         built = build.built
-        has_geometry = has_geometry or bool(rt.tess_lines)
+        geometry = bool(rt.tess_lines or rt.box_lines)
+        has_geometry = has_geometry or geometry
         n_tokens = sum(len(b["tokens"]) for b in built)
-        well_anchored = bool(rt.tess_lines) and n_tokens > 0
+        well_anchored = geometry and n_tokens > 0
         well_anchored = well_anchored and sum(b["n_anchored"] for b in built) >= MIN_ANCHOR_RATIO * n_tokens
         suspect = set(merged_lines(built)) if well_anchored else set()
         place = {i: (k, x) for k, b in enumerate(built) for x, i in enumerate(b["indices"])}
@@ -1761,7 +1919,7 @@ def finalize_page(page: Page) -> ComposedPage | None:
     if _has_review_work(page):
         _keep_reviewed_lines(page)
         return None
-    composed = compose_page(page)
+    composed = compose_page(page, save_boxes=True)
     new_lines = composed.lines
 
     from review.models import LineRevision  # review history of the page (other app: lazy import)
@@ -1877,11 +2035,11 @@ def _refresh_book_status(page: Page) -> None:
 
 # ---------------------------------------------------------------- rebuilding lines from stored runs
 
-TRAILING_MIN = 3  # a line ending with this many words without a Tesseract box is counted in reports
+TRAILING_MIN = 3  # a line ending with this many words without a box is counted in reports
 
 
 def trailing_unanchored(tokens: list[dict]) -> int:
-    """Number of words at the end of a line that have no Tesseract box."""
+    """Number of words at the end of a line that have no box."""
     count = 0
     for token in reversed(tokens or []):
         if token.get("bbox"):
@@ -1895,7 +2053,7 @@ class LineStats:
     """Counts reported by `rebuild_page_lines` for one version of a page's lines."""
 
     lines: int
-    trailing: int  # lines ending with TRAILING_MIN or more words without a Tesseract box
+    trailing: int  # lines ending with TRAILING_MIN or more words without a box
     merged: int | None = None  # lines that look merged (`alignment.merged_lines`); unknown for stored lines
 
     @classmethod
@@ -1942,9 +2100,10 @@ def rebuild_skip_reason(page: Page) -> str:
 def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
     """Re-run the line rescue on a page's stored Tesseract runs and rebuild its lines from its stored runs.
 
-    No model is called: Tesseract only reads the rescue bands (`rescue_lines`) and the lines are
-    built from the runs already stored (`compose_page`). With `save` the runs are saved and the page
-    is finalised again (`finalize_page`); without it nothing is written. Raises `OcrError` for a page
+    No model is called: Tesseract only reads the rescue bands (`rescue_lines`), Kraken the printed lines
+    whose stored `boxes` run read other lines or none (D92, before the page is locked), and the lines are
+    built from the runs already stored (`compose_page`). With `save` the runs are saved and the page is
+    finalised again (`finalize_page`); without it nothing is written. Raises `OcrError` for a page
     that `rebuild_skip_reason` refuses (callers check it first to list those pages), and when it
     refuses it once the rescue has read (a resolve or an approval made meanwhile): the check runs again
     on the page row locked as review locks it, and nothing is written.
@@ -1961,9 +2120,15 @@ def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
         tess = _latest_runs(page, target).get(fast)
         if tess is not None and tess.status == OcrRun.Status.OK:
             pairs.append((target, tess))
+    override = {target.region.pk if target.region is not None else None: run for target, run in pairs}
     if save:
         with tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
             rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp), save=False)
+        texts = [rt for rt in _collect_region_texts(page, override) if wants_boxes(rt)]
+        if texts:  # Kraken reads before the page is locked; `finalize_page` finds its runs (D92)
+            bands, gray = _page_geometry(page)
+            if gray is not None:
+                attach_box_lines(page, texts, bands, gray, save=True)
         with transaction.atomic():
             # the rescue took seconds: review may have resolved or approved meanwhile (it locks this row too)
             fresh = Page.objects.select_for_update(of=("self",)).get(pk=page.pk)
@@ -1976,7 +2141,6 @@ def rebuild_page_lines(page: Page, save: bool = True) -> RebuildResult:
     else:
         with tempfile.TemporaryDirectory(prefix="nassakh-rebuild-") as tmp:
             rescued = rescue_lines(pre, bw, pairs, fast, Path(tmp), save=False)
-        override = {target.region.pk if target.region is not None else None: run for target, run in pairs}
         composed = compose_page(page, _collect_region_texts(page, override))
     lines = composed.lines if composed is not None else []
     after = LineStats.of([line.tokens for line in lines], len(composed.merged) if composed else None)

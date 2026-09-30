@@ -171,6 +171,9 @@ NASSAKH = {
     # numbers of each finalised page of a book that prints them.
     "NUMBERS_PASS": env.bool("NUMBERS_PASS", default=True),
     "CALLS_PASS": env.bool("CALLS_PASS", default=True),
+    # D92: the models' words take their boxes from Kraken's reading of each region's printed lines (Tesseract
+    # still gives the reference text, the provisional text and the third reading); off: Tesseract's boxes.
+    "KRAKEN_BOXES": env.bool("KRAKEN_BOXES", default=True),
     "KRAKEN_PYTHON": Path(BASE_DIR, env("KRAKEN_PYTHON", default=".venv-kraken/bin/python")),
     "KRAKEN_MODEL": Path(BASE_DIR, env("KRAKEN_MODEL", default="models/kraken/all_arabic_scripts.mlmodel")),
     "KRAKEN_TIMEOUT_S": env.int("KRAKEN_TIMEOUT_S", default=120),

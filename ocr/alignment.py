@@ -845,6 +845,7 @@ def build_lines(
     single: bool = False,
     partial: bool = False,
     inserted: dict[int, int] | None = None,
+    box_lines: list[dict] | None = None,
 ) -> list[dict]:
     """Split the chosen text into visual lines with per-token confidence.
 
@@ -892,10 +893,21 @@ def build_lines(
     the words (`is_word`) no Tesseract word accounts for; `tess_words` / `tess_matched` are the words of the
     Tesseract line and how many of them a primary word matched; `rescued` marks a line that only the line
     rescue found, `two_bands` one whose Tesseract line covers two printed lines.
+
+    With `box_lines` (Kraken's lines of the region, `ocr.boxes`, D92) the words take their lines and boxes
+    from Kraken's words instead: the lines are built twice, on Kraken's lines for the geometry and on
+    Tesseract's for the readings, and `with_readings` joins the two. `tess` and `tc` stay Tesseract's word and
+    confidence (the flags and the vote rest on them, D71); `n_anchored`, `n_unseen`, `tess_words` and
+    `tess_matched` then count Kraken's words, the reader of the boxes.
     """
     p_tokens = primary_text.split()
     if not p_tokens:
         return []
+    if box_lines is not None:
+        options = {"single": single, "partial": partial, "inserted": inserted}
+        geometry = build_lines(primary_text, secondary_text, box_lines, bands, gray, **options)
+        readings = build_lines(primary_text, secondary_text, tesseract_lines, bands, gray, **options)
+        return with_readings(geometry, readings)
     n = len(p_tokens)
     p_line_no: list[int] = []  # the primary's own line of each token (its line breaks)
     for k, raw_line in enumerate(primary_text.split("\n")):
@@ -1562,6 +1574,36 @@ def build_lines(
             }
         )
     return lines
+
+
+def with_readings(geometry: list[dict], readings: list[dict]) -> list[dict]:
+    """The lines of `geometry` with each token as `readings` built it, its box and weak mark as `geometry`
+    did (both `build_lines` output of one text, D92): the lines, boxes and anchor counts of one reader, the
+    readings (`tess`, `tc`) and the flags resting on them of the other. Each line's `n_low` and `confidence`
+    follow."""
+    by_index = {
+        i: token for line in readings for i, token in zip(line["indices"], line["tokens"], strict=True)
+    }
+    out = []
+    for line in geometry:
+        tokens = []
+        for i, placed in zip(line["indices"], line["tokens"], strict=True):
+            token = {key: value for key, value in by_index[i].items() if key != "bq"}
+            token["bbox"] = placed["bbox"]
+            if placed.get("bq"):
+                token["bq"] = placed["bq"]
+            tokens.append(token)
+        n_low = sum(1 for t in tokens if t["conf"] == "low")
+        out.append(
+            {
+                **line,
+                "text": " ".join(t["t"] for t in tokens),
+                "tokens": tokens,
+                "n_low": n_low,
+                "confidence": round(1.0 - n_low / len(tokens), 3) if tokens else 1.0,
+            }
+        )
+    return out
 
 
 def merged_lines(lines: list[dict]) -> list[int]:
