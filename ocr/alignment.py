@@ -118,6 +118,10 @@ WEAK_TALL = 1.35
 WEAK_WIDE = 1.6
 WEAK_WIDE_SLACK = 1
 WEAK_MIN_SAMPLES = 4
+# D91: a run left on the previous line moves to the next when that line's start is unread ink Tesseract
+# boxed no word on (book 31 p. 50: Tesseract read only the left half of a printed line).
+UNREAD_MIN_LETTERS = 2.0  # the unread ink must be at least this many letters wide
+UNREAD_FIT = 1.25  # without the primary's line break, the run's last words that fit this share of it move
 # A region's first / last Tesseract line of one word of at most this many characters, on a printed line
 # of its own, is where the region's leading / trailing number may go (a page number, «١٨» read "\A").
 LONE_MAX_CHARS = 5
@@ -1121,6 +1125,79 @@ def build_lines(
             for r in holders(s, unit):
                 bbox_of[r] = [x0, y0, x1, y1]
 
+    letter_px: list[float] = []  # the region's letter width, from the anchored words (`move_unread_tail`)
+    widened: dict[int, int] = {}  # a line whose box grows to its unread ink: line → its new right edge
+
+    def region_letter_width() -> float:
+        if not letter_px:
+            widths = [
+                (bbox_of[r][2] - bbox_of[r][0]) / _width_units(p_tokens[r])
+                for r in anchored_by
+                if bbox_of[r] and _chars([p_tokens[r]]) and _width_units(p_tokens[r]) > 0
+            ]
+            letter_px.append(_median(widths) if len(widths) >= WEAK_MIN_SAMPLES else 0.0)
+        return letter_px[0]
+
+    def move_unread_tail(
+        s: int, units: list[list[int]], placed: list, edges: tuple
+    ) -> tuple[list, dict[int, list[int]]]:
+        """The run's words left on the previous anchored line without a Tesseract word, moved to the next
+        anchored line when that line starts with unread ink (D91): ink in its band's core rows right of
+        its Tesseract box, at least `UNREAD_MIN_LETTERS` letters wide. From the primary's own line break
+        in those words when there is one («… فِيهِ ) : .⏎٢٣ ـ ٣١٥ ـ عَنْ عَائِشَةَ …», book 31 p. 50), else
+        the last words that fit `UNREAD_FIT` times the ink. Returns the placement and a box per moved
+        unit cut from that ink (`split_at_ink`, when it splits cleanly); the line's box grows over it."""
+        before, after = edges
+        if gray is None or before is None or after is None or before == after:
+            return placed, {}
+        trailing = 0
+        for k, j, _seen in reversed(placed):
+            if k != before or j is not None:
+                break
+            trailing += 1
+        if not trailing:
+            return placed, {}
+        line = lines_in[after]
+        core, box = line.get("core"), _box(line)
+        band = next((b for b in all_bands if core and (b.y0, b.y1) == tuple(core)), None)
+        if not core or not box or band is None or band.x1 <= box[2] + 2:
+            return placed, {}
+        start = int(box[2]) + 2
+        inked = np.flatnonzero(ink_columns(gray, core, start, band.x1) > 0)
+        letter = region_letter_width()
+        if not inked.size or not letter or inked[-1] - inked[0] + 1 < UNREAD_MIN_LETTERS * letter:
+            return placed, {}
+        room = float(inked[-1] - inked[0] + 1)
+        tail = list(range(len(units) - trailing, len(units)))
+        move = 0
+        for pos, u in enumerate(tail):
+            r = s + units[u][0]
+            if r > 0 and p_line_no[r] != p_line_no[r - 1]:
+                move = len(tail) - pos
+                break
+        if not move:
+            width = 0.0
+            for u in reversed(tail):
+                w = (sum(_width_units(p_tokens[s + x]) for x in units[u]) + 1) * letter
+                if width + w > UNREAD_FIT * room:
+                    break
+                width += w
+                move += 1
+        if not move:
+            return placed, {}
+        moved = tail[len(tail) - move :]
+        placed = placed[: len(placed) - move] + [(after, None, False)] * move
+        right = start + int(inked[-1]) + 1
+        widened[after] = max(widened.get(after, 0), right)
+        weights = [
+            max(1, _chars([p_tokens[s + x] for x in units[u]]))
+            + SPLIT_PUNCT_WEIGHT * sum(1 for x in units[u] if not _chars([p_tokens[s + x]]))
+            for u in moved
+        ]
+        pieces = split_at_ink(gray, core, start + int(inked[0]), right, weights) or []
+        y0, y1 = int(box[1]), int(box[3])
+        return placed, {u: [a, y0, b, y1] for u, (a, b) in zip(moved, pieces, strict=False)}
+
     def holders(s: int, unit: list[int]) -> list[int]:
         """The tokens of unit `unit` (of a run starting at token `s`) that take its box: those with
         letters or digits, but not an abbreviation before its number («(ج ١،»: the box is the number's,
@@ -1377,7 +1454,8 @@ def build_lines(
                 now = {x: k for unit, (k, _, _) in zip(units, placed, strict=True) for x in unit}
                 if any(was[x] != now[x] for x in was if x not in paired):
                     units, placed = plain, by_word
-            for unit, (k, j, seen) in zip(units, placed, strict=True):
+            placed, cut = move_unread_tail(s, units, placed, edges)
+            for u, (unit, (k, j, seen)) in enumerate(zip(units, placed, strict=True)):
                 for r in (s + x for x in unit):
                     line_of[r] = k
                     if _chars([p_tokens[r]]):
@@ -1385,9 +1463,17 @@ def build_lines(
                 if j is not None:
                     for r in holders(s, unit):
                         take(r, j)
+                elif u in cut:
+                    for r in holders(s, unit):
+                        bbox_of[r] = list(cut[u])
         place_marks()
         line_bboxes = {k: line.get("bbox") for k, line in enumerate(lines_in)}
         line_bboxes.update(synthetic)
+        for k, right in widened.items():  # a line whose unread start took the run's words (D91)
+            if line_bboxes.get(k):
+                grown = list(line_bboxes[k])
+                grown[2] = max(int(grown[2]), right)
+                line_bboxes[k] = grown
         rescued = {k for k, line in enumerate(lines_in) if line.get("rescued")}
         two_bands = {k for k, line in enumerate(lines_in) if line.get("two_bands")}
         matched = {j for j in word_of if j is not None}

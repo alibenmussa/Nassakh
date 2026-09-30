@@ -609,3 +609,24 @@ rather than failing the region. Only failing regions pay the extra reading (abou
 On book 31 the eight pages whose body or notes had fallen back while holding real text (pp. 44, 61, 87, 88, 93,
 100, 103, 111) were read again: all eight now carry the models' text; on pp. 93, 100 and 103 the two models agree
 and no flag is left. Photos and ornament pages (pp. 11–21, 45, 49, 52) are not retried.
+
+## D91 — Words left on the line above go to the next line when its start is unread ink (2026-09-30)
+
+The models give a region's words, not its printed lines; each word takes the line (and box) of the Tesseract word
+it matches, and a run of words that match none between two anchored lines stays on the line above when Tesseract
+left no word between them (`_place_run`). When Tesseract read only part of a printed line, that is wrong: book 31
+p. 50 — Tesseract boxed only the left half of the line «٢٣ ـ ٣١٥ ـ عَنْ عَائِشَةَ رَضِيَ اللَّهُ عَنْهَا : أَنَّ
+أَمْرَأَةً مِنَ», so its right half's words ended the line above and the line kept «أَنَّ أَمْرَأَةَ مِنَ» in a box over
+half its width (the line rescue does not read a band whose rows a Tesseract line covers, and read alone that half
+was noise anyway). Now such a run moves to the next anchored line when that line's band holds unread ink at its
+start — ink in its core rows right of its Tesseract box, at least two letters wide at the region's letter width
+(`move_unread_tail`): from the model's own line break in the run when there is one, else the run's last words that
+fit 1.25 times that ink. The moved words take boxes cut from the ink where it splits cleanly (`split_at_ink`), and
+the line's box grows over the ink.
+
+Built again in memory from the stored readings of books 29, 31 and 32–35: book 31 changes on five pages (50, 94,
+101, 105, 117), book 29 on six (206, 215, 256, 279, 283, 292: a year or a list number at a line's start, «١١٢٢ هـ
+ومدة ولايته», «١٠٦ – ابراهيم»), the test books not at all; every change checked on the scans is right (on book 29
+p. 206 only the era sign moves, its year stays behind). A broader rule (move the run whenever the line above is
+full) made two pages of book 31 worse, and dropping the box of a one-letter Tesseract word that a longer word took
+(«أَنَّ» on p. 50's «ا») removed 229 good boxes of short words on book 29; neither was kept.

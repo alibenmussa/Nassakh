@@ -504,3 +504,43 @@ def test_a_word_equal_to_a_later_word_is_not_paired_across_the_words_between():
     b = "قال الامبر في سنة ثم انتهى".split()
     assert align_tokens(a, b) == [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
     assert align_tokens(["كلمة"], []) == [(0, None)] and align_tokens([], ["كلمة"]) == [(None, 0)]
+
+
+# ---------------------------------------------------------------- D91: words of an unread line start
+
+
+def test_words_left_on_the_line_above_go_to_the_unread_start_of_the_next_line(monkeypatch):
+    """Book 31 p. 50: Tesseract read only the left half of a printed line; the model's words of its right
+    half, with no Tesseract word to anchor them, stayed at the end of the line above. The next line's band
+    has that ink unread at its start: the words go there from the model's own line break, boxed on the ink
+    where it splits cleanly, and the line's box grows over it (D91)."""
+    gray = np.full((120, 400), 255, dtype=np.uint8)
+    for rows, blocks in (
+        ((10, 30), [(320, 380), (240, 310), (180, 230), (100, 170), (20, 90)]),
+        ((50, 70), [(300, 380), (200, 290), (120, 180), (20, 110)]),
+        ((90, 110), [(300, 380), (200, 290)]),
+    ):
+        for x0, x1 in blocks:
+            gray[rows[0] : rows[1], x0:x1] = 0
+    tess = [
+        line(
+            w("قال", 320, 380, 5, 35),
+            w("الأمير", 240, 310, 5, 35),
+            w("في", 180, 230, 5, 35),
+            w("سنة", 100, 170, 5, 35),
+            w("كذا", 20, 90, 5, 35),
+        ),
+        line(w("وهذا", 120, 180, 45, 75), w("الكلام", 20, 110, 45, 75)),  # the right half never read
+        line(w("انتهى", 300, 380, 85, 115), w("هنا", 200, 290, 85, 115)),
+    ]
+    bands = [band(12, 28), band(52, 68), band(92, 108)]
+    text = "قال الأمير في سنة كذا\nعشرين سنة وهذا الكلام\nانتهى هنا"
+    built = build_lines(text, None, tess, bands=bands, gray=gray)
+    assert texts(built) == ["قال الأمير في سنة كذا", "عشرين سنة وهذا الكلام", "انتهى هنا"]
+    assert built[1]["bbox"][2] == 380  # the line's box covers its whole ink
+    assert boxes_of(built)["عشرين"] == [300, 45, 380, 75]
+    # the rule off: the words stay at the end of the line above (as before D91)
+    import ocr.alignment as alignment
+
+    monkeypatch.setattr(alignment, "UNREAD_MIN_LETTERS", 1e9)
+    assert texts(build_lines(text, None, tess, bands=bands, gray=gray))[0].endswith("كذا عشرين سنة")
