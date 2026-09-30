@@ -1159,6 +1159,14 @@ _RE_LOOKALIKE = re.compile(rf"[\(\[]\s*([{LOOKALIKE_GLYPHS}]?)\s*[\)\]]")
 _RE_HALF_LOOKALIKE = re.compile(
     rf"(?:(?<=\s)|^)(?:[\(\[]\s*([{LOOKALIKE_GLYPHS}])|([”“\"'’‘])\s*[\)\]])(?=\s|$|[{re.escape(MARKS)}])"
 )
+# What the models write for a raised call with quote strokes (D87): a pair of strokes as a word of its own
+# («صَدَقَةٌ ” “ .», «""», book 31 p. 37), or strokes around one or two digits or an alef, glued to the word or
+# alone («المخالفة"٢"،», «به"٢٢».», «الأصول»"ا".», books 34 and 35). A leading «»» stays the text's closer.
+_RE_QUOTE_PAIR = re.compile(rf"(?:(?<=\s)|^)([”“\"'’‘])\s?[”“\"'’‘](?=\s|$|[{re.escape(MARKS)}])")
+_RE_QUOTED_READING = re.compile(
+    rf"(?:(?<=\s)|(?<=[^\W\d_])|(?<=[{_AR_MARKS}»]))[”“\"'’‘]({_DIGIT_RUN}{{1,2}}|[اأإآ])[”“\"'’‘»]"
+    rf"(?=\s|$|[{re.escape(MARKS)}])"
+)
 LOOKALIKE = "lookalike"
 # A note marker the models read as a bracketed lookalike («(أ) ١ ـ (الوحي)» for (١), book 31 p. 28): its
 # number is the next of its page's sequence (`page_notes`, D85), unless the page's note lines start with
@@ -1220,6 +1228,13 @@ class Note:
         return [line.id for line in self.lines]
 
 
+# One stray character the model read before a bracketed number at a note line's start («أ (١) ويعني»).
+STRAY_BEFORE_MARKER = "أاإآء.،:ـ-•*"  # not a letter that is a word of its own («و (٣)» is text)
+_RE_STRAY_BEFORE_MARKER = re.compile(
+    rf"^\s*[{re.escape(STRAY_BEFORE_MARKER)}]\s+(?=[\(\[]\s*{_DIGIT_RUN}{{1,3}}\s*[\)\]])"
+)
+
+
 def split_note_marker(text: str) -> tuple[str | None, int]:
     """`(marker, length)` of the marker that starts a footnote line (`(None, 0)` when there is none).
 
@@ -1229,6 +1244,10 @@ def split_note_marker(text: str) -> tuple[str | None, int]:
     A bracketed lookalike («(أ)», «(”)») is returned as its glyph; `page_notes` numbers it by its page's
     sequence (D85).
     """
+    stray = _RE_STRAY_BEFORE_MARKER.match(text or "")
+    if stray:  # «أ (١) ويعني»: a stray mark the model read before the bracketed marker (book 35 p. 3, D87)
+        marker, length = split_note_marker(text[stray.end() :])
+        return (marker, stray.end() + length) if marker is not None else (None, 0)
     match = NOTE_MARKER.match(text or "")
     if not match:
         look = _NOTE_LOOKALIKE.match(text or "")
@@ -1258,15 +1277,39 @@ def note_keys(page: PageIn) -> list[str]:
 _RE_CONTINUED = re.compile(r"^\s*=\s*")  # a note line printed with «=» continues the note of the page before
 
 
-def continues(carry: Note | None, open_calls: int, text: str = "") -> bool:
+def continues(carry: Note | None, open_calls: int, text: str = "", first_below: str | None = None) -> bool:
     """The continuation guard (D74): a marker-less line at the top of a page's notes continues the
     previous page's note only when that note does not end with terminal punctuation and the page's
     body has no open call that the line could be the note of (`open_calls`: `open_calls_before`, the
     calls `link_footnotes` would give it, `positional_call`). A line the printer starts with «=» (the mark
-    of a note carried over; books 32, 34) continues it whatever it ends with (D85)."""
+    of a note carried over; books 32, 34) continues it whatever it ends with (D85). So does a line above the
+    page's first new note (`first_below`, the key of the first marked note below it): that note is 1, or one
+    more than `carry`'s, so what stands above it is no note of this page (book 31, a commentary running on
+    over pages and breaking at a sentence's end, D87)."""
     if carry is not None and _RE_CONTINUED.match(text or ""):
         return True
+    if carry is not None and first_below is not None and _starts_page(first_below, carry):
+        return True
     return carry is not None and not open_calls and not ends_terminal(carry.rich.plain())
+
+
+def _starts_page(key: str, carry: Note) -> bool:
+    """True when a note numbered `key` is the first new note of a page after `carry`: 1, or one more than
+    `carry`'s number in a book numbering its notes on (not 2 after 1: that page may have lost its «(١)»)."""
+    if key == "1":
+        return True
+    return bool(
+        carry.key and carry.key.isdigit() and key.isdigit() and key != "2" and int(key) == int(carry.key) + 1
+    )
+
+
+def _first_key_below(texts: list[str], index: int) -> str | None:
+    """The key of the first bracketed numbered marker on the page's note lines after line `index`."""
+    for text in texts[index + 1 :]:
+        key = _bracketed_key(text)
+        if key is not None:
+            return key if key.isdigit() else None
+    return None
 
 
 def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[list[Note], Note | None]:
@@ -1296,6 +1339,10 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
                 key not in _next_keys(notes, carry) or (below is not None and int(key) >= below)
             ):
                 marker = None  # «١٢١ ـ» in a note of a page that prints «(١)», «=» read «3» above «(١)» (D85)
+        elif marker is not None and bracketed[index] is None:
+            key = marker_key(marker)
+            if key.isdigit() and len(key) >= 2 and key not in _next_keys(notes, carry):
+                marker = None  # a hadith's number «١٩ ـ» at a line's start, out of the notes' sequence (D87)
         if marker is not None:
             current = Note(
                 id=note_id(line.id),
@@ -1307,7 +1354,7 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
                 reviewed=page.reviewed,
             )
             notes.append(current)
-        elif current is None and continues(carry, open_calls, rich.text):
+        elif current is None and continues(carry, open_calls, rich.text, _first_key_below(texts, index)):
             sign = _RE_CONTINUED.match(rich.text)
             if sign:
                 rich = rich.cut(sign.end())  # the printed «=» is the book's mark of a carried note, not text
@@ -1332,7 +1379,8 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
 
 
 _RE_BRACKETED_MARKER = re.compile(
-    rf"^\s*[\(\[]\s*(?:{_DIGIT_RUN}{{1,3}}|\*{{1,3}}|[{ALEF}{re.escape(NOTE_LOOKALIKES)}])\s*[\)\]]"
+    rf"^\s*(?:[{re.escape(STRAY_BEFORE_MARKER)}]\s+)?[\(\[]\s*"
+    rf"(?:{_DIGIT_RUN}{{1,3}}|\*{{1,3}}|[{ALEF}{re.escape(NOTE_LOOKALIKES)}])\s*[\)\]]"
 )
 
 
@@ -1407,6 +1455,8 @@ def _repair_sequence(notes: list[Note]) -> None:
             fixed = before + 1 if keys[i] <= before else None
         else:
             fixed = None
+        if fixed is None and before is not None and str(keys[i]) == f"{before + 1}1":
+            fixed = before + 1  # «(٢١)» after «(١)»: the «(» stroke read as a one, as on the calls (D82)
         if fixed is not None and fixed != keys[i]:
             keys[i] = fixed
             note.key = note.marker = str(fixed)
@@ -1514,6 +1564,11 @@ def find_candidates(block_index: int, rich: Rich, line_page: dict[int, int]) -> 
         add(match.start(), match.end(), match.group(1), LOOKALIKE)
     for match in _RE_HALF_LOOKALIKE.finditer(text):
         add(match.start(), match.end(), match.group(1) or match.group(2), LOOKALIKE)
+    for match in _RE_QUOTED_READING.finditer(text):
+        glyph = match.group(1)
+        add(match.start(), match.end(), glyph, LOOKALIKE if glyph in "اأإآ" else "quoted")
+    for match in _RE_QUOTE_PAIR.finditer(text):
+        add(match.start(), match.end(), match.group(1), LOOKALIKE)
     for match in _RE_SUPERSCRIPT.finditer(text):
         add(match.start(), match.end(), match.group(), "superscript")
     for match in _RE_GLUED.finditer(text):

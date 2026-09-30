@@ -521,3 +521,68 @@ because the marks are components of their own (book 31: 1.22). The top 15% of a 
 never searched. Measured on the stored images of books 29, 31, 32–35: the three missed rules of the test books and
 the 38 of book 31 are found, each of the four drawn from book 31 checked on the image (pp. 33, 39, 60, 115); book
 29's 285 pages do not change. Pages are re-prepared and re-read to use it.
+
+## D87 — Call pass v2: calls found by their bracket shape and numbered by count and order; the models' readings of a call give way to it; the notes' sequence repairs their markers (2026-09-30)
+
+D83 sized its clusters by the page's `median_line_height`, which measures the thin core band of a line (12 px on
+the vowelled book 31): the call's brackets there are 24–25 px, twice that, and failed the size filter while vowel
+marks passed it. It then needed Kraken to read the digit, and Kraken misreads a small raised digit often (book 35
+p. 2: «(٢)» read «۶», «(٣)» read «٢»). The models' own reading of a call («"٢"», «٤»», «"ا"», «(”», «‘‘») stayed in
+the text beside the call the pass wrote («المخالفة"٢"، (٢)»), and books printing Western digits were skipped.
+
+Now the call is found by its shape: a pair of raised brackets of one height, 0.14–0.40 of the line pitch tall,
+ending above the line's core, with at most three parts between them (`bracket_calls`); a word's box does not hide
+it (Tesseract boxes «الشافعي(٢)» as one word). D83's clusters stay as a second source, and a call among unboxed words
+is placed by the run's letters spread over its width (`estimate_place`). The calls already in the text fix their
+numbers; between two of them, when the shapes are as many as the numbers still wanted there, they take those
+numbers in reading order whatever Kraken read; otherwise the readings that agree with each other and with the order
+keep their numbers (dynamic programming, `_aligned`) and the order numbers the shapes between them when the counts
+match (`number_calls`). A Western-digit book is numbered the same way without Kraken. What the models write for a
+call is parsed once (`call_reading`): strokes around at most two digits or an alef, or digits with closing quotes,
+glued to the word or alone; the call takes its place and the text keeps its own closers and marks («الخبيثَ»٤»» →
+«الخبيثَ» (٥)», «"الموطأ"» and «(يؤذيهما)» untouched, «٢٣]» of a verse never taken). Edits apply right to left.
+
+On the notes' side (`page_notes`): a line printed with «=» continues the note of the page before, the sign dropped
+(books 32, 34); a bare number that is not below the page's next bracketed marker is text («=» read «3» above «(١)»);
+a marker that breaks the page's sequence between two numbers that differ by two is the number between them (book
+34 p. 2 read «(١) (٤) (٣) (٤)»); a number missing from the sequence is restored on the one line that may start it,
+the period the model moved there going back to the note before (book 35 p. 2 dropped «(٢)»).
+
+Measured on the four 6-page test books (74 calls marked by hand, `playground/footnotes-2026-09-30`): 64 links right
+before, 66 after (book 35: 16 → 18), wrong links 5 → 4; book 31's unlinked notes 57 → 53. The old figures were taken
+on text the D83 pass had already written into; the new ones on the models' own text (`bench.py --fresh`).
+
+On a commentary book the notes of a page may start with lines carried from the page before and then its own «(١)»:
+book 31's notes run on over pages and often break at a sentence's end, where D74's guard (the note before must not
+end a sentence) made each carried part an orphan of its own. Lines above the page's first new note — «(١)», or one
+more than the note before in a book numbering on — are that note's continuation whatever it ends with (18 notes of
+book 31 joined the notes they continue; its orphans 53 → 34). The linker also takes the quote-stroke readings of a
+call when the call pass found no ink for them («صَدَقَةٌ ” “ .», «المخالفة"٢"،», «الأصول»"ا".»; a quoted title stays
+text), and a bare number of two or three digits at a note line's start that is out of the notes' sequence is a
+hadith's number («١٩ ـ»), on any page.
+
+## D88 — A short line of text stops the walk for the page number from the page's edge (2026-09-30)
+
+`detect_page_number` walks in from the bottom (then the top) and skips rows that are neither a page number nor a
+full text line (at least half the text block wide): specks and scan-edge smears. The last line of a note is text
+of any width: on book 34 p. 5 note 6, half a line wide, was skipped as a speck, the short last line of note 5
+(«الوصول ٣٦.») above it passed as the page number, the footnote region ended there, and note 6 was never read. Now a
+row of text height (half the type to 2.5 ×, ascenders and descenders counted), wider than a page number may be
+(`PN_MAX_WIDTH_FRAC`) and not a solid blob stops the walk too (`_is_text_row`), unless a page-number-shaped row
+shares its band (a stamp or a printer's signature beside the number: book 29 pp. 96, 128, 192). Replayed from the
+original images of books 29, 31 and 32–35: only book 34 p. 5 changes.
+
+## D89 — Tesseract's reading of a photo or an ornament is no text (2026-09-30)
+
+When both models fail on a region, its text was Tesseract's (D16). On a photo, a manuscript or a decorated page
+that text is noise: book 31 pp. 11–21 read «Ls cg Dre et راموز الورسثر» at a mean word confidence of 22–34 against
+63–87 on print, a third to two thirds of its letters Latin. Now the region keeps no text when Tesseract's words
+have a mean confidence under 50, when half its letters or more are Latin, when nine in ten of at least 20 Arabic
+letters are an ornament's few («ههه ها هد واه», a dotted border read at confidence 83), or when it holds no letter
+(«٠ ٠ 3») — `tesseract_unreadable`, the selection's `unreadable` reason. A page left without text is flagged
+`no_readable_text`, «صورة، لا نص مقروء», shown on its sheet beside «استثناء» in «التخطيط»; a page with an unreadable
+region and text elsewhere is flagged `missing_text`; `ocr_fallback` stays for a region whose Tesseract text was
+kept. The provisional text skips such regions too. On book 31, 16 regions go (the ten photo pages, two dotted
+pages, a page of three digits, and three pages of vowelled hadith where both models looped and Tesseract read at
+44–50: text the models should read on a second try in smaller pieces, not Tesseract); book 29 loses two (a photo
+page, a Latin-read footnote). No test book changes.

@@ -579,7 +579,7 @@ _STATUS_RANK: dict[str, int] = {
     Page.Status.ASSEMBLED: 5,
 }
 # Attention flags written by the OCR stage (recomputed by `ocr.services.finalize_page`).
-_OCR_FLAGS: frozenset[str] = frozenset({"ocr_fallback", "alignment_poor", "lines_merged"})
+_OCR_FLAGS: frozenset[str] = frozenset({"ocr_fallback", "alignment_poor", "lines_merged", "no_readable_text"})
 # Pipeline stage that continues a re-included page from its completed status.
 _NEXT_STAGE: dict[str, str] = {
     Page.Status.UPLOADED: "preprocess",

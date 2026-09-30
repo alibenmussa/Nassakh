@@ -78,6 +78,7 @@ PN_MAX_HEIGHT_RATIO = 1.4
 PN_MIN_GAP_RATIO = 0.8
 PN_TOP_FRAC = 0.12
 PN_BOTTOM_FRAC = 0.15
+PN_TEXT_ROW_MAX_HEIGHT = 2.5  # a short text row stops the walk from the edge (D88): up to this × type
 # Candidate rows beyond the text are split where the ink leaves this many type sizes of gap.
 CLUSTER_GAP_RATIO = 3.0
 
@@ -721,6 +722,22 @@ def _is_text_line(ln: LineBox, block_w: int, median_h: float) -> bool:
     return (ln["x1"] - ln["x0"]) >= 0.5 * block_w and (ln["y1"] - ln["y0"]) >= 0.5 * median_h
 
 
+def _is_text_row(ln: LineBox, block_w: int, median_h: float) -> bool:
+    """A row of text too short to be a full line (the last line of a note or a paragraph): of text height
+    (half the type to 2.5 ×, ascenders and descenders included), wider than a page number may be and not
+    a solid blob. The walk from the page edge stops at it as at a full line: a page number is never above
+    text (book 34 p. 5: the short last line «الوصول ٣٦.» of note 5 was taken for the page number below
+    which note 6 went unread, D88)."""
+    lw, lh = ln["x1"] - ln["x0"], ln["y1"] - ln["y0"]
+    if not 0.5 * median_h <= lh <= PN_TEXT_ROW_MAX_HEIGHT * median_h:
+        return False
+    glyph_w = ln.get("glyph_w")
+    if (glyph_w if glyph_w is not None else lw) <= PN_MAX_WIDTH_FRAC * block_w:
+        return False
+    area = ln.get("area")
+    return area is None or area / max(1, lw * lh) < 0.6
+
+
 def detect_page_number(lines: list[LineBox], width: int, height: int, median_h: float) -> dict | None:
     """The printed page number: `{"bbox": [x0, y0, x1, y1], "position": "top"|"bottom"}` or None.
 
@@ -747,6 +764,18 @@ def detect_page_number(lines: list[LineBox], width: int, height: int, median_h: 
             )
             if not in_zone or _is_text_line(ln, block_w, median_h):
                 return None
+            if _is_text_row(ln, block_w, median_h):
+                beside = (
+                    any(  # a mark beside the number on its band (a stamp, a signature) is no text above it
+                        other is not ln
+                        and not (other["y1"] <= ln["y0"] or other["y0"] >= ln["y1"])
+                        and _is_page_number(other, block_w, median_h)
+                        for other in ordered
+                    )
+                )
+                if not beside:
+                    return None
+                continue
             if _is_page_number(ln, block_w, median_h):
                 # the neighbour towards the text: the next row that does not share ln's band
                 beyond = [

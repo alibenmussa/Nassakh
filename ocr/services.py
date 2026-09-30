@@ -59,6 +59,15 @@ FLAG_ALIGNMENT = "alignment_poor"
 FLAG_MERGED = "lines_merged"
 FLAG_SINGLE = "single_reader"  # D73: a region read by one model (or Tesseract alone)
 FLAG_MISSING = "missing_text"  # D72: words only the second model read (a group, a suggestion)
+FLAG_UNREADABLE = "no_readable_text"  # D89: no text is left: Tesseract's reading of a photo or ornament
+# D89: Tesseract's text of a region both models failed on is no text when its words are unsure (mean
+# confidence), half Latin letters (an Arabic book's photo read as English), or letters of an ornament.
+TESS_UNREADABLE_CONF = 50.0
+TESS_UNREADABLE_LATIN = 0.5
+ORNAMENT_LETTERS = frozenset("هاودةءأ")  # dots and flourishes read as letters («ههه ها هد واه»)
+ORNAMENT_SHARE = 0.9
+ORNAMENT_MIN_LETTERS = 20
+_LATIN_LETTER = re.compile(r"[A-Za-z]")
 # How a page was read (`Page.reading["readers"]`, D73), weakest last.
 READERS_TWO = "two"
 READERS_ONE = "one"
@@ -152,6 +161,7 @@ class RegionText:
     reason: str
     source: str
     alt_partial: bool = False
+    unreadable: str = ""  # D89: why Tesseract's text of a failed region was dropped ('' when it was not)
 
 
 @dataclass
@@ -164,6 +174,7 @@ class Selection:
     reason: str
     source: str
     alt_partial: bool = False
+    unreadable: str = ""
 
 
 # ---------------------------------------------------------------- settings and inputs
@@ -811,8 +822,8 @@ def run_fast_ocr(page: Page) -> None:
     for target, run in done:
         if target.kind == Region.Kind.PAGE_NUMBER:
             printed = printed or printed_number_of(run.parsed_text)
-        elif target.kind not in SKIPPED_KINDS:
-            texts.append((target.kind, run.parsed_text))
+        elif target.kind not in SKIPPED_KINDS and not tesseract_unreadable(run, run.parsed_text):
+            texts.append((target.kind, run.parsed_text))  # a photo's letters are no provisional text (D89)
 
     has_region = any(target.kind == Region.Kind.PAGE_NUMBER for target in targets)
     provisional, stripped = strip_page_number_lines(
@@ -1055,6 +1066,33 @@ def looped_prefix_of(run: OcrRun | None) -> str:
     return flags.looped_prefix(run.raw_output or run.parsed_text or "", hit_cap=run.finish == "length")
 
 
+def tesseract_unreadable(run: OcrRun | None, text: str) -> str:
+    """Why Tesseract's `text` of a region is no text at all (D89), '' when it may be read: no letter in it,
+    its words' mean confidence under `TESS_UNREADABLE_CONF` (photos: 22–34, print: 63–87 on books 29 and
+    31), half its letters or more Latin (an Arabic page's picture read as English), or nine in ten of its
+    letters from an ornament's few («ههه ها هد واه»: a dotted border read at confidence 83)."""
+    arabic = _ARABIC_LETTER.findall(text or "")
+    latin = _LATIN_LETTER.findall(text or "")
+    if not arabic and not latin:
+        return "no letters"
+    words = [
+        w
+        for line in ((run.params or {}).get("lines") or [] if run is not None else [])
+        for w in line.get("words") or []
+        if str(w.get("text") or "").strip()
+    ]
+    confs = [float(w.get("conf") or 0) for w in words]
+    if confs and sum(confs) / len(confs) < TESS_UNREADABLE_CONF:
+        return "low confidence"
+    if len(latin) >= TESS_UNREADABLE_LATIN * (len(arabic) + len(latin)):
+        return "latin"
+    if len(arabic) >= ORNAMENT_MIN_LETTERS and sum(
+        c in ORNAMENT_LETTERS for c in arabic
+    ) >= ORNAMENT_SHARE * len(arabic):
+        return "ornament"
+    return ""
+
+
 def select_reading(
     primary: OcrRun | None, secondary: OcrRun | None, tesseract: OcrRun | None, partial: bool = True
 ) -> Selection:
@@ -1108,7 +1146,11 @@ def select_reading(
         # Both differ from Tesseract only, and agree with each other: trust the models (D16).
         return Selection(p_text, s_text, False, "models_agree", primary.engine_name)
     source = tesseract.engine_name if tesseract is not None else ""
-    return Selection(reference, None, True, f"primary:{p_reason} secondary:{s_reason}", source)
+    reason = f"primary:{p_reason} secondary:{s_reason}"
+    why = tesseract_unreadable(tesseract, reference) if reference.strip() else ""
+    if why:  # a photo, an ornament: Tesseract's letters would only be noise (D89)
+        return Selection("", None, True, f"{reason} unreadable:{why}", source, unreadable=why)
+    return Selection(reference, None, True, reason, source)
 
 
 def select_text(
@@ -1169,6 +1211,7 @@ def _collect_region_texts(page: Page, tesseract: dict[int | None, OcrRun] | None
                 chosen.reason,
                 chosen.source,
                 chosen.alt_partial,
+                chosen.unreadable,
             )
         )
     return out
@@ -1350,6 +1393,7 @@ class ComposedPage:
     gaps: list[dict] = field(default_factory=list)
     groups: int = 0
     reading: dict = field(default_factory=dict)
+    unreadable: bool = False  # D89: a region's Tesseract text was dropped as no text
 
 
 def _page_geometry(page: Page) -> tuple[list[dict], np.ndarray | None]:
@@ -1555,7 +1599,8 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
         region_texts=region_texts,
         lines=new_lines,
         final_text=final_text,
-        fallback=any(rt.fallback for rt in region_texts),
+        fallback=any(rt.fallback and not rt.unreadable for rt in region_texts),
+        unreadable=any(rt.unreadable for rt in region_texts),
         poor=has_geometry and total_tokens >= 10 and anchored / total_tokens < MIN_ANCHOR_RATIO,
         merged=merged,
         printed=printed,
@@ -1619,7 +1664,9 @@ def finalize_page(page: Page) -> ComposedPage | None:
                 FLAG_ALIGNMENT: composed.poor,
                 FLAG_MERGED: bool(composed.merged),
                 FLAG_SINGLE: composed.reading.get("readers") != READERS_TWO,
-                FLAG_MISSING: bool(composed.groups or composed.gaps),
+                FLAG_MISSING: bool(composed.groups or composed.gaps)
+                or (composed.unreadable and bool(composed.final_text.strip())),
+                FLAG_UNREADABLE: composed.unreadable and not composed.final_text.strip(),
             },
         )
         page.n_unresolved = page_open_items(page).total

@@ -287,6 +287,22 @@ def test_detect_page_number_ignores_a_normal_width_line():
     assert pipeline.detect_page_number(lines + [touching], 900, 1200, 25) is None
 
 
+def test_a_short_text_row_below_a_short_line_keeps_it_from_being_the_page_number():
+    """Book 34 p. 5 (D88): note 5 ended with the short line «الوصول ٣٦.» and note 6, half a line wide, was
+    below it; the walk from the bottom skipped note 6 as a speck and took «الوصول ٣٦.» for the page number."""
+    lines = [{"x0": 50, "y0": 100 + 50 * i, "x1": 850, "y1": 125 + 50 * i} for i in range(20)]
+    short = {"x0": 700, "y0": 1080, "x1": 800, "y1": 1105, "glyph_w": 90, "glyphs": 5, "area": 900}
+    note = {"x0": 450, "y0": 1130, "x1": 850, "y1": 1160, "glyph_w": 390, "glyphs": 19, "area": 3000}
+    assert pipeline.detect_page_number(lines + [short, note], 900, 1200, 25) is None
+    # a mark beside the number on its band (a stamp, a signature) does not hide it
+    number = {"x0": 430, "y0": 1130, "x1": 470, "y1": 1155, "glyph_w": 40, "glyphs": 2, "area": 500}
+    stamp = {"x0": 40, "y0": 1132, "x1": 250, "y1": 1165, "glyph_w": 200, "glyphs": 7, "area": 1500}
+    assert pipeline.detect_page_number(lines + [number, stamp], 900, 1200, 25) == {
+        "bbox": [430, 1130, 470, 1155],
+        "position": "bottom",
+    }
+
+
 @pytest.mark.parametrize("side", ["left", "right"])
 def test_pipeline_removes_a_facing_page_strip_at_the_edge(side):
     gray = render_page(strip=side)

@@ -42,6 +42,8 @@ FLAG_LABELS: dict[str, str] = {
     # D73: a region read by one model (or Tesseract alone); D72: words only the second model read
     "single_reader": "قراءة واحدة",
     "missing_text": "نص قد يكون ناقصًا",
+    # D89: Tesseract alone read the page, and what it read was no text (a photo, an ornament)
+    "no_readable_text": "صورة، لا نص مقروء",
 }
 
 

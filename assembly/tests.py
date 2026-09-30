@@ -2758,6 +2758,22 @@ def test_a_bare_number_in_the_notes_of_a_bracketed_page_is_a_marker_only_in_sequ
     bare = run([pg(1, [ln("كلام ٣ هنا", id=30), ln("٣ ـ حاشية", kind="footnote", id=31)])])
     (note,) = notes_of(bare)
     assert note["attrs"]["marker"] == "٣"
+    # D87: a number of two or three digits out of the sequence is a hadith's number, on any page
+    hadith = run(
+        [
+            pg(1, [ln("كلام (١) هنا", id=40), ln("(١) شرح طويل", kind="footnote", id=41)]),
+            pg(
+                2,
+                [
+                    ln("كلام هنا", id=50),
+                    ln("يتصل الشرح", kind="footnote", id=51),
+                    ln("١٩ ـ وعن أبي هريرة", kind="footnote", id=52),
+                ],
+            ),
+        ]
+    )
+    (note,) = notes_of(hadith)
+    assert note["attrs"]["sourceLineIds"] == [41, 51, 52]
 
 
 def test_a_carried_note_line_read_with_a_number_above_the_pages_first_marker_continues():
@@ -2825,6 +2841,23 @@ def test_a_note_number_missing_from_the_pages_sequence_is_restored_on_its_one_po
         ]
     )
     assert [n["attrs"]["sourceLineIds"] for n in notes_of(unsure)] == [[21, 22, 23], [24]]
+    # book 35 p. 3: a stray «أ» read before «(١)» does not hide the marker
+    stray = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١) ثم (٢) ثم (٣) هنا", id=30),
+                    ln("أ (١) ويعني بها تنقيح الفصول", kind="footnote", id=31),
+                    ln("الشاطبي أي الموافقات", kind="footnote", id=32),
+                    ln(". يقصد تقييد عبدالله.", kind="footnote", id=33),
+                    ln("(٣) نيل السول: ٥ .", kind="footnote", id=34),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["sourceLineIds"] for n in notes_of(stray)] == [[31, 32], [33], [34]]
+    assert not any(n["attrs"]["orphan"] for n in notes_of(stray))
 
 
 def test_a_note_number_misread_against_the_pages_sequence_takes_its_place_in_it():
@@ -2847,6 +2880,20 @@ def test_a_note_number_misread_against_the_pages_sequence_takes_its_place_in_it(
     assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11], [12], [13], [14]]
     assert not any(n["attrs"]["orphan"] for n in notes)
     assert "marker_unmatched" not in codes(result)
+    # book 29 p. 29: «(٢١)» after «(١)» is note 2 with the bracket read as a one
+    hung = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١) ثم (٢) هنا", id=30),
+                    ln("(١) أ", kind="footnote", id=31),
+                    ln("(٢١) ب", kind="footnote", id=32),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(hung)] == [False, False]
     # a page whose notes run on from the page before is left as read
     onward = run(
         [
@@ -2861,6 +2908,65 @@ def test_a_note_number_misread_against_the_pages_sequence_takes_its_place_in_it(
         ]
     )
     assert [n["attrs"]["orphan"] for n in notes_of(onward)] == [False, False]
+
+
+def test_lines_above_a_pages_first_new_note_continue_the_note_before_whatever_it_ends_with():
+    """Book 31: a commentary note runs on over pages and often breaks at a sentence's end; the lines above
+    the page's «(١)» are no note of this page, they continue the note before (D87)."""
+    result = run(
+        [
+            pg(1, [ln("متن (١) هنا", id=10), ln("(١) شرح طويل انتهت جملته.", kind="footnote", id=11)]),
+            pg(
+                2,
+                [
+                    ln("متن (١) هنا", id=20),
+                    ln("وفيه: إشارة إلى كذا.", kind="footnote", id=21),
+                    ln("(١) حاشية الصفحة", kind="footnote", id=22),
+                ],
+            ),
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11, 21], [22]]
+    assert not any(n["attrs"]["orphan"] for n in notes)
+    # above a «(٢)» the lines may be note 1 with its marker lost: the guard decides as before (D74)
+    lost = run(
+        [
+            pg(1, [ln("متن (١) هنا", id=30), ln("(١) شرح انتهى.", kind="footnote", id=31)]),
+            pg(
+                2,
+                [
+                    ln("متن (١) ثم (٢) هنا", id=40),
+                    ln("حاشية فقدت علامتها", kind="footnote", id=41),
+                    ln("(٢) الثانية", kind="footnote", id=42),
+                ],
+            ),
+        ]
+    )
+    assert [n["attrs"]["sourceLineIds"] for n in notes_of(lost)] == [[31], [41], [42]]
+
+
+def test_a_call_the_models_wrote_with_quote_strokes_is_linked():
+    """Books 31, 34, 35: «صَدَقَةٌ ” “ .», «المخالفة"٢"،», «الأصول»"ا".» are the models' readings of a raised
+    call; a quoted title stays text (D87)."""
+    result = run(
+        [
+            pg(
+                1,
+                [
+                    ln('فهي له صدقة ” “ . ومفهوم المخالفة"٢"، ثم علم الأصول»"ا". وقال "الموطأ" كذا', id=10),
+                    ln("(١) الأولى", kind="footnote", id=11),
+                    ln("(٢) الثانية", kind="footnote", id=12),
+                    ln("(٣) الثالثة", kind="footnote", id=13),
+                ],
+            )
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["orphan"] for n in notes] == [False, False, False]
+    text = text_of(blocks_of(result)[0])
+    assert text.startswith("فهي له صدقة[1]") and "المخالفة[2]،" in text and "الأصول»[3]" in text
+    assert '"الموطأ"' in text
 
 
 def test_a_note_line_printed_with_an_equals_sign_continues_the_note_before():

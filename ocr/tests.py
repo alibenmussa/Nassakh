@@ -2116,3 +2116,43 @@ def test_a_repeated_unit_is_read_once_before_the_sanity_check():
     chosen = services.select_reading(primary, secondary, tess)
     assert chosen.source == "qari_v03" and chosen.text == f"{head} {rest}" and chosen.alt == f"{head} {rest}"
     assert primary.parsed_text == raw
+
+
+# ---------------------------------------------------------------- D89: a photo's letters are no text
+
+
+def _tess(text: str, conf: float) -> OcrRun:
+    words = [{"text": word, "conf": conf, "bbox": [0, 0, 10, 10]} for word in text.split()]
+    return OcrRun(
+        engine_name="tesseract",
+        parsed_text=text,
+        params={"lines": [{"bbox": [0, 0, 10, 10], "words": words}]},
+    )
+
+
+def test_tesseract_text_of_a_photo_or_an_ornament_is_no_text():
+    """Book 31 pp. 11–21 (photos: confidence 22–34, a third to two thirds Latin), p. 103 (a dotted border read
+    «ههه ها هد واه» at 83), p. 45 («٠ ٠ 3»): Tesseract's letters are noise (D89)."""
+    assert (
+        services.tesseract_unreadable(_tess("انسار دف ززة الي قا للم شاع", 30), "انسار دف ززة الي قا للم شاع")
+        == "low confidence"
+    )
+    photo = "OD Nene Kawi das eal je Kanye daa احمنؤزؤلك"
+    assert services.tesseract_unreadable(_tess(photo, 70), photo) == "latin"
+    ornament = "ههه ها هد وا هد هاو هادها واه وه هاه هاو هد ها"
+    assert services.tesseract_unreadable(_tess(ornament, 83), ornament) == "ornament"
+    assert services.tesseract_unreadable(_tess("٠ ٠ 3", 90), "٠ ٠ 3") == "no letters"
+    text = "قال الحافظ في فتح الباري وفي الحديث تعظيم قدر الصلاة"
+    assert services.tesseract_unreadable(_tess(text, 87), text) == ""
+
+
+def test_a_region_both_models_failed_on_keeps_no_text_when_tesseract_read_a_photo():
+    photo = "OD Nene Kawi das eal je Kanye daa"
+    tess = _tess(photo, 29)
+    loop_a = OcrRun(engine_name="qari_v03", parsed_text="", status=OcrRun.Status.OK)
+    loop_b = OcrRun(engine_name="qari_v02", parsed_text="", status=OcrRun.Status.OK)
+    chosen = services.select_reading(loop_a, loop_b, tess)
+    assert chosen.fallback and chosen.text == "" and chosen.unreadable == "low confidence"
+    text = "قال الحافظ في فتح الباري وفي الحديث تعظيم قدر الصلاة"
+    kept = services.select_reading(loop_a, loop_b, _tess(text, 87))
+    assert kept.fallback and kept.text == text and not kept.unreadable
