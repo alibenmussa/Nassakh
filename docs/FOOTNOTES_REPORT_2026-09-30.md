@@ -29,6 +29,20 @@ The two full books, counted by the notes the assembly leaves without a call (no 
 | 29 (Libyan history, the owner's sample) | 109 → 110 | 17 | 3 |
 | 31 مختصر صحيح البخاري (vowelled hadith with commentary) | 133 → 119 | 106 | 33 |
 
+A hand-marked sample of the two full books (every fourth page with notes, 19 pages each, calls marked on the
+page images; scored like the test books):
+
+| Book | Calls | Right before | Right now | Wrong now |
+|---|---|---|---|---|
+| 29 | 25 | 22 | 24 | 0 |
+| 31 | 27 | 6 | 17 | 1 |
+
+Book 29's one miss is a call whose number the models and Kraken both misread. Book 31's ten failures: three are
+reading failures before any footnote logic (p. 100's body dropped after both models looped, p. 106's second hadith
+line missing from the text), six are calls not found or not numbered on vowelled lines (p. 86 alone has three,
+with one call shape found for three notes), and one call went to an earlier word that repeats the phrase before
+the real call (p. 57, «ثم سلم»).
+
 The note counts differ between the two versions because the new one joins the parts of a note carried over a
 page break into one note, and drops notes that were Tesseract's noise (D89).
 
