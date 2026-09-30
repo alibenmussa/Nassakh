@@ -1255,11 +1255,17 @@ def note_keys(page: PageIn) -> list[str]:
     return out
 
 
-def continues(carry: Note | None, open_calls: int) -> bool:
+_RE_CONTINUED = re.compile(r"^\s*=\s*")  # a note line printed with «=» continues the note of the page before
+
+
+def continues(carry: Note | None, open_calls: int, text: str = "") -> bool:
     """The continuation guard (D74): a marker-less line at the top of a page's notes continues the
     previous page's note only when that note does not end with terminal punctuation and the page's
     body has no open call that the line could be the note of (`open_calls`: `open_calls_before`, the
-    calls `link_footnotes` would give it, `positional_call`)."""
+    calls `link_footnotes` would give it, `positional_call`). A line the printer starts with «=» (the mark
+    of a note carried over; books 32, 34) continues it whatever it ends with (D85)."""
+    if carry is not None and _RE_CONTINUED.match(text or ""):
+        return True
     return carry is not None and not open_calls and not ends_terminal(carry.rich.plain())
 
 
@@ -1276,17 +1282,20 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
     current: Note | None = None
     lines = footnote_lines(page)
     texts = [Rich.from_line(line).text for line in lines]
-    bracketed = any(_bracketed_marker(text) for text in texts)
+    bracketed = [_bracketed_key(text) for text in texts]
     lettered = any(_RE_LETTERED.match(text) for text in texts)
-    for line in lines:
+    for index, line in enumerate(lines):
         rich = Rich.from_line(line)
         marker, length = split_note_marker(rich.text)
         if marker is not None and marker in NOTE_LOOKALIKES and lettered:
             marker = None  # «(أ)» among «(ب)», «(ج)»: a lettered item of a note, not a marker
-        if marker is not None and bracketed and not _bracketed_marker(rich.text):
+        if marker is not None and any(bracketed) and bracketed[index] is None:
             key = marker_key(marker)
-            if key.isdigit() and key not in _next_keys(notes, carry):
-                marker = None  # «١٢١ ـ» in a note of a page that prints «(١)»: a number of the text (D85)
+            below = next((int(k) for k in bracketed[index + 1 :] if k and k.isdigit()), None)
+            if key.isdigit() and (
+                key not in _next_keys(notes, carry) or (below is not None and int(key) >= below)
+            ):
+                marker = None  # «١٢١ ـ» in a note of a page that prints «(١)», «=» read «3» above «(١)» (D85)
         if marker is not None:
             current = Note(
                 id=note_id(line.id),
@@ -1298,7 +1307,10 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
                 reviewed=page.reviewed,
             )
             notes.append(current)
-        elif current is None and continues(carry, open_calls):
+        elif current is None and continues(carry, open_calls, rich.text):
+            sign = _RE_CONTINUED.match(rich.text)
+            if sign:
+                rich = rich.cut(sign.end())  # the printed «=» is the book's mark of a carried note, not text
             current = carry
             current.lines.append(line)
             current.rich = Rich.join([current.rich, rich]) if len(current.rich) else rich
@@ -1310,6 +1322,10 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
             current.lines.append(line)
             current.rich = Rich.join([current.rich, rich]) if len(current.rich) else rich
     _number_lookalike_notes(notes)
+    _repair_sequence(notes)
+    restored = _restore_missing_number(notes, page)
+    if restored is not None and current is not None and restored[0] is current:
+        current = restored[1]  # the page's last note is now the restored one
     if not lines:
         return notes, None
     return notes, current
@@ -1323,6 +1339,14 @@ _RE_BRACKETED_MARKER = re.compile(
 def _bracketed_marker(text: str) -> bool:
     """True when a note line starts with a bracketed marker («(١)», «[٢]», «(*)», «(أ)»)."""
     return bool(_RE_BRACKETED_MARKER.match(text or ""))
+
+
+def _bracketed_key(text: str) -> str | None:
+    """The key of the bracketed marker a note line starts with («(٢)» → "2", «(أ)» → its glyph), else None."""
+    if not _bracketed_marker(text):
+        return None
+    marker, _length = split_note_marker(text)
+    return marker_key(marker) if marker is not None else None
 
 
 def _next_keys(notes: Sequence[Note], carry: Note | None) -> set[str]:
@@ -1363,6 +1387,86 @@ def _number_lookalike_notes(notes: list[Note]) -> None:
             continue
         taken.add(key)
         note.key = note.marker = key
+
+
+def _repair_sequence(notes: list[Note]) -> None:
+    """Note numbers misread against the page's sequence (D87): a number between two that differ by two is
+    the one between them («(١)», «(٤)», «(٣)»: the model read «(٢)» as «٤», book 34 p. 2); the first,
+    before a «(٢)», is 1; the last, not above the one before it, is one more. The number becomes the note's
+    marker, as a lookalike's does (`_number_lookalike_notes`)."""
+    numbered = [note for note in notes if note.key and note.key.isdigit()]
+    keys = [int(note.key) for note in numbered]
+    for i, note in enumerate(numbered):
+        before = keys[i - 1] if i else None
+        after = keys[i + 1] if i + 1 < len(keys) else None
+        if before is not None and after is not None:
+            fixed = before + 1 if after == before + 2 else None
+        elif before is None and after is not None:
+            fixed = 1 if after == 2 else None
+        elif before is not None:
+            fixed = before + 1 if keys[i] <= before else None
+        else:
+            fixed = None
+        if fixed is not None and fixed != keys[i]:
+            keys[i] = fixed
+            note.key = note.marker = str(fixed)
+
+
+_RE_STRAY_START = re.compile(r"^\s*[.،:؛]\s*")  # the last mark of the line before, moved to this one
+
+
+def _restore_missing_number(notes: list[Note], page: PageIn) -> tuple[Note, Note] | None:
+    """A number missing from the page's notes (D87): «(١)» then «(٣)», and between them the lines of note 1
+    of which exactly one may start a note — the only one, or the one after a line that ends a sentence, or
+    one that starts with the mark of the line before («. راجع تقديمه», book 35 p. 2: the model dropped
+    «(٢)» and moved the period of the line above). That line starts note 2 (its number is its marker; the
+    moved mark goes back to the note before). Returns `(note before, restored note)` of the last split, or
+    None. One number per gap: a longer gap is left as it is."""
+    last = None
+    i = 0
+    while i + 1 < len(notes):
+        note, following = notes[i], notes[i + 1]
+        i += 1
+        if not (note.key and note.key.isdigit() and following.key and following.key.isdigit()):
+            continue
+        if int(following.key) != int(note.key) + 2 or note.page != page.number or len(note.lines) < 2:
+            continue
+        if any(line not in page.lines for line in note.lines):
+            continue  # a note carried from the page before: its lines are not all this page's
+        texts = [Rich.from_line(line).text for line in note.lines]
+        starts = [
+            k
+            for k in range(1, len(note.lines))
+            if len(note.lines) == 2 or ends_terminal(texts[k - 1]) or _RE_STRAY_START.match(texts[k])
+        ]
+        if len(starts) != 1:
+            continue
+        k = starts[0]
+        _marker, length = split_note_marker(texts[0])
+        first = Rich.from_line(note.lines[0])
+        head = Rich.join([first.cut(length), *(Rich.from_line(line) for line in note.lines[1:k])])
+        tail = Rich.join([Rich.from_line(line) for line in note.lines[k:]])
+        stray = _RE_STRAY_START.match(tail.text)
+        if stray:
+            mark = tail.cut(0, stray.end()).text.strip()
+            if mark and not ends_terminal(head.plain()):
+                head = head + Rich.of(mark)
+            tail = tail.cut(stray.end())
+        key = str(int(note.key) + 1)
+        restored = Note(
+            id=note_id(note.lines[k].id),
+            marker=key,
+            key=key,
+            page=note.page,
+            lines=note.lines[k:],
+            rich=tail,
+            reviewed=note.reviewed,
+        )
+        note.lines, note.rich = note.lines[:k], head
+        notes.insert(i, restored)
+        last = (note, restored)
+        i += 1
+    return last
 
 
 @dataclass(frozen=True)

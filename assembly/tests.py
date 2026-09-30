@@ -650,8 +650,9 @@ def test_each_note_takes_the_first_unused_matching_candidate():
         ],
     )
     result = run([page])
-    assert text_of(blocks_of(result)[0]) == "الأول[1] والثاني (2) وتكرار[2] آخر"
-    assert codes(result).count("marker_unmatched") == 1  # (2)
+    # D87: the second note's «(1)» is out of the page's sequence: it is note 2, and takes «(2)»
+    assert text_of(blocks_of(result)[0]) == "الأول[1] والثاني[2] وتكرار (1) آخر"
+    assert codes(result).count("marker_unmatched") == 1  # the second (1)
 
 
 def test_several_orphans_of_a_page_keep_the_order_of_their_notes():
@@ -2757,6 +2758,131 @@ def test_a_bare_number_in_the_notes_of_a_bracketed_page_is_a_marker_only_in_sequ
     bare = run([pg(1, [ln("كلام ٣ هنا", id=30), ln("٣ ـ حاشية", kind="footnote", id=31)])])
     (note,) = notes_of(bare)
     assert note["attrs"]["marker"] == "٣"
+
+
+def test_a_carried_note_line_read_with_a_number_above_the_pages_first_marker_continues():
+    """Book 32 p. 2: the printed «=» of a carried note was read «3»; below it the page's notes start
+    again at «(١)», so «3» is out of sequence and the line continues the note before (D85)."""
+    result = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) ثم (٢) هنا", id=10),
+                    ln("(١) الأولى", kind="footnote", id=11),
+                    ln("(٢) الثانية تمتد", kind="footnote", id=12),
+                ],
+            ),
+            pg(
+                2,
+                [
+                    ln("متن (١) هنا", id=20),
+                    ln("3 :٥٤ وقد انقلب اسمه", kind="footnote", id=21),
+                    ln("(١) في نسبة الشهيد", kind="footnote", id=22),
+                ],
+            ),
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11], [12, 21], [22]]
+    assert not any(n["attrs"]["orphan"] for n in notes)
+
+
+def test_a_note_number_missing_from_the_pages_sequence_is_restored_on_its_one_possible_line():
+    """Book 35 p. 2: the model dropped «(٢)» and moved the period of the line above to its start; notes
+    (١) and (٣) with one line between them: that line is note 2 (D87)."""
+    result = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١) ثم (٢) ثم (٣) هنا", id=10),
+                    ln("(١) انظر: نيل السول: ٦٠٤", kind="footnote", id=11),
+                    ln(". راجع تقديمه لطبعة الكتاب الفاسية.", kind="footnote", id=12),
+                    ln("(٣) في المعسول: ٨/٢٨٥ .", kind="footnote", id=13),
+                ],
+            )
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11], [12], [13]]
+    assert not any(n["attrs"]["orphan"] for n in notes)
+    assert notes[0]["content"][0]["text"].endswith("604.")  # the period moved back to the note it ends
+    assert notes[1]["content"][0]["text"].startswith("راجع")
+    # two lines that may start the missing note: which one is not known, the notes stay as read
+    unsure = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١) ثم (٣) هنا", id=20),
+                    ln("(١) الأولى.", kind="footnote", id=21),
+                    ln("ثانية.", kind="footnote", id=22),
+                    ln("ثالثة", kind="footnote", id=23),
+                    ln("(٣) الأخيرة", kind="footnote", id=24),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["sourceLineIds"] for n in notes_of(unsure)] == [[21, 22, 23], [24]]
+
+
+def test_a_note_number_misread_against_the_pages_sequence_takes_its_place_in_it():
+    """Book 34 p. 2: the notes read (١), (٤), (٣), (٤): the second is 2 (D87)."""
+    result = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١) ثم (٢) ثم (٣) ثم (٤) هنا", id=10),
+                    ln("(١) الأولى", kind="footnote", id=11),
+                    ln("(٤) الثانية", kind="footnote", id=12),
+                    ln("(٣) الثالثة", kind="footnote", id=13),
+                    ln("(٤) الرابعة", kind="footnote", id=14),
+                ],
+            )
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11], [12], [13], [14]]
+    assert not any(n["attrs"]["orphan"] for n in notes)
+    assert "marker_unmatched" not in codes(result)
+    # a page whose notes run on from the page before is left as read
+    onward = run(
+        [
+            pg(
+                1,
+                [
+                    ln("متن (١٢) ثم (١٣) هنا", id=20),
+                    ln("(١٢) أ", kind="footnote", id=21),
+                    ln("(١٣) ب", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(onward)] == [False, False]
+
+
+def test_a_note_line_printed_with_an_equals_sign_continues_the_note_before():
+    """Books 32 and 34 print «=» at the start of a note carried over from the page before: it continues
+    that note even when the note ends a sentence and the page has calls of its own (D85)."""
+    result = run(
+        [
+            pg(1, [ln("كلام (١) هنا", id=10), ln("(١) الأولى انتهت.", kind="footnote", id=11)]),
+            pg(
+                2,
+                [
+                    ln("متن (١) هنا", id=20),
+                    ln("= تتمة الأولى", kind="footnote", id=21),
+                    ln("(١) الثانية", kind="footnote", id=22),
+                ],
+            ),
+        ]
+    )
+    notes = notes_of(result)
+    assert [n["attrs"]["sourceLineIds"] for n in notes] == [[11, 21], [22]]
+    assert not any(n["attrs"]["orphan"] for n in notes)
+    assert "=" not in str(notes[0]["content"]) and "تتمة الأولى" in str(notes[0]["content"])
 
 
 def test_a_call_read_with_one_bracket_is_a_lookalike():
