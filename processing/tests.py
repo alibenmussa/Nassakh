@@ -1600,3 +1600,55 @@ def test_short_lines_the_threshold_missed_join_the_bands():
         for x in range(200, 1400, 30):
             plain[500 + i * pitch : 526 + i * pitch, x : x + 20] = 0
     assert pipeline.run_pipeline(plain).n_lines == 8
+
+
+# ---------------------------------------------------------------- D86: high and wavy rules, confirmed by type
+
+
+def _sized(size_above: int, size_below: int, pitch_below: int = 60) -> list[dict]:
+    above = [
+        {"x0": 100, "y0": 150 + 60 * i, "x1": 900, "y1": 170 + 60 * i, "size": size_above} for i in range(4)
+    ]
+    below = [
+        {"x0": 100, "y0": 600 + pitch_below * i, "x1": 900, "y1": 615 + pitch_below * i, "size": size_below}
+        for i in range(6)
+    ]
+    return above + below
+
+
+def test_a_rule_high_on_the_page_counts_when_the_type_below_is_smaller():
+    """Book 34 pp. 1, 6: notes fill two thirds of a commentary page, the rule sits at a third (D86)."""
+    lines = _sized(30, 25)
+    gray = np.full((1500, 1000), 255, dtype=np.uint8)
+    for ln in lines:  # specks where the lines are, so Otsu sees ink
+        for x in range(ln["x0"], ln["x1"], 40):
+            gray[ln["y0"] + 4 : ln["y1"] - 4, x : x + 3] = 0
+    gray[450:453, 600:900] = 0  # a 3 px rule at 30% of the height
+    y = pipeline.detect_footnote_rule(gray, lines, 20.0, sized=lines)
+    assert y is not None and abs(y - 451) <= 1
+    # type of one size but tighter lines below (book 34 p. 6: pitch 64 / 86; book 31: 76 / 103) counts too
+    y = pipeline.detect_footnote_rule(gray, lines, 20.0, sized=_sized(30, 30, pitch_below=45))
+    assert y is not None and abs(y - 451) <= 1
+    # one size and one pitch above and below, or without sizes: refused as before
+    assert pipeline.detect_footnote_rule(gray, lines, 20.0, sized=_sized(30, 30)) is None
+    assert pipeline.detect_footnote_rule(gray, lines, 20.0) is None
+    # never in the top 15% of the page (a running head's rule)
+    top = np.full((1500, 1000), 255, dtype=np.uint8)
+    top[150:153, 600:900] = 0
+    assert pipeline.detect_footnote_rule(top, _sized(30, 25), 20.0, sized=_sized(30, 25)) is None
+
+
+def test_a_wavy_thick_rule_with_a_lower_fill_counts_when_the_type_below_is_smaller():
+    """Book 35 p. 6: a scanned rule 10 px tall, 5.6 px thick on average (fill 0.56 < `RULE_MIN_FILL`)."""
+    gray = _blank()
+    for x in range(500, 900):  # a 7 px stroke waving over 13 rows: thick at 20 (6 < t ≤ 10), fill ≈ 0.54
+        top = 900 + int(round(3 + 3 * np.sin(x / 15)))
+        gray[top : top + 7, x] = 0
+    lines = [dict(ln, size=30) for ln in RULE_LINES[:1]] + [
+        {"x0": 100, "y0": 300, "x1": 900, "y1": 320, "size": 30},
+        {"x0": 100, "y0": 950, "x1": 900, "y1": 970, "size": 24},
+        {"x0": 100, "y0": 1100, "x1": 900, "y1": 1120, "size": 24},
+    ]
+    assert pipeline.detect_footnote_rule(gray, RULE_LINES, 20.0) is None  # as before D86
+    y = pipeline.detect_footnote_rule(gray, RULE_LINES, 20.0, sized=lines)
+    assert y is not None and 900 <= y <= 910

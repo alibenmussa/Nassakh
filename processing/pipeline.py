@@ -59,6 +59,14 @@ RULE_MIN_WIDTH_FRAC = 0.12
 # height, and a component that fills at least this share of its box (a closed text row fills less).
 NEAR_RULE_THICKNESS = 0.5
 RULE_MIN_FILL = 0.6
+# A rule is looked for in the lower 60% of the page. Higher up (to 15% of the page: notes can fill two
+# thirds of a commentary page, book 34 pp. 1, 6), or with a slightly lower fill (a wavy scanned rule, book 35
+# p. 6: 0.56), it counts only when the lines below it are notes: smaller type, or tighter lines (D86).
+RULE_TOP_FRAC = 0.4
+RULE_CONFIRMED_TOP_FRAC = 0.15
+RULE_CONFIRMED_FILL = 0.5
+SMALLER_BELOW = 0.93  # type size below / above (real rules: 0.77–0.94; a vowelled body measures smaller)
+TIGHTER_BELOW = 0.88  # line pitch below / above, with 3 lines below at least (real rules: 0.66–0.86)
 # Footnote block without a rule: smaller type at the bottom of the page.
 BLOCK_MAX_SIZE_RATIO = 0.8
 BLOCK_MIN_LINES = 2
@@ -421,7 +429,11 @@ def _text_block_width(lines: list[LineBox], fallback: int) -> int:
 
 
 def detect_footnote_rule(
-    gray: np.ndarray, lines: list[LineBox], med_h: float, extra_rows: list[LineBox] | None = None
+    gray: np.ndarray,
+    lines: list[LineBox],
+    med_h: float,
+    extra_rows: list[LineBox] | None = None,
+    sized: list[LineBox] | None = None,
 ) -> int | None:
     """y of a footnote separator rule in `gray`, or None.
 
@@ -440,6 +452,10 @@ def detect_footnote_rule(
 
     The widest strict candidate wins; only when there is none does the widest thick one win (a
     single "widest wins" over both kinds would move a table page's thin rule to a thicker bar).
+
+    D86: a candidate higher than the lower 60% (down to `RULE_CONFIRMED_TOP_FRAC` of the page), or a thick
+    one with a fill between `RULE_CONFIRMED_FILL` and `RULE_MIN_FILL`, counts only when `sized` (the lines
+    with their type size, `measure_line_sizes`) confirms it: smaller type below it (`smaller_below`).
     """
     h, w = gray.shape
     if h == 0 or w == 0:
@@ -456,19 +472,25 @@ def detect_footnote_rule(
     thick = None
     for i in range(1, n):
         x, y, cw, ch, area = (int(v) for v in stats[i])
-        if cw < min_width or y < 0.4 * h or ch > max(12, 0.06 * h):
+        if cw < min_width or y < RULE_CONFIRMED_TOP_FRAC * h or ch > max(12, 0.06 * h):
             continue
         thickness = area / cw
+        fill = area / (cw * ch)
+        confirm = y < RULE_TOP_FRAC * h
         if thickness <= max_thickness:
             kind = "strict"
-        elif thickness <= max_thick and area / (cw * ch) >= RULE_MIN_FILL:
+        elif thickness <= max_thick and fill >= RULE_MIN_FILL:
             kind = "thick"
+        elif thickness <= max_thick and fill >= RULE_CONFIRMED_FILL:
+            kind, confirm = "thick", True
         else:
             continue
         y0, y1 = y, y + ch
         below = [ln for ln in text if ln["y0"] >= y1 - 2]
         above = [ln for ln in text if ln["y1"] <= y0 + 2]
         if not (below and above) or y1 >= 0.97 * h:
+            continue
+        if confirm and not smaller_below(sized or [], y0, y1):
             continue
         candidate = ((y0 + y1) // 2, cw)
         if kind == "strict":
@@ -478,6 +500,30 @@ def detect_footnote_rule(
             thick = candidate
     best = strict if strict is not None else thick
     return None if best is None else int(best[0])
+
+
+def smaller_below(sized: list[LineBox], y0: int, y1: int) -> bool:
+    """True when the lines below the band `y0`–`y1` look like notes next to those above it (D86): their
+    median `size` is at most `SMALLER_BELOW` of the lines above, or (three lines below at least) their
+    median pitch is at most `TIGHTER_BELOW` of the pitch above. At least two lines above and one below
+    (a note region may be one long line to `detect_lines`). Glyph size alone misses notes set only a
+    little smaller (book 34 p. 6: 28 / 30) and a vowelled body, whose marks measure small (book 31)."""
+    above = sorted((ln for ln in sized if ln["y1"] <= y0 + 2), key=lambda ln: ln["y0"])
+    below = sorted((ln for ln in sized if ln["y0"] >= y1 - 2), key=lambda ln: ln["y0"])
+    if len(above) < 2 or not below:
+        return False
+    size_above = float(np.median([_line_size(ln) for ln in above]))
+    if float(np.median([_line_size(ln) for ln in below])) <= SMALLER_BELOW * size_above:
+        return True
+    if len(below) < 3:
+        return False
+    return _pitch(below) <= TIGHTER_BELOW * _pitch(above)
+
+
+def _pitch(lines: list[LineBox]) -> float:
+    """Median distance between the centres of consecutive `lines` (sorted top down)."""
+    centres = [(ln["y0"] + ln["y1"]) / 2 for ln in lines]
+    return float(np.median(np.diff(centres)))
 
 
 def measure_line_sizes(ink: np.ndarray, lines: list[LineBox]) -> list[LineBox]:
@@ -900,7 +946,7 @@ def run_pipeline(gray: np.ndarray, params: PreprocessParams | None = None) -> Pr
         for r in candidates
         if "glyphs" in r and _is_short_text_row(r, lines, type_size) and not (pn_box and _overlaps(r, pn_box))
     ]
-    rule_y = detect_footnote_rule(gray_c, lines, med_h, extra_rows=short_text)
+    rule_y = detect_footnote_rule(gray_c, lines, med_h, extra_rows=short_text, sized=sized)
     body_lines = [ln for ln in sized if not (pn_box and _overlaps(ln, pn_box))]
     block_y = None if rule_y is not None else detect_footnote_block(body_lines, type_size, gray_c.shape[0])
 

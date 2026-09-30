@@ -502,3 +502,22 @@ visible in the text alone and are repaired by the assembly's linker (`assembly/p
 Measured in memory (`assembly.services.preview`): book 29 orphans 21 → 19 (113 notes), book 31 63 → 54 (notes 75 →
 73: the two false notes are gone); every new link on book 29 was checked on the page image. D82's test that kept
 a lone «(١)» or «(٦)» from a lone note (٢) is replaced: one loose small call and one note without a call pair.
+
+## D86 — A footnote rule high on the page, or a wavy one, counts when the lines below it are notes (2026-09-30)
+
+`detect_footnote_rule` looked only in the lower 60% of a page. A commentary edition can fill two thirds of a page
+with notes under a short text: the rule of «غاية المأمول» (book 34) sat at 34% and 36% of the page, and on book 31
+(a hadith book: three to five lines of hadith, then the commentary) **38 of its 120 pages** had their rule between
+18% and 39%. The notes of those pages were read as main text: the commentary landed in the book's text and its
+notes were never notes, which no orphan count shows. A scanned rule can also be wavy: book 35 p. 6, 5.6 px thick on
+average in a 10 px box, fills 0.56 of it, under D68's `RULE_MIN_FILL` 0.6.
+
+Now a candidate between 15% and 40% of the page height, or a thick one with a fill from 0.5 to 0.6, counts when the
+lines below it look like notes next to the lines above (`smaller_below`, on the lines `measure_line_sizes` sized):
+their median type size is at most 0.93 of the size above (real rules measured 0.77–0.94), or, with three lines
+below at least, their median line pitch is at most 0.88 of the pitch above (real rules 0.66–0.86). Glyph size alone
+is not enough: book 34 p. 6 sets its notes at 28 against 30, and a vowelled body measures smaller than its notes
+because the marks are components of their own (book 31: 1.22). The top 15% of a page (a running head's rule) is
+never searched. Measured on the stored images of books 29, 31, 32–35: the three missed rules of the test books and
+the 38 of book 31 are found, each of the four drawn from book 31 checked on the image (pp. 33, 39, 60, 115); book
+29's 285 pages do not change. Pages are re-prepared and re-read to use it.
