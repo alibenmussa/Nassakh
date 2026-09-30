@@ -10,10 +10,10 @@ The pass, for one finalised page (`read_page_numbers`):
 1. `printed_style(book)`: does the book print Arabic-Indic digits? Decided from what Qari already
    wrote for the book's numbers (Qari v0.2 writes Arabic-Indic digits for 90–100 % of them in such
    books, 0–12 % in Western ones; v0.3 33–82 % against 0 %).
-2. `number_areas`: where each number token sits: its word box, else the gap between its nearest
-   neighbours that have one (right to left: the word before it is on its right). Numbers without a
-   box that share a gap share one area. A box the alignment marked weak (`bq: "weak"`) counts as
-   none, here and in steps 5-6 (`word_box`).
+2. `number_areas`: where each number token sits: its word box (in its line's rows, D92:
+   `in_line_rows`), else the gap between its nearest neighbours that have one (right to left: the word
+   before it is on its right). Numbers without a box that share a gap share one area. A box the
+   alignment marked weak (`bq: "weak"`) counts as none, here and in steps 5-6 (`word_box`).
 3. Kraken reads each area as one line (`ocr.engines.kraken`, its own process); `assign` gives its
    digit runs to the area's numbers in order when the counts agree (closing up stray spaces inside a
    number if that makes them agree). A token read in its own word box whose counts do not agree takes
@@ -129,11 +129,20 @@ def word_box(token: dict) -> list | None:
     return box if box and token.get("bq") != WEAK else None
 
 
+def in_line_rows(box: list, line_bbox: list[int]) -> list[int]:
+    """A word box's columns in its line's rows at least. Kraken's word boxes (D92) are trimmed to the word's
+    own ink, and Kraken misreads digits cut that close (book 29 p. 15: «٢٧» read «٢٤», p. 1: «١٩٧٠» read
+    «١٦٧٠»; in the line's rows, as Tesseract's boxes fitted to the printed line were, both right)."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    return [x0, min(y0, int(line_bbox[1])), x1, max(y1, int(line_bbox[3]))]
+
+
 def number_areas(tokens: list[dict], line_bbox: list[int]) -> list[Area]:
     """The areas of a line's number tokens (reading order, right to left on the page).
 
-    A token with a word box is read in that box (the runner adds a margin of 30 % of its height: the
-    set-up that read 92 % of the labelled numbers). One without is read in the gap between its nearest
+    A token with a word box is read in that box's columns and its line's rows (`in_line_rows`; the runner
+    adds a margin of 30 % of the height: the set-up that read 92 % of the labelled numbers, on Tesseract's
+    boxes fitted to the printed line). One without is read in the gap between its nearest
     neighbours that have a box (the word before it is on its right: the gap's right edge is that
     word's left edge), or the line's edge, at the line's height; tokens of one gap share it. A weak
     box counts as none (`word_box`).
@@ -146,7 +155,7 @@ def number_areas(tokens: list[dict], line_bbox: list[int]) -> list[Area]:
             continue
         box = word_box(token)
         if box:
-            areas.append(Area([int(v) for v in box], [i]))
+            areas.append(Area(in_line_rows(box, line_bbox), [i]))
             continue
         right = next((int(word_box(tokens[j])[0]) for j in range(i - 1, -1, -1) if word_box(tokens[j])), lx1)
         left = next(
@@ -375,13 +384,13 @@ def digitless_dates(tokens: list[dict]) -> list[tuple[int, int]]:
 
 def letter_area(tokens: list[dict], i: int, line_bbox: list[int]) -> tuple[list[int], str, bool] | None:
     """Letter token `i`'s own area: `(bbox, Qari's reading of the area without the letter, is its
-    box)`. Its word box; else the gap between its boxed neighbours when nothing but punctuation shares
-    it (a gap holding words or numbers too says nothing of where the letter is: None). Weak boxes
-    count as none (`word_box`)."""
+    box)`. Its word box (in its line's rows, `in_line_rows`); else the gap between its boxed neighbours
+    when nothing but punctuation shares it (a gap holding words or numbers too says nothing of where the
+    letter is: None). Weak boxes count as none (`word_box`)."""
     token = tokens[i]
     rest = LETTER_TOKEN.sub(r"\1\3", str(token.get("t") or ""))
     if word_box(token):
-        return [int(v) for v in word_box(token)], rest, True
+        return in_line_rows(word_box(token), line_bbox), rest, True
     lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
     right = next((j for j in range(i - 1, -1, -1) if word_box(tokens[j])), None)
     left = next((j for j in range(i + 1, len(tokens)) if word_box(tokens[j])), None)
@@ -456,19 +465,23 @@ def apply_letter(token: dict, number: str) -> bool:
 
 
 def date_area(tokens: list[dict], first: int, last: int, line_bbox: list[int]) -> list[int] | None:
-    """Where the date `tokens[first:last + 1]` is: its tokens' boxes, else the gap between its nearest
-    boxed neighbours (the word before it is on its right), at the line's height, when no number and no
-    bracket shares that gap (one could be another date, read in the date's place: None). Words may:
-    Kraken reads no bracketed date out of them. Weak boxes count as none (`word_box`)."""
+    """Where the date `tokens[first:last + 1]` is: its tokens' boxes (in the line's rows, `in_line_rows`),
+    else the gap between its nearest boxed neighbours (the word before it is on its right), at the line's
+    height, when no number and no bracket shares that gap (one could be another date, read in the date's
+    place: None). Words may: Kraken reads no bracketed date out of them. Weak boxes count as none
+    (`word_box`)."""
     lx0, ly0, lx1, ly1 = (int(v) for v in line_bbox)
     boxes = [word_box(t) for t in tokens[first : last + 1] if word_box(t)]
     if len(boxes) == last - first + 1:
-        return [
-            min(b[0] for b in boxes),
-            min(b[1] for b in boxes),
-            max(b[2] for b in boxes),
-            max(b[3] for b in boxes),
-        ]
+        return in_line_rows(
+            [
+                min(b[0] for b in boxes),
+                min(b[1] for b in boxes),
+                max(b[2] for b in boxes),
+                max(b[3] for b in boxes),
+            ],
+            line_bbox,
+        )
     boxed = [bool(word_box(t)) for t in tokens]
     right = first if boxed[first] else next((j for j in range(first - 1, -1, -1) if boxed[j]), None)
     left = last if boxed[last] else next((j for j in range(last + 1, len(tokens)) if boxed[j]), None)
@@ -668,7 +681,7 @@ def page_weak_boxes(page, lines: list | None = None) -> tuple[list[dict], list[t
                 continue
             if token.get("res") or token.get("src") == "kraken":
                 continue
-            requests.append({"id": f"{line.pk}:weak{i}", "bbox": [int(v) for v in token["bbox"]]})
+            requests.append({"id": f"{line.pk}:weak{i}", "bbox": in_line_rows(token["bbox"], line.bbox)})
             index.append((line, i))
     return requests, index
 

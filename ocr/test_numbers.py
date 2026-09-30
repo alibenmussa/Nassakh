@@ -70,7 +70,10 @@ def test_areas_are_the_word_box_or_the_gap_between_boxed_neighbours():
     ]
     areas = nb.number_areas(tokens, [100, 5, 1000, 45])
     assert [(a.bbox, a.tokens) for a in areas] == [
-        ([700, 14, 780, 38], [2]),
+        (
+            [700, 5, 780, 45],
+            [2],
+        ),  # its box's columns in the line's rows: a box trimmed to the digits is too tight
         ([590, 5, 640, 45], [4, 5]),
         ([100, 5, 500, 45], [7]),
     ]
@@ -368,7 +371,7 @@ def test_the_pass_reads_the_printed_page_number_in_its_region(numbers_page):
     Region.objects.create(page=page, kind=Region.Kind.PAGE_NUMBER, bbox=[40, 80, 60, 95], order=1)
     area = tuple(nb.printed_number_area([40, 80, 60, 95], 100, 100))
     assert area == (32, 72, 68, 100)
-    engine = FakeKraken({(60, 10, 75, 20): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢", area: "— ٢١ —"})
+    engine = FakeKraken({(60, 8, 75, 22): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢", area: "— ٢١ —"})
     done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
     assert (done.areas, done.applied, done.printed) == (3, 2, "21")
     page.refresh_from_db()
@@ -383,7 +386,7 @@ def test_the_pass_reads_the_printed_page_number_in_its_region(numbers_page):
 
 def test_the_pass_reads_the_numbers_of_unreviewed_lines_and_records_the_run(numbers_page):
     page, line, reviewed = numbers_page
-    engine = FakeKraken({(60, 10, 75, 20): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢"})
+    engine = FakeKraken({(60, 8, 75, 22): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢"})
     done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
     assert (done.areas, done.applied) == (2, 2)
     line.refresh_from_db()
@@ -418,8 +421,8 @@ def test_the_pass_reads_letters_and_dates_on_their_line_and_saves_them(numbers_p
     engine = FakeKraken(
         {
             (0, 8, 100, 22): "المنصور (٧٥٤-٧٧٥م) بأيدي (٥) (هـ)",  # the whole line
-            (45, 10, 55, 20): "(٥)",  # each letter's own box
-            (30, 10, 40, 20): "(هـ)",
+            (45, 8, 55, 22): "(٥)",  # each letter's own box
+            (30, 8, 40, 22): "(هـ)",
         }
     )
     done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
@@ -454,7 +457,7 @@ def test_numbers_letters_and_a_date_on_one_line_all_land(numbers_page):
     line.save(update_fields=["tokens"])
     engine = FakeKraken(
         {
-            (70, 10, 82, 20): "(٣٣٤هـ)",
+            (70, 8, 82, 22): "(٣٣٤هـ)",
             (0, 8, 100, 22): "توفي (٣٣٤هـ)١ وولد (٨٤٧-٨٦١م) ثم",
             (65, 10, 70, 20): "١",  # the letter's gap
             (40, 10, 55, 20): "(٨٤٧-٨٦١م)",  # the date's gap
@@ -476,7 +479,7 @@ def test_a_page_approved_while_kraken_reads_is_left_alone(numbers_page):
             Page.objects.filter(pk=page.pk).update(reviewed_at=timezone.now())
             return super().read(pages)
 
-    done = nb.read_page_numbers(page, engine=Meanwhile({(60, 10, 75, 20): "(٣٣٤هـ)"}), style=nb.ARABIC_INDIC)
+    done = nb.read_page_numbers(page, engine=Meanwhile({(60, 8, 75, 22): "(٣٣٤هـ)"}), style=nb.ARABIC_INDIC)
     assert done.applied == 0
     line.refresh_from_db()
     assert line.tokens[1]["t"] == "(٢٢٢٢هـ)"
@@ -495,7 +498,7 @@ def test_a_line_the_reviewer_changes_while_kraken_reads_is_left_as_they_made_it(
             )
             return super().read(pages)
 
-    engine = Meanwhile({(60, 10, 75, 20): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢"})
+    engine = Meanwhile({(60, 8, 75, 22): "(٣٣٤هـ)", (0, 8, 40, 22): "٣٢٢"})
     done = nb.read_page_numbers(page, engine=engine, style=nb.ARABIC_INDIC)
     assert done.applied == 0
     line.refresh_from_db()
