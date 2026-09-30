@@ -476,3 +476,29 @@ which is the mode then. `primary_url` (D76) falls back to the page's sheet (`she
 attention list, the stage bar's «التخطيط» step and the redirect after a per-page action. The
 «تفاصيل المعالجة» icons on tiles and sheets and the «⋯» menu of review that held only that item are removed.
 `processing.urls` keeps its API routes only.
+
+## D85 — The linker's text-side repairs: lookalike note markers, numbers inside notes, half brackets, leftover calls (2026-09-30)
+
+A night of footnote work on books 29 and 31 (a hadith book, 75 notes, 63 orphans) and four six-page test books
+started with a diagnosis of every orphan (`playground/footnotes-2026-09-30/diagnose.py`). Four of its causes are
+visible in the text alone and are repaired by the assembly's linker (`assembly/pipeline.py`):
+
+- **A note marker read as a lookalike** («(أ) ١ ـ (الوحي)» for (١), book 31 p. 28) starts a note; its number is
+  one more than the page's numbered note before it, else one less than the one after it, else 1, and becomes the
+  note's marker (`_number_lookalike_notes`). Among lettered items («(ب)», «(ج)» at note-line starts) the «(أ)» is a
+  letter and continues the note.
+- **A bare number at a note line's start on a page that prints bracketed markers** is a marker only when it
+  continues the page's sequence (one more than its last note; on a page without one, 1 or one more than the
+  previous page's last note). Otherwise it is text: «١٢١ ـ عن عائشة» inside a commentary (book 31 pp. 40, 102)
+  made the false notes «121» and «19», each an orphan that also cut the real note short.
+- **A call read with one bracket lost** («» (” .», book 31 p. 23; «(ا» ) is a lookalike when it is a word of its
+  own, as the full-bracket ones of D82 are.
+- **Leftover calls** (`leftover_calls`): the page's bracketed or superscript calls of 1–15 that no note carries —
+  a misread digit, «(٦)» for (١) (book 29 p. 59, «زناتة (١)» on the image), «(3)» for (٢) (p. 256) — pair with the
+  notes still without a call when they are as many and lie in the page's order (the D82 lookalike rule, whose
+  order check is shared: `_pair_in_order`). A number above 15 stays text (a page reference «(22)», D74); a
+  crossing order stays unpaired. Each pairing warns `note_call_repaired`.
+
+Measured in memory (`assembly.services.preview`): book 29 orphans 21 → 19 (113 notes), book 31 63 → 54 (notes 75 →
+73: the two false notes are gone); every new link on book 29 was checked on the page image. D82's test that kept
+a lone «(١)» or «(٦)» from a lone note (٢) is replaced: one loose small call and one note without a call pair.

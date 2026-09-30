@@ -607,7 +607,8 @@ def test_orphan_notes_go_to_the_end_of_their_page_text_and_unmatched_markers_war
         pg(
             1,
             [
-                ln("متن الصفحة الأولى (٣) بلا حاشية مقابلة ثم الفيل٤ أيضًا ثم 7 رقم عادي", id=40),
+                # two loose calls for one note: which one is its call cannot be told (D85 pairs one to one)
+                ln("متن الصفحة الأولى (٣) بلا حاشية (٥) مقابلة ثم الفيل٤ أيضًا ثم 7 رقم عادي", id=40),
                 ln("(١) حاشية بلا علامة", kind="footnote", id=41),
             ],
         ),
@@ -620,6 +621,7 @@ def test_orphan_notes_go_to_the_end_of_their_page_text_and_unmatched_markers_war
     unmatched = [w for w in result.warnings if w["code"] == "marker_unmatched"]
     assert [w["message"] for w in unmatched] == [
         "علامة الحاشية «3» في الصفحة 1 بلا حاشية مقابلة.",
+        "علامة الحاشية «5» في الصفحة 1 بلا حاشية مقابلة.",
         "علامة الحاشية «4» في الصفحة 1 بلا حاشية مقابلة.",
     ]
     assert all(w["blockId"] == "p40" and w["lineIds"] == [40] for w in unmatched)
@@ -844,13 +846,20 @@ def test_the_two_digit_repair_stays_narrow():
     )
     assert {n["attrs"]["marker"]: n["attrs"]["orphan"] for n in notes_of(own)} == {"١": True, "١١": False}
     assert "note_call_repaired" not in codes(own)
-    # a second digit other than «١» («(٤١)» for (٢), p. 114), a three-digit «(١١٧)», a bare «١١»,
-    # a glued «كتاب١١»: none is the note's call
-    for body in ("كلام (٤١) هنا", "كلام (١١٧) هنا", "كلام ١١ هنا", "كتاب١١ هنا", "كلام (١) هنا"):
+    # «(٤١)» (above the positional range: it may be a page reference; the call pass reads the ink), a
+    # three-digit «(١١٧)», a bare «١١», a glued «كتاب١١»: none is taken for the call
+    for body in ("كلام (٤١) هنا", "كلام (١١٧) هنا", "كلام ١١ هنا", "كتاب١١ هنا"):
         result = run([pg(1, [ln(body, id=93), ln("(٢) حاشية", kind="footnote", id=94)])])
         (footnote,) = notes_of(result)
         assert footnote["attrs"]["orphan"] is True, body
         assert "note_call_repaired" not in codes(result), body
+    # the page's one loose small bracketed call and its one note without a call pair (D85, `leftover_calls`;
+    # book 29 p. 59: «زناتة (١)» read «(٦)»)
+    for body in ("كلام (١) هنا", "كلام (٦) هنا"):
+        result = run([pg(1, [ln(body, id=93), ln("(٢) حاشية", kind="footnote", id=94)])])
+        (footnote,) = notes_of(result)
+        assert footnote["attrs"]["orphan"] is False, body
+        assert codes(result).count("note_call_repaired") == 1, body
     # note (١) has its call: a leftover «(١١)» is not taken for it (it warns as before)
     called = run([pg(1, [ln("الأول (١) ثم (١١) بعده", id=95), ln("(١) حاشية", kind="footnote", id=96)])])
     assert text_of(blocks_of(called)[0]) == "الأول[1] ثم (11) بعده"
@@ -1195,7 +1204,7 @@ def test_document_shape():
 
 def test_warnings_shape_messages_are_arabic_with_western_digits():
     pages = [
-        pg(1, [ln("متن (٣) ثم", uncertain=[0]), ln("(١) حاشية", kind="footnote")], status="ocr_done"),
+        pg(1, [ln("متن (٣) ثم (٥)", uncertain=[0]), ln("(١) حاشية", kind="footnote")], status="ocr_done"),
         pg(2, [ln("قيد المعالجة")], status="layout_done"),
         pg(3, [ln("خطأ")], status="error"),
         pg(4, []),
@@ -2658,3 +2667,134 @@ def test_assemble_command_runs_and_saves(db):
     assert "manuscript v1" in out.getvalue()
     assert Manuscript.objects.get(book=f.book).version == 1
     assert f.book.pages.get(number=1).status == Page.Status.ASSEMBLED
+
+
+# ---------------------------------------------------------------- D85: the linker's text-side repairs
+
+
+def test_a_note_marker_read_as_a_lookalike_takes_the_next_number_of_its_page():
+    """Book 31 p. 28: the note marker «(١)» read «(أ)» made a marker-less orphan note (D85)."""
+    first = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) ثم كلام (٢) هنا", id=10),
+                    ln("(أ) الأولى", kind="footnote", id=11),
+                    ln("(٢) الثانية", kind="footnote", id=12),
+                ],
+            )
+        ]
+    )
+    assert [(n["attrs"]["orphan"], n["attrs"]["id"]) for n in notes_of(first)] == [
+        (False, "n11"),
+        (False, "n12"),
+    ]
+    assert text_of(blocks_of(first)[0]) == "كلام[1] ثم كلام[2] هنا"
+    second = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) ثم كلام (٢) هنا", id=20),
+                    ln("(١) الأولى", kind="footnote", id=21),
+                    ln("(”) الثانية", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(second)] == [False, False]
+    # among lettered items «(ب)», «(ج)» the «(أ)» is a letter of the note: it continues the note
+    lettered = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) هنا", id=30),
+                    ln("(١) حاشية فيها أقسام :", kind="footnote", id=31),
+                    ln("(أ) القسم الأول", kind="footnote", id=32),
+                    ln("(ب) القسم الثاني", kind="footnote", id=33),
+                ],
+            )
+        ]
+    )
+    (note,) = notes_of(lettered)
+    assert note["attrs"]["sourceLineIds"] == [31, 32, 33] and note["attrs"]["orphan"] is False
+
+
+def test_a_bare_number_in_the_notes_of_a_bracketed_page_is_a_marker_only_in_sequence():
+    """Book 31 p. 40: «١٢١ ـ عن عائشة» inside a commentary note made a note «121» (D85)."""
+    inside = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) هنا", id=10),
+                    ln("(١) قال الحافظ : وفي الحديث", kind="footnote", id=11),
+                    ln("١٢١ ـ عن عائشة رضي الله عنها", kind="footnote", id=12),
+                ],
+            )
+        ]
+    )
+    (note,) = notes_of(inside)
+    assert note["attrs"]["sourceLineIds"] == [11, 12] and note["attrs"]["orphan"] is False
+    assert "note_orphan" not in codes(inside)
+    # the next number of the sequence is a marker, bracketed or not
+    sequence = run(
+        [
+            pg(
+                1,
+                [
+                    ln("كلام (١) ثم (٢) هنا", id=20),
+                    ln("(١) الأولى", kind="footnote", id=21),
+                    ln("٢ ـ الثانية", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(sequence)] == [False, False]
+    # a page printing bare markers only is as before
+    bare = run([pg(1, [ln("كلام ٣ هنا", id=30), ln("٣ ـ حاشية", kind="footnote", id=31)])])
+    (note,) = notes_of(bare)
+    assert note["attrs"]["marker"] == "٣"
+
+
+def test_a_call_read_with_one_bracket_is_a_lookalike():
+    """Book 31 p. 23: the raised «(١)» after «»» read «(”» (D85)."""
+    result = run([pg(1, [ln("فله الجنة » (” . ومنها", id=10), ln("(١) حاشية", kind="footnote", id=11)])])
+    (note,) = notes_of(result)
+    assert note["attrs"]["orphan"] is False
+    assert text_of(blocks_of(result)[0]) == "فله الجنة»[1]. ومنها"
+    assert codes(result).count("note_call_repaired") == 1
+
+
+def test_a_leftover_call_pairs_only_in_the_order_of_its_page():
+    # note (٢) takes its «(٢)»; the loose «(٣)» lies before it, where note (١)'s call must be: they pair
+    before = run(
+        [
+            pg(
+                1,
+                [
+                    ln("الأول (٣) ثم الثاني (٢) هنا", id=10),
+                    ln("(١) الأولى", kind="footnote", id=11),
+                    ln("(٢) الثانية", kind="footnote", id=12),
+                ],
+            )
+        ]
+    )
+    assert text_of(blocks_of(before)[0]) == "الأول[1] ثم الثاني[2] هنا"
+    # after note (٢)'s call it cannot be note (١)'s: the note stays an orphan, the call warns
+    after = run(
+        [
+            pg(
+                1,
+                [
+                    ln("الأول (٢) ثم الثاني (٣) هنا", id=20),
+                    ln("(١) الأولى", kind="footnote", id=21),
+                    ln("(٢) الثانية", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    assert {n["attrs"]["id"]: n["attrs"]["orphan"] for n in notes_of(after)} == {"n21": True, "n22": False}
+    assert "marker_unmatched" in codes(after) and "note_call_repaired" not in codes(after)
