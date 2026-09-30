@@ -2969,6 +2969,44 @@ def test_a_call_the_models_wrote_with_quote_strokes_is_linked():
     assert '"الموطأ"' in text
 
 
+def test_a_second_call_with_the_number_of_a_linked_note_is_the_next_notes_call():
+    """Book 32 p. 4: the calls read «(1)» and «(1)» for (١) and (٢); note 1 takes the first, the second is
+    note 2's in the page's order (D87)."""
+    result = run(
+        [
+            pg(
+                1,
+                [
+                    ln("عبد الملك (1) ، ثم مات سنة 339 ـ (1) . وقال في التذكرة (٣) ، هنا", id=10),
+                    ln("(١) الأولى", kind="footnote", id=11),
+                    ln("(٢) الثانية", kind="footnote", id=12),
+                    ln("(٣) الثالثة", kind="footnote", id=13),
+                ],
+            )
+        ]
+    )
+    assert [n["attrs"]["orphan"] for n in notes_of(result)] == [False, False, False]
+    assert "marker_unmatched" not in codes(result)
+    # the same page as read: note 3 in note 2's line after its last sentence
+    merged = run(
+        [
+            pg(
+                1,
+                [
+                    ln("عبد الملك (1) ، ثم مات سنة 339 ـ (1) . وقال في التذكرة (٣) ، هنا", id=20),
+                    ln("(١) الأولى", kind="footnote", id=21),
+                    ln("(٢) الثانية وزدت كلمات. (3) م م :94 .", kind="footnote", id=22),
+                ],
+            )
+        ]
+    )
+    notes = notes_of(merged)
+    assert [n["attrs"]["orphan"] for n in notes] == [False, False, False]
+    assert notes[1]["content"][0]["text"].endswith("كلمات.") and notes[2]["content"][0]["text"].startswith(
+        "م م"
+    )
+
+
 def test_a_note_line_printed_with_an_equals_sign_continues_the_note_before():
     """Books 32 and 34 print «=» at the start of a note carried over from the page before: it continues
     that note even when the note ends a sentence and the page has calls of its own (D85)."""

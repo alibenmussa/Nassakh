@@ -1599,7 +1599,7 @@ def compose_page(page: Page, region_texts: list[RegionText] | None = None) -> Co
         region_texts=region_texts,
         lines=new_lines,
         final_text=final_text,
-        fallback=any(rt.fallback and not rt.unreadable for rt in region_texts),
+        fallback=any(rt.fallback and not rt.unreadable and rt.text.strip() for rt in region_texts),
         unreadable=any(rt.unreadable for rt in region_texts),
         poor=has_geometry and total_tokens >= 10 and anchored / total_tokens < MIN_ANCHOR_RATIO,
         merged=merged,

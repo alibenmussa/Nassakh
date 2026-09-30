@@ -1373,6 +1373,9 @@ def page_notes(page: PageIn, carry: Note | None, open_calls: int = 0) -> tuple[l
     restored = _restore_missing_number(notes, page)
     if restored is not None and current is not None and restored[0] is current:
         current = restored[1]  # the page's last note is now the restored one
+    split = _split_merged_notes(notes)
+    if split is not None and current is not None and split[0] is current:
+        current = split[1]
     if not lines:
         return notes, None
     return notes, current
@@ -1435,6 +1438,49 @@ def _number_lookalike_notes(notes: list[Note]) -> None:
             continue
         taken.add(key)
         note.key = note.marker = key
+
+
+_RE_INNER_MARKER = re.compile(rf"(?<=[.»”)\]]\s)[\(\[]\s*({_DIGIT_RUN}{{1,3}})\s*[\)\]]\s*")
+
+
+def _split_merged_notes(notes: list[Note]) -> tuple[Note, Note] | None:
+    """A note whose text holds the next note's start (D87): two printed lines read as one
+    («… «النزهة». (3) م م :94 .», book 32 p. 4). A bracketed number after a sentence's end that is the next
+    note's number, when no note of the page carries it, starts that note (its number its marker; the line is
+    both notes').
+    Returns `(note, new note)` of the last split, or None."""
+    last = None
+    i = 0
+    while i < len(notes):
+        note = notes[i]
+        i += 1
+        if not (note.key and note.key.isdigit()):
+            continue
+        want = str(int(note.key) + 1)
+        if any(other.key == want for other in notes):
+            continue
+        match = next(
+            (m for m in _RE_INNER_MARKER.finditer(note.rich.text) if marker_key(m.group(1)) == want), None
+        )
+        if match is None:
+            continue
+        line_id = note.rich.meta[match.start()].line
+        at = next((k for k, line in enumerate(note.lines) if line.id == line_id), None)
+        if at is None:
+            continue
+        new = Note(
+            id=note_id(note.lines[at].id) + "-" + want,
+            marker=want,
+            key=want,
+            page=note.page,
+            lines=note.lines[at:],
+            rich=note.rich.cut(match.end()),
+            reviewed=note.reviewed,
+        )
+        note.lines, note.rich = note.lines[: at + 1], note.rich.cut(0, match.start())
+        notes.insert(i, new)
+        last = (note, new)
+    return last
 
 
 def _repair_sequence(notes: list[Note]) -> None:
@@ -1759,8 +1805,9 @@ def leftover_calls(
     (٢) (book 29 pp. 59, 256) — paired with the notes still without a call when they can only be theirs
     (D85): as many, in the page's order (`_pair_in_order`). A call at a block's start is a marker left in
     the body, never a call."""
-    keys = {note.key for note in notes if note.key}
-    loose = [
+    linked = {note.key for note in notes if note.key and id(note) in linked_at}
+    keys = {note.key for note in notes if note.key} - linked  # a second «(1)» after note 1 is linked: a
+    loose = [  # misread digit too (book 32 p. 4: «(1)» … «339 ـ (1)» for (١) … (٢), D87)
         i
         for i, cand in enumerate(cands)
         if i not in used
