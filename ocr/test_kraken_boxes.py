@@ -235,7 +235,14 @@ def test_the_lines_read_are_the_bands_and_the_tesseract_lines_no_band_holds():
             (26, 48),
         ),  # half a pitch (50 px) above the core at most, halfway to the next line
         (90, 104, 67, 117, False, (86, 108)),
-        (130, 144, 117, 169, True, (117, 169)),  # the short line the band detector missed, from its own ink
+        (
+            130,
+            144,
+            117,
+            169,
+            True,
+            (126, 148),
+        ),  # read in Tesseract's rows  # the short line the band detector missed, from its own ink
     ]
     assert [(c.x0, c.x1) for c in crops] == [(60, 370), (60, 370), (300, 370)]
     # a band holding two Tesseract lines, far taller than the others, is those lines

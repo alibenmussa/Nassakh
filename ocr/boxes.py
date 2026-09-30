@@ -150,7 +150,8 @@ def region_crops(
     `bands` are the page's `Preprocess.line_boxes`, `tess_lines` the region's Tesseract lines (gray-image
     pixels). A band belongs to the region when its middle row lies in it and its columns overlap it; it is
     read in its columns and in the rows of the Tesseract lines fitted to it (`alignment.fit_lines`), or of
-    its own reach without them. A band that is a printed rule (`is_rule`) is not read: a Tesseract line
+    its own reach without them (a line the detector missed, in its Tesseract line's rows). A band that is a
+    printed rule (`is_rule`) is not read: a Tesseract line
     fitted to it counts as a line without a band. Such a line is one the detector missed only when its ink
     (its core, the rules' rows aside) lies `APART` pitches or more from every band (else it is a raised call
     or the marks above a thin band); two such lines whose cores share rows (one printed line in two pieces)
@@ -177,7 +178,7 @@ def region_crops(
             for k in held:  # two printed lines the detector took for one
                 x0, top, x1, bottom = lines[k]["bbox"]
                 y0, y1 = ink_core(gray, [x0, max(b["y0"], top), x1, min(b["y1"], bottom)])
-                cores.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "line": True})
+                cores.append({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "line": True, "rows": [top, bottom]})
                 used.add(k)
             continue
         cores.append({**b, "line": False})
@@ -200,10 +201,11 @@ def region_crops(
             continue  # on a band's printed line: a raised call, the marks above a thin core
         near = next((m for m in missed if min(m["y1"], y1) > max(m["y0"], y0)), None)
         if near is None:
-            missed.append({"x0": box[0], "y0": y0, "x1": box[2], "y1": y1, "line": True})
+            missed.append({"x0": box[0], "y0": y0, "x1": box[2], "y1": y1, "line": True, "rows": box[1::2]})
         else:  # the same missed line in two pieces
             near.update(x0=min(near["x0"], box[0]), y0=min(near["y0"], y0))
             near.update(x1=max(near["x1"], box[2]), y1=max(near["y1"], y1))
+            near.update(rows=[min(near["rows"][0], box[1]), max(near["rows"][1], box[3])])
     cores = sorted(cores + missed, key=lambda c: (c["y0"], c["y1"]))
     pitch = line_pitch(cores) or line_pitch(valid) or 3.0 * max(1, median_h)
     out: list[Crop] = []
@@ -215,7 +217,7 @@ def region_crops(
             hi = min(hi, (c["y1"] + cores[n + 1]["y0"]) / 2)
         lo, hi = max(0, min(int(lo), int(c["y0"]))), max(int(round(hi)), int(c["y1"]))
         top = bottom = None
-        fitted_rows = None if c["line"] else rows.get((int(c["y0"]), int(c["y1"])))
+        fitted_rows = c["rows"] if c["line"] else rows.get((int(c["y0"]), int(c["y1"])))
         if fitted_rows is not None:  # the rows Tesseract's lines took there, inside the line's reach
             top = max(lo, min(int(c["y0"]), fitted_rows[0]))
             bottom = min(hi, max(int(c["y1"]), fitted_rows[1]))
