@@ -1656,7 +1656,9 @@ def _crop_list(crops: list[boxes.Crop]) -> list[list]:
     return [c.as_list() for c in crops]
 
 
-def _stored_lines(run: OcrRun, crops: list[boxes.Crop], gray: np.ndarray) -> list[dict] | None:
+def _stored_lines(
+    run: OcrRun, crops: list[boxes.Crop], gray: np.ndarray, tess_lines: list[dict]
+) -> list[dict] | None:
     """A stored `boxes` run's lines when it read `crops` (shaped again from its answer when the shaping
     changed since), None when it read other lines."""
     params = run.params or {}
@@ -1668,7 +1670,7 @@ def _stored_lines(run: OcrRun, crops: list[boxes.Crop], gray: np.ndarray) -> lis
         raw = json.loads(run.raw_output or "[]")
     except json.JSONDecodeError:
         return None
-    return boxes.shape_lines(raw, crops, gray)
+    return boxes.region_lines(raw, crops, gray, tess_lines)
 
 
 def _gray_path(pre: Preprocess, gray: np.ndarray, tmpdir: Path) -> str:
@@ -1684,7 +1686,8 @@ def attach_box_lines(
 ) -> int:
     """Give each of `region_texts` Kraken's lines (`RegionText.box_lines`, D92); returns how many got them.
 
-    A region's printed lines are `boxes.region_crops` (its line bands and the Tesseract lines no band holds).
+    A region's printed lines are `boxes.region_crops` (its line bands and the Tesseract lines no band holds;
+    Tesseract's own words stay on a short line where it read a number Kraken missed, `boxes.number_lines`).
     Its stored `boxes` run serves when it read the same lines; the others are read in one Kraken call for the
     page (`boxes.read_boxes`) and, with `save`, stored as one run per region (engine `kraken`, variant `gray`,
     `params`: scope and kind as any run of the region, `"pass": "boxes"`, the lines read (`crops`), the shaped
@@ -1699,7 +1702,7 @@ def attach_box_lines(
         if not crops:
             continue
         run = stored.get(_region_key(rt.target))
-        lines = _stored_lines(run, crops, gray) if run is not None else None
+        lines = _stored_lines(run, crops, gray, rt.tess_lines) if run is not None else None
         if lines is None:
             to_read[n] = (rt, crops)
         elif lines:
@@ -1711,7 +1714,9 @@ def attach_box_lines(
         engine = registry.get_engine("kraken")
         with tempfile.TemporaryDirectory(prefix="nassakh-boxes-") as tmp:
             path = _gray_path(page.preprocess, gray, Path(tmp))
-            read, raw, seconds = boxes.read_boxes(engine, path, gray, {n: c for n, (_, c) in to_read.items()})
+            crops = {n: c for n, (_, c) in to_read.items()}
+            tess = {n: rt.tess_lines for n, (rt, _) in to_read.items()}
+            read, raw, seconds = boxes.read_boxes(engine, path, gray, crops, tess)
     except Exception as exc:  # noqa: BLE001 - the boxes are a bonus: Tesseract's stand
         log.warning("page %s: Kraken could not read the word boxes (%s); Tesseract's are used", page.pk, exc)
         return attached

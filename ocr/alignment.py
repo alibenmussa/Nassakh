@@ -68,6 +68,7 @@ _CLOSERS = frozenset(")]")  # a closing bracket after a line's last word ends th
 _BRACKETED = re.compile(r"^[(\[][^\s()\[\]]{1,4}[)\]][.,،؛:]*$")
 _BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")  # Tesseract adds RLMs
 _LATIN = re.compile(r"[A-Za-z]")
+_TATWEEL = frozenset("ـ")
 # «ج» (volume), «ص» (page), «ط» (edition) before their number, and any digit
 _ABBREVIATION = re.compile(r"^[(\[«]?[جصط]$")
 _DIGITS = re.compile(r"[0-9٠-٩۰-۹]")
@@ -685,9 +686,11 @@ def is_special(token: str) -> str:
 
     Punctuation and numbers are never paired with a word (`build_lines`): every mark normalises to
     nothing (so any two marks compared equal) and Tesseract rarely reads Arabic-Indic digits as digits.
+    A token of tatweels alone is a dash (a list item's «ـ», «٢٣ ـ ٣١٥»), which a reader may write «-»
+    (D92: Kraken does).
     """
     text = _BIDI_CONTROLS.sub("", str(token or ""))
-    if not _chars([text]):
+    if not _chars([text]) or set(text) <= _TATWEEL:
         return "punct"
     return "number" if is_digit_token(text) else ""
 

@@ -105,7 +105,7 @@ def fake_kraken(**kwargs) -> LineKraken:
 
 
 def texts(chars: list[list]) -> list[tuple[str, bool]]:
-    return [(boxes.word_text(rows), glued) for rows, glued in boxes.split_words(chars)]
+    return [(boxes.word_text(p.rows), p.glued) for p in boxes.split_words(chars)]
 
 
 def flat(text: str) -> list[list]:
@@ -118,9 +118,12 @@ def test_words_split_at_spaces_and_punctuation_and_numbers_keep_their_brackets()
     assert texts(flat("(١).")) == [("(١)", False), (".", False)]
     assert texts(flat("١٩٦٦م.")) == [("١٩٦٦م", False), (".", False)]  # letters stay with their digits
     assert texts(flat("«الموطأ»")) == [("«", False), ("الموطأ", False), ("»", False)]
-    # a joiner between two digit runs and the digits after it may continue the number (decided by the ink)
+    # a number laid out as one left-to-right run is one word (Kraken's positions inside it are permuted) ...
+    assert texts(flat("(٤١٠/١")) == [("(٤١٠/١", False)]
+    assert texts(flat("(274/1).")) == [("(274/1)", False), (".", False)]
+    assert texts(flat("1966-1967م")) == [("1966-1967م", False)]
+    # ... a dash between Arabic-Indic digits parts two runs: the dash and the digits after it may continue it
     assert texts(flat("٢٢-٣٠٨")) == [("٢٢", False), ("-", True), ("٣٠٨", True)]
-    assert texts(flat("(٤١٠/١")) == [("(٤١٠", False), ("/", True), ("١", True)]
 
 
 def test_a_word_s_confidence_is_its_characters_mean_as_a_percentage():
@@ -165,6 +168,22 @@ def test_a_number_read_without_its_spaces_is_one_word_only_when_its_ink_is_tight
         gray = draw([(words, CORE_A)])
         chars = [row for row in kraken_chars(words) if row[0] != " "]  # Kraken dropped the spaces
         line = boxes.kraken_line(chars, boxes.Crop(220, 30, 370, 44, 0, 67), gray)
+        assert [(w["text"], w["bbox"]) for w in line["words"]] == expected
+
+
+def test_a_mark_read_without_a_space_joins_its_word_where_the_print_glues_it():
+    glued = [("القرآن", 250, 370), (".", 243, 247), ("(", 190, 196), ("قالت", 120, 186), (")", 112, 118)]
+    spaced = [("عنها", 250, 370), (":", 215, 222), ("نعم", 120, 190)]
+    for words, expected in (
+        (glued, [("القرآن.", [243, 30, 370, 44]), ("(قالت)", [112, 30, 196, 44])]),
+        (spaced, [("عنها", [250, 30, 370, 44]), (":", [215, 34, 222, 44]), ("نعم", [120, 30, 190, 44])]),
+    ):
+        gray = draw([(words, CORE_A)])
+        chars = kraken_chars(words)
+        chars = [row for n, row in enumerate(chars) if row[0] != " " or n == 0]  # Kraken read no space
+        if words is glued:  # ... but for the one between the two words
+            chars.insert(next(n for n, row in enumerate(chars) if row[0] == "("), [" ", 200.0, 202.0, 0.99])
+        line = boxes.kraken_line(chars, boxes.Crop(100, 30, 370, 44, 0, 67), gray)
         assert [(w["text"], w["bbox"]) for w in line["words"]] == expected
 
 
@@ -226,6 +245,20 @@ def test_the_lines_read_are_the_bands_and_the_tesseract_lines_no_band_holds():
     assert [(c.y0, c.y1) for c in crops] == [(30, 44), (90, 104), (130, 144), (170, 184)]
     # the region's columns bound the line's
     assert {(c.x0, c.x1) for c in boxes.region_crops(BANDS, [], [100, 0, 300, H], gray)} == {(100, 300)}
+
+
+def test_a_printed_rule_is_no_line_and_the_line_it_held_is_read_on_its_own():
+    rule = {"x0": 60, "y0": 120, "x1": 370, "y1": 123}  # a footnote rule the band detector took for a line
+    gray = draw(
+        [(LINE_A, CORE_A), (LINE_B, CORE_B), ([("حاشية", 250, 370)], (140, 154))], [(60, 120, 370, 123)]
+    )
+    note = tess_line([("حاشية", 250, 370)], (140, 154))
+    note["bbox"][1] = 118  # Tesseract's box reaches over the rule: it is fitted to the rule's band
+    crops = boxes.region_crops([*BANDS, rule], [tess_line(LINE_A, CORE_A), note], [0, 0, W, 200], gray)
+    assert boxes.is_rule(rule, gray, W) and not boxes.is_rule(BANDS[0], gray, W)
+    word = {"x0": 300, "y0": 140, "x1": 370, "y1": 154}  # a line of one word, its baseline inked end to end
+    assert not boxes.is_rule(word, gray, W)
+    assert [(c.y0, c.y1, c.line) for c in crops] == [(30, 44, False), (90, 104, False), (140, 154, True)]
 
 
 def test_a_tesseract_line_on_a_band_s_printed_line_is_not_read_as_a_line_of_its_own():
