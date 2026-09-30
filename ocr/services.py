@@ -68,6 +68,11 @@ ORNAMENT_LETTERS = frozenset("هاودةءأ")  # dots and flourishes read as le
 ORNAMENT_SHARE = 0.9
 ORNAMENT_MIN_LETTERS = 20
 _LATIN_LETTER = re.compile(r"[A-Za-z]")
+# D90: a region both models failed on is read again in pieces of a few printed lines before Tesseract's text
+# stands for it (a loop comes with length: book 31's full pages of vowelled hadith and commentary).
+PIECE_LINES = 4  # printed lines (`Preprocess.line_boxes`) per piece
+PIECE_MIN_BANDS = 5  # a region of fewer lines is not cut
+PIECE_MIN_CONF = 40.0  # under this mean Tesseract confidence the region is a picture (photos: 22–36)
 # How a page was read (`Page.reading["readers"]`, D73), weakest last.
 READERS_TWO = "two"
 READERS_ONE = "one"
@@ -982,6 +987,20 @@ def run_full_ocr(page: Page) -> None:
             secondary_run = run_engine(page, secondary, target, image_path, variant, cap, scale)
             _record_check(secondary_run, reference)
             n_model_runs += 2
+            if select_reading(primary_run, secondary_run, tess).fallback and _worth_pieces(tess, reference):
+                pieces = piece_boxes(pre.line_boxes, target.bbox)
+                if pieces:
+                    log.info(
+                        "page %s %s: both models failed; read again in %d pieces",
+                        page.pk,
+                        target.kind,
+                        len(pieces),
+                    )
+                    for name in (primary, secondary):
+                        _read_in_pieces(
+                            page, target, name, gray, pieces, scale, variant, cap, reference, tmpdir, i
+                        )
+                        n_model_runs += len(pieces)
             model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
     if n_model_runs and len(model_errors) == n_model_runs:
         # Every model call crashed (out of memory, broken weights...): this is an engine failure,
@@ -994,6 +1013,100 @@ def run_full_ocr(page: Page) -> None:
         page.printed_number = number[0]
         page.save(update_fields=["printed_number"])
     finalize_page(page)
+
+
+def _worth_pieces(tess: OcrRun | None, reference: str) -> bool:
+    """Whether a region both models failed on may be text the models read in smaller pieces (D90): Tesseract
+    saw words there, not a picture — no Latin, ornament or letterless reading, and a confidence of at least
+    `PIECE_MIN_CONF` (vowelled print reads at 44–53, photos at 22–36)."""
+    if not (reference or "").strip():
+        return False
+    why = tesseract_unreadable(tess, reference)
+    if why == "low confidence":
+        return (tesseract_confidence(tess) or 0.0) >= PIECE_MIN_CONF
+    return not why
+
+
+def piece_boxes(bands: list[dict] | None, bbox: list[int]) -> list[list[int]]:
+    """The region `bbox` cut into pieces of `PIECE_LINES` printed lines (`bands`, the page's detected lines),
+    each cut halfway between two lines; none for a region of fewer than `PIECE_MIN_BANDS` lines (D90)."""
+    x0, y0, x1, y1 = (int(v) for v in bbox)
+    inside = sorted(
+        (b for b in bands or [] if y0 <= (float(b["y0"]) + float(b["y1"])) / 2 <= y1),
+        key=lambda b: float(b["y0"]),
+    )
+    if len(inside) < PIECE_MIN_BANDS:
+        return []
+    groups = [inside[k : k + PIECE_LINES] for k in range(0, len(inside), PIECE_LINES)]
+    if len(groups) > 2 and len(groups[-1]) == 1:  # a lone last line goes with the piece above
+        last = groups.pop()
+        groups[-1] = groups[-1] + last
+    if len(groups) < 2:
+        return []
+    out: list[list[int]] = []
+    top = y0
+    for k, group in enumerate(groups):
+        if k + 1 < len(groups):
+            bottom = int((float(group[-1]["y1"]) + float(groups[k + 1][0]["y0"])) / 2)
+        else:
+            bottom = y1
+        out.append([x0, top, x1, bottom])
+        top = bottom
+    return out
+
+
+def _read_in_pieces(
+    page: Page,
+    target: Target,
+    engine_name: str,
+    gray: np.ndarray,
+    pieces: list[list[int]],
+    scale: int,
+    variant: str,
+    cap: int,
+    reference: str,
+    tmpdir: Path,
+    index: int,
+) -> OcrRun:
+    """Read `target` again with `engine_name` piece by piece (D90) and store the reading as one run of the
+    region (`input_variant` «…_pieces», its pieces' runs listed in `params["pieces"]`), checked against the
+    region's Tesseract text like any run; being the latest, it is the one `select_reading` sees."""
+    parts: list[OcrRun] = []
+    for k, box in enumerate(pieces):
+        piece = Target(target.region, box)
+        path = _save_temp(_crop_image(gray, box, scale), tmpdir, f"{variant}-{index}-{target.kind}~p{k}")
+        parts.append(run_engine(page, engine_name, piece, path, f"{variant}_p{k}", cap, scale))
+    first = parts[0]
+    failed = next((r for r in parts if r.status != OcrRun.Status.OK), None)
+    # a piece looping on dots or a flourish (a separator «. . . .», «* * *») holds no words: it is empty
+    blank = {r.pk for r in parts if r.looped and not _ARABIC_LETTER.search(r.parsed_text or "")}
+    run = OcrRun(
+        page=page,
+        region=target.region,
+        engine_name=first.engine_name,
+        model_id=first.model_id,
+        model_revision=first.model_revision,
+        backend=first.backend,
+        prompt=first.prompt,
+        input_variant=f"{variant}_pieces"[:20],
+        params={
+            "scope": target.scope,
+            "kind": target.kind,
+            "max_new_tokens": cap,
+            "pieces": [r.pk for r in parts],
+        },
+        raw_output="\n".join(r.raw_output for r in parts),
+        parsed_text="\n".join(r.parsed_text for r in parts if r.parsed_text and r.pk not in blank),
+        looped=any(r.looped for r in parts if r.pk not in blank),
+        duration_ms=sum(r.duration_ms or 0 for r in parts),
+        output_tokens=sum(r.output_tokens or 0 for r in parts),
+        finish="pieces",
+    )
+    if failed is not None:
+        run.status, run.error = OcrRun.Status.ERROR, failed.error
+    run.save()
+    _record_check(run, reference)
+    return run
 
 
 PAGE_NUMBER_VLM_TOKENS = 16
@@ -1066,6 +1179,17 @@ def looped_prefix_of(run: OcrRun | None) -> str:
     return flags.looped_prefix(run.raw_output or run.parsed_text or "", hit_cap=run.finish == "length")
 
 
+def tesseract_confidence(run: OcrRun | None) -> float | None:
+    """The mean confidence of the words of a Tesseract run (None without words)."""
+    confs = [
+        float(w.get("conf") or 0)
+        for line in ((run.params or {}).get("lines") or [] if run is not None else [])
+        for w in line.get("words") or []
+        if str(w.get("text") or "").strip()
+    ]
+    return sum(confs) / len(confs) if confs else None
+
+
 def tesseract_unreadable(run: OcrRun | None, text: str) -> str:
     """Why Tesseract's `text` of a region is no text at all (D89), '' when it may be read: no letter in it,
     its words' mean confidence under `TESS_UNREADABLE_CONF` (photos: 22–34, print: 63–87 on books 29 and
@@ -1075,14 +1199,8 @@ def tesseract_unreadable(run: OcrRun | None, text: str) -> str:
     latin = _LATIN_LETTER.findall(text or "")
     if not arabic and not latin:
         return "no letters"
-    words = [
-        w
-        for line in ((run.params or {}).get("lines") or [] if run is not None else [])
-        for w in line.get("words") or []
-        if str(w.get("text") or "").strip()
-    ]
-    confs = [float(w.get("conf") or 0) for w in words]
-    if confs and sum(confs) / len(confs) < TESS_UNREADABLE_CONF:
+    mean = tesseract_confidence(run)
+    if mean is not None and mean < TESS_UNREADABLE_CONF:
         return "low confidence"
     if len(latin) >= TESS_UNREADABLE_LATIN * (len(arabic) + len(latin)):
         return "latin"

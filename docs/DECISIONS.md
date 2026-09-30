@@ -591,3 +591,21 @@ kept. The provisional text skips such regions too. On book 31, 16 regions go (th
 pages, a page of three digits, and three pages of vowelled hadith where both models looped and Tesseract read at
 44–50: text the models should read on a second try in smaller pieces, not Tesseract); book 29 loses two (a photo
 page, a Latin-read footnote). No test book changes.
+
+## D90 — A region both models failed on is read again in pieces of a few lines before Tesseract stands for it (2026-09-30)
+
+A model that loops does so on length: book 31's pages of vowelled hadith and commentary, ten to twenty dense lines,
+looped in both Qari models, and the region fell back to Tesseract's text (D16), which there is half noise, then
+under D89 to no text at all. Now, when the selection would fall back (`select_reading(...).fallback`) and
+Tesseract saw words there rather than a picture (not Latin, ornament or letterless; mean confidence at least 40 —
+vowelled print reads at 44–53, photos at 22–36; `_worth_pieces`), the region is cut into pieces of four printed
+lines (`Preprocess.line_boxes`, each cut halfway between two lines; a region of fewer than five lines is not cut;
+`piece_boxes`) and both models read every piece at the region's scale. Each model's pieces are joined into one run
+of the region (`input_variant` «…_pieces», the pieces' runs in `params["pieces"]`), checked against Tesseract like
+any run and, being the latest, chosen by the selection as usual: both pass, or both differ from Tesseract but agree
+with each other. A piece that loops on dots or a flourish (a separator «. . . .») holds no words and is left out
+rather than failing the region. Only failing regions pay the extra reading (about one to three minutes a page).
+
+On book 31 the eight pages whose body or notes had fallen back while holding real text (pp. 44, 61, 87, 88, 93,
+100, 103, 111) were read again: all eight now carry the models' text; on pp. 93, 100 and 103 the two models agree
+and no flag is left. Photos and ornament pages (pp. 11–21, 45, 49, 52) are not retried.

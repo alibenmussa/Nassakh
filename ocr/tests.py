@@ -2156,3 +2156,76 @@ def test_a_region_both_models_failed_on_keeps_no_text_when_tesseract_read_a_phot
     text = "قال الحافظ في فتح الباري وفي الحديث تعظيم قدر الصلاة"
     kept = services.select_reading(loop_a, loop_b, _tess(text, 87))
     assert kept.fallback and kept.text == text and not kept.unreadable
+
+
+# ---------------------------------------------------------------- D90: a failed region read again in pieces
+
+
+def test_piece_boxes_cut_a_region_between_its_printed_lines(monkeypatch):
+    bands = [{"x0": 0, "y0": 30 + 20 * k, "x1": 100, "y1": 40 + 20 * k} for k in range(9)]  # 9 lines
+    assert services.piece_boxes(bands, [0, 20, 120, 220]) == [
+        [0, 20, 120, 105],  # lines 1-4, cut halfway to line 5
+        [0, 105, 120, 220],  # lines 5-9: a lone last line goes with the piece above
+    ]
+    five = services.piece_boxes(bands[:5], [0, 20, 120, 220])  # 4 + 1 lines: two pieces, not one
+    assert len(five) == 2
+    assert services.piece_boxes(bands[:4], [0, 20, 120, 220]) == []  # a short region is not cut
+
+
+def test_a_region_both_models_loop_on_is_read_again_in_pieces(page, monkeypatch):
+    """Book 31: whole pages of vowelled hadith looped in both models; read in pieces of a few lines, each
+    model reads them, and the pieces' text is the region's (D90)."""
+    add_regions(page)
+    pre = page.preprocess
+    pre.line_boxes = [{"x0": 0, "y0": y, "x1": W, "y1": y + 6} for y in (24, 34, 46, 56)]
+    pre.save()
+    monkeypatch.setattr(services, "PIECE_MIN_BANDS", 4)
+    monkeypatch.setattr(services, "PIECE_LINES", 2)
+    looping = OcrResult(text=PRIMARY_BODY, duration_s=1.0, output_tokens=2500, finish="length")
+    first, second = "قال الأمير في سنة ١٩٦٦ إن الكتاب مفيد", "وهذا سطر ثانٍ من المتن"
+    fakes = engines()
+    for name in ("qari_v03", "qari_v02"):
+        fakes[name] = vlm_fake(name, looping)
+        fakes[name].responder = by_kind(
+            {"body": looping, "body~p0": first, "body~p1": second, "footnote": FOOT}
+        )
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    assert "ocr_fallback" not in page.attention_flags
+    assert page.final_text.startswith("قال الأمير في سنة 1966 إن الكتاب مفيد\nوهذا سطر ثانٍ من المتن")
+    joined = page.ocr_runs.filter(engine_name="qari_v03", region__kind="body").order_by("-id").first()
+    assert joined.input_variant == "gray_pieces" and joined.parsed_text == first + "\n" + second
+    assert len(joined.params["pieces"]) == 2 and joined.params["sanity"]["ok"] is True
+    # a picture (Tesseract's words unsure and Latin) is not read again
+    assert services._worth_pieces(None, "") is False
+
+
+def test_a_piece_that_loops_on_a_dotted_separator_is_empty_not_a_loop(page, monkeypatch):
+    """Book 31 p. 87: the piece holding a dotted separator looped on «. . . .» and failed the whole region."""
+    add_regions(page)
+    pre = page.preprocess
+    pre.line_boxes = [{"x0": 0, "y0": y, "x1": W, "y1": y + 6} for y in (24, 34, 46, 56)]
+    pre.save()
+    monkeypatch.setattr(services, "PIECE_MIN_BANDS", 4)
+    monkeypatch.setattr(services, "PIECE_LINES", 2)
+    looping = OcrResult(text=PRIMARY_BODY, duration_s=1.0, output_tokens=2500, finish="length")
+    dots = OcrResult(text=". " * 400, duration_s=1.0, output_tokens=2500, finish="length")
+    fakes = engines()
+    for name in ("qari_v03", "qari_v02"):
+        fakes[name] = vlm_fake(name, looping)
+        fakes[name].responder = by_kind(
+            {"body": looping, "body~p0": dots, "body~p1": PRIMARY_BODY, "footnote": FOOT}
+        )
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    page.refresh_from_db()
+    joined = page.ocr_runs.filter(engine_name="qari_v03", region__kind="body").order_by("-id").first()
+    assert (
+        joined.input_variant == "gray_pieces"
+        and joined.looped is False
+        and joined.parsed_text == PRIMARY_BODY
+    )
+    assert "ocr_fallback" not in page.attention_flags
