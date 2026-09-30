@@ -510,6 +510,11 @@ def test_join_region_texts_orders_body_then_footnotes_and_skips_header_and_numbe
         ("(١٥)\n\nمتن\n\nحاشية (١)", "متن\n\nحاشية (١)", "15"),
         ("متن\n12\nآخر", "متن\n12\nآخر", ""),  # a number inside the body is left alone
         ("٢٢", "٢٢", ""),  # a single line is never emptied
+        # an ornament's specks read as a line of their own beyond the number go with it (D92)
+        ("متن\nسطر\n١٩٥\n.", "متن\nسطر", "195"),
+        (".\n— ٢١ —\nمتن\nآخر", "متن\nآخر", "21"),
+        (".\nمتن\nآخر .", ".\nمتن\nآخر .", ""),  # no number: the marks stay
+        ("١٩٥\n.", ".", "195"),  # the marks would empty the page with it: the edge lines alone, as before
     ],
 )
 def test_strip_page_number_lines_drops_only_a_first_or_last_number_line(text, expected, number):

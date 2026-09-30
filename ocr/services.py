@@ -84,6 +84,8 @@ TEXT_LAYER_SOURCE = "pdf_text"
 # A page-number line: only digits (Western, Arabic-Indic, Persian), dashes, dots, brackets, spaces.
 _PN_CHARS = r"\s0-9٠-٩۰-۹\-‐‑‒–—―ـ.·•…()\[\]{}﴾﴿<>«»"
 _PAGE_NUMBER_LINE = re.compile(rf"^[{_PN_CHARS}]*[0-9٠-٩۰-۹][{_PN_CHARS}]*$")
+_PAGE_NUMBER_MARKS = re.compile(rf"^[{_PN_CHARS}]+$")  # a line of those characters (with or without a digit)
+PN_EDGE_MARKS = 2  # lines of marks alone between a page-number line and the page's edge dropped with it (D92)
 _DIGITS = re.compile(r"[0-9٠-٩۰-۹]+")
 _ARABIC_LETTER = re.compile(r"[\u0621-\u063A\u0641-\u064A\u0671-\u06D3]")
 PRINTED_NUMBER_MAX = 20
@@ -1360,25 +1362,42 @@ def page_number_digits(line: str) -> str | None:
     return digits[:PRINTED_NUMBER_MAX] or None
 
 
+def _edge_run(lines: list[str], filled: list[int]) -> list[int]:
+    """The non-empty lines `filled` from one edge of the page up to the first that holds a digit or a letter:
+    the lines of marks alone before it (at most `PN_EDGE_MARKS`) and that line."""
+    run: list[int] = []
+    for i in filled[: PN_EDGE_MARKS + 1]:
+        run.append(i)
+        text = lines[i].strip()
+        if _DIGITS.search(text) or not _PAGE_NUMBER_MARKS.match(text):
+            break
+    return run
+
+
 def page_number_edges(lines: list[str], has_region: bool = False, known: str = "") -> tuple[set[int], str]:
     """Indices of the first / last non-empty lines that are only a page number, and the number.
 
     `digits` is the Western number of a dropped line (the last one when both are numbers), ''
     when none. A page with a single line is never emptied. Nothing between the first and the last
-    non-empty line is looked at. With `has_region` (the lines come from region crops and the page
-    has a page-number region, which already cut the number out) an edge line that is only digits is
-    real text, a wrapped reference «٣٤» or a section marker «(١٢)», and is kept unless its digits
-    equal `known`, the number read in that region.
+    non-empty line is looked at, but for the lines of marks alone between them and the page's edge,
+    dropped with them (`_edge_run`: an ornament's specks around a page number that Kraken's word boxes
+    read as a line of their own, «١٩٥» then «.», D92). With `has_region` (the lines come from region
+    crops and the page has a page-number region, which already cut the number out) an edge line that is
+    only digits is real text, a wrapped reference «٣٤» or a section marker «(١٢)», and is kept unless its
+    digits equal `known`, the number read in that region.
     """
     filled = [i for i, line in enumerate(lines) if line.strip()]
     if len(filled) < 2:
         return set(), ""
-    first = page_number_digits(lines[filled[0]])
-    last = page_number_digits(lines[filled[-1]])
+    head, tail = _edge_run(lines, filled), _edge_run(lines, filled[::-1])
+    if len(set(head) | set(tail)) >= len(filled):  # the marks would take the page: the edge lines alone
+        head, tail = [filled[0]], [filled[-1]]
+    first = page_number_digits(lines[head[-1]])
+    last = page_number_digits(lines[tail[-1]])
     if has_region:
         first = first if known and first == known else None
         last = last if known and last == known else None
-    drop = ({filled[0]} if first else set()) | ({filled[-1]} if last else set())
+    drop = (set(head) if first else set()) | (set(tail) if last else set())
     return drop, last or first or ""
 
 
@@ -1557,7 +1576,8 @@ def build_region(
 
     The runs of Qari v0.2 words without a Qari v0.3 counterpart that pass the filters
     (`flags.secondary_only_runs`) are measured against Tesseract around them (`flags.run_support`, on
-    the lines built without them): a run Tesseract supports (`flags.SUPPORT_MIN`) is merged into the
+    the lines built without them on Tesseract's own lines, whichever reader gives the boxes, D92, so the
+    text does not depend on the boxes): a run Tesseract supports (`flags.SUPPORT_MIN`) is merged into the
     text and the lines are built again with its words marked (`inserted`; groups numbered from
     `next_group`); any other run becomes a suggestion anchored after the token it follows. A region
     is read by `tesseract` (fallback), by `one` model (no second reading, or a looped prefix that stops
@@ -1582,8 +1602,13 @@ def build_region(
         runs = [run for run in flags.secondary_only_runs(primary, secondary, footnote) if not run.drop]
     supported: list[flags.Run] = []
     unsupported: list[flags.Run] = []
+    around = built  # the lines Tesseract's support is looked for on: its own (D92: not Kraken's)
+    if runs and rt.tess_lines and rt.box_lines is not None:
+        around = build_lines(
+            rt.text, rt.alt_text, rt.tess_lines, bands, gray, single=single, partial=rt.alt_partial
+        )
     for run in runs:
-        run.support = round(flags.run_support(run, built, rt.tess_lines), 2) if rt.tess_lines else 0.0
+        run.support = round(flags.run_support(run, around, rt.tess_lines), 2) if rt.tess_lines else 0.0
         (supported if run.support >= flags.SUPPORT_MIN else unsupported).append(run)
     groups: dict[int, flags.Run] = {}
     position = list(range(len(primary)))  # primary token index → its index among the built tokens

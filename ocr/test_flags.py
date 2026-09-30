@@ -287,6 +287,25 @@ def test_without_tesseracts_support_the_run_is_a_gap_never_text():
     assert "بطرابلس" not in " ".join(t["t"] for line in build.built for t in line["tokens"])
 
 
+def test_tesseracts_support_is_looked_for_on_its_own_lines_whichever_reader_gives_the_boxes():
+    import copy
+
+    from ocr.services import build_region
+
+    def lower(box):
+        return [box[0], box[1] + 10000, box[2], box[3] + 10000]
+
+    far = copy.deepcopy(RUNS["b23p1"]["tesseract_lines"])  # Kraken's lines (D92), here far below Tesseract's
+    for line in far:
+        line["bbox"] = lower(line["bbox"])
+        for word in line["words"]:
+            word["bbox"] = lower(word["bbox"])
+    rt = _region_23_1()
+    rt.box_lines = far
+    build = build_region(rt, RUNS["b23p1"]["bands"], None)
+    assert build.groups[1].support >= flags.SUPPORT_MIN and build.gaps == []  # the text as without them
+
+
 # ---------------------------------------------------------------- the looped prefix (D73)
 
 
