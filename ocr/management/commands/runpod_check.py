@@ -1,6 +1,7 @@
 """`manage.py runpod_check [--no-ping] [--book ID --page N]`: is the Runpod endpoint of the Qari models ready?
 
-Prints the endpoint Nassakh would call, its health (workers idle and running, jobs queued), then sends a ping:
+Prints the endpoint Nassakh would call, its health (workers idle and running, jobs queued; the worker's local
+server has none, which is only a warning), then sends a ping:
 a job that reads nothing, so it waits for a worker to start and load both models when none is warm (a cold
 start), and reports the GPU, the library versions and where each model's weights came from (baked into the
 image, Runpod's cached model, a download) at which revision. With --book and --page it also reads that page's
@@ -47,13 +48,18 @@ class Command(BaseCommand):
         try:
             health = client.health()
         except runpod.RemoteError as exc:
-            raise CommandError(f"health: {exc}") from exc
-        workers, jobs = health.get("workers") or {}, health.get("jobs") or {}
-        self.stdout.write(
-            f"health    workers idle {workers.get('idle', '?')}, running {workers.get('running', '?')} · "
-            f"jobs in queue {jobs.get('inQueue', '?')}, in progress {jobs.get('inProgress', '?')}, "
-            f"completed {jobs.get('completed', '?')}, failed {jobs.get('failed', '?')}"
-        )
+            if options["no_ping"]:
+                raise CommandError(f"health: {exc}") from exc
+            # the worker's local server (`python handler.py --rp_serve_api`) has no /health: the ping decides
+            first = str(exc).splitlines()[0]
+            self.stdout.write(self.style.WARNING(f"health    not available ({first}); the ping follows"))
+        else:
+            workers, jobs = health.get("workers") or {}, health.get("jobs") or {}
+            self.stdout.write(
+                f"health    workers idle {workers.get('idle', '?')}, running {workers.get('running', '?')} · "
+                f"jobs in queue {jobs.get('inQueue', '?')}, in progress {jobs.get('inProgress', '?')}, "
+                f"completed {jobs.get('completed', '?')}, failed {jobs.get('failed', '?')}"
+            )
         if options["no_ping"]:
             return
         try:

@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 from django.conf import settings
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.urls import reverse
 
 import httpx
@@ -571,6 +571,24 @@ def test_runpod_check_reports_the_worker_and_reads_a_region(page, runpod_setting
     assert "on NVIDIA L4" in out and "qari_v03: baked" in out
     assert "read      p1 body: qari_v03 12 tokens" in out
     assert RemoteCall.objects.filter(operation="read", region_kind="body").count() == 1
+
+
+def test_runpod_check_goes_on_without_health_on_the_workers_local_server(db, runpod_settings, capsys):
+    """`python handler.py --rp_serve_api` serves /runsync and /status but no /health."""
+
+    class LocalServer(Endpoint):
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/health"):
+                self.requests.append(request)
+                return httpx.Response(404, json={"detail": "Not Found"})
+            return super().__call__(request)
+
+    with runpod.use_client(make_client(LocalServer())):
+        call_command("runpod_check")
+    out = capsys.readouterr().out
+    assert "health    not available" in out and "on NVIDIA L4" in out
+    with runpod.use_client(make_client(LocalServer())), pytest.raises(CommandError, match="health"):
+        call_command("runpod_check", "--no-ping")
 
 
 def test_runpod_compare_measures_runpod_against_the_stored_readings(page, runpod_settings, capsys, tmp_path):
