@@ -1,0 +1,36 @@
+{% extends "admin/change_list.html" %}
+{% load l10n %}
+{% block result_list %}
+{% if runpod_summary and runpod_summary.calls %}
+{% localize off %}
+<div class="module" id="runpod-summary" style="margin-bottom:16px">
+  <h2>ملخّص الطلبات المعروضة</h2>
+  <table style="width:100%">
+    <tbody>
+      <tr>
+        <th scope="row">الطلبات</th>
+        <td>{{ runpod_summary.calls }}: اكتمل {{ runpod_summary.ok }} · جزئيًا {{ runpod_summary.partial }} · فشل {{ runpod_summary.failed }} · قيد التنفيذ {{ runpod_summary.running }}</td>
+      </tr>
+      <tr>
+        <th scope="row">الصفحات</th>
+        <td>{{ runpod_summary.pages }}</td>
+      </tr>
+      <tr>
+        <th scope="row">بدء بارد</th>
+        <td>{{ runpod_summary.cold }} طلب، والانتظار وبدء العامل {{ runpod_summary.queue_s }} ث في المجموع</td>
+      </tr>
+      <tr>
+        <th scope="row">زمن GPU في المهام</th>
+        <td>{{ runpod_summary.gpu_s }} ث{% if runpod_summary.gpu_s_per_page is not None %} · {{ runpod_summary.gpu_s_per_page }} ث للصفحة{% endif %} · متوسط زمن الطلب {{ runpod_summary.mean_total_s }} ث</td>
+      </tr>
+      <tr>
+        <th scope="row">التكلفة التقديرية</th>
+        <td>{% if runpod_summary.cost is not None %}{{ runpod_summary.cost }} $ ({{ runpod_summary.cost_per_page }} $ للصفحة، بسعر {{ runpod_summary.price }} $ للثانية): زمن المهام وحده، ويحسب Runpod أيضًا بدء العامل ومهلة الخمول.{% else %}اضبط RUNPOD_PRICE_PER_S في ملف .env لتظهر هنا.{% endif %}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% endlocalize %}
+{% endif %}
+{{ block.super }}
+{% endblock %}

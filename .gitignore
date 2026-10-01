@@ -36,6 +36,9 @@ playground/poc/regions/
 # Model weights fetched by `make kraken` (D50)
 models/
 
+# The Runpod worker of the Qari models: its own repository (alibenmussa/nassakh-qari-worker), cloned here
+workers/qari/
+
 # Digits experiment: environments, models, crops and intermediate files (the scripts, labels, results and
 # REPORT.md are kept; crops/ and sheets/ are rebuilt by collect.py from the database)
 playground/digits/.venv-*/

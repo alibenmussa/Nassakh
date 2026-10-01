@@ -148,3 +148,69 @@ class TextGap(models.Model):
 
     def __str__(self) -> str:
         return f"gap after {self.index} on line {self.line_id} of page {self.page_id}"
+
+
+class RemoteCall(models.Model):
+    """One request to the Runpod endpoint that reads with the Qari models (OCR_BACKEND=runpod,
+    docs/RUNPOD_SPEC.md): the API log in Django admin.
+
+    What was asked (never the image), how long Runpod kept it in its queue and on the GPU, what came back
+    (never the text) and why it failed. `ocr.runpod` writes the row when the request leaves and completes it
+    when the request ends, so a request still waiting for a cold start is on the list while it waits.
+    `queue_ms` and `execution_ms` are Runpod's own `delayTime` and `executionTime`; `total_ms` is the time
+    Nassakh waited, retries and polls included.
+    """
+
+    class Operation(models.TextChoices):
+        READ = "read", "قراءة"
+        PING = "ping", "فحص"
+
+    class Status(models.TextChoices):
+        RUNNING = "running", "قيد التنفيذ"
+        OK = "ok", "اكتمل"
+        PARTIAL = "partial", "اكتمل جزئيًا"  # a model failed inside a completed job
+        FAILED = "failed", "فشل"  # the worker failed the job, or every model in it
+        TIMEOUT = "timeout", "انتهت المهلة"  # no answer within RUNPOD_TIMEOUT_S: the job was cancelled
+        ERROR = "error", "تعذّر الاتصال"  # Runpod refused the request or could not be reached
+
+    created_at = models.DateTimeField("أُرسل في", auto_now_add=True, db_index=True)
+    finished_at = models.DateTimeField("انتهى في", null=True, blank=True)
+    operation = models.CharField("العملية", max_length=8, choices=Operation.choices, default=Operation.READ)
+    status = models.CharField(
+        "الحالة", max_length=10, choices=Status.choices, default=Status.RUNNING, db_index=True
+    )
+    engines = models.CharField("النماذج", max_length=80, blank=True)
+    page = models.ForeignKey(
+        Page,
+        verbose_name="الصفحة",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="remote_calls",
+    )
+    region_kind = models.CharField("المنطقة", max_length=20, blank=True)
+    variant = models.CharField("نوع الصورة", max_length=20, blank=True)
+    endpoint = models.CharField("نقطة النهاية", max_length=200, blank=True)
+    job_id = models.CharField("رقم المهمة", max_length=80, blank=True, db_index=True)
+    job_status = models.CharField("حالة المهمة في Runpod", max_length=20, blank=True)
+    http_status = models.PositiveSmallIntegerField("آخر رمز HTTP", null=True, blank=True)
+    attempts = models.PositiveSmallIntegerField("محاولات الإرسال", default=0)
+    polls = models.PositiveSmallIntegerField("مرات الاستعلام", default=0)
+    queue_ms = models.PositiveIntegerField("الانتظار وبدء العامل (مللي ثانية)", null=True, blank=True)
+    execution_ms = models.PositiveIntegerField("التنفيذ على GPU (مللي ثانية)", null=True, blank=True)
+    total_ms = models.PositiveIntegerField("الزمن الكلي (مللي ثانية)", null=True, blank=True)
+    gpu = models.CharField("GPU", max_length=80, blank=True)
+    worker_id = models.CharField("العامل", max_length=80, blank=True)
+    worker_version = models.CharField("إصدار العامل", max_length=20, blank=True)
+    cold_start = models.BooleanField("بدء بارد", null=True, blank=True)
+    request = models.JSONField("الطلب", default=dict, blank=True)
+    response = models.JSONField("الرد", default=dict, blank=True)
+    error = models.TextField("الخطأ", blank=True)
+
+    class Meta:
+        verbose_name = "طلب Runpod"
+        verbose_name_plural = "سجل طلبات Runpod"
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.get_operation_display()} {self.engines} · {self.get_status_display()}"

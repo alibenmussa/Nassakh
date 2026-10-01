@@ -1,6 +1,8 @@
 """Engine registry: one loaded instance per engine name per process.
 
-The GPU worker runs with `--pool=solo`, so the cache keeps the Qari models resident across tasks.
+The GPU worker runs with `--pool=solo`, so the cache keeps the Qari models resident across tasks; with
+OCR_BACKEND=runpod the models live on a Runpod GPU and the gpu worker is a threads pool of HTTP clients
+(`ocr.runpod`). `together` lets engines that answer several models in one request read a crop once.
 Tests inject fakes with `override({...})` so no real model is ever loaded there.
 """
 
@@ -9,8 +11,9 @@ from __future__ import annotations
 import logging
 import shutil
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 
 from django.conf import settings
 
@@ -34,6 +37,10 @@ def build_engine(name: str) -> OcrEngine:
             from .qari_mlx import QariMlxEngine
 
             return QariMlxEngine(name)
+        if backend == "runpod":
+            from .qari_runpod import QariRunpodEngine
+
+            return QariRunpodEngine(name)
         from .qari_torch import QariTorchEngine
 
         return QariTorchEngine(name)
@@ -100,6 +107,35 @@ def available_engines() -> list[str]:
         else:
             names.append(name)
     return names
+
+
+@contextmanager
+def together(
+    names: Sequence[str], source: str | Path, max_new_tokens: int | None = None, trace: dict | None = None
+) -> Iterator[None]:
+    """`names` are about to read the same `source`, one `recognize` after the other.
+
+    Engines that answer several models in one request (Qari on Runpod: they share a `batch_key`) are asked
+    once here, through the first of them (`read_together`), and each `recognize` in the block takes its own
+    answer from that request; what nobody took is dropped at the end (`forget_together`). `trace` says what is
+    read (book, page, region, variant) for engines that log their requests. Other engines are untouched, so
+    local and fake engines read exactly as before.
+    """
+    engines = [get_engine(name) for name in names]
+    groups: dict[str, list[str]] = {}
+    leads: dict[str, OcrEngine] = {}
+    for name, engine in zip(names, engines, strict=True):
+        key = getattr(engine, "batch_key", None)
+        if key and name not in groups.get(key, []):
+            groups.setdefault(key, []).append(name)
+            leads.setdefault(key, engine)
+    for key, members in groups.items():
+        leads[key].read_together(source, members, max_new_tokens, dict(trace or {}))
+    try:
+        yield
+    finally:
+        for lead in leads.values():
+            lead.forget_together()
 
 
 def unload_all() -> None:

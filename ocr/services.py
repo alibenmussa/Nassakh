@@ -24,6 +24,7 @@ import logging
 import re
 import shutil
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -356,6 +357,31 @@ def run_engine(
     return run
 
 
+def _read_models(
+    page: Page,
+    names: Sequence[str],
+    target: Target,
+    source: Path,
+    input_variant: str,
+    max_new_tokens: int,
+    scale: float = 1.0,
+) -> list[OcrRun]:
+    """Every engine of `names` reads the same crop: one OcrRun per engine, in the order of `names`. Engines
+    that read together (both Qari models behind one Runpod endpoint) answer from one request
+    (`registry.together`); local engines read one after the other as before."""
+    trace = {
+        "book": page.book_id,
+        "page": page.number,
+        "page_id": page.pk,
+        "region": target.kind,
+        "variant": input_variant,
+    }
+    with registry.together(names, source, max_new_tokens, trace):
+        return [
+            run_engine(page, name, target, source, input_variant, max_new_tokens, scale) for name in names
+        ]
+
+
 def _fill_run(
     run: OcrRun, result: OcrResult, engine: OcrEngine, origin: tuple[int, int], scale: float
 ) -> None:
@@ -373,6 +399,10 @@ def _fill_run(
     run.finish = (result.finish or "")[:20]
     run.looped = looped
     extra = dict(result.extra or {})
+    # a remote engine (Runpod) learns the revision of the weights it read with from its answer
+    revision = extra.pop("model_revision", None)
+    if revision:
+        run.model_revision = str(revision)[:64]
     lines = extra.pop("lines", None)
     if lines is not None:
         run.params["lines"] = _offset_lines(lines, origin[0], origin[1], scale)
@@ -984,11 +1014,12 @@ def run_full_ocr(page: Page) -> None:
             )
             cap = max_new_tokens_for(target.kind)
 
-            primary_run = run_engine(page, primary, target, image_path, variant, cap, scale)
+            primary_run, secondary_run = _read_models(
+                page, (primary, secondary), target, image_path, variant, cap, scale
+            )
             ok, reason = _record_check(primary_run, reference)
             if not ok:
                 log.info("page %s %s: primary %s failed sanity (%s)", page.pk, target.kind, primary, reason)
-            secondary_run = run_engine(page, secondary, target, image_path, variant, cap, scale)
             _record_check(secondary_run, reference)
             n_model_runs += 2
             if select_reading(primary_run, secondary_run, tess).fallback and _worth_pieces(tess, reference):
@@ -1000,11 +1031,11 @@ def run_full_ocr(page: Page) -> None:
                         target.kind,
                         len(pieces),
                     )
-                    for name in (primary, secondary):
-                        _read_in_pieces(
-                            page, target, name, gray, pieces, scale, variant, cap, reference, tmpdir, i
-                        )
-                        n_model_runs += len(pieces)
+                    models = (primary, secondary)
+                    _read_in_pieces(
+                        page, target, models, gray, pieces, scale, variant, cap, reference, tmpdir, i
+                    )
+                    n_model_runs += len(models) * len(pieces)
             model_errors += [r.error for r in (primary_run, secondary_run) if r.status == OcrRun.Status.ERROR]
     if n_model_runs and len(model_errors) == n_model_runs:
         # Every model call crashed (out of memory, broken weights...): this is an engine failure,
@@ -1062,7 +1093,7 @@ def piece_boxes(bands: list[dict] | None, bbox: list[int]) -> list[list[int]]:
 def _read_in_pieces(
     page: Page,
     target: Target,
-    engine_name: str,
+    names: Sequence[str],
     gray: np.ndarray,
     pieces: list[list[int]],
     scale: int,
@@ -1071,15 +1102,25 @@ def _read_in_pieces(
     reference: str,
     tmpdir: Path,
     index: int,
-) -> OcrRun:
-    """Read `target` again with `engine_name` piece by piece (D90) and store the reading as one run of the
-    region (`input_variant` «…_pieces», its pieces' runs listed in `params["pieces"]`), checked against the
-    region's Tesseract text like any run; being the latest, it is the one `select_reading` sees."""
-    parts: list[OcrRun] = []
+) -> list[OcrRun]:
+    """Read `target` again piece by piece (D90) with every engine of `names` (on Runpod both models read a
+    piece in one request) and store each engine's reading as one run of the region (`_join_pieces`); being the
+    latest of its engine, it is the one `select_reading` sees. Returns those runs, in the order of `names`."""
+    parts: list[list[OcrRun]] = [[] for _ in names]
     for k, box in enumerate(pieces):
         piece = Target(target.region, box)
         path = _save_temp(_crop_image(gray, box, scale), tmpdir, f"{variant}-{index}-{target.kind}~p{k}")
-        parts.append(run_engine(page, engine_name, piece, path, f"{variant}_p{k}", cap, scale))
+        runs = _read_models(page, names, piece, path, f"{variant}_p{k}", cap, scale)
+        for engine_parts, run in zip(parts, runs, strict=True):
+            engine_parts.append(run)
+    return [_join_pieces(page, target, engine_parts, variant, cap, reference) for engine_parts in parts]
+
+
+def _join_pieces(
+    page: Page, target: Target, parts: list[OcrRun], variant: str, cap: int, reference: str
+) -> OcrRun:
+    """One engine's pieces as one run of the region (`input_variant` «…_pieces», the pieces' runs listed in
+    `params["pieces"]`), checked against the region's Tesseract text like any run (D90)."""
     first = parts[0]
     failed = next((r for r in parts if r.status != OcrRun.Status.OK), None)
     # a piece looping on dots or a flourish (a separator «. . . .», «* * *») holds no words: it is empty
@@ -1142,16 +1183,16 @@ def _vote_page_number(
     readings = [tess.parsed_text] if tess is not None and tess.status == OcrRun.Status.OK else []
     votes: list[str] = [printed_number_of(readings[0])] if readings else []
     model_texts: list[str] = []
-    for name in engines:
-        run = run_engine(
-            page,
-            name,
-            target,
-            path,
-            f"gray_{PAGE_NUMBER_UPSCALE}x",
-            PAGE_NUMBER_VLM_TOKENS,
-            scale=PAGE_NUMBER_UPSCALE,
-        )
+    runs = _read_models(
+        page,
+        engines,
+        target,
+        path,
+        f"gray_{PAGE_NUMBER_UPSCALE}x",
+        PAGE_NUMBER_VLM_TOKENS,
+        scale=PAGE_NUMBER_UPSCALE,
+    )
+    for run in runs:
         if run.status == OcrRun.Status.OK:
             model_texts.append(run.parsed_text)
             votes.append(printed_number_of(run.parsed_text))

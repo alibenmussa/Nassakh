@@ -910,3 +910,145 @@ stays: with unreviewed pages included the convert button reads «تجميع مع
 | dashboard does not update | it polls `/api/books/<id>/progress/` every 2 s only while the book is `processing` («قيد التخطيط») or `ocr`; check that the workers are running (`make worker`, `make gpu-worker`) |
 | `NoReverseMatch` after moving routes | API routes are reversed as `api:<name>` (`book_progress`, `book_text`, `book_sheets`, `page_status`, `page_preprocess`, `page_guides_override`, `page_text`, `page_runs`, and the review names in §10) |
 | review screen read-only | the user has no `proofreader` / `editor` / `admin` group (Django admin → Users), or the page has no final text yet |
+
+## 18. Qari on Runpod (`OCR_BACKEND=runpod`)
+
+Spec `docs/RUNPOD_SPEC.md`. The two Qari models run on a Runpod Serverless GPU, through the endpoint of
+`nassakh-qari-worker` (its own repository, `alibenmussa/nassakh-qari-worker`). Everything else stays on this
+machine: Tesseract, Kraken, the alignment, the footnotes. **Not the default:** keep `mlx` or `torch` until the
+measurements below pass.
+
+**Upgrading.**
+1. Stop both workers.
+2. Run `make install` (`httpx` is new) and `make migrate` (`ocr.0005_remotecall`, the API log table).
+3. Start the workers and the web server again.
+
+Nothing changes while `OCR_BACKEND` is `mlx` or `torch`.
+
+**The worker repository.** Clone it inside this one, where Nassakh's git ignores it (`.gitignore`:
+`workers/qari/`):
+
+```sh
+git clone https://github.com/alibenmussa/nassakh-qari-worker workers/qari
+```
+
+Its README covers the endpoint step by step:
+- upload the merged Qari v0.2 to a private Hugging Face repository;
+- create the endpoint from GitHub, with its GPU, CUDA filter, cached model and environment variables;
+- check it from Runpod's console.
+
+**Switching Nassakh to Runpod.** In `.env`:
+
+```sh
+OCR_BACKEND=runpod
+RUNPOD_API_KEY=…          # Runpod console → Settings → API Keys
+RUNPOD_ENDPOINT_ID=…      # the endpoint's ID
+RUNPOD_PRICE_PER_S=0.00019   # optional: the API log's cost estimate (24 GB GPUs)
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `RUNPOD_ENDPOINT_URL` | (none) | another address than Runpod's, e.g. the worker's local server `http://localhost:8010` |
+| `RUNPOD_TIMEOUT_S` | 600 | one request, cold start included; then the job is cancelled |
+| `RUNPOD_SYNC_WAIT_S` | 90 | how long `/runsync` waits before the job is polled |
+| `RUNPOD_RETRIES` | 4 | attempts for a network error, 429 or 5xx |
+| `RUNPOD_EXECUTION_TIMEOUT_S` | 300 | a job's time on the GPU |
+
+Then restart both workers. **`make gpu-worker` now starts a threads pool**:
+- `-P threads -c 4` with `OCR_BACKEND=runpod`, set `GPU_THREADS=6 make gpu-worker` for more;
+- `-P solo -c 1` with the local models, as before.
+
+The threads are HTTP clients, so several pages are read at once. Runpod adds GPU workers up to the endpoint's
+max workers. `warm_up_engines` only checks the settings. Celery's hard time limit does not apply in a threads
+pool; each request has its own deadline (`RUNPOD_TIMEOUT_S`).
+
+**What changes for a page.**
+- **One request per region** for both models; the page-number vote and D90's pieces are paired the same way.
+- **The OcrRuns:** `backend = runpod`; `model_revision` is the revision the worker read with; `duration_ms` is
+  the generation time on the GPU.
+- **`params["remote"]`** holds the request's job, its queue and GPU milliseconds, the GPU, the worker's version,
+  the cold start, and the API log row (`call`).
+- **A failure:**
+  - a refused or unreachable request, or a job that failed, is recorded on each model's run;
+  - when every model call of a page fails, the page goes to `error` with the reason, e.g. «رفض Runpod مفتاح الـ
+    API (HTTP 401)؛ تحقّق من RUNPOD_API_KEY.»;
+  - retry the page from «المعالجة» once it is fixed.
+
+**The API log.** Django admin → «سجل طلبات Runpod» (`/admin/ocr/remotecall/`).
+- **The list:**
+  - every request, newest first, written when it leaves; a cold start shows «قيد التنفيذ» while it waits;
+  - its status, region, total, queue and GPU seconds, GPU, cold start and attempts;
+  - a row still «قيد التنفيذ» long after the timeout reads «لم يكتمل (توقّف العامل؟)».
+- **A request's page** shows what was sent (without the image), what came back (without the texts) and the
+  error.
+- **The summary above the list** sums the filtered requests:
+  - outcomes and pages;
+  - cold starts;
+  - GPU seconds per page;
+  - the estimated cost, which is a floor: Runpod also bills a worker's start and its idle timeout.
+- Rows can be deleted from the list's actions; they hold no text.
+
+**Checking the endpoint.**
+
+```sh
+.venv/bin/python manage.py runpod_check                    # health, then a ping (a cold start when no worker is warm)
+.venv/bin/python manage.py runpod_check --book 29 --page 5  # and one real region, both models (the page is not changed)
+```
+
+The ping prints:
+- the GPU;
+- the worker's torch, CUDA and transformers versions;
+- for each model, where its weights came from (`baked`, `runpod_cache`, `download`) and at which revision.
+
+Compare the revisions with `playground/poc/models/*/nassakh_info.json`.
+
+**Measuring before switching the default** (spec §8). Each request is a row of the API log; the book is never
+changed.
+
+```sh
+.venv/bin/python manage.py runpod_compare --book 29 --pages 1-20 --json /tmp/compare-29.json
+.venv/bin/python manage.py runpod_compare --book 31 --max-regions 60 --price-per-second 0.00019
+```
+
+Per engine it prints:
+- the identical regions;
+- the character difference against the stored (MLX or PyTorch) readings: median, mean, max;
+- the loops on each side;
+- every region above 2 %.
+
+Then the timing:
+- GPU seconds per request and per page;
+- the queue and cold starts;
+- the cost per page and for 800 pages.
+
+The proposed gate:
+- a median difference of at most 0.5 % per engine;
+- no more loops than locally;
+- every region above 5 % checked against its scan.
+
+For speed, process one real book on Runpod and read the pages per hour on the dashboard, and the GPU seconds
+and cost per page in the API log's summary.
+
+**Trying it on the Mac without Runpod.** The worker runs on MPS with the models this machine already has. Its
+README, «Try it on the Mac first», starts a local endpoint on port 8010. Then in `.env`:
+
+```sh
+OCR_BACKEND=runpod
+RUNPOD_ENDPOINT_URL=http://localhost:8010
+RUNPOD_API_KEY=local
+```
+
+**Back to the local models.** Set `OCR_BACKEND=mlx` (or `torch`) and restart both workers; `make gpu-worker`
+is the solo process again.
+
+| Symptom | Fix |
+|---|---|
+| `runpod_check`: «لم يُضبط RUNPOD_ENDPOINT_ID ولا RUNPOD_API_KEY…» | set both in `.env` and restart the workers |
+| «رفض Runpod مفتاح الـ API (HTTP 401)» | a wrong or revoked key: create one in Runpod's console (Settings, API Keys) |
+| «لم يجد Runpod نقطة النهاية (HTTP 404)» | `RUNPOD_ENDPOINT_ID` is not the endpoint's ID |
+| «لم يردّ Runpod خلال 600 ثانية…؛ أُلغيت المهمة» | no worker could start: GPUs unavailable (add a second GPU type), max workers 0, or the image still building; see the endpoint's Workers and Builds tabs |
+| every task: «CUDA is not available on this worker…» | the endpoint's CUDA filter must allow 13.0 and newer only (the image's torch is built for CUDA 13.0) |
+| a task: «QARI_V02_SOURCE is not set…» or «cannot download…» | the endpoint's environment: `QARI_V02_SOURCE` and its cached model (Model field with a read-only token), see the worker's README |
+| rows «اكتمل جزئيًا» | one model failed inside the job (its error is on the row and on its OcrRun); the other model's reading was kept |
+| pages are read one at a time | the gpu worker was started before `OCR_BACKEND=runpod`: restart it with `make gpu-worker` (threads) |
+| rows stay «قيد التنفيذ» | the gpu worker was stopped mid-request; they read «لم يكتمل (توقّف العامل؟)» after the timeout and can be deleted |
