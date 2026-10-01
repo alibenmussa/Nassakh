@@ -253,7 +253,8 @@ behind a login-protected view (`core.views.protected_media`) — implement the v
   `normalize(..., "lenient")`); `build_lines(primary_text, secondary_text, tesseract_lines) -> list[dict]`: anchor primary tokens
   to Tesseract word boxes, assign each token to the Tesseract line whose words it matched (unmatched tokens inherit the previous
   token's line), attach `alt` from the secondary alignment when normalised forms differ, `conf="low"` when alt differs or token
-  is a digit (D17); returns per-line dicts `{order, bbox, text, tokens, n_low}`.
+  is a digit (D17); returns per-line dicts `{order, bbox, text, tokens, n_low}`. (Since D92 the lines and boxes come from
+  Kraken's words, `box_lines`, and the readings from Tesseract's.)
 - `services.finalize_page(page)`: builds `Line` rows (replace existing unreviewed lines), `final_text` (D6: convert Arabic-Indic
   digits to Western in `final_text` only, keep `Line.ocr_text` raw), `text_state = final`, status `ocr_done`; sets book status
   `ready_for_review` when all non-excluded pages are `ocr_done`.

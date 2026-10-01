@@ -69,6 +69,7 @@ change preprocessing parameters;
 | `TESSERACT_LANGS` | `ara+eng` | D17 |
 | `NUMBERS_PASS` | `true` | the numbers pass after Qari (D50): Kraken reads the Arabic-Indic numbers of each finalised page |
 | `KRAKEN_PYTHON` / `KRAKEN_MODEL` | `.venv-kraken/bin/python` / `models/kraken/all_arabic_scripts.mlmodel` | Kraken's own environment and model (`make kraken`) |
+| `KRAKEN_BOXES` | `true` | the models' words take their boxes from Kraken's reading of each region's printed lines (D92); `false`: Tesseract's boxes |
 
 ## 3. Running
 
@@ -128,7 +129,9 @@ Text:  none → provisional (Tesseract, after ocr_page_fast) → final (after oc
   automatically proposed book line is never applied). Page number: page override → detected box (+6 px) → manual
   book zone → none (no automatic bottom zone). A page can override from the «التخطيط» viewer or its detail screen
   (`POST /api/pages/<id>/guides/`).
-- **Fast OCR** (Tesseract `ara+eng` on the B&W crops) gives the provisional text and the word boxes. Page numbers
+- **Fast OCR** (Tesseract `ara+eng` on the B&W crops) gives the provisional text, the models' reference and the
+  third reading. The word boxes come from Kraken's reading of each model region's printed lines when the page is
+  finalised (D92, `KRAKEN_BOXES`; Tesseract's without Kraken or where Tesseract's text stands). Page numbers
   never reach the text: the page-number region is not transcribed, and as a safety net a first or last line that is
   only digits / dashes / dots / brackets is dropped from `provisional_text`, `final_text` and the `Line` rows. Its
   number (Western digits) is stored in `Page.printed_number` as metadata; page order always comes from the scan
@@ -439,7 +442,8 @@ replaces the edited text but keeps it as a snapshot that is never pruned.
 Every OCR model misreads Arabic-Indic digits; Kraken with the OpenITI printed Arabic-script model reads them far better
 (92 % of 116 real numbers against Qari's 43 %, `playground/digits/REPORT.md`). After Qari finalises a page, `read_numbers`
 (default queue, so `make worker`) runs Kraken on the page's number words, for books detected as printing Arabic-Indic
-digits (from Qari's own readings). A number Kraken read shows one reading, «Kraken», in review and in «غير المؤكَّدة»:
+digits (from Qari's own readings); a word is read in its box's columns and its line's rows (D92: Kraken's word boxes
+are trimmed to the ink, and Kraken misreads digits cut that close). A number Kraken read shows one reading, «Kraken», in review and in «غير المؤكَّدة»:
 confirm it (1 or Enter) or type the true number. Reviewed lines, resolved words and approved pages are never touched;
 Qari's readings stay on the token (`qari`) and the run is recorded (`OcrRun` engine `kraken`). Books printed with Western
 digits keep Qari's numbers (it reads those better). Kraken needs its own environment (it pins torch ≤ 2.9): `make kraken`
@@ -697,7 +701,8 @@ looped reading (that start now counts as a second reading); `tesseract`: a regio
   519 against §2.4's 518: «الإيyan» (book 26 page 7) mixes Arabic and Latin letters, so it is `script`.
 - `manage.py rebuild_lines [book …] [--book ID --page N] [--dry-run] [--include-edited]` recomputes, from the stored runs,
   the reasons, the vote, the groups, the suggestions and `reading`. No model is called (Tesseract reads the rescue
-  bands, as in D39), and the numbers pass is scheduled again, so the workers must be running.
+  bands, as in D39; Kraken reads the printed lines for the word boxes where no stored `boxes` run read the same
+  lines, about 3 s a page, D92), and the numbers pass is scheduled again, so the workers must be running.
   - It skips and lists pages with review work: approved, reviewed or excluded pages, and pages with any revision or a
     manual or reviewed line.
   - A book whose manuscript was edited on the book page is refused when named, and skipped with a note when no ids

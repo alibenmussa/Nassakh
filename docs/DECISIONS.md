@@ -630,3 +630,73 @@ Built again in memory from the stored readings of books 29, 31 and 32–35: book
 p. 206 only the era sign moves, its year stays behind). A broader rule (move the run whenever the line above is
 full) made two pages of book 31 worse, and dropping the box of a one-letter Tesseract word that a longer word took
 («أَنَّ» on p. 50's «ا») removed 229 good boxes of short words on book 29; neither was kept.
+
+## D92 — The models' words take their boxes from Kraken's reading of the printed lines (2026-10-01)
+
+The models give a region's words, not their places; each word took the line and the box of the Tesseract word it
+matches (D12, `alignment.build_lines`). Tesseract reads vowelled print poorly: on book 31 75.5 % of the
+models' words had a box on their own word (a Tesseract word that reads like it), and whole lines of hadith had
+none (p. 94: its first two lines). Kraken, the reader of the numbers (D50) and the calls (D83), reads that print
+far better. So, for a region whose text is the models' (not Tesseract's fallback, not a PDF text layer), Kraken
+now reads the region's printed lines once per page and its words stand in for Tesseract's in the geometry: the
+lines are built twice, on Kraken's words for the lines and boxes and on Tesseract's for the readings
+(`build_lines(box_lines=...)`, `with_readings`), so `tess`, `tc`, the flags and the vote stay Tesseract's (D71);
+the text does not change, only where its words sit.
+
+The lines read (`boxes.region_crops`): the page's line bands (`Preprocess.line_boxes`) in the region, each across
+its columns and in the rows of the Tesseract lines fitted to it; a band far taller than the others holding two
+Tesseract lines is those two. A band that is a printed rule is not read (its densest row inked across 90 % of it,
+12 times as wide as tall and a fifth of the region wide: the 354 such bands of the ten test books span 29 % of
+their region or more, a one-word line inked along its baseline 8 % at most). A Tesseract line no band holds is a
+line the detector missed, read on its own in its own rows, when it lies 0.6 pitches from every band (nearer, it
+is a raised call or the marks above a thin core): the bands' pitch, or, for a line Tesseract read at a mean
+confidence of 60 or more, the pitch of the region's lines so read — book 29 p. 23 has 12 bands for 16 lines,
+every other gap two lines tall, and the short last lines of its paragraphs («الاسلام .», «ففتحها .») lay 0.5 of
+the bands' pitch from them. On a page with few lines half a pitch around a missed line took in a frame (book 34
+p. 4 read its «(صفحة بيضاء ١٩٤)» as «رشت» in rows 779–1255): such a line is read in its Tesseract line's rows only.
+
+The words (`boxes.kraken_line`): Kraken's characters split at spaces and punctuation, as Tesseract's words mostly
+are; a number keeps the brackets just around it («(١)»); a number laid out as one left-to-right run («(274/1)»,
+«١٢/٣») is one word, as Kraken's positions inside such a run are permuted; a dash between Arabic-Indic digits
+joins them when the ink around it is tight («٢٢-٣٠٨»; spaced, «٢٢ ـ ٣٠٨» is two numbers); a mark Kraken read
+without a space joins its word when the blank between them is under 0.15 line heights (the print's words:
+«القرآن.» glued, «عنها» «:» spaced); a token of tatweels alone is a dash mark for either reader; a line of lone
+letters is an ornament's specks. The boxes (`boxes.snap`): Kraken places a character at its network's peaks,
+narrower than the glyph and drifting 20–40 px near a line's ends, so each boundary between two words moves to the
+widest blank run of ink columns within 0.2 line heights of Kraken's space, the line's first and last words reach
+the ink running on from them (not a rule beyond), and each box is trimmed to its ink, its rows to the ink
+components of its own line. A short line (three words at most) where Tesseract read a number and Kraken none keeps
+Tesseract's words: Kraken misreads a page number in its ornament (book 33 p. 2: «195» read «عاوه»), and a region's
+page-number line is found by its digits (D63).
+
+The reading is one Kraken call per page, stored as a `kraken` OcrRun per region (`params`: `"pass": "boxes"`, the
+lines read, the shaped lines and the shaping's version); a build reuses it while it read the same lines (shaped
+again when the shaping changed), so `rebuild_lines` reads only the regions whose lines changed (before it locks
+the page); the page's finalisation after OCR reads and stores it; a dry run reads without storing. Tesseract's
+boxes stand when Kraken is off (`KRAKEN_BOXES=false`), not set up or failing, when it read no word in a region,
+and where the region's text is Tesseract's.
+
+What rests on the boxes follows. The words only the second model read are merged into the text when Tesseract
+reads them near their anchor (D72); that support is looked for on the lines built on Tesseract's own, whichever
+reader gives the boxes, or the text would depend on them (book 31 p. 46 took other groups). The numbers pass
+(D50) read a number in its word box with a margin of 30 % of the box's height, the set-up measured on
+Tesseract's boxes fitted to the printed line; Kraken's boxes are trimmed to the digits' ink, and Kraken misreads
+digits cut that close (book 29: «٢٧» read «٢٤», «٤٩» «١٩», «١٩٧٠» «١٦٧٠»), so a number's box, a weak box, a
+letter's box and a date's boxes are read in their columns and their line's rows (`numbers.in_line_rows`); on
+book 31 that also reads the hadith numbers whose Kraken box drifted onto half the number («٢٢ ـ ٣٠٨» read «٢»
+and «٥٨» in the boxes, «٢٢» and «٣٠٨» in the line's rows). Kraken's lines split a page number from its
+ornament («١٩٥» then «.», book 33 p. 2), so the lines of marks alone between a page-number line and the page's
+edge (two at most) are dropped with it (`page_number_edges`).
+
+Measured on the ten test books (books 29 and 31 whole, 32–39 six pages each: 452 pages, 59,713 model words),
+built from the stored runs with `KRAKEN_BOXES` off and on: the words with a box 91.2 % → 98.0 %, with a box on
+their own word (a word of the box's reader that reads like it) 79.9 % → 96.6 % — book 29 82.1 → 97.4, book 31
+75.5 → 96.2, books 32–39 72.7–89.0 → 92.7–98.2; weak boxes 522 → 253; words no reader word accounts for 2,549 →
+369; lines flagged merged 68 on 58 pages → 42 on 35. The words of the final text are the same but on three
+pages: book 29 p. 82 (a section number «- ٣٨ -» the models read «8 3 -», on two of Kraken's lines, no longer
+taken for the page number), book 31 p. 84 (the hadith number «٩٥ ـ» now on its own line, after the heading
+the models wrote between its two numbers) and book 33 p. 5 (the page number «198» no longer glued to the last
+line). Footnote benchmark (`playground/footnotes-2026-09-30/bench.py --fresh`, calls marked by hand), before →
+after: book 29 24/25 → 24/25, book 31 19/27 → 24/27 (unlinked notes 28 → 16), 32 11/11 → 11/11, 33 13/13 → 12/13, 34 27/29 → 24/29, 35 19/21 → 11/21, 36 10/16 → 10/16, 37 6/8 → 6/8, 38 3/4 → 2/4, 39 3/12 → 2/12 (the eight test books 92/114 → 78/114). The call pass places and filters the calls by the word boxes (D87) and wrote fewer calls on the test books (book 35: 17 → 8), most likely because Kraken's boxes now cover raised call marks that Tesseract's left bare; not yet examined, so the test books lose links while the vowelled book 31 gains them. Kraken reads a page in about 2.9 s (some 2.2 s starting its runner, then about 35 ms a line), once:
+`rebuild_lines` of the 452 pages took 3.1 s a page against 0.4 s with Tesseract's boxes; later rebuilds reuse
+the stored reading.
