@@ -587,6 +587,7 @@ def test_runpod_check_goes_on_without_health_on_the_workers_local_server(db, run
         call_command("runpod_check")
     out = capsys.readouterr().out
     assert "health    not available" in out and "on NVIDIA L4" in out
+    assert "/health" in out and "RUNPOD_ENDPOINT_ID" not in out  # not the message of a wrong endpoint
     with runpod.use_client(make_client(LocalServer())), pytest.raises(CommandError, match="health"):
         call_command("runpod_check", "--no-ping")
 

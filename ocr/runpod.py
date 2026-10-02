@@ -280,6 +280,8 @@ def _http_message(response: httpx.Response, path: str, attempts: int) -> str:
         headline = f"رفض Runpod مفتاح الـ API (HTTP {code})؛ تحقّق من RUNPOD_API_KEY."
     elif code == 404 and path.startswith("/status"):
         headline = "انتهت صلاحية المهمة في Runpod قبل أن تُقرأ نتيجتها (HTTP 404)."
+    elif code == 404 and path == "/health":
+        headline = "لا يقدّم هذا الخادم /health (HTTP 404)؛ خادم العامل المحلي لا يقدّمه."
     elif code == 404:
         headline = "لم يجد Runpod نقطة النهاية (HTTP 404)؛ تحقّق من RUNPOD_ENDPOINT_ID."
     elif code == 413:
