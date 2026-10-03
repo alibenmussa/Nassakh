@@ -1,0 +1,44 @@
+/* The connection cover (static/src/js/offline.js, templates/base.html): offline, or the server silent, the page
+   fades behind a quiet veil (lower opacity, a little blur, its colours muted) and one small card says why and
+   that the work waits; the page under it is inert. Back online, the veil lifts. Reduced motion: no fade. */
+@layer components {
+  .net-cover {
+    position: fixed;
+    inset: 0;
+    z-index: 200; /* over every dialog, drawer and toast of the screens */
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(247, 247, 248, 0.62);
+    -webkit-backdrop-filter: blur(2px) grayscale(0.6);
+    backdrop-filter: blur(2px) grayscale(0.6);
+    cursor: not-allowed;
+  }
+  .net-card {
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 22px 22px 18px;
+    text-align: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-pop);
+    cursor: default;
+    animation: net-in 180ms ease-out both;
+  }
+  .net-icon { width: 28px; height: 28px; color: var(--color-text-3); }
+  .net-title { margin: 2px 0 0; font-size: 15px; font-weight: 600; color: var(--color-text); }
+  .net-text { margin: 0; font-size: 13px; line-height: 1.7; color: var(--color-text-2); }
+  .net-status { display: inline-flex; align-items: center; gap: 7px; margin: 4px 0 6px; font-size: 12px; color: var(--color-text-3); }
+  .net-dot { width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--color-warning); animation: net-pulse 1100ms ease-in-out infinite; }
+  .net-cover[data-checking="true"] .net-dot { background: var(--color-accent); }
+  @keyframes net-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: none; } }
+  @keyframes net-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .net-card, .net-dot { animation: none; }
+  }
+}

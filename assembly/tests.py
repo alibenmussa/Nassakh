@@ -2145,6 +2145,10 @@ def test_reassembly_snapshots_the_previous_document_and_prunes_old_snapshots(edi
     for _ in range(11):
         ManuscriptSnapshot.objects.create(manuscript=manuscript, document={}, version=0, reason="reassembly")
     manual = ManuscriptSnapshot.objects.create(manuscript=manuscript, document={}, version=0, reason="manual")
+    # old snapshots: taken long before this run (a run within minutes of one adds none, see editor/test_checkpoints.py)
+    from datetime import timedelta
+
+    manuscript.snapshots.update(created_at=timezone.now() - timedelta(days=1))
     services.start_assembly(f.book, editor)
     manuscript.refresh_from_db()
     assert manuscript.version == 2

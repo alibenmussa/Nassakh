@@ -30,6 +30,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.contrib.auth.models import AnonymousUser
 from django.db import IntegrityError, transaction
@@ -67,6 +68,12 @@ from .models import (
 log = logging.getLogger(__name__)
 
 EDIT_SNAPSHOTS_KEPT = 20  # automatic `edit` snapshots kept per manuscript (manual ones are never pruned)
+# automatic checkpoints (the owner's review, 2026-10-03): one «قبل إعادة التجميع» per burst of re-assemblies of
+# an unedited text (the first stands for the burst; the next one after this quiet), the main version once at
+# the first edit, a twin of a manual snapshot (same version, same name) answered instead of made
+CHECKPOINT_WINDOW_S = 600
+TWIN_WINDOW_S = 120
+MAIN_VERSION_LABEL = "النص قبل أول تحرير · الإصدار {version}"
 MAX_QUERY = 500
 MAX_MATCHES = 5000
 MAX_LABEL = 200
@@ -324,7 +331,7 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
         end = chapter.start + len(nodes)
         formed = [c for c in doc.chapters_of(new_document) if c.start < end and c.end > chapter.start]
         if changed:
-            fields = _mark_edited(manuscript)
+            fields = _mark_edited(manuscript, user)
             manuscript.document = new_document
             manuscript.version += 1
             manuscript.origin = Manuscript.Origin.EDITOR
@@ -353,14 +360,16 @@ def save_chapter(book: Book, chapter_id: str, content, version, user) -> dict:
 _KEEP = object()  # `_write`: the base follows `_mark_edited`
 
 
-def _mark_edited(manuscript: Manuscript) -> list[str]:
+def _mark_edited(manuscript: Manuscript, user=None) -> list[str]:
     """Before the first edit of an assembled text, keep that text as the manuscript's base (D78): the
-    assembled document every later edit descends from. Every editor write calls it first (`save_chapter`,
-    `_write`: find & replace, digits, the uncertain words); a text already edited keeps its base (an edit
-    never rewrites it). Returns the fields to save with the write (`["base"]` or none)."""
+    assembled document every later edit descends from, and once as a snapshot for good (`keep_main_version`:
+    the version the editing started from). Every editor write calls it first (`save_chapter`, `_write`: find
+    & replace, digits, the uncertain words); a text already edited keeps its base (an edit never rewrites
+    it). Returns the fields to save with the write (`["base"]` or none)."""
     if manuscript.origin != Manuscript.Origin.ASSEMBLY:
         return []
     manuscript.base = copy.deepcopy(manuscript.document or {})
+    keep_main_version(manuscript, user)
     return ["base"]
 
 
@@ -368,7 +377,7 @@ def _write(manuscript: Manuscript, document: dict, user, base=_KEEP) -> None:
     """Write an edited document (version + 1, origin editor); the base as `_mark_edited` keeps it, or `base`
     when given (a restore puts the snapshot's back)."""
     if base is _KEEP:
-        fields = _mark_edited(manuscript)
+        fields = _mark_edited(manuscript, user)
     else:
         manuscript.base = base
         fields = ["base"]
@@ -434,8 +443,47 @@ def _take(
     return snapshot
 
 
+def _newest_snapshot(manuscript: Manuscript) -> ManuscriptSnapshot | None:
+    return (
+        manuscript.snapshots.defer("document", "base").order_by("-created_at", "-id").first()
+        if manuscript.pk
+        else None
+    )
+
+
+def keep_main_version(manuscript: Manuscript, user=None) -> ManuscriptSnapshot | None:
+    """The first edit of an assembled text keeps that text once, for good (`manual`, never pruned): the main
+    version the editing started from (the owner's review, 2026-10-03: one main version at the first entry,
+    checkpoints later). Called with the manuscript locked, before the write. When the newest snapshot holds
+    this very version already (a replace-all or a «حفظ نسخة» took it a moment ago) no second copy is made: an
+    automatic one is kept for good instead."""
+    newest = _newest_snapshot(manuscript)
+    if newest is not None and newest.version == manuscript.version:
+        if newest.reason == ManuscriptSnapshot.Reason.EDIT:
+            ManuscriptSnapshot.objects.filter(pk=newest.pk).update(reason=ManuscriptSnapshot.Reason.MANUAL)
+        return None
+    return _take(manuscript, MAIN_VERSION_LABEL.format(version=manuscript.version), "manual", user)
+
+
+def recent_checkpoint(
+    manuscript: Manuscript, reason: str, within_s: float = CHECKPOINT_WINDOW_S
+) -> ManuscriptSnapshot | None:
+    """The newest snapshot of `reason` taken less than `within_s` seconds ago (None when there is none): an
+    automatic checkpoint a burst of runs already has (`assembly.services._save`: one «قبل إعادة التجميع» per
+    burst, not one per run — the role marks of the manuscript screen re-assemble the book at each click)."""
+    since = timezone.now() - timedelta(seconds=within_s)
+    return (
+        manuscript.snapshots.filter(reason=reason, created_at__gte=since)
+        .defer("document", "base")
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
 def snapshot(book: Book, label: str = "", reason: str = "manual", user=None) -> dict:
-    """Save a copy of the manuscript as it is now («حفظ نسخة باسم…»); returns the snapshot's row dict."""
+    """Save a copy of the manuscript as it is now («حفظ نسخة باسم…»); returns the snapshot's row dict. A
+    second request for the same version with the same name (a double click, a resent form) answers the copy
+    taken a moment ago instead of a twin."""
     if reason not in ManuscriptSnapshot.Reason.values:
         raise EditorError("سبب النسخة غير معروف.")
     label = " ".join(str(label or "").split())
@@ -443,7 +491,11 @@ def snapshot(book: Book, label: str = "", reason: str = "manual", user=None) -> 
         raise EditorError("اسم النسخة أطول من المسموح.")
     with transaction.atomic():
         manuscript = manuscript_of(book, lock=True)
-        taken = _take(manuscript, label or f"نسخة محفوظة · الإصدار {manuscript.version}", reason, user)
+        name = label or f"نسخة محفوظة · الإصدار {manuscript.version}"
+        twin = recent_checkpoint(manuscript, reason, TWIN_WINDOW_S) if reason == "manual" else None
+        if twin is not None and twin.version == manuscript.version and twin.label == name[:MAX_LABEL]:
+            return _snapshot_dict(twin, manuscript.version)
+        taken = _take(manuscript, name, reason, user)
     return _snapshot_dict(taken, manuscript.version)
 
 

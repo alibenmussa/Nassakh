@@ -22,8 +22,9 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 <div class="lo-bar" x-data="bookBar">
   <template x-if="v">
     <div class="lo-bar-inner">
-      {# the save pill (= rv-save): the chapter's text and the stylesheet; a failed save retries on a click #}
-      <button type="button" class="lo-pill lo-save" :class="'is-' + v.savePill.state" x-show="v.savePill.text" :disabled="v.savePill.state !== 'error'" @click="v.retrySave()" data-save-pill>
+      {# the save pill (= rv-save): the chapter's text and the stylesheet; a failed save retries on a click (in edit mode #}
+      {# the toolbar's status says it, by the text: _book_toolbar.html) #}
+      <button type="button" class="lo-pill lo-save" :class="'is-' + v.savePill.state" x-show="v.savePill.text && v.mode !== 'edit'" :disabled="v.savePill.state !== 'error'" @click="v.retrySave()" :title="v.savePill.title || v.savePill.text" data-save-pill>
         <span class="lo-pill-dot" aria-hidden="true"></span>
         <span role="status" aria-live="polite" x-text="v.savePill.text"></span>
       </button>
@@ -107,7 +108,7 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
 <div class="lo-screen bp-screen" data-book data-rail x-data="bookPage(JSON.parse(document.getElementById('book-config').textContent))"
      :class="{ 'is-spread': spreadOn, 'is-edit': mode === 'edit', 'is-open': Boolean(open), 'has-marks': pageMarks }" :data-fit="fit" :data-mode="mode"
      @keydown.window="onKey($event)" @resize.window.debounce.120ms="onResize()" @beforeunload.window="guardUnload($event)" @pagehide.window="guardUnload()" @hashchange.window="onHashChange()" @visibilitychange.document="onVisible()"
-     @focus.window="onWindowFocus()" @pageshow.window="onPageShow($event)">
+     @focus.window="onWindowFocus()" @pageshow.window="onPageShow($event)" @nassakh-online.window="onOnline()">
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
   {# the render's faces for the live pages (publishing.fonts.browser_font_css): the same families as the PDF #}
   <style data-font-css x-text="fontCss">{{ config.fontCss }}</style>

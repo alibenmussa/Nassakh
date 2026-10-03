@@ -882,9 +882,11 @@ def test_a_full_reassembly_keeps_the_edited_text_for_good(editor_user):
     # D49: a whole-book run over the edited text is refused until the replacement is confirmed
     with pytest.raises(assembly_services.AssemblyEdited):
         assembly_services.start_assembly(book, editor_user, {"strip_tatweel": False})
-    assert not ManuscriptSnapshot.objects.filter(manuscript__book=book, reason="manual").exists()
+    # only the main version the first edit kept (the refused run kept nothing)
+    main = ManuscriptSnapshot.objects.get(manuscript__book=book, reason="manual")
+    assert main.label == services.MAIN_VERSION_LABEL.format(version=1)
     assembly_services.start_assembly(book, editor_user, {"strip_tatweel": False}, replace_edited=True)
-    kept = ManuscriptSnapshot.objects.get(manuscript__book=book, reason="manual")
+    kept = ManuscriptSnapshot.objects.exclude(pk=main.pk).get(manuscript__book=book, reason="manual")
     assert kept.label.startswith("النص المحرَّر قبل إعادة التجميع") and "نص محرَّر." in json.dumps(
         kept.document, ensure_ascii=False
     )
@@ -1972,8 +1974,12 @@ def test_the_base_is_written_once_by_the_first_edit_and_reset_by_a_whole_book_ru
     assembly_services.start_assembly(book, editor_user, replace_edited=True)
     manuscript = Manuscript.objects.get(book=book)
     assert manuscript.base is None and manuscript.origin == "assembly"
-    kept = manuscript.snapshots.get(reason="manual")  # the edited text kept for good, with its base
+    # the edited text kept for good, with its base; and the main version the editing started from (the digit
+    # conversion's own copy, kept for good: no twin of it)
+    kept = manuscript.snapshots.get(reason="manual", label__startswith="النص المحرَّر قبل إعادة التجميع")
     assert kept.base == assembled
+    main = manuscript.snapshots.get(reason="manual", version=1)
+    assert main.document == assembled and main.label.startswith("قبل تحويل")
     chapter = services.chapter_document(book, "h40011")
     chapter["content"]["content"][1]["content"] = [text("تعديل بعد التجميع.")]
     services.save_chapter(book, "h40011", chapter["content"], chapter["version"], editor_user)

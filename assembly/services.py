@@ -784,24 +784,29 @@ def _save(
                     updated_by=run.created_by,
                 )
             else:
+                from editor.services import recent_checkpoint  # other app: lazy import
+
                 edited = manuscript.origin == Manuscript.Origin.EDITOR
-                ManuscriptSnapshot.objects.create(
-                    manuscript=manuscript,
-                    document=manuscript.document,
-                    base=manuscript.base if edited else None,
-                    version=manuscript.version,
-                    label=(
-                        f"النص المحرَّر قبل إعادة التجميع · الإصدار {manuscript.version}"
+                # an unedited text keeps one checkpoint per burst of runs (the role marks of the manuscript
+                # screen re-assemble at each click): the first stands for the burst; an edited text, always
+                if edited or recent_checkpoint(manuscript, ManuscriptSnapshot.Reason.REASSEMBLY) is None:
+                    ManuscriptSnapshot.objects.create(
+                        manuscript=manuscript,
+                        document=manuscript.document,
+                        base=manuscript.base if edited else None,
+                        version=manuscript.version,
+                        label=(
+                            f"النص المحرَّر قبل إعادة التجميع · الإصدار {manuscript.version}"
+                            if edited
+                            else f"قبل إعادة التجميع · الإصدار {manuscript.version}"
+                        ),
+                        # an edited text (D41) is kept for good: re-assembly snapshots are pruned
+                        reason=ManuscriptSnapshot.Reason.MANUAL
                         if edited
-                        else f"قبل إعادة التجميع · الإصدار {manuscript.version}"
-                    ),
-                    # an edited text (D41) is kept for good: re-assembly snapshots are pruned
-                    reason=ManuscriptSnapshot.Reason.MANUAL
-                    if edited
-                    else ManuscriptSnapshot.Reason.REASSEMBLY,
-                    created_by=run.created_by,
-                )
-                prune_snapshots(manuscript)
+                        else ManuscriptSnapshot.Reason.REASSEMBLY,
+                        created_by=run.created_by,
+                    )
+                    prune_snapshots(manuscript)
                 manuscript.document = document
                 manuscript.base = None  # D78: an assembled text is its own base until the next edit
                 manuscript.version += 1

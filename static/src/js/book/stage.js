@@ -305,7 +305,8 @@
       },
       async poll() {
         if (this.stopped || !urls.preview) return;
-        if (U.hasDOM && document.hidden) { this.schedule(POLL_HIDDEN_MS); return; }
+        // hidden, or offline (offline.js covers the page; `nassakh-online` polls again at once): later
+        if ((U.hasDOM && document.hidden) || U.offline()) { this.schedule(POLL_HIDDEN_MS); return; }
         const r = await U.api(`${urls.preview}${urls.preview.includes('?') ? '&' : '?'}scope=book`);
         if (r.status === 401 || r.status === 403) { this.stopped = true; this.pollState = 'auth'; return; }
         if (!r.ok || !r.data) {
@@ -476,9 +477,14 @@
         if (this.relayout.state === 'error') return this.relayout.error || 'تعذّرت إعادة ترتيب صفحات الفصل.';
         return this.book && this.book.status === 'error' ? this.book.error || RENDER_ERROR : '';
       },
-      // the quiet pill: re-laying out, the book render, a failure with the retry, stale
+      // the quiet pill: re-laying out, the book render, a failure with the retry, stale (a re-layout of a saved
+      // edit is the save pill's «تم الحفظ · تُحدَّث الصفحات…»: said once)
       get renderPill() {
-        if (this.relayout.state === 'running') return { state: 'saving', text: 'تُرتَّب الصفحات…', action: '' };
+        if (this.relayout.state === 'running') {
+          const pill = this.savePill;
+          if (pill && pill.state === 'pages') return { state: '', text: '', action: '' };
+          return { state: 'saving', text: 'تُرتَّب الصفحات…', action: '' };
+        }
         if (isActive(this.book)) return { state: 'saving', text: 'تُرتَّب صفحات الكتاب…', action: '' };
         if (this.errorText) return this.pages.length ? { state: 'error', text: 'تعذّر تحديث الصفحات · إعادة المحاولة', action: 'retry' } : { state: '', text: '', action: '' };
         if (this.stale && this.pages.length) return { state: 'warn', text: 'الصفحات أقدم من النص', action: this.canEdit ? 'retry' : '' };

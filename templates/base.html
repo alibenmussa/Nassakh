@@ -54,6 +54,8 @@
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
   {# «تغييرات المراجعة» (D78): review's text joining the book's #}
   <symbol id="i-merge" viewBox="0 0 24 24"><path d="M7 4v4.5a4.5 4.5 0 0 0 4.5 4.5H19"/><path d="M7 20v-3.5A4.5 4.5 0 0 1 11.5 12"/><path d="M15.5 9.5L19 13l-3.5 3.5"/></symbol>
+  {# the connection cover (offline.js) #}
+  <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 4.2-2.4M19 12.9a10 10 0 0 0-3-2.1M2 9.3a14.5 14.5 0 0 1 4.4-2.6M22 9.3A14.5 14.5 0 0 0 11 5.6"/><path d="M12 20h.01" stroke-width="2.4"/></symbol>
 </svg>
 
 {% block body %}
@@ -158,7 +160,20 @@
   </div>
 </div>
 
+{# The connection (static/src/js/offline.js): offline, or the server silent, the page is covered and its work #}
+{# waits (it is inert under the cover) until the connection is back; `data-probe` is the file asked to check it. #}
+<div class="net-cover" x-data="offlineCover" x-show="net.lost" x-cloak x-transition.opacity.duration.200ms role="alertdialog" aria-modal="true" aria-labelledby="net-title" aria-describedby="net-text" :data-checking="net.checking ? 'true' : 'false'" data-net-cover data-probe="{% static 'vendor/alpine.min.js' %}">
+  <div class="net-card">
+    <svg class="icon net-icon" aria-hidden="true"><use href="#i-wifi-off"/></svg>
+    <h2 class="net-title" id="net-title" x-text="title">لا اتصال بالإنترنت</h2>
+    <p class="net-text" id="net-text">توقّف العمل مؤقتًا حتى يعود الاتصال، كي لا يُجرى تعديل لا يُحفظ. ما حُفظ باقٍ، وما لم يُحفظ بعد يُحفظ عند عودة الاتصال.</p>
+    <p class="net-status" aria-live="polite"><span class="net-dot" aria-hidden="true"></span><span x-text="statusText"></span></p>
+    <button type="button" class="btn" @click="retry()" :disabled="net.checking" data-net-retry>إعادة المحاولة الآن</button>
+  </div>
+</div>
+
 <script src="{% static 'src/js/ui.js' %}"></script>
+<script src="{% static 'src/js/offline.js' %}"></script>
 <script src="{% static 'src/js/keys.js' %}"></script>
 <script src="{% static 'src/js/decode.js' %}"></script>
 <script src="{% static 'src/js/stages.js' %}"></script>

@@ -29,9 +29,70 @@
   const POP_EDGE = 8;
   const POP_GAP = 6;
   const POP_SIZE = { note: [380, 132], word: [280, 168] };
-  const SAVE_TEXT = { dirty: 'غير محفوظ', saving: 'يُحفظ…', saved: 'محفوظ', error: 'تعذّر الحفظ · إعادة المحاولة', conflict: 'تغيّر في نافذة أخرى' };
+  const SAVE_TEXT = {
+    saving: 'يتم الحفظ…',
+    pages: 'تم الحفظ · تُحدَّث الصفحات…',
+    saved: 'تم الحفظ',
+    error: 'تعذّر الحفظ · إعادة المحاولة',
+    retrying: 'تعذّر الحفظ · تُعاد المحاولة…',
+    offline: 'لا اتصال · يُحفظ عند عودته',
+    conflict: 'تغيّر في نافذة أخرى',
+  };
+  const SAVE_TIMEOUT_MS = 30000; // a PUT that has not answered by then is given up (and tried again)
+  const RETRY_MS = [2000, 5000, 10000, 20000, 30000];
+  const MAX_SAVE_ROUNDS = 25; // one flight saves at most this many versions in a row
 
   const jsonOf = (node) => JSON.stringify(node);
+  const isOffline = () => typeof navigator !== 'undefined' && navigator !== null && navigator.onLine === false;
+  // «10:42» (Western digits) for the pill's «آخر حفظ»
+  const clock = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  // The chapters a split (or a merge) formed, in the order to load them: the one holding the open block first
+  // (its first block's id is the chapter's id: the saved blocks are cut where each formed chapter starts),
+  // then the others, then the answer's `id`.
+  function splitOrder(Bk, formed, id, sent, open) {
+    const order = [];
+    const add = (cid) => { if (cid && !order.includes(cid)) order.push(cid); };
+    if (open && Bk && Array.isArray(sent)) {
+      const top = sent.map((node) => (node && node.attrs ? node.attrs.id : null));
+      const at = (Bk.flatBlocks(sent).find((b) => b.id === open) || {}).index;
+      let holder = null;
+      formed.forEach((cid) => { const i = top.indexOf(cid); if (i >= 0 && at !== undefined && i <= at) holder = cid; });
+      add(holder);
+    }
+    formed.forEach(add);
+    add(id);
+    return order;
+  }
+
+  // Edits made after `sent` went to the server, carried onto `fresh` (the chapter as the server holds it now):
+  // a block changed since is written into it by id, a block added since goes after the block before it (or
+  // before the one after it), a block removed since goes. `{nodes, changed}`; `nodes` is `fresh` when nothing
+  // was carried.
+  function rebase(Bk, sent, mine, fresh) {
+    if (!Bk || mine === sent) return { nodes: fresh, changed: false };
+    const before = new Map(Bk.flatBlocks(sent).map((b) => [b.id, jsonOf(b.node)]));
+    const now = Bk.flatBlocks(mine);
+    const ids = new Set(now.map((b) => b.id));
+    let out = fresh;
+    let changed = false;
+    now.forEach((b, i) => {
+      if (!b.id) return;
+      if (before.has(b.id)) {
+        if (before.get(b.id) !== jsonOf(b.node) && Bk.locate(out, b.id)) { out = Bk.replaceBlock(out, b.id, [b.node]); changed = true; }
+        return;
+      }
+      if (Bk.locate(out, b.id)) return;
+      const prev = i > 0 ? now[i - 1].id : null;
+      const next = i + 1 < now.length ? now[i + 1].id : null;
+      const at = prev ? Bk.locate(out, prev) : null;
+      if (at) { out = Bk.replaceBlock(out, prev, [at.node, b.node]); changed = true; return; }
+      const after = next ? Bk.locate(out, next) : null;
+      if (after) { out = Bk.replaceBlock(out, next, [b.node, after.node]); changed = true; }
+    });
+    before.forEach((_json, id) => { if (!ids.has(id) && Bk.locate(out, id)) { out = Bk.replaceBlock(out, id, []); changed = true; } });
+    return { nodes: changed ? out : fresh, changed };
+  }
 
   // Placement of the overlay (= manuscript placeAgainst, in viewport coordinates): below the anchor, flipped
   // above when it would leave the visible area and there is more room above, its start edge on the anchor's
@@ -84,7 +145,7 @@
     host._nkPinned = true;
     host.addEventListener('scroll', () => { if (host.scrollTop || host.scrollLeft) { host.scrollTop = 0; host.scrollLeft = 0; } });
   }
-  NS.editFlow = { flow, placeAgainst };
+  NS.editFlow = { flow, placeAgainst, rebase, splitOrder };
 
   NS.parts.edit = function edit(ctx) {
     const U = NS.util;
@@ -101,8 +162,8 @@
     ctx.patches = new Map(); // block id → {el, json, side}
     ctx.ed = null;
     ctx.openGen = 0;
-    let saving = null; // the PUT in flight (a promise)
-    let again = false;
+    let flight = null; // the save in flight (a promise: its PUTs, a split's reload)
+    let retries = 0; // failed saves in a row (the next retry waits longer)
     let followGen = 0;
     let noteEd = null;
     let justOpened = false;
@@ -191,6 +252,7 @@
 
       // ------------------------------------------------------------ the chapter's nodes
       // The chapter's nodes for editing (the one being edited is saved first); one request per chapter at a time.
+      // Never called from inside a save (the save would wait for itself): a save's own reload uses fetchChapter.
       async loadChapter(cid, opts = {}) {
         if (!cid || !urls.chapter) return false;
         if (this.editChapterId === cid && !opts.force) return true;
@@ -201,13 +263,17 @@
             await this.saveNow();
             if (this.editDirty) { U.toast('تعذّر الحفظ؛ بقيت في هذا الفصل'); return false; }
           }
-          const r = await U.api(U.fill(urls.chapter, cid));
-          if (!r.ok || !r.data) { if (!opts.quiet) U.toast(r.message); return false; }
-          this.applyChapter(r.data, opts);
-          return true;
+          return this.fetchChapter(cid, opts);
         })();
         ctx.loading = { cid, promise };
         try { return await promise; } finally { if (ctx.loading && ctx.loading.promise === promise) ctx.loading = null; }
+      },
+      // The chapter from the server, made the one being edited (nothing is saved first).
+      async fetchChapter(cid, opts = {}) {
+        const r = await U.api(U.fill(urls.chapter, cid));
+        if (!r.ok || !r.data) { if (!opts.quiet) U.toast(r.message); return false; }
+        this.applyChapter(r.data, opts);
+        return true;
       },
       applyChapter(data, opts = {}) {
         this.chapter = {
@@ -956,18 +1022,26 @@
       },
 
       // ------------------------------------------------------------ saving and the re-layout
+      // The state between an edit and its pages, as Google Docs shows it: «يتم الحفظ…» from the first key (the
+      // pause, then the PUT), «تم الحفظ · تُحدَّث الصفحات…» while the saved text is laid out, «تم الحفظ»; a
+      // failure says so (a click tries again; a network failure is tried again by itself), a conflict, offline.
       get savePill() {
         const own = this.editSave.state;
-        if (own === 'conflict') return { state: 'conflict', text: SAVE_TEXT.conflict };
-        if (own === 'error') return { state: 'error', text: this.editSave.message && this.editSave.message.length < 40 ? this.editSave.message : SAVE_TEXT.error };
-        if (own === 'saving' || this.sheetSave.state === 'saving') return { state: 'saving', text: SAVE_TEXT.saving };
-        if (own === 'dirty') return { state: 'dirty', text: SAVE_TEXT.dirty };
-        if (this.sheetSave.state) return { state: this.sheetSave.state, text: this.sheetSave.message };
-        if (own === 'saved') return { state: 'saved', text: SAVE_TEXT.saved };
-        return { state: '', text: '' };
+        const at = this.editSave.at ? `آخر حفظ ${clock(this.editSave.at)}` : '';
+        if (own === 'conflict') return { state: 'conflict', text: SAVE_TEXT.conflict, title: this.editSave.message || SAVE_TEXT.conflict };
+        if (own === 'error') {
+          if (this.editSave.offline) return { state: 'error', text: SAVE_TEXT.offline, title: this.editSave.message };
+          const text = this.editSave.retry ? SAVE_TEXT.retrying : this.editSave.message && this.editSave.message.length < 40 ? this.editSave.message : SAVE_TEXT.error;
+          return { state: 'error', text, title: this.editSave.message || SAVE_TEXT.error };
+        }
+        if (own === 'saving' || own === 'dirty' || this.sheetSave.state === 'saving') return { state: 'saving', text: SAVE_TEXT.saving, title: SAVE_TEXT.saving };
+        if (this.sheetSave.state) return { state: this.sheetSave.state, text: this.sheetSave.message, title: this.sheetSave.message };
+        if (own === 'saved' && this.relayout && this.relayout.state === 'running') return { state: 'pages', text: SAVE_TEXT.pages, title: at };
+        if (own === 'saved') return { state: 'saved', text: SAVE_TEXT.saved, title: at };
+        return { state: '', text: '', title: '' };
       },
       retrySave() {
-        if (this.editSave.state === 'error') return this.saveNow();
+        if (this.editSave.state === 'error') { retries = 0; clearTimeout(T.saveRetry); return this.saveNow(); }
         if (this.sheetSave.state === 'error') return this.flushSheet();
         return false;
       },
@@ -976,40 +1050,53 @@
         this.commitOpen();
         return this.saveChapter();
       },
-      // One PUT at a time; a change made while it is on the wire is saved after it.
-      async saveChapter() {
-        if (!this.canEdit || !this.editChapterId || !urls.chapter) return false;
-        if (saving) { again = true; return saving; }
-        if (ctx.nodes === ctx.saved) { this.textDirty = false; return true; }
-        saving = this.putChapter();
-        let ok = false;
-        try { ok = await saving; } finally { saving = null; }
-        if (again) { again = false; return this.saveChapter(); }
-        return ok;
+      // One save at a time (single flight): a change made while a PUT is on the wire is saved right after it,
+      // by the same flight, and every caller waits for that one promise. Nothing the flight awaits may wait for
+      // the flight (a chapter split reloads through fetchChapter, never loadChapter): it did, and from then on
+      // every save, chapter switch and «حفظ نسخة الآن» hung on it.
+      saveChapter() {
+        if (!this.canEdit || !this.editChapterId || !urls.chapter) return Promise.resolve(false);
+        if (flight) return flight; // it saves what changed meanwhile before it settles
+        flight = (async () => {
+          try { return await this.runSaves(); } finally { flight = null; }
+        })();
+        return flight;
       },
+      // PUT after PUT while the nodes differ from the ones saved (a change made during a PUT is the next one);
+      // a split's reload in between, never a save inside it.
+      async runSaves() {
+        for (let round = 0; round < MAX_SAVE_ROUNDS; round += 1) {
+          if (!this.editChapterId) return false;
+          if (ctx.nodes === ctx.saved) { this.textDirty = Boolean(ctx.ed && jsonOf(ctx.ed.getNode()) !== ctx.base); return true; }
+          const r = await this.putChapter();
+          if (r.reload) { if (!(await this.reloadAfterSplit(r.reload, r.sent))) return false; continue; }
+          if (!r.ok) return false;
+        }
+        return ctx.nodes === ctx.saved;
+      },
+      // `{ok}`; `{ok, reload: answer, sent: nodes}` when the saved blocks no longer form this chapter (the caller
+      // reloads it, outside this request).
       async putChapter() {
         const cid = this.editChapterId;
         const nodes = ctx.nodes;
-        if (!this.version) { this.editSave = { state: 'error', message: 'أعد تحميل الفصل قبل الحفظ.' }; return false; }
-        this.editSave = { state: 'saving', message: '' };
-        const r = await U.api(U.fill(urls.chapter, cid), { method: 'PUT', body: { content: { type: 'doc', content: nodes }, version: this.version } });
-        if (this.editChapterId !== cid) return false;
+        if (!this.version) { this.editSave = { state: 'error', message: 'أعد تحميل الفصل قبل الحفظ.' }; return { ok: false }; }
+        clearTimeout(T.saveRetry);
+        this.editSave = { state: 'saving', message: '', at: this.editSave.at || 0 };
+        const r = await U.api(U.fill(urls.chapter, cid), { method: 'PUT', body: { content: { type: 'doc', content: nodes }, version: this.version }, timeout: SAVE_TIMEOUT_MS });
+        if (this.editChapterId !== cid) return { ok: false };
         if (r.status === 409 && r.data) {
           this.editSave = { state: 'conflict', message: r.message };
           this.conflict = { open: true, version: r.data.version || '', content: r.data.content || null };
           this.liveMessage = r.message;
-          return false;
+          return { ok: false };
         }
-        if (!r.ok || !r.data) {
-          this.editSave = { state: 'error', message: r.message };
-          this.liveMessage = r.message;
-          return false;
-        }
+        if (!r.ok || !r.data) { this.saveFailed(r); return { ok: false }; }
         const data = r.data;
+        retries = 0;
         ctx.saved = nodes;
         this.textDirty = ctx.nodes !== nodes || Boolean(ctx.ed && jsonOf(ctx.ed.getNode()) !== ctx.base);
-        this.editSave = { state: this.textDirty ? 'dirty' : 'saved', message: '' };
-        if (data.reload) { await this.reloadAfterSplit(data); return true; }
+        this.editSave = { state: this.textDirty ? 'dirty' : 'saved', message: '', at: Date.now() };
+        if (data.reload) return { ok: true, reload: data, sent: nodes };
         this.version = data.version || this.version;
         if (Array.isArray(data.chapters) && data.chapters[0] && this.chapter) {
           this.chapter.title = data.chapters[0].title;
@@ -1021,30 +1108,72 @@
         if (data.changed && typeof this.afterSave === 'function') this.afterSave(cid);
         this.followRelayout(data.relayout, nodes);
         this.pollNow();
+        return { ok: true };
+      },
+      // A failed save never goes quiet: the pill says so; a network failure, a timeout or a server error is
+      // tried again by itself (2 s, 5 s, 10 s, … 30 s), offline when the connection is back (onOnline). The text
+      // stays in the page, and leaving the page asks first.
+      saveFailed(r) {
+        const transient = !r.status || r.status === 408 || r.status === 429 || r.status >= 500;
+        const off = typeof U.offline === 'function' ? U.offline() : isOffline();
+        this.editSave = { state: 'error', message: r.message, retry: transient && !off, offline: off, at: this.editSave.at || 0 };
+        this.liveMessage = r.message;
+        clearTimeout(T.saveRetry);
+        if (!transient || off) return;
+        const ms = RETRY_MS[Math.min(retries, RETRY_MS.length - 1)];
+        retries += 1;
+        T.saveRetry = setTimeout(() => { T.saveRetry = null; if (this.editSave.state === 'error') this.saveNow(); }, ms);
+      },
+      // The connection is back (offline.js, `nassakh-online`): what waited is saved now, the pages polled again.
+      onOnline() {
+        if (this.editSave.state === 'error' || this.editDirty) { retries = 0; this.saveNow(); }
+        if (typeof this.flushSheet === 'function' && (this.sheetSave.state === 'error' || Object.keys(this.dirty || {}).length)) this.flushSheet();
+        if (typeof this.pollNow === 'function') this.pollNow();
         return true;
       },
       // A new level-1 heading split the chapter (or a deleted one merged it): the chapter list and the chapter
-      // again, the open paragraph kept where it went.
-      async reloadAfterSplit(data) {
+      // that holds the open paragraph again, the paragraph reopened at its caret. Called by the save's flight
+      // after its PUT, so it never saves (nor loads through loadChapter, which saves first); what was typed
+      // while the PUT was on the wire is carried onto the reloaded chapter (`rebase`) and the flight saves it.
+      // The re-layout the save asked for is followed (a second request would lay the book out twice).
+      async reloadAfterSplit(data, sent) {
+        this.commitOpen();
         const open = ctx.openId;
         const caret = ctx.ed ? ctx.ed.offset() : 0;
+        const n = ctx.anchor ? ctx.anchor.n : this.current;
+        const mine = ctx.nodes;
+        const before = this.editChapterId;
         this.dropEditor();
         const list = await U.api(urls.chapters);
         if (list.ok && Array.isArray(list.data)) {
           this.chapters = list.data.map((c) => ({ id: c.id, number: c.number, kind: c.kind, title: c.title }));
           this.summaries = list.data;
         }
-        const formed = Array.isArray(data.chapters) ? data.chapters.map((c) => c.id) : [];
-        this.editChapterId = null;
-        const target = data.id || formed[0];
-        if (!(await this.loadChapter(target, { force: true }))) return false;
-        if (open && !B().locate(ctx.nodes, open)) {
-          const other = formed.find((c) => c !== target);
-          if (other) await this.loadChapter(other, { force: true });
+        const formed = Array.isArray(data.chapters) ? data.chapters.map((c) => c.id).filter(Boolean) : [];
+        let loaded = false;
+        for (const cid of splitOrder(B(), formed, data.id, sent, open)) {
+          if (!(await this.fetchChapter(cid, { force: true, quiet: true }))) continue;
+          loaded = true;
+          if (!open || B().locate(ctx.nodes, open)) break;
+        }
+        if (!loaded) {
+          // the text stays here (ctx.nodes); no save with the old chapter's version (it would read as a conflict)
+          if (this.editChapterId === before) this.version = '';
+          this.editSave = { state: 'error', message: 'تعذّر تحميل الفصل بعد تقسيمه؛ أعد تحميل الصفحة.' };
+          return false;
+        }
+        const fresh = ctx.nodes;
+        const carried = rebase(B(), sent, mine, fresh);
+        if (carried.changed) {
+          ctx.nodes = carried.nodes;
+          this.textDirty = true;
+          this.editSave = { state: 'dirty', message: '', at: this.editSave.at || 0 };
         }
         U.toast(formed.length > 1 ? 'انقسم الفصل؛ حُدّثت قائمة الفصول' : 'اندمج الفصل؛ حُدّثت قائمة الفصول');
-        this.requestRelayout(this.editChapterId);
-        if (open && B().locate(ctx.nodes, open)) this.openBlock(open, caret, { n: ctx.anchor ? ctx.anchor.n : this.current });
+        if (data.relayout) this.followRelayout(data.relayout, fresh);
+        else this.requestRelayout(this.editChapterId);
+        if (open && B().locate(ctx.nodes, open)) this.openBlock(open, caret, { n });
+        else this.paint();
         return true;
       },
       // POST a re-layout of a chapter (after a server-side change, a page setup change) and follow it.
@@ -1151,7 +1280,7 @@
       },
       guardUnload(e) {
         if (typeof this.flushSheet === 'function' && Object.keys(this.dirty || {}).length) this.flushSheet({ keepalive: true });
-        const pending = this.editDirty || Boolean(saving);
+        const pending = this.editDirty || Boolean(flight) || this.editSave.state === 'error' || this.editSave.state === 'conflict';
         if (!pending) return false;
         if (e && typeof e.preventDefault === 'function') e.preventDefault();
         if (e) e.returnValue = '';

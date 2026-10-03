@@ -67,6 +67,17 @@ the bookPage component (layout.html). Context: can_edit.{% endcomment %}
   </div>
 
   <div class="lo-toolbar-end">
+    {% if can_edit %}
+    {# the text's save state in edit mode, where the eyes are (as Google Docs): «يتم الحفظ…» from the first key, «تم الحفظ · #}
+    {# تُحدَّث الصفحات…» while the saved text is laid out, «تم الحفظ» (its time on hover); a failure or a conflict says so #}
+    {# and a click tries again (the top bar's pill says the same outside edit mode) #}
+    <button type="button" class="lo-pill ed-status" :class="'is-' + savePill.state" x-show="mode === 'edit' && savePill.text" x-cloak :disabled="savePill.state !== 'error'" @click="retrySave()" :title="savePill.title || savePill.text" data-edit-status>
+      <svg class="icon" aria-hidden="true" x-show="savePill.state === 'saved'"><use href="#i-check"/></svg>
+      <svg class="icon" aria-hidden="true" x-show="savePill.state === 'error' || savePill.state === 'conflict'"><use href="#i-alert"/></svg>
+      <span class="lo-pill-dot" aria-hidden="true" x-show="savePill.state === 'saving' || savePill.state === 'pages'"></span>
+      <span role="status" aria-live="polite" x-text="savePill.text"></span>
+    </button>
+    {% endif %}
     <span class="bk-counter lo-counter" x-show="counterText" x-cloak aria-live="polite" data-counter>
       <span x-text="counterText"></span>
       <span class="lo-counter-chapter" x-show="counterChapter"><span aria-hidden="true">·</span> <span class="lo-counter-title" x-text="counterChapter && counterChapter.title"></span> <span class="num">ص <bdi x-text="counterChapter && (counterChapter.first + '–' + counterChapter.last)"></bdi></span></span>

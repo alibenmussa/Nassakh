@@ -109,7 +109,7 @@
   "status": 200,
   "response": {
    "version": 3,
-   "snapshot": 1,
+   "snapshot": 2,
    "chapters": [
     {
      "id": "h40011",
@@ -137,8 +137,8 @@
   "status": 200,
   "response": {
    "version": 4,
-   "snapshot": 2,
-   "restored": 1
+   "snapshot": 3,
+   "restored": 2
   }
  },
  "POST …/apply/ {keep_all: true} («الاحتفاظ بنصّي في الكل»: the baseline and the base move, the text is not written)": {
@@ -156,7 +156,7 @@
   "status": 200,
   "response": {
    "version": 4,
-   "snapshot": 3,
+   "snapshot": 4,
    "chapters": [
     {
      "id": "h40011",
@@ -218,7 +218,7 @@
   "status": 200,
   "response": {
    "version": 6,
-   "snapshot": 5,
+   "snapshot": 6,
    "chapters": [
     {
      "id": "h40011",

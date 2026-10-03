@@ -180,6 +180,14 @@
   .lo-pill.is-error:not(:disabled):hover { background: var(--color-danger-border); }
   .lo-pill.is-warn:not(:disabled):hover { background: var(--color-warning-border); }
   .lo-pill:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  /* the text's save state in the edit toolbar (as Google Docs): «يتم الحفظ…» → «تم الحفظ · تُحدَّث الصفحات…» → «تم الحفظ» */
+  .lo-pill.is-pages { color: var(--color-text-2); }
+  .lo-pill.is-pages .lo-pill-dot { background: var(--color-success); animation: lo-pulse 900ms ease-in-out infinite; }
+  .ed-status { height: 26px; padding: 0 10px; font-size: 12.5px; border: 1px solid transparent; }
+  .ed-status .icon { width: 14px; height: 14px; flex: none; }
+  .ed-status.is-saved .icon { color: var(--color-success); }
+  .ed-status.is-saving, .ed-status.is-pages { background: var(--color-bg-subtle); }
+  .ed-status.is-error, .ed-status.is-conflict { border-color: var(--color-danger-border); }
   .lo-menu { width: 264px; max-width: 264px; inset-inline-start: auto; inset-inline-end: 0; } /* = bk-menu */
   .lo-menu .menu-item .icon { color: var(--color-text-3); }
   .lo-menu .menu-item[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
@@ -913,7 +921,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .lo-spread, .lo-stage.is-out-next .lo-spread, .lo-stage.is-out-prev .lo-spread { transition: none; }
-    .lo-pill.is-saving .lo-pill-dot, .lo-pill-dot.is-live { animation: none; }
+    .lo-pill.is-saving .lo-pill-dot, .lo-pill.is-pages .lo-pill-dot, .lo-pill-dot.is-live { animation: none; }
     .lo-sheet.is-skeleton > span, .lp-skeleton > span, .lo-thumb.is-pending .lo-thumb-img, .ed-source-skeleton, .ed-sheet-skeleton, .ed-snap-skeleton span, .lp-cover.is-loading .lp-cover-hint::after { animation: none; }
     .lo-diagram-block, .lo-thumb, .lp-line.is-moved, .bp-acc-head .icon, .app-shell:has([data-rail]) .sidebar, .bp-drop, .bp-drop-progress > span, .bp-swatch, .bp-swatch-cover, .bp-color-box { transition: none; }
     .bp-panel, .ed-pop, .ed-drawer, .lp-line.is-flash, .lp-line.is-applied, .bp-changes-skel span { animation: none; }

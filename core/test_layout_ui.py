@@ -2153,7 +2153,8 @@ def test_book_page_component_under_node(tmp_path):
     # pages for the chapter spliced in, the later pages renumbered (+1) and on the other side, the footprint's
     # delta, the paragraph still open (re-anchored), the new pages' thumbs waiting for their images
     saved = out["saved"]
-    assert saved["beforePause"] == {"state": "dirty", "pill": "غير محفوظ", "timer": 1, "puts": 0}
+    # the pill says «يتم الحفظ…» from the first key (as Google Docs), through the pause and the PUT
+    assert saved["beforePause"] == {"state": "dirty", "pill": "يتم الحفظ…", "timer": 1, "puts": 0}
     assert (
         saved["url"] == "/api/books/1/chapters/h10/" and saved["putVersion"] == "v1" and saved["p13"] is True
     )
@@ -2180,7 +2181,7 @@ def test_book_page_component_under_node(tmp_path):
     assert (
         saved["version"] == "v2"
         and saved["state"] == "saved"
-        and saved["pill"] == "محفوظ"
+        and saved["pill"] == "تم الحفظ"
         and saved["relayout"] == ""
     )
     assert (

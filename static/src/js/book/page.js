@@ -29,7 +29,13 @@
     return (meta && meta.content) || '';
   };
 
-  // fetch wrapper: never throws; `{ok, status, data, message}` with an Arabic message on failure.
+  const OFFLINE_MESSAGE = 'انقطع الاتصال بالخادم. تحقّق من الشبكة ثم أعد المحاولة.';
+  const TIMEOUT_MESSAGE = 'لم يردّ الخادم في الوقت المعتاد؛ تُعاد المحاولة.';
+  const API_TIMEOUT_MS = 60000; // no request holds the page for ever (a save waits for its answer)
+
+  // fetch wrapper: never throws; `{ok, status, data, message}` with an Arabic message on failure. `timeout`
+  // (ms, default 60 s) gives up a request that does not answer (`{status: 0, timeout: true}`); a network
+  // failure tells offline.js, which checks the connection and covers the page while it is gone.
   async function api(url, options) {
     const opts = options || {};
     const method = opts.method || 'GET';
@@ -41,12 +47,21 @@
       headers['X-CSRFToken'] = csrfToken();
       init.body = JSON.stringify(opts.body || {});
     }
+    const ms = Number(opts.timeout) || API_TIMEOUT_MS;
+    const Abort = typeof AbortController === 'function' && !opts.keepalive ? AbortController : null;
+    const control = Abort ? new Abort() : null;
+    let timedOut = false;
+    const timer = control ? setTimeout(() => { timedOut = true; control.abort(); }, ms) : null;
+    if (control) init.signal = control.signal;
     let response;
     try {
       response = await fetch(url, init);
     } catch (_) {
-      return { ok: false, status: 0, data: null, message: 'انقطع الاتصال بالخادم. تحقّق من الشبكة ثم أعد المحاولة.' };
+      if (timer) clearTimeout(timer);
+      if (!timedOut && root.Nassakh && typeof root.Nassakh.netFailed === 'function') root.Nassakh.netFailed();
+      return { ok: false, status: 0, data: null, timeout: timedOut, message: timedOut ? TIMEOUT_MESSAGE : OFFLINE_MESSAGE };
     }
+    if (timer) clearTimeout(timer);
     let data = null;
     try { data = await response.json(); } catch (_) { data = null; }
     let message = data && typeof data === 'object' && (data.message || data.detail);
@@ -72,6 +87,12 @@
     readSession(key) { try { return root.sessionStorage.getItem(key); } catch (_) { return null; } },
     writeSession(key, value) { try { root.sessionStorage.setItem(key, String(value)); } catch (_) { /* fine */ } },
     toast(message) { if (root.Nassakh && root.Nassakh.toast) root.Nassakh.toast(message); },
+    // the browser says it is offline, or offline.js covers the page (the server silent)
+    offline() {
+      if (typeof navigator !== 'undefined' && navigator !== null && navigator.onLine === false) return true;
+      const net = root.Nassakh && root.Nassakh.net && typeof root.Nassakh.net.state === 'function' ? root.Nassakh.net.state() : null;
+      return Boolean(net && net.lost);
+    },
     frame(fn) { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fn); else setTimeout(fn, 16); },
     q: (el, sel) => (el && typeof el.querySelector === 'function' ? el.querySelector(sel) : null),
     qa: (el, sel) => (el && typeof el.querySelectorAll === 'function' ? Array.from(el.querySelectorAll(sel)) : []),
