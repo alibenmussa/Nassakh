@@ -74,6 +74,7 @@ _LATIN_LETTER = re.compile(r"[A-Za-z]")
 # stands for it (a loop comes with length: book 31's full pages of vowelled hadith and commentary).
 PIECE_LINES = 4  # printed lines (`Preprocess.line_boxes`) per piece
 PIECE_MIN_BANDS = 5  # a region of fewer lines is not cut
+HEAD_MIN_BANDS = 4  # a region of fewer lines is not read again without its first line (D105)
 PIECE_MIN_CONF = 40.0  # under this mean Tesseract confidence the region is a picture (photos: 22–36)
 # How a page was read (`Page.reading["readers"]`, D73), weakest last.
 READERS_TWO = "two"
@@ -1043,6 +1044,44 @@ def run_full_ocr(page: Page) -> None:
                 _record_check(primary_run, reference)
                 _record_check(secondary_run, reference)
                 n_model_runs += 2
+            # a model that ended its reading after the region's first printed line (the running head and its
+            # rule taken for the whole page: PyTorch's Qari v0.2 on 7.6 % of Runpod's body regions, D105)
+            # reads the region again as two pieces, that line and the rest
+            for k, run in enumerate((primary_run, secondary_run)):
+                check = (run.params or {}).get("sanity") or {}
+                if (
+                    run.status != OcrRun.Status.OK
+                    or check.get("reason") != "too_short"
+                    or run.finish != "stop"
+                ):
+                    continue
+                pieces = head_pieces(pre.line_boxes, target.bbox)
+                if not pieces:
+                    continue
+                log.info(
+                    "page %s %s: %s stopped after the first line; read again without it",
+                    page.pk,
+                    target.kind,
+                    run.engine_name,
+                )
+                (joined,) = _read_in_pieces(
+                    page,
+                    target,
+                    (run.engine_name,),
+                    gray,
+                    pieces,
+                    scale,
+                    f"{variant}_head",
+                    cap,
+                    reference,
+                    tmpdir,
+                    i,
+                )
+                n_model_runs += len(pieces)
+                if k == 0:
+                    primary_run = joined
+                else:
+                    secondary_run = joined
             if select_reading(primary_run, secondary_run, tess).fallback and _worth_pieces(tess, reference):
                 pieces = piece_boxes(pre.line_boxes, target.bbox)
                 if pieces:
@@ -1109,6 +1148,20 @@ def piece_boxes(bands: list[dict] | None, bbox: list[int]) -> list[list[int]]:
         out.append([x0, top, x1, bottom])
         top = bottom
     return out
+
+
+def head_pieces(bands: list[dict] | None, bbox: list[int]) -> list[list[int]]:
+    """The region `bbox` as two pieces, its first printed line (`bands`) and the rest, cut halfway between
+    the first and second lines; none for a region of fewer than `HEAD_MIN_BANDS` lines (D105)."""
+    x0, y0, x1, y1 = (int(v) for v in bbox)
+    inside = sorted(
+        (b for b in bands or [] if y0 <= (float(b["y0"]) + float(b["y1"])) / 2 <= y1),
+        key=lambda b: float(b["y0"]),
+    )
+    if len(inside) < HEAD_MIN_BANDS:
+        return []
+    cut = int((float(inside[0]["y1"]) + float(inside[1]["y0"])) / 2)
+    return [[x0, y0, x1, cut], [x0, cut, x1, y1]]
 
 
 def _read_in_pieces(

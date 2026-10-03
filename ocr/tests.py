@@ -2293,3 +2293,31 @@ def test_run_full_ocr_reads_a_footnote_again_at_1x_when_both_models_loop_on_the_
     assert variants == {"gray_2x", "gray"}
     again = page.ocr_runs.filter(engine_name="qari_v03", region__kind="footnote", input_variant="gray").get()
     assert again.looped is False
+
+
+def test_head_pieces_cut_a_region_after_its_first_printed_line():
+    bands = [{"x0": 0, "y0": 30 + 20 * k, "x1": 100, "y1": 40 + 20 * k} for k in range(5)]
+    assert services.head_pieces(bands, [0, 20, 120, 220]) == [[0, 20, 120, 45], [0, 45, 120, 220]]
+    assert services.head_pieces(bands[:3], [0, 20, 120, 220]) == []  # a short region is not cut
+
+
+def test_a_model_that_stops_after_the_first_line_reads_the_region_again_without_it(page, monkeypatch):
+    """D105, book 43: PyTorch's Qari v0.2 (on Runpod) wrote only the running head «الخَاصِّ» and ended its
+    reading; read as that line and the rest, it reads the whole region."""
+    add_regions(page)
+    pre = page.preprocess
+    pre.line_boxes = [{"x0": 0, "y0": y, "x1": W, "y1": y + 6} for y in (24, 34, 46, 56)]
+    pre.save()
+    monkeypatch.setattr(services, "MIN_REF_WORDS_FOR_OVERLAP", 3)
+    head, rest = "الخاص", "قال الأمير في سنة ١٩٦٦ إن الكتاب مفيد وهذا سطر ثانٍ من المتن"
+    fakes = engines()
+    fakes["qari_v02"] = vlm_fake("qari_v02", head)
+    fakes["qari_v02"].responder = by_kind({"body": head, "body~p0": head, "body~p1": rest, "footnote": FOOT})
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    runs = page.ocr_runs.filter(engine_name="qari_v02", region__kind="body").order_by("id")
+    assert runs.first().params["sanity"]["reason"] == "too_short"
+    joined = runs.last()
+    assert joined.input_variant == "gray_head_pieces" and joined.parsed_text == head + "\n" + rest
+    assert len(joined.params["pieces"]) == 2

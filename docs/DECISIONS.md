@@ -978,3 +978,23 @@ to the queue.
   لاحقًا.», and its retry button reads it again. At most about 3.5 hours of no GPU before a page is an error.
 - Tests: `ocr/test_runpod.py` (a queued job waits past RUNPOD_TIMEOUT_S, then is cancelled as no capacity; a late
   GPU gets its full reading time; no run records the error; the task retries, then errors).
+
+## D105 — A model that ends its reading after the region's first line reads the region again without it (2026-10-03)
+
+**Why.** In the Runpod benchmark Qari v0.2 wrote only the running head of 5 of 16 pages of «الأصول من علم الأصول»
+(«الخَاصِّ», «الأَمْرُ») and ended its reading (`<|im_end|>`), so those pages had one reader; `too_short` on body
+regions: Runpod 7.6 %, MLX 0.8 %. It is not Runpod's: PyTorch on the Mac (MPS) does the same, MLX reads on — at
+that step the model is close between ending and going on, and the two numerics tip it apart. Making it go on
+(`min_new_tokens`) read one page right and two into garbage. Without the first printed line (the running head and
+its rule) PyTorch's v0.2 reads all three bodies whole (281, 190, 1,067 tokens).
+
+**Decision.** In `run_full_ocr`, a model whose reading of a region ended by itself (`finish: stop`) and failed the
+sanity check as `too_short` reads the region again as two pieces, its first printed line and the rest
+(`head_pieces`, cut halfway to the second line; regions of 4 lines or more), through D90's `_read_in_pieces`
+(variant `…_head_pieces`); the joined run is that model's newest and is checked like any. Only the failed model
+reads again, so the cost is a failure's. Measured on Runpod: the 5 pages of book 43 now read with v0.2 in full
+(200–1,088 tokens), none falls back to Tesseract. Every backend gets it (MLX's rare `too_short` too).
+
+Also seen: Runpod connections reset («Connection reset by peer», 4 attempts) while 4 pages were read at once over
+the owner's café Wi-Fi; one at a time they did not. A server in a data centre should not see it; RUNPOD_RETRIES
+can be raised if it does.
