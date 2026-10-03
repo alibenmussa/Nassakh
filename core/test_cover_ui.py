@@ -224,7 +224,7 @@ def test_cover_section_reads_only_for_a_proofreader(proofreader):
 def test_cover_css_rules_in_the_source():
     css = CSS_SRC.read_text(encoding="utf-8")
     for rule in (
-        ".lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff);",
+        ".lp-page.lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff);",
         ".lp-cover:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }",
         ".lp-cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%;",
         ".lp-cover-img.is-shown { opacity: 1; }",
