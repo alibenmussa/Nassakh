@@ -1427,22 +1427,34 @@ def _is_lookalike_marker(marker: str | None) -> bool:
     return marker is not None and len(marker) == 1 and marker in NOTE_LOOKALIKES
 
 
+def _inner_numbers(note: Note) -> list[int]:
+    """The bracketed numbers after a sentence's end inside a note's text (`_RE_INNER_MARKER`), in order."""
+    keys = [marker_key(m.group(1)) for m in _RE_INNER_MARKER.finditer(note.rich.text)]
+    return [int(k) for k in keys if k and k.isdigit()]
+
+
 def _number_lookalike_notes(notes: list[Note]) -> None:
     """Number the notes whose marker was read as a lookalike (D85): one more than the numbered note
     before it on the page, else one less than the one after it, else 1; the number becomes the note's
     marker. When that number is taken on the page the note keeps no number (key None)."""
     taken = {note.key for note in notes if note.key and note.key.isdigit()}
     for i, note in enumerate(notes):
-        if not _is_lookalike_marker(note.marker):
+        first_unmarked = i == 0 and note.marker is None and _inner_numbers(note)[:1] == [2]
+        if not (_is_lookalike_marker(note.marker) or first_unmarked):
             continue
         before = next((int(n.key) for n in reversed(notes[:i]) if n.key and n.key.isdigit()), None)
         after = next((int(n.key) for n in notes[i + 1 :] if n.key and n.key.isdigit()), None)
+        inner = _inner_numbers(note)
         if before is not None:
             number = before + 1
         elif after is not None and after > 1:
             number = after - 1
         else:
             number = 1
+        # a next note's number inside this note's text, the one still wanting its own marker: this note is
+        # the one before it («أ) … (٢) …» then «(٣)», book 36 p. 1) and `_split_merged_notes` cuts it
+        if inner and inner[0] - 1 >= 1 and str(inner[0]) not in taken and number >= inner[0]:
+            number = inner[0] - 1
         key = str(number)
         if key in taken:
             note.key = None

@@ -709,3 +709,8 @@ stored boxes). `search_box` now also reaches `REACH_UP` = 0.45 line pitches abov
 ten books (hand-marked calls right): 29 24/25, 31 25/27, 32 11/11, 33 12/13, 34 25/29, 35 17/21, 36 12/16,
 37 6/8, 38 3/4, 39 2/12; 137 of 166. The reach is not finely tuned: 0.3 gave the same total (36 better,
 29 and 34 worse). Book 39 (calls read «(م)», small print) is still open.
+
+D93 addendum: a bracket that touches the word below is up to 0.46 pitch tall and the shorter bracket may be
+0.6 of the taller (`BRACKET_MAX_H`, `PAIR_HEIGHTS`): book 39's calls 2/12 → 11/12, no other book changed. A
+page's first note without a marker whose text holds «(٢)» after a sentence's end is note 1 and is split
+there (`_number_lookalike_notes`): book 36 12 → 13/16. Ten books now 147 of 166.

@@ -466,3 +466,9 @@ def test_the_calls_a_pass_wrote_are_undone_and_the_pass_reads_the_models_text_ag
     ]
     clean, moves = calls.undo_calls(tokens)
     assert [t["t"] for t in clean] == ["أ", "ب", "(٢)"] and moves == {0: 0, 2: 1, 3: 2}
+
+
+def test_a_first_note_without_marker_holding_the_second_notes_number_is_the_first():
+    # book 36 p. 1: «أ) … (٢) …» is note 1 and note 2 on one line, then «(٣)»
+    texts = ["أ) تاريخ بغداده (2/ 12). (٢) المصدر نفسه (2/ 13).", "(٣) المصدر نفسه"]
+    assert calls.note_numbers(texts) == ["1", "2", "3"]
