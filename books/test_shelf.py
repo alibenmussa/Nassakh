@@ -20,6 +20,7 @@ from django.utils import timezone
 
 import pytest
 
+from accounts.testing import member
 from books import services, shelf
 from books.models import Book, Page
 
@@ -33,7 +34,7 @@ STEP_KEYS = ("key", "label", "url", "state", "detail", "hint", "count")
 def _user(name: str, group: str) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     user.groups.add(Group.objects.get_or_create(name=group)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 @pytest.fixture

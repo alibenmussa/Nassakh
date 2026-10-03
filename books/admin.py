@@ -8,13 +8,14 @@ class BookAdmin(admin.ModelAdmin):
     list_display = (
         "title",
         "author",
+        "organization",  # who sees the book (D102)
         "original_year",
         "status",
         "source_page_count",
         "pages_per_sheet",
         "updated_at",
     )
-    list_filter = ("status", "pages_per_sheet", "has_text_layer")
+    list_filter = ("organization", "status", "pages_per_sheet", "has_text_layer")
     search_fields = ("title", "author")
     readonly_fields = ("created_at", "updated_at", "source_page_count", "has_text_layer")
     raw_id_fields = ("created_by",)

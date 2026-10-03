@@ -868,3 +868,48 @@ started book now names the model time too), its title and button name the action
 «إعادة المعالجة»), and the message after it is «بدأت إعادة المعالجة.». The config's `rerun` carries the estimate of
 the offered action only. The other stages (`layout`, `ocr_fast`, `ocr_full`) stay for the retry of a failed page
 (unchanged, for every editor), the `books:rerun` view, the tasks and the shell.
+
+## D102 — A book is seen and acted on by its organisation alone (2026-10-03, SaaS preparation, amends D98)
+
+Owner decision. Until now every signed-in user saw every book (D98 kept book access global and let a user without
+a membership belong to the only organisation). The rule now: a user sees and acts on the books of the
+organisation of their `Membership` and no other; a user without a membership sees no book (the books home says
+«لا تنتمي إلى مؤسسة بعد», «كتاب جديد» goes back there with the reason, the organisation's page stays 403); a
+superuser sees every book of every organisation. The roles (global groups admin / editor / proofreader) keep their
+meaning inside that set. A new book takes the organisation the user works in (`create_book(…, organization=)`;
+for a command without a user, the first one). A book without an organisation (its organisation deleted: the key is
+`SET_NULL`) is the superusers' alone — never handed to the first organisation, which would show one publisher's
+books to another.
+- **One helper.** `books.access`: `books_for(user)`, `pages_for(user)`, `scope(queryset, user, path)`,
+  `may_access(user, book | id)`, `get_book_or_404`, `get_page_or_404` and `get_or_404(user, queryset, path,
+  message, **lookup)` for a line, a suggestion, an export or a render. Every view and API that takes such an id
+  goes through it: the books home (`books.shelf.books_shelf(sort, books)`), the dashboard and «التخطيط», every
+  books action (start, start-ocr, delete, rerun, exclude), the books API (progress, text, sheets, stages),
+  review (both screens, every page / line / suggestion / book endpoint, fix everywhere), the manuscript (both
+  views, every API), the book page and the old editor address, every editor API (the polled drift scopes its
+  manuscript in its one query), the export page, the export download, the preview / layout / re-layout / exports APIs, the guides
+  APIs, the ocr page APIs, and the organisation's template APIs of a book. Another organisation's id answers
+  404 with the same message as a missing one (`Http404`, which DRF turns into `{"detail": …}`), never 403, so its
+  existence does not leak; the role checks still run first (a proofreader's POST is 403 for any id). The rule
+  is a join to the user's membership inside the lookup's own query (`organization__memberships__user_id`), so
+  it costs no query of its own.
+- **Media.** `/media/` serves `books/<id>/…` only (scans, derived images, covers, previews, layouts, exports,
+  uploaded images: every file lives there), to the users who may access book `<id>`; the path is normalised and
+  the normalised path is opened (`books/1/../2/x` is book 2's); `orgs/` stays refused (fonts go through
+  `accounts:font_file`, members only), anything else 404.
+- **Internal stays unscoped.** Management commands, Celery tasks and the services they call; Django admin
+  (superusers and staff).
+- **Organisations.** `accounts.services.organization_for(user)` is the membership's organisation only (a superuser
+  without one: the first); `current_organization(request)` adds a superuser's choice from the switcher on the
+  organisation's page («العمل في مؤسسة أخرى», `accounts:organization_switch`, kept in the session), which the
+  sidebar, the organisation's page and «كتاب جديد» follow. Existing data keeps working: the D98 migration put
+  every book and user in the first organisation. A user created later has no membership until one is set: the
+  user's page in Django admin carries «المؤسسة» (organisation and role, one per user), the users' list shows and
+  filters it, and the books' list shows and filters theirs.
+- **Tests.** `books/test_access.py`: two organisations, each with a book, page and images, line, suggestion,
+  finished export and re-layout; every route that takes such an id, found from the URL configuration (a new
+  route is checked by itself), answers 404 to the other organisation's editor for GET, POST, PUT and PATCH and
+  changes nothing, and still answers its member and a superuser; the home, media, downloads, a user without a
+  membership, a book without an organisation, the switcher and the admin. The suites' users join the first
+  organisation (`accounts.testing.member`); the root `conftest.py` gives a test book created without an
+  organisation the first one, as every real book has.

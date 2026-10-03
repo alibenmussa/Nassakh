@@ -66,7 +66,9 @@ def page(book):
 
 @pytest.fixture
 def user(db):
-    return User.objects.create_user("editor", password="x")
+    from accounts.testing import member
+
+    return member(User.objects.create_user("editor", password="x"))  # the books' organisation (D102)
 
 
 def add_regions(page: Page) -> dict[str, Region]:

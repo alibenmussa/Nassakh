@@ -25,6 +25,7 @@ import pymupdf
 import pytest
 from PIL import Image
 
+from accounts.testing import member
 from assembly import pipeline
 from books.models import Book
 from editor import document as doc
@@ -583,7 +584,7 @@ def role_user(name: str, role: str | None) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     if role:
         user.groups.add(Group.objects.get_or_create(name=role)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 def logged(user) -> Client:

@@ -8,7 +8,8 @@ The organisation's page (D98; accounts.views.organization): its fonts and its fo
 - «قوالب التنسيق»: each template with its summary and the book it came from; «تطبيق على كتاب…» opens the changes it
   brings to a chosen book before applying (accounts:template_apply); editors save a book's format as a template; admins
   rename, update from a book and delete.
-Context: organization, is_org_admin, can_edit_books, fonts, removed_fonts ([{font, styles, books, more, used,
+A superuser among several organisations gets a switcher (`organizations`, D102).
+Context: organization, organizations, is_org_admin, can_edit_books, fonts, removed_fonts ([{font, styles, books, more, used,
 used_phrase, templates, licence_line}]), templates ([{template, summary}]), books, sample_css, max_mb, accept, members.
 {% endcomment %}
 {% block head_title %}المؤسسة · {{ organization.name }} · نسّاخ{% endblock %}
@@ -30,6 +31,17 @@ used_phrase, templates, licence_line}]), templates ([{template, summary}]), book
         <button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button>
       </form>
     </div>
+    {% endif %}
+    {% if organizations %}
+    {# a superuser works in any organisation (D102): its page, and the organisation of the books they add #}
+    <form method="post" action="{% url 'accounts:organization_switch' %}" class="og-inline-form">
+      {% csrf_token %}
+      <label class="meta" for="og-switch">العمل في مؤسسة أخرى</label>
+      <select id="og-switch" name="organization" class="select" onchange="this.form.submit()">
+        {% for item in organizations %}<option value="{{ item.pk }}"{% if item.pk == organization.pk %} selected{% endif %}>{{ item.name }}</option>{% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn btn-sm">انتقال</button></noscript>
+    </form>
     {% endif %}
   </div>
 

@@ -488,13 +488,14 @@ def test_the_real_api_answers_what_the_bar_reads(client):
     order, a known state, no link when blocked, `current` on the screen's step."""
     from django.contrib.auth.models import User
 
+    from accounts.testing import member
     from books.models import Book
 
     book = Book.objects.create(title="كتاب المراحل")
     url = _stages_url(book.pk)
     if not url:
         pytest.skip("api:book_stages is not routed yet")
-    client.force_login(User.objects.create_user("stages-reader"))
+    client.force_login(member(User.objects.create_user("stages-reader")))  # the book's organisation (D102)
     data = client.get(f"{url}?current=review").json()
     steps = data["steps"]
     assert [s["key"] for s in steps] == ["pages", "ocr", "review", "manuscript", "book", "export"]

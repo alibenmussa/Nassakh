@@ -1,7 +1,8 @@
 """Function-based views of the books app: list, new book, dashboard, page detail and actions.
 
 Views parse the request, call a service and render or redirect. Reading screens need a login;
-actions that change a book need the `editor` role (admins and superusers always pass).
+actions that change a book need the `editor` role (admins and superusers always pass). Every book and page
+is looked up through `books.access` (D102): the user's organisation's only, another one's answers 404.
 """
 
 from __future__ import annotations
@@ -9,35 +10,52 @@ from __future__ import annotations
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from accounts.services import NOT_A_MEMBER, current_organization
 from books import services, shelf
+from books.access import books_for, get_book_or_404, get_page_or_404, has_organization
 from books.forms import BookForm
-from books.models import Book, Page
+from books.models import Book
 from core.decorators import role_required
 
 
 @login_required
 def book_list(request: HttpRequest) -> HttpResponse:
-    """The books home (`books.shelf`): the book to resume, then every book as a cover with its six steps,
-    searched, filtered and sorted in the page; the empty state explains how to start. The view and the sort
+    """The books home (`books.shelf`): the book to resume, then every book of the user's organisation (every
+    book for a superuser, D102) as a cover with its six steps, searched, filtered and sorted in the page; the
+    empty state explains how to start, or that the user belongs to no organisation yet. The view and the sort
     the browser last chose (`shelf.PREFS_COOKIE`) are drawn at once, with no flash of the defaults."""
     view, sort = shelf.prefs(request.COOKIES.get(shelf.PREFS_COOKIE))
-    return render(request, "books/list.html", {**shelf.books_shelf(sort), "view": view, "sort": sort})
+    context = {
+        **shelf.books_shelf(sort, books_for(request.user)),
+        "view": view,
+        "sort": sort,
+        "no_organization": not has_organization(request.user),
+    }
+    return render(request, "books/list.html", context)
 
 
 @role_required("editor")
 def book_create(request: HttpRequest) -> HttpResponse:
     """New-book form: «استخراج الصفحات» stores and inspects the PDF, starts the extraction at once and
     opens the dashboard in «التخطيط» (D66); the message gives the exact kept range. If the extraction
-    cannot be queued the book stays `uploaded` and its dashboard offers «استخراج الصفحات»."""
+    cannot be queued the book stays `uploaded` and its dashboard offers «استخراج الصفحات». The book belongs
+    to the user's organisation (the one a superuser works in); a user without one adds no book and goes back
+    to the books home, which says why (D102)."""
+    organization = current_organization(request)
+    if organization is None:
+        messages.error(request, NOT_A_MEMBER)
+        return redirect("books:list")
     if request.method == "POST":
         form = BookForm(request.POST, request.FILES)
         if form.is_valid():
             data = {key: value for key, value in form.cleaned_data.items() if key != "source_pdf"}
-            book = services.create_book(data, form.cleaned_data["source_pdf"], request.user)
+            book = services.create_book(
+                data, form.cleaned_data["source_pdf"], request.user, organization=organization
+            )
             if book.status == Book.Status.ERROR:
                 messages.error(request, (book.error_message or "").splitlines()[0])
                 return redirect("books:detail", book.pk)
@@ -60,7 +78,7 @@ def book_detail(request: HttpRequest, book_id: int) -> HttpResponse:
     It opens in the «التخطيط» mode while the book awaits «بدء المعالجة»; once «المعالجة» started that mode
     has its own address, `/books/<id>/guides/` (`book_guides`, D84); the old `?view=guides` goes there.
     """
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     if request.GET.get("view") == services.GUIDES_VIEW:
         return redirect(services.guides_url(book), permanent=True)
     return render(request, "books/detail.html", services.book_dashboard(book))
@@ -70,7 +88,7 @@ def book_detail(request: HttpRequest, book_id: int) -> HttpResponse:
 def book_guides(request: HttpRequest, book_id: int) -> HttpResponse:
     """The «التخطيط» mode of the dashboard at its own address (D84): every page as a sheet with its guides;
     `#sheet-<n>` opens at a page. Before «بدء المعالجة» the dashboard itself is this mode."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     if book.awaits_ocr_start:
         return redirect("books:detail", book.pk)
     return render(request, "books/detail.html", services.book_dashboard(book, services.GUIDES_VIEW))
@@ -80,7 +98,7 @@ def book_guides(request: HttpRequest, book_id: int) -> HttpResponse:
 @require_POST
 def toggle_exclude(request: HttpRequest, book_id: int, number: int) -> HttpResponse:
     """Exclude a page from the book or bring it back, then return to where the user was."""
-    page = get_object_or_404(Page.objects.select_related("book"), book_id=book_id, number=number)
+    page = get_page_or_404(request.user, book_id=book_id, number=number)
     page = services.toggle_exclude(page)
     undo = "undo:" + reverse("books:toggle_exclude", args=[book_id, number])  # the toast's «تراجع»
     if page.is_excluded:
@@ -95,7 +113,7 @@ def toggle_exclude(request: HttpRequest, book_id: int, number: int) -> HttpRespo
 def start(request: HttpRequest, book_id: int) -> HttpResponse:
     """«استخراج الصفحات» (and «إعادة استخراج الصفحات» from error): ingest → preprocess, then the pause
     for a book in «التخطيط»; a book whose «المعالجة» had started goes on through OCR, as today."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     try:
         services.start_processing(book)
     except ValueError as exc:
@@ -114,7 +132,7 @@ def start(request: HttpRequest, book_id: int) -> HttpResponse:
 @require_POST
 def start_ocr(request: HttpRequest, book_id: int) -> HttpResponse:
     """«بدء المعالجة» (D64): send the prepared pages into «المعالجة», then today's dashboard."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     try:
         services.start_ocr(book)
     except ValueError as exc:
@@ -128,7 +146,7 @@ def start_ocr(request: HttpRequest, book_id: int) -> HttpResponse:
 @require_POST
 def delete(request: HttpRequest, book_id: int) -> HttpResponse:
     """«حذف الكتاب»: delete the book, its rows and its files (the dialog confirmed it), then the list."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     title = services.delete_book(book)
     messages.success(request, f"حُذف الكتاب «{title}».")
     return redirect("books:list")
@@ -143,7 +161,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
     «إعادة التخطيط» (`preprocess`) and «إعادة المعالجة» (`ocr`), the retry of a failed page. A run already
     holding a page refuses the re-run with a message (`books.runs`): a second click never queues a second run.
     """
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     stage = request.POST.get("stage") or request.GET.get("stage") or ""
     if stage not in services.STAGES:
         messages.error(request, "اختر مرحلة صحيحة لإعادة التشغيل.")
@@ -163,7 +181,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
         messages.success(request, f"{started}{note}")
         return redirect("books:detail", book.pk)
 
-    page = get_object_or_404(Page, book=book, number=number)
+    page = get_page_or_404(request.user, book=book, number=number)
     try:
         services.run_stage(page, stage)
     except ValueError as exc:

@@ -1,6 +1,8 @@
-"""Login and logout as function-based views around `django.contrib.auth`; the organisation's page (D98,
-D98): its fonts (upload, rename, remove, restore, delete) and its format templates (from a book, rename,
-update, delete, apply to a book after a preview of the changes); the organisation's font files."""
+"""Login and logout as function-based views around `django.contrib.auth`; the organisation's page (D98):
+its fonts (upload, rename, remove, restore, delete) and its format templates (from a book, rename, update,
+delete, apply to a book after a preview of the changes); the organisation's font files. The page is the
+organisation of the user's membership; a user without one gets 403 «لا تنتمي إلى مؤسسة بعد…»; a superuser
+works in the first organisation or the one chosen with the switcher (`organization_switch`, D102)."""
 
 from __future__ import annotations
 
@@ -23,10 +25,17 @@ from accounts import fonts as org_fonts
 from accounts import styles
 from accounts.forms import LoginForm
 from accounts.models import FONT_STYLE_LABELS, FONT_STYLES, Organization, OrganizationFont, StyleTemplate
-from accounts.services import can_edit_books, is_member, is_org_admin, organization_for, safe_next_url
+from accounts.services import (
+    NOT_A_MEMBER,
+    ORGANIZATION_SESSION_KEY,
+    can_edit_books,
+    current_organization,
+    is_member,
+    is_org_admin,
+    safe_next_url,
+)
 
 FONT_TYPES = {"ttf": "font/ttf", "otf": "font/otf"}
-NOT_A_MEMBER = "لا تنتمي إلى مؤسسة بعد؛ اطلب من مدير النظام إضافتك إلى مؤسستك."
 ADMINS_ONLY = "هذا الإجراء لمدير المؤسسة."
 EDITORS_ONLY = "هذا الإجراء يتطلب صلاحية محرّر في المؤسسة."
 
@@ -60,7 +69,7 @@ def logout(request: HttpRequest) -> HttpResponse:
 
 
 def _organization(request: HttpRequest) -> Organization:
-    organization = organization_for(request.user)
+    organization = current_organization(request)
     if organization is None:
         raise PermissionDenied(NOT_A_MEMBER)
     return organization
@@ -131,11 +140,14 @@ def organization(request: HttpRequest) -> HttpResponse:
         .order_by("name", "id")
     ]
     books = list(Book.objects.filter(organization=organization).order_by("title", "id").only("id", "title"))
+    # a superuser works in any organisation (D102): the switcher lists them all when there are several
+    switchable = list(Organization.objects.order_by("name", "id")) if request.user.is_superuser else []
     return render(
         request,
         "accounts/organization.html",
         {
             "organization": organization,
+            "organizations": switchable if len(switchable) > 1 else [],
             "is_org_admin": is_org_admin(request.user, organization),
             "can_edit_books": can_edit_books(request.user, organization),
             "fonts": active,
@@ -162,6 +174,20 @@ def organization_rename(request: HttpRequest) -> HttpResponse:
         organization.name = name
         organization.save(update_fields=["name"])
         messages.success(request, "حُفظ اسم المؤسسة.")
+    return redirect(_page_url())
+
+
+@login_required
+@require_POST
+def organization_switch(request: HttpRequest) -> HttpResponse:
+    """A superuser works in another organisation (D102): its page, its fonts and templates, and the
+    organisation of the books they add, for the rest of the session. Superusers see every book anyway."""
+    if not request.user.is_superuser:
+        raise PermissionDenied(ADMINS_ONLY)
+    raw = str(request.POST.get("organization") or "")
+    organization = get_object_or_404(Organization, pk=int(raw) if raw.isascii() and raw.isdigit() else 0)
+    request.session[ORGANIZATION_SESSION_KEY] = organization.pk
+    messages.success(request, f"تعمل الآن في «{organization.name}».")
     return redirect(_page_url())
 
 

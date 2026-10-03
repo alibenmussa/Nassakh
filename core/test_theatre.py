@@ -17,6 +17,7 @@ from django.urls import NoReverseMatch, reverse
 
 import pytest
 
+from accounts.testing import member
 from books.models import Book, Page
 
 pytestmark = pytest.mark.django_db
@@ -29,7 +30,7 @@ CSS = ROOT / "static" / "dist" / "app.css"
 def _user(name: str, group: str) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     user.groups.add(Group.objects.get_or_create(name=group)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 @pytest.fixture

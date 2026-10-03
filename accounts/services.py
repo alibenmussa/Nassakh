@@ -10,9 +10,12 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from core.decorators import ROLE_ADMIN, ROLE_EDITOR, ROLES, has_role, user_role
 
 __all__ = [
+    "NOT_A_MEMBER",
+    "ORGANIZATION_SESSION_KEY",
     "ROLES",
     "book_organization",
     "can_edit_books",
+    "current_organization",
     "default_organization",
     "ensure_groups",
     "is_member",
@@ -21,6 +24,11 @@ __all__ = [
     "safe_next_url",
     "user_role",
 ]
+
+# The organisation a superuser chose on the organisation's page (`current_organization`).
+ORGANIZATION_SESSION_KEY = "nassakh_organization"
+# A signed-in user without a membership (D102): no organisation's page, no book, no new book.
+NOT_A_MEMBER = "لا تنتمي إلى مؤسسة بعد؛ اطلب من مدير النظام إضافتك إلى مؤسستك."
 
 
 def ensure_groups() -> list[Group]:
@@ -63,29 +71,36 @@ def _membership(user):
         return None
 
 
-def _only_organization():
-    """The organisation when there is exactly one (a user without a membership belongs to it), else None."""
-    from .models import Organization
-
-    rows = list(Organization.objects.order_by("id")[:2])
-    return rows[0] if len(rows) == 1 else None
-
-
 def organization_for(user):
-    """The user's organisation: their membership's; without one, the only organisation there is (one
-    publisher, the common case), or the first one for a superuser; None for anonymous users and for a user
-    without a membership among several organisations."""
+    """The user's organisation: their membership's (D102: no membership, no organisation — the user sees no
+    book); a superuser without one works in the first organisation (created when there is none). None for
+    anonymous users."""
     if not getattr(user, "is_authenticated", False):
         return None
     membership = _membership(user)
     if membership is not None:
         return membership.organization
-    only = _only_organization()
-    if only is not None:
-        return only
     if user.is_superuser:
         return default_organization()
     return None
+
+
+def current_organization(request: HttpRequest):
+    """The organisation a request works in (the organisation's page, the sidebar): the user's
+    (`organization_for`); a superuser may switch to another one on that page (`ORGANIZATION_SESSION_KEY`,
+    `accounts:organization_switch`), kept for the session."""
+    user = getattr(request, "user", None)
+    session = getattr(request, "session", None)
+    superuser = getattr(user, "is_authenticated", False) and getattr(user, "is_superuser", False)
+    if superuser and session is not None:
+        chosen = session.get(ORGANIZATION_SESSION_KEY)
+        if chosen:
+            from .models import Organization
+
+            organization = Organization.objects.filter(pk=chosen).first()
+            if organization is not None:
+                return organization
+    return organization_for(user)
 
 
 def is_member(user, organization) -> bool:

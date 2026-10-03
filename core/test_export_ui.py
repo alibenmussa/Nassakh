@@ -30,6 +30,7 @@ from django.urls import reverse
 
 import pytest
 
+from accounts.testing import member
 from assembly.models import AssemblyRun
 from books.models import Book
 from editor.models import Manuscript
@@ -303,7 +304,7 @@ def test_the_download_symbol_and_the_compiled_css():
 def _user(name: str, role: str) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     user.groups.add(Group.objects.get_or_create(name=role)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 def _logged(user) -> Client:

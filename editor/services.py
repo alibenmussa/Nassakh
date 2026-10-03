@@ -769,13 +769,13 @@ def drift_payload(drift: dict) -> dict:
     }
 
 
-def drift_of(book_id: int) -> dict | None:
+def drift_of(book_id: int, manuscripts=None) -> dict | None:
     """The live review drift of the book page (D70, `api:review_drift`): `drift_payload`, or None when the
-    book has no manuscript. The book comes with the manuscript and its run, so three queries in all (a
-    fourth when a page's lines changed: `review_drift`)."""
-    manuscript = (
-        Manuscript.objects.filter(book_id=book_id).select_related("run", "book").defer("base").first()
-    )
+    book has no manuscript among `manuscripts` (all by default; the API passes the user's, scoped by
+    `books.access` in the same query, D102). The book comes with the manuscript and its run, so three
+    queries in all (a fourth when a page's lines changed: `review_drift`)."""
+    rows = manuscripts if manuscripts is not None else Manuscript.objects.all()
+    manuscript = rows.filter(book_id=book_id).select_related("run", "book").defer("base").first()
     if manuscript is None:
         return None
     return drift_payload(review_drift(manuscript.book, manuscript))

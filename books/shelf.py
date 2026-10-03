@@ -20,7 +20,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.db.models import Count, Max, Min, OuterRef, Subquery
+from django.db.models import Count, Max, Min, OuterRef, QuerySet, Subquery
 from django.urls import reverse
 
 from books import services
@@ -209,8 +209,9 @@ def _latest(*moments: datetime | None) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def books_shelf(sort: str = "activity") -> dict:
-    """The books home: `{rows, resume, filters, summary}`.
+def books_shelf(sort: str = "activity", books: QuerySet[Book] | None = None) -> dict:
+    """The books home: `{rows, resume, filters, summary}` of `books` (the view passes the user's,
+    `books.access.books_for`, D102; every book when None).
 
     `rows` (in the `sort` order, `SORTS`; newest activity first by default): `{book, author, byline, pages,
     pages_label, steps, current, stage_key, attention, rank, next_url, next_label, next_text, dashboard_url,
@@ -245,7 +246,7 @@ def books_shelf(sort: str = "activity") -> dict:
         .values("page_count")[:1]
     )
     books = list(
-        Book.objects.annotate(
+        (books if books is not None else Book.objects.all()).annotate(
             shelf_scan=Subquery(first_scan),
             shelf_run=Subquery(latest_run),
             shelf_render=Subquery(latest_render),

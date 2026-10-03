@@ -474,19 +474,19 @@ def test_the_font_files_go_to_the_organisations_members_only(org, other_org, adm
         assert logged(admin).get(f"/media/{path}").status_code == 404
 
 
-def test_a_superuser_and_a_user_of_the_only_organisation_are_its_members(org):
+def test_a_superuser_and_the_members_belong_but_not_a_user_without_a_membership(org):
+    """D102 (amends D98): a membership is needed, even with a single organisation."""
     from accounts.services import is_member, is_org_admin, organization_for
 
     root = User.objects.create_superuser("root", password="pass-1234")
     loner = user("loner", "editor")
-    boss = user("boss", "admin")
-    assert organization_for(loner) == org and is_member(loner, org) and not is_org_admin(loner, org)
+    boss = user("boss", "admin", org)
+    plain = user("plain", "editor", org)
+    assert organization_for(loner) is None and not is_member(loner, org) and not is_org_admin(loner, org)
+    assert organization_for(plain) == org and is_member(plain, org) and not is_org_admin(plain, org)
     assert is_org_admin(root, org) and is_org_admin(boss, org)
     Organization.objects.create(name="ثانية")
-    assert organization_for(loner) is None and not is_member(
-        loner, org
-    )  # among several: a membership is needed
-    assert organization_for(root) == org and is_member(root, org)
+    assert organization_for(root) == org and is_member(root, org)  # the first one, without a membership
 
 
 # ====================================================================== the book page

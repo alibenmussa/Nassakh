@@ -209,9 +209,10 @@ media/books/{book_id}/pages/{n:04d}/thumb.webp         ≤ 240 px, grids
 ```
 
 Media is served by Django at `/media/<path>` to signed-in users only (`core.views.protected_media`, also with
-`DEBUG=false`); an organisation's licensed fonts (`media/orgs/<org>/fonts/`, D98) never through it, only to its
-members at `/accounts/fonts/<id>/<file>`. Every engine call is an `OcrRun` row (engine, model revision, prompt, raw
-output, duration, sanity-check result) visible at `/api/pages/<id>/runs/`.
+`DEBUG=false`), and `media/books/<id>/…` only to the users who may access that book (its organisation's members and
+superusers, D102; else 404); an organisation's licensed fonts (`media/orgs/<org>/fonts/`, D98) never through it,
+only to its members at `/accounts/fonts/<id>/<file>`. Every engine call is an `OcrRun` row (engine, model revision,
+prompt, raw output, duration, sanity-check result) visible at `/api/pages/<id>/runs/`.
 
 `/api/pages/<id>/status/` and `/api/pages/<id>/text/` return a failure as `error` (the Arabic headline) plus
 `error_detail` (the technical lines); the status payload also carries `images` (the three image-tab URLs).
@@ -487,8 +488,8 @@ replaces the edited text but keeps it as a snapshot that is never pruned.
 (`accounts.0002`–`0003`, `books.0010`: the first organisation «المؤسسة» is created and every book and user joins it;
 superusers and the `admin` group are its admins) and `npm run build:css` (`static/src/components/org.css`).
 - «المؤسسة» in the sidebar (`/accounts/organization/`): rename it, add fonts, manage templates. Members are set in
-  Django admin (Organization → its memberships, role «مدير المؤسسة» or «عضو»); a user without a membership belongs to
-  the only organisation while there is one.
+  Django admin (Organization → its memberships, role «مدير المؤسسة» or «عضو», or a user's page → «المؤسسة»); since
+  D102 a user without a membership has no organisation and sees no book (see «Who sees which book» below).
 - Fonts (admins): choose the family's files at once (regular and bold, italic too), TTF / OTF / WOFF2 up to 20 MB each
   (`ORG_FONT_MAX_MB`), tick the licence confirmation. The weight comes from the file; a face whose licence forbids
   embedding or subsetting, a variable face and a font collection are refused with the reason. The face then shows in
@@ -502,6 +503,20 @@ superusers and the `admin` group are its admins) and `npm run build:css` (`stati
   faces, sizes, leading, headings, footnotes and page settings, never the book details or the cover.
 - Files: `media/orgs/<org>/fonts/<sha256>.<ttf|otf>`; `/media/` refuses `orgs/` (members load them through
   `/accounts/fonts/<id>/<file>`).
+
+**Who sees which book (D102).** A user sees and acts on the books of their organisation only; a superuser sees
+every book. Nothing to migrate (D98 already put every book and user in the first organisation); no restart of the
+workers is needed (the tasks are not scoped).
+- A new user (Django admin → Users → add) has **no organisation** until one is set: on the user's page fill
+  «المؤسسة» (the organisation, and «عضو» or «مدير المؤسسة»), next to the role group (admin / editor / proofreader),
+  which still says what the user may do inside it. Without it the user's «الكتب» says «لا تنتمي إلى مؤسسة بعد». The
+  users' list has an «المؤسسة» column and filter; the books' list in admin shows and filters a book's organisation
+  (change it there to move a book).
+- Another organisation's book, page, line, export or file answers 404 (as a missing one), in the screens, the API
+  and `/media/`. Management commands (`export_book`, `smoke_pipeline`, …) and the workers are not scoped.
+- A superuser works in the first organisation; with several, the organisation's page has «العمل في مؤسسة أخرى»
+  (kept for the session): that page, the sidebar's «المؤسسة» and the organisation of the books they add follow it.
+- A book whose organisation is deleted keeps no organisation and only superusers see it; give it one in admin.
 
 **Text options, empty lines, page breaks, the scrubber (D99, owner review items 11, 23–27).** Upgrading: `npm run
 build` (the editor bundle and the CSS), then restart `make worker`: the engine is `nk-print-6`, so every book lays out

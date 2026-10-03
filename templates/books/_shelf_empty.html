@@ -1,10 +1,15 @@
 {% comment %}The books home with no book (library.css `lb-empty`): an empty shelf waiting for its first book, how a book
 goes from a scan to its files (the six steps of the stage bar, D76), and «كتاب جديد» for those who may add one —
-the page's only primary action. Context: role.{% endcomment %}
+the page's only primary action. A user without an organisation (D102: no membership, no book) is told so instead,
+with no action. Context: role, no_organization.{% endcomment %}
 <section class="lb-empty" aria-labelledby="lb-empty-title">
   <div class="lb-empty-shelf" aria-hidden="true">
     <span class="lb-ghost"></span><span class="lb-ghost"></span><span class="lb-ghost is-leaning"></span>
   </div>
+  {% if no_organization %}
+  <h2 id="lb-empty-title" class="empty-title">لا تنتمي إلى مؤسسة بعد</h2>
+  <p class="empty-text">يرى كلُّ مستخدم كتبَ مؤسسته وحدها. اطلب من مدير النظام إضافتك إلى مؤسستك، فتظهر هنا كتبها.</p>
+  {% else %}
   <h2 id="lb-empty-title" class="empty-title">لا كتب بعد</h2>
   <p class="empty-text">ارفع ملف PDF لكتاب مصوّر أو رقمي، وحدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة. يستخرج نسّاخ الصفحات ويكتشف مناطقها، ثم تضغط «بدء المعالجة» ليتعرّف على نصّها.</p>
   <ol class="lb-empty-steps">
@@ -22,5 +27,6 @@ the page's only primary action. Context: role.{% endcomment %}
   </a>
   {% else %}
   <p class="meta">يضيف الكتبَ المحرّرون والمديرون؛ تظهر هنا حين يُضاف أولها.</p>
+  {% endif %}
   {% endif %}
 </section>

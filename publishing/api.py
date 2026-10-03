@@ -15,7 +15,8 @@
 - GET  /api/books/<id>/relayout/<rid>/?wait=<seconds ≤ 5>  (login) → the re-layout's state; with `wait`
   the answer waits until it is done (a long poll).
 
-404 without a manuscript or for an unknown chapter, 400 for an unknown scope or a bad page range.
+404 without a manuscript or for an unknown chapter, 400 for an unknown scope or a bad page range. Another
+organisation's book, render or export answers 404 like a missing one (`books.access`, D102).
 
 Exports (PHASE6_SPEC §6.5, D58; payloads §3.2, `publishing.exports`):
 
@@ -36,10 +37,10 @@ from datetime import datetime
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import NotFound
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from books.access import get_book_or_404, get_or_404
 from books.models import Book
 from editor.api import EditorOrReadOnly
 
@@ -50,18 +51,16 @@ from .preview import PreviewNotFound
 SCOPES = ("book", "chapter")
 
 
-def _book(book_id: int) -> Book:
-    book = Book.objects.filter(pk=book_id).first()
-    if book is None:
-        raise NotFound("الكتاب غير موجود.")
-    return book
+def _book(request: Request, book_id: int) -> Book:
+    """A book the user may access (`books.access`, D102), else 404 «الكتاب غير موجود.»."""
+    return get_book_or_404(request.user, book_id)
 
 
 @api_view(["GET", "POST"])
 @permission_classes([EditorOrReadOnly])
 def preview(request: Request, book_id: int) -> Response:
     """The book's (or a chapter's) page preview; POST asks for a render of the current content."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     source = (
         request.query_params
         if request.method == "GET"
@@ -94,7 +93,7 @@ def _int(value) -> int | None:
 @api_view(["GET"])
 def preview_layout(request: Request, book_id: int) -> Response:
     """A page range of the book's live layout (or of a chapter's render, or of one render)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     params = request.query_params
     scope = str(params.get("scope") or "book")
     chapter_id = str(params.get("chapter") or "") or None
@@ -116,7 +115,7 @@ def preview_layout(request: Request, book_id: int) -> Response:
 @permission_classes([EditorOrReadOnly])
 def relayout_chapter(request: Request, book_id: int, chapter_id: str) -> Response:
     """Ask for the fast re-layout of a chapter (after an edit); poll the answer's `url`."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = request.data if isinstance(request.data, dict) else {}
     try:
         version = _int(data.get("version"))
@@ -134,9 +133,15 @@ def relayout_chapter(request: Request, book_id: int, chapter_id: str) -> Respons
 @api_view(["GET"])
 def relayout_status(request: Request, book_id: int, render_id: int) -> Response:
     """The state of a re-layout (its result and new pages once done); `?wait=` long-polls."""
-    row = PreviewRender.objects.filter(pk=render_id, book_id=book_id, kind=PreviewRender.Kind.LAYOUT).first()
-    if row is None:
-        raise NotFound("إعادة الترتيب غير موجودة.")
+    row = get_or_404(
+        request.user,
+        PreviewRender.objects.all(),
+        "book",
+        "إعادة الترتيب غير موجودة.",
+        pk=render_id,
+        book_id=book_id,
+        kind=PreviewRender.Kind.LAYOUT,
+    )
     try:
         wait = float(request.query_params.get("wait") or 0)
     except ValueError:
@@ -160,11 +165,10 @@ def _export_error(exc: exports.ExportError, request: Request) -> Response:
     return Response(body, status=exc.status)
 
 
-def _export_row(book_id: int, export_id: int) -> Export:
-    row = Export.objects.filter(pk=export_id, book_id=book_id).select_related("book", "created_by").first()
-    if row is None:
-        raise NotFound("الإخراج غير موجود.")
-    return row
+def _export_row(request: Request, book_id: int, export_id: int) -> Export:
+    """An export of a book the user may access (`books.access`, D102), else 404."""
+    rows = Export.objects.select_related("book", "created_by")
+    return get_or_404(request.user, rows, "book", "الإخراج غير موجود.", pk=export_id, book_id=book_id)
 
 
 def _since(value) -> datetime | None:
@@ -182,7 +186,7 @@ def _since(value) -> datetime | None:
 @permission_classes([EditorOrReadOnly])
 def book_exports(request: Request, book_id: int) -> Response:
     """The export page's payload; POST starts an export of one format."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     if request.method == "GET":
         return Response(exports.page_payload(book, request.user))
     data = request.data if isinstance(request.data, dict) else {}
@@ -196,7 +200,7 @@ def book_exports(request: Request, book_id: int) -> Response:
 @api_view(["GET"])
 def book_export(request: Request, book_id: int, export_id: int) -> Response:
     """One export's row; `?wait=` long-polls until it changes after `since` or is final."""
-    row = _export_row(book_id, export_id)
+    row = _export_row(request, book_id, export_id)
     try:
         wait = float(request.query_params.get("wait") or 0)
     except ValueError:
@@ -210,7 +214,7 @@ def book_export(request: Request, book_id: int, export_id: int) -> Response:
 @permission_classes([EditorOrReadOnly])
 def book_export_cancel(request: Request, book_id: int, export_id: int) -> Response:
     """Cancel a queued or running export."""
-    row = _export_row(book_id, export_id)
+    row = _export_row(request, book_id, export_id)
     try:
         row = exports.cancel_export(row)
     except exports.ExportError as exc:

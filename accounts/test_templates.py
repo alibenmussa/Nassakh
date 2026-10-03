@@ -199,10 +199,10 @@ def test_another_organisations_book_sees_none_of_it(org, other_org, editor):
     styles.create_template(org, styled_book(org), "A5")
     stranger_book = org_book(other_org)
     url = reverse("api:book_templates", args=[stranger_book.pk])
-    assert logged(editor).get(url).status_code == 403
+    assert logged(editor).get(url).status_code == 404  # D102: another organisation's book, as a missing one
     template = StyleTemplate.objects.get()
     apply_url = reverse("api:book_template_apply", args=[stranger_book.pk, template.pk])
-    assert post_json(logged(editor), apply_url).status_code == 403
+    assert post_json(logged(editor), apply_url).status_code == 404
     outsider = user("outsider", "editor", other_org)
     own = org_book(other_org)
     assert logged(outsider).get(reverse("api:book_templates", args=[own.pk])).json()["templates"] == []
@@ -332,6 +332,7 @@ def test_the_migration_gives_every_book_and_user_the_first_organisation():
     boss = user("boss", "admin")
     plain = user("plain", "editor")
     book = Book.objects.create(title="قديم")
+    Organization.objects.all().delete()  # before D98 there was none (conftest gave the book one)
     migration.join(django_apps, None)
     organization = Organization.objects.get()
     book.refresh_from_db()

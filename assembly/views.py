@@ -3,16 +3,18 @@
 - `assembly:manuscript` → the manuscript view of a book: the document server-rendered by
   `assembly.render`, the side panel's outline, warnings and stats, and the Alpine component's config
 - `assembly:document`   → the same fragment on its own, swapped in place by the view after a re-run
+
+Another organisation's book answers 404 (`books.access`, D102).
 """
 
 from __future__ import annotations
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404
 from django.shortcuts import render as render_template
 from django.urls import reverse
 
+from books.access import get_book_or_404
 from books.models import Book
 from books.services import book_stages, page_url_templates
 from core.decorators import ROLE_EDITOR, ROLE_PROOFREADER, has_role
@@ -43,7 +45,7 @@ def _config(book: Book, state: dict, can_edit: bool, can_review: bool, counts_te
 @login_required
 def manuscript(request: HttpRequest, book_id: int) -> HttpResponse:
     """The manuscript view: never assembled, assembling, ready (fresh or stale) or failed."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     state = services.manuscript_state(book)
     payload = services.manuscript_payload(book) if state["exists"] else None
     fragment = render.fragment_context(payload)
@@ -66,7 +68,7 @@ def manuscript(request: HttpRequest, book_id: int) -> HttpResponse:
 @login_required
 def document(request: HttpRequest, book_id: int) -> HttpResponse:
     """The rendered document fragment (article, outline, warnings, stats and the meta JSON)."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     payload = services.manuscript_payload(book)
     if payload is None:
         return HttpResponse("", status=404)

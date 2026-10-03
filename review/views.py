@@ -2,7 +2,8 @@
 
 Both take review's origin (D76, PHASE7_SPEC §5.3): `?from=book|manuscript|export`, with `at` (the book page's
 page) and `block` (a block id); `services.parse_origin` validates it, the payload's `nav.back` leads there and
-every review URL carries it. Anything else in them is ignored.
+every review URL carries it. Anything else in them is ignored. A page of another organisation's book answers
+404 (`books.access`, D102).
 """
 
 from __future__ import annotations
@@ -10,10 +11,10 @@ from __future__ import annotations
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 
-from books.models import Book, Page
+from books.access import get_book_or_404, get_page_or_404
 
 from . import services
 
@@ -28,7 +29,7 @@ def review_page(request: HttpRequest, book_id: int, number: int) -> HttpResponse
     """Review screen of one page; the Alpine component reads `config` (`review_payload`)."""
     from books.services import StageFacts, book_stages
 
-    page = get_object_or_404(Page.objects.select_related("book"), book_id=book_id, number=number)
+    page = get_page_or_404(request.user, book_id=book_id, number=number)
     facts = StageFacts(page.book)
     config = services.review_payload(page, request.user, origin_of(request), facts)
     context = {
@@ -54,7 +55,7 @@ def review_next(request: HttpRequest, book_id: int) -> HttpResponse:
     When the page the reviewer came from is the only one still waiting, they stay on it. The origin comes
     along.
     """
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     origin = origin_of(request)
     raw = request.GET.get("after", "")
     after = int(raw) if raw.isascii() and raw.isdigit() else None

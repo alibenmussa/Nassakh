@@ -8,20 +8,21 @@
 - POST /api/books/<id>/guides/preview/    `services.preview_book_guides` (editor; writes nothing)
 
 Guide writes answer 400 `{errors}` (Arabic validation), 422 `{errors}` for a locked page and 409
-`{detail, started: true}` when the client's `stage` is no longer the book's (§3.11).
+`{detail, started: true}` when the client's `stage` is no longer the book's (§3.11). Another organisation's
+book or page answers 404 (`books.access`, D102).
 """
 
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError
-from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from books.models import Book, Page
+from books.access import get_book_or_404, get_page_or_404
+from books.models import Page
 from core.decorators import ROLE_EDITOR, has_role
 from core.permissions import IsEditor
 from processing import services
@@ -52,7 +53,8 @@ def _stage(data: dict) -> str | None:
 
 
 def _page(request: Request, page_id: int) -> Page:
-    return get_object_or_404(Page.objects.select_related("book"), pk=page_id)
+    """A page of a book the user may access (`books.access`, D102), else 404."""
+    return get_page_or_404(request.user, pk=page_id)
 
 
 @api_view(["POST"])
@@ -97,7 +99,7 @@ def _page_bound(raw) -> int | None:
 def book_guides(request: Request, book_id: int) -> Response:
     """GET: every page's bands, doubts and state, the book guides, the detection line and the chip
     counts (`?from&to` narrows the pages). POST: change, reset or restore the book guides."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     if request.method == "GET":
         first = _page_bound(request.query_params.get("from"))
         last = _page_bound(request.query_params.get("to"))
@@ -132,7 +134,7 @@ def book_guides(request: Request, book_id: int) -> Response:
 def book_guides_preview(request: Request, book_id: int) -> Response:
     """What a book-guides change, or `reset: true`, would do (pages changed, cut, kept, locked, re-read,
     minutes)."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     data = _body(request)
     try:
         answer = services.preview_book_guides(

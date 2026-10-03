@@ -72,6 +72,7 @@ from django.contrib.auth.models import Group, User  # noqa: E402
 from django.test import Client, override_settings  # noqa: E402
 from django.urls import reverse  # noqa: E402
 
+from accounts.testing import member  # noqa: E402
 from assembly import services as assembly_services  # noqa: E402
 from books.models import Page  # noqa: E402
 from books.services import book_progress  # noqa: E402
@@ -152,7 +153,7 @@ def role_user(name: str, role: str | None) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     if role:
         user.groups.add(Group.objects.get_or_create(name=role)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 def logged(user) -> Client:

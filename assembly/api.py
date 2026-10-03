@@ -2,7 +2,8 @@
 
 GETs need a login; starting a run needs an editor (`core.permissions.IsEditor`), except the line
 roles, which reviewers may set (`CanReview`). Refusals answer `{"detail": <Arabic>}`: 400 for bad
-input, 403 for roles, 404 for another book's line or page (or a book without manuscript yet), 409 for
+input, 403 for roles, 404 for another book's line or page (or a book without manuscript yet, or another
+organisation's book: `books.access`, D102), 409 for
 a run over a text edited on the book page without `replace_edited: true` (D49). Every endpoint that
 starts a run answers 202 `services.run_payload`.
 
@@ -27,6 +28,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from books.access import get_book_or_404
 from books.models import Book
 from core.permissions import CanReview, IsEditor
 
@@ -38,11 +40,9 @@ def _data(request: Request) -> dict:
     return request.data if isinstance(request.data, dict) else {}
 
 
-def _book(book_id: int) -> Book:
-    book = Book.objects.filter(pk=book_id).first()
-    if book is None:
-        raise NotFound("الكتاب غير موجود.")
-    return book
+def _book(request: Request, book_id: int) -> Book:
+    """A book the user may access (`books.access`, D102), else 404 «الكتاب غير موجود.»."""
+    return get_book_or_404(request.user, book_id)
 
 
 def _refused(exc: services.AssemblyError) -> Response:
@@ -68,7 +68,7 @@ def _started(run) -> Response:
 @permission_classes([IsEditor])
 def book_assemble(request: Request, book_id: int) -> Response:
     """Convert the book into its manuscript with the posted options (remembered for the book)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         data = _data(request)
         run = services.start_assembly(book, request.user, data, replace_edited=_replace(data))
@@ -80,13 +80,13 @@ def book_assemble(request: Request, book_id: int) -> Response:
 @api_view(["GET"])
 def manuscript_state(request: Request, book_id: int) -> Response:
     """Whether a manuscript exists, the latest run and whether the pages changed since."""
-    return Response(services.manuscript_state(_book(book_id)))
+    return Response(services.manuscript_state(_book(request, book_id)))
 
 
 @api_view(["GET"])
 def manuscript(request: Request, book_id: int) -> Response:
     """The manuscript document with the warnings, stats and seams of the run that built it."""
-    payload = services.manuscript_payload(_book(book_id))
+    payload = services.manuscript_payload(_book(request, book_id))
     if payload is None:
         raise NotFound("لم يُجمَّع هذا الكتاب بعد.")
     return Response(payload)
@@ -96,7 +96,7 @@ def manuscript(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def manuscript_seam(request: Request, book_id: int) -> Response:
     """Join or split at a page boundary (`auto` drops the override), then re-run."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         run = services.set_seam_override(
@@ -112,7 +112,7 @@ def manuscript_seam(request: Request, book_id: int) -> Response:
 def manuscript_roles(request: Request, book_id: int) -> Response:
     """Set the kind of a block from its lines (body / heading / subheading / verse / footnote through
     review, quote / center as the book's line styles), then re-run."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         lines, role = data.get("line_ids"), str(data.get("role") or "")
@@ -126,7 +126,7 @@ def manuscript_roles(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def manuscript_block_type(request: Request, book_id: int) -> Response:
     """Change the kind of a block of the text edited on the book page (no run)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         out = services.set_edited_block_type(book, request.user, data.get("block_id"), data.get("type"))
@@ -139,7 +139,7 @@ def manuscript_block_type(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def manuscript_suggestion(request: Request, book_id: int) -> Response:
     """Dismiss a heading suggestion for good, then re-run."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         run = services.dismiss_suggestion(

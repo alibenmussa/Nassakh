@@ -5,7 +5,7 @@
 - `publishing:export_download` → `/books/<id>/exports/<eid>/download/[?inline=1]`: a finished export's file
   under its Arabic name (`Content-Disposition` with `filename*=utf-8''…`, RFC 5987), `Cache-Control:
   private, no-cache`; 404 «الملف غير جاهز.» when the export is not done, its file is gone, or it belongs
-  to another book.
+  to another book (or to another organisation's book: `books.access`, D102).
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ from __future__ import annotations
 from django.contrib.auth.decorators import login_required
 from django.core.files.storage import default_storage
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import render
 
-from books.models import Book
+from books.access import get_book_or_404, get_or_404
 from books.services import book_stages
 
 from . import exports
@@ -26,7 +26,7 @@ from .models import Export
 @login_required
 def export_page(request: HttpRequest, book_id: int) -> HttpResponse:
     """The export page: readiness, one block per format, the history."""
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     config = exports.page_payload(book, request.user)
     stage_steps = book_stages(book, "export")  # the stage bar (D76)
     context = {"book": book, "config": config, "stage_steps": stage_steps}
@@ -36,8 +36,16 @@ def export_page(request: HttpRequest, book_id: int) -> HttpResponse:
 @login_required
 def export_download(request: HttpRequest, book_id: int, export_id: int) -> FileResponse:
     """A finished export's file (an attachment, or shown in the browser with `?inline=1`)."""
-    row = Export.objects.filter(pk=export_id, book_id=book_id, status=Export.Status.DONE).first()
-    if row is None or not row.file or not default_storage.exists(row.file.name):
+    row = get_or_404(
+        request.user,
+        Export.objects.all(),
+        "book",
+        exports.NOT_READY,
+        pk=export_id,
+        book_id=book_id,
+        status=Export.Status.DONE,
+    )
+    if not row.file or not default_storage.exists(row.file.name):
         raise Http404(exports.NOT_READY)
     info = FORMATS.get(row.format)
     inline = request.GET.get("inline") in ("1", "true")

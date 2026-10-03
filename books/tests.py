@@ -26,6 +26,7 @@ import pymupdf
 import pytest
 from PIL import Image
 
+from accounts.testing import member
 from books import services, tasks
 from books.forms import BookForm
 from books.models import ALL_PAGES_FAILED, ALL_PAGES_FAILED_LAYOUT, Book, Page
@@ -124,14 +125,14 @@ def make_scan_pdf(n_pages: int = 3, landscape: bool = False) -> bytes:
 def editor() -> User:
     user = User.objects.create_user("editor", password="pass-1234")
     user.groups.add(Group.objects.get_or_create(name="editor")[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 @pytest.fixture
 def proofreader() -> User:
     user = User.objects.create_user("reader", password="pass-1234")
     user.groups.add(Group.objects.get_or_create(name="proofreader")[0])
-    return user
+    return member(user)
 
 
 @pytest.fixture

@@ -8,6 +8,7 @@
 
 The book page renders with `config` (`editor.services.page_config`), the Alpine component's start, as
 JSON. `editor_context` builds the old editor page's context (its template stays until the UI merge).
+Another organisation's book answers 404 (`books.access`, D102).
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from urllib.parse import urlencode
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import render
 from django.urls import reverse
 
+from books.access import get_book_or_404
 from books.models import Book
 
 from . import services
@@ -27,7 +29,7 @@ INITIAL_LAYOUT_PAGES = 4
 
 
 def _context(request: HttpRequest, book_id: int, page: str) -> dict:
-    book = get_object_or_404(Book, pk=book_id)
+    book = get_book_or_404(request.user, book_id)
     chapter_id = request.GET.get("chapter") or None
     config = services.page_config(
         book,
@@ -53,7 +55,7 @@ def editor_context(request: HttpRequest, book_id: int) -> dict:
 @login_required
 def edit(request: HttpRequest, book_id: int) -> HttpResponse:
     """The old editor address (D47): the book page on the chapter, in edit mode."""
-    get_object_or_404(Book, pk=book_id)
+    get_book_or_404(request.user, book_id)
     query = {"mode": "edit"}
     if request.GET.get("chapter"):
         query = {"chapter": request.GET["chapter"], **query}

@@ -14,6 +14,7 @@ urlpatterns = [
     path("logout/", views.logout, name="logout"),
     path("organization/", views.organization, name="organization"),
     path("organization/rename/", views.organization_rename, name="organization_rename"),
+    path("organization/switch/", views.organization_switch, name="organization_switch"),
     path("organization/fonts/", views.font_upload, name="font_upload"),
     path("organization/fonts/<int:font_id>/", views.font_edit, name="font_edit"),
     path("organization/fonts/<int:font_id>/remove/", views.font_remove, name="font_remove"),

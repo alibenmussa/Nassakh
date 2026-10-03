@@ -2,7 +2,8 @@
 
 GETs need a login; every change needs an editor (`core.permissions.IsEditor`). Refusals answer
 `{"detail": <Arabic>}`: 400 bad input (a stylesheet adds `errors: {field: message}`), 403 role, 404 no
-manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, version, content}`).
+manuscript / chapter / snapshot (or another organisation's book: `books.access`, D102), 409 a chapter changed
+elsewhere (`{detail, id, version, content}`).
 
 - GET  /api/books/<id>/chapters/                      → `services.chapter_summaries`
 - GET  /api/books/<id>/chapters/<cid>/                → `services.chapter_document`
@@ -44,17 +45,18 @@ from __future__ import annotations
 
 from rest_framework import status
 from rest_framework.decorators import api_view, parser_classes, permission_classes
-from rest_framework.exceptions import NotFound
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from books.access import get_book_or_404, scope
 from books.models import Book
 from core.decorators import ROLE_EDITOR, has_role
 from core.permissions import IsEditor
 
 from . import services, uncertain
+from .models import Manuscript
 
 
 class EditorOrReadOnly(BasePermission):
@@ -72,11 +74,9 @@ def _data(request: Request) -> dict:
     return request.data if isinstance(request.data, dict) else {}
 
 
-def _book(book_id: int) -> Book:
-    book = Book.objects.filter(pk=book_id).first()
-    if book is None:
-        raise NotFound("الكتاب غير موجود.")
-    return book
+def _book(request: Request, book_id: int) -> Book:
+    """A book the user may access (`books.access`, D102), else 404 «الكتاب غير موجود.»."""
+    return get_book_or_404(request.user, book_id)
 
 
 def _replace(data: dict) -> bool:
@@ -112,7 +112,7 @@ def _refused(exc: services.EditorError) -> Response:
 def chapters(request: Request, book_id: int) -> Response:
     """The chapters of the manuscript with their versions, word counts, pages and drift."""
     try:
-        return Response(services.chapter_summaries(_book(book_id)))
+        return Response(services.chapter_summaries(_book(request, book_id)))
     except services.EditorError as exc:
         return _refused(exc)
 
@@ -121,7 +121,7 @@ def chapters(request: Request, book_id: int) -> Response:
 @permission_classes([EditorOrReadOnly])
 def chapter(request: Request, book_id: int, chapter_id: str) -> Response:
     """One chapter for the editor (GET), or its autosave (PUT, version-checked)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         if request.method == "GET":
             return Response(services.chapter_document(book, chapter_id))
@@ -143,7 +143,7 @@ def chapter_reassemble(request: Request, book_id: int, chapter_id: str) -> Respo
     edited text the request must confirm the replacement (`replace_edited`, D70), else 409."""
     from assembly.services import run_payload
 
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         run = services.reassemble_chapter(
             book, chapter_id, request.user, replace_edited=_replace(_data(request))
@@ -156,10 +156,11 @@ def chapter_reassemble(request: Request, book_id: int, chapter_id: str) -> Respo
 @api_view(["GET"])
 def review_drift(request: Request, book_id: int) -> Response:
     """The live review drift (D70): the book page refreshes it on focus, on a return to the tab and on the
-    review screen's message. Without a manuscript, no drift."""
-    drift = services.drift_of(book_id)
+    review screen's message. Without a manuscript, no drift. Polled: the user's manuscript of the book in one
+    query (`books.access.scope`); only without one is the book looked up (404, D102)."""
+    drift = services.drift_of(book_id, scope(Manuscript.objects.all(), request.user, "book"))
     if drift is None:
-        _book(book_id)  # 404 for a book that does not exist
+        _book(request, book_id)  # 404 for a book that does not exist or is another organisation's
         return Response(services.drift_payload(services.NO_DRIFT))
     return Response(drift)
 
@@ -169,7 +170,7 @@ def review_drift(request: Request, book_id: int) -> Response:
 def review_changes(request: Request, book_id: int) -> Response:
     """«تغييرات المراجعة» (D78): the drift and the newest plan (GET); POST starts a plan of the drift pages
     (`pages` to limit it, `fix` for a «تصحيح في كل الكتاب» batch) and answers 202 `{plan_id, status}`."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     if request.method == "GET":
         return Response(services.review_changes(book))
     data = _data(request)
@@ -186,7 +187,7 @@ def review_changes_apply(request: Request, book_id: int, plan_id: int) -> Respon
     """Take a plan's changes (`{choices, pages}`), or keep the book's text for them (`keep_all`)."""
     from assembly.services import _parse_bool
 
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         result = services.apply_review_changes(
@@ -210,7 +211,7 @@ def to_footnote(request: Request, book_id: int) -> Response:
     saves."""
     from . import document as doc
 
-    _book(book_id)
+    _book(request, book_id)
     data = _data(request)
     try:
         nodes = doc.clean_nodes(data.get("content"))
@@ -226,7 +227,7 @@ def to_footnote(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def find_replace(request: Request, book_id: int) -> Response:
     """Find, or replace all, in one chapter or the whole book."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         result = services.find_replace(
@@ -248,7 +249,7 @@ def find_replace(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def convert_digits(request: Request, book_id: int) -> Response:
     """Convert the digits of one chapter (or of the book) to Western or Arabic-Indic."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     data = _data(request)
     try:
         result = services.convert_digits(
@@ -263,7 +264,7 @@ def convert_digits(request: Request, book_id: int) -> Response:
 @permission_classes([EditorOrReadOnly])
 def snapshots(request: Request, book_id: int) -> Response:
     """The manuscript's snapshots (GET), or a new one taken now (POST `{label}`)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         if request.method == "GET":
             return Response(services.snapshots(book))
@@ -277,7 +278,7 @@ def snapshots(request: Request, book_id: int) -> Response:
 @permission_classes([IsEditor])
 def snapshot_restore(request: Request, book_id: int, snapshot_id: int) -> Response:
     """Put a snapshot back (the current text is kept as a snapshot first)."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         return Response(services.restore(book, snapshot_id, request.user))
     except services.EditorError as exc:
@@ -292,7 +293,7 @@ def stylesheet(request: Request, book_id: int) -> Response:
     from publishing import engine
     from publishing.preview import PreviewNotFound
 
-    book = _book(book_id)
+    book = _book(request, book_id)
     if request.method == "GET":
         return Response(services.stylesheet_payload(book))
     data = _data(request)
@@ -320,7 +321,7 @@ def stylesheet(request: Request, book_id: int) -> Response:
 @parser_classes([MultiPartParser, FormParser])
 def book_images(request: Request, book_id: int) -> Response:
     """Upload an image of the book (D80: the cover's picture): checked, normalised and stored by content."""
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         row, created = services.upload_image(
             book, request.FILES.get("file"), request.data.get("purpose") or None, request.user
@@ -336,20 +337,20 @@ def cover(request: Request, book_id: int) -> Response:
     """The book page's cover (D80): `{mode, hash, image_1x, image_2x, width, height}`."""
     from publishing.cover import cover_payload
 
-    return Response(cover_payload(_book(book_id)))
+    return Response(cover_payload(_book(request, book_id)))
 
 
 @api_view(["GET"])
 def uncertain_words(request: Request, book_id: int) -> Response:
     """Every uncertain word left in the manuscript, with its page, context and readings (D47)."""
     try:
-        return Response(uncertain.uncertain_words(_book(book_id)))
+        return Response(uncertain.uncertain_words(_book(request, book_id)))
     except services.EditorError as exc:
         return _refused(exc)
 
 
 def _resolve(request: Request, book_id: int, action: str) -> Response:
-    book = _book(book_id)
+    book = _book(request, book_id)
     try:
         return Response(uncertain.resolve(book, action, _data(request), request.user))
     except services.EditorError as exc:

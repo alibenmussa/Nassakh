@@ -11,7 +11,8 @@
                                                   (`stylesheet_payload` + `preview` + `cover_render`) +
                                                   `applied: {id, name, changed, skipped}`
 
-Refusals answer `{"detail": <Arabic>}`: 400 bad input, 403 not the book's organisation or not allowed, 404.
+Refusals answer `{"detail": <Arabic>}`: 400 bad input, 403 not allowed, 404 (also another organisation's book,
+`books.access`, D102).
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from books.access import get_book_or_404
 from books.models import Book
 
 from . import styles
 from .models import StyleTemplate
-from .services import book_organization, can_edit_books, is_member, is_org_admin
+from .services import book_organization, can_edit_books, is_org_admin
 
-NOT_YOURS = "هذا الكتاب لا ينتمي إلى مؤسستك."
 EDITORS_ONLY = "هذا الإجراء يتطلب صلاحية محرّر في المؤسسة."
 ADMINS_ONLY = "هذا الإجراء لمدير المؤسسة."
 
@@ -38,13 +39,10 @@ def _data(request: Request) -> dict:
 
 
 def _book(request: Request, book_id: int):
-    book = Book.objects.filter(pk=book_id).select_related("organization").first()
-    if book is None:
-        raise NotFound("الكتاب غير موجود.")
-    organization = book_organization(book)
-    if organization is not None and not is_member(request.user, organization):
-        raise PermissionDenied(NOT_YOURS)
-    return book, organization
+    """A book the user may access (`books.access`, D102: another organisation's answers 404) and its
+    organisation."""
+    book = get_book_or_404(request.user, book_id, Book.objects.select_related("organization"))
+    return book, book_organization(book)
 
 
 def _template_payload(book, template: StyleTemplate) -> dict:

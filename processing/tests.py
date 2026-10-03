@@ -474,10 +474,13 @@ def page_with_original(book) -> Page:
 
 @pytest.fixture
 def users(db):
+    from accounts.testing import member
+
     editor = User.objects.create_user("editor", password="x")
     editor.groups.add(Group.objects.get(name="editor"))
     plain = User.objects.create_user("plain", password="x")
-    return types.SimpleNamespace(editor=editor, plain=plain)
+    # both in the books' organisation (D102): only the role tells them apart
+    return types.SimpleNamespace(editor=member(editor), plain=member(plain))
 
 
 @pytest.fixture

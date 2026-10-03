@@ -141,19 +141,21 @@ class IngestError(ValueError):
 # ====================================================================== book creation
 
 
-def create_book(data: dict, pdf: UploadedFile, user) -> Book:
+def create_book(data: dict, pdf: UploadedFile, user, organization=None) -> Book:
     """Create a book from validated form data and its PDF, store the file and inspect it.
 
     Only keys in `BOOK_FIELDS` are taken from `data`. The PDF lands at `books/{id}/source.pdf`
     (`core.storage.book_source_path`). When the PDF cannot be read the book is kept with status
     `error` and an actionable Arabic message instead of raising. The book awaits «بدء المعالجة»
     (D64): its pages are extracted and prepared, then nothing is read before the owner starts.
+    The book belongs to `organization` (the view passes the one the user works in), else to the user's,
+    else (a command, no user) to the first organisation: who may see it follows (D98, D102).
     """
     fields = {key: value for key, value in data.items() if key in BOOK_FIELDS and value is not None}
     book = Book(**fields, awaits_ocr_start=True)
     if getattr(user, "is_authenticated", False):
         book.created_by = user
-    book.organization = organization_for(user) or default_organization()  # its fonts and templates (D98)
+    book.organization = organization or organization_for(user) or default_organization()
     book.save()
 
     target = book_source_path(book, pdf.name)

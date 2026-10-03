@@ -21,6 +21,7 @@ from django.urls import reverse
 
 import pytest
 
+from accounts.testing import member
 from assembly import render, services
 from assembly.models import AssemblyRun
 from books.models import Book, Page
@@ -44,7 +45,7 @@ def _user(name: str, role: str | None) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     if role:
         user.groups.add(Group.objects.get_or_create(name=role)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 def _logged(user) -> Client:

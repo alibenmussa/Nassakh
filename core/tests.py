@@ -261,13 +261,18 @@ def test_nav_context_processor(users):
 
 @pytest.mark.django_db
 def test_protected_media_requires_login_and_serves_files(client, users):
-    name = default_storage.save("books/1/pages/0001/original.png", ContentFile(b"\x89PNG fake"))
+    from accounts.testing import member
+
+    book = Book.objects.create(title="كتاب")
+    name = default_storage.save(f"books/{book.pk}/pages/0001/original.png", ContentFile(b"\x89PNG fake"))
     url = reverse("media", kwargs={"path": name})
 
     anonymous = client.get(url)
     assert anonymous.status_code == 302 and reverse("accounts:login") in anonymous["Location"]
 
     client.force_login(users.plain)
+    assert client.get(url).status_code == 404  # no organisation, no book's files (D102)
+    member(users.plain)
     response = client.get(url)
     assert response.status_code == 200
     assert response["Content-Type"] == "image/png"
@@ -279,9 +284,10 @@ def test_protected_media_requires_login_and_serves_files(client, users):
     again = client.get(url, HTTP_IF_MODIFIED_SINCE=response["Last-Modified"])
     assert again.status_code == 304
 
-    assert client.get(reverse("media", kwargs={"path": "books/1/missing.png"})).status_code == 404
+    missing = f"books/{book.pk}/missing.png"
+    assert client.get(reverse("media", kwargs={"path": missing})).status_code == 404
     assert client.get("/media/../settings.py").status_code == 404
-    assert client.get(reverse("media", kwargs={"path": "books/1/pages"})).status_code == 404
+    assert client.get(reverse("media", kwargs={"path": f"books/{book.pk}/pages"})).status_code == 404
 
 
 @pytest.mark.django_db

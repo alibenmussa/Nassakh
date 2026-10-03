@@ -13,6 +13,7 @@ from django.urls import reverse
 import numpy as np
 import pytest
 
+from accounts.testing import member
 from books.models import Book, Page
 from core.storage import save_array
 from ocr.models import Line
@@ -103,7 +104,7 @@ def role_user(name: str, role: str | None) -> User:
     user = User.objects.create_user(name, password="pass-1234")
     if role:
         user.groups.add(Group.objects.get_or_create(name=role)[0])
-    return user
+    return member(user)  # the books' organisation (D102)
 
 
 @pytest.fixture
