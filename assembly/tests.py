@@ -3457,3 +3457,25 @@ def test_retype_block_keeps_the_id_text_and_sources():
     assert "style" not in services.retype_block(out, "p2", "body")[1]["attrs"]
     with pytest.raises(services.AssemblyNotFound):
         services.retype_block(nodes, "p9", "quote")
+
+
+def test_a_call_that_opens_a_line_goes_back_to_the_line_above():
+    """D103, book 33 p. 1: the models put «النسيان(1).» on two lines, «النسيان» and «(1). [حكم سجود السهو]»,
+    and the call opened a paragraph of its own; a numbered item of the text («(١) ما رواه») stays."""
+    lines = [
+        LineIn(1, 0, "body", "body", "لأنه أعم من النسيان", uncertain=[3]),
+        LineIn(2, 1, "body", "body", "(1). [حكم سجود السهو]", uncertain=[0, 2]),
+        LineIn(3, 2, "body", "body", "(٢) ما رواه أبو داود"),
+    ]
+    out = pipeline.pull_leading_calls(lines)
+    assert [line.text for line in out] == [
+        "لأنه أعم من النسيان (1).",
+        "[حكم سجود السهو]",
+        "(٢) ما رواه أبو داود",
+    ]
+    assert out[0].uncertain == [3, 4] and out[1].uncertain == [1]
+    assert lines[1].text == "(1). [حكم سجود السهو]"  # copies
+    alone = [LineIn(1, 0, "body", "body", "النسيان"), LineIn(2, 1, "body", "body", "(١) ،")]
+    assert [line.text for line in pipeline.pull_leading_calls(alone)] == ["النسيان (١) ،"]
+    heading = [LineIn(1, 0, "body", "heading", "الباب الأول"), LineIn(2, 1, "body", "body", "(١).")]
+    assert [line.text for line in pipeline.pull_leading_calls(heading)] == ["الباب الأول", "(١)."]

@@ -41,6 +41,7 @@ JOIN_GAP = 0.8  # components closer than this (× the line height) form one clus
 MIN_PARTS, MAX_PARTS = 2, 4  # a cluster's components: «(», «١», «)»; a bracket may touch the digit
 MIN_CLUSTER, MAX_CLUSTER = 1.0, 3.5  # a cluster's width in line heights («(١)» 2.3, «(١١)» 3.2)
 INSIDE = 3  # px: a component is a word's only this far inside its box (clipped boxes split a call)
+ABOVE_INSIDE = 0.8  # a component this share inside the line above's rows is that line's ink (D103)
 REACH_UP = 0.45  # line pitches searched above the line box (a raised call above a tight band)
 REACH = 5.0  # line heights searched left of the line box (an unboxed call at the line's end lies outside it)
 CORE_SHARE = 0.5  # rows with at least this share of the densest row's ink are the line's core
@@ -435,6 +436,11 @@ def split_reading(text: str) -> tuple[str, str, str] | None:
     return (closers, reading, punct) if is_reading(reading) else None
 
 
+# A bracket and one letter boxed on a call's ink: the models' reading of the call («(ك» for «(٣)», book 34
+# p. 5, D103); a lettered item «(أ)» of the text sits on the line, it is no raised call shape
+_LETTER_READING = re.compile(r"^[\(\[]\s*[ء-ي]\s*[\)\]]?$|^[ء-ي]\s*[\)\]]$")
+
+
 def is_reading_token(token: dict) -> bool:
     """A token that is the models' reading of a call, alone or with its closers and marks glued."""
     text = _text(token)
@@ -555,7 +561,21 @@ def estimate_place(
     return i, (i + 1, j)
 
 
-def ink_candidates(line, gray: np.ndarray, line_height: float, pitch: float = 0.0) -> list[Candidate]:
+def _inside(comp: tuple[int, int, int, int], box: list | None) -> bool:
+    """A component of the line above's ink: its middle within that line's columns and `ABOVE_INSIDE` of its
+    height inside that line's rows."""
+    if not box:
+        return False
+    x0, y0, x1, y1 = (float(v) for v in box)
+    middle = (comp[0] + comp[2]) / 2
+    height = comp[3] - comp[1]
+    inside = min(float(comp[3]), y1) - max(float(comp[1]), y0)
+    return x0 <= middle <= x1 and height > 0 and inside >= ABOVE_INSIDE * height
+
+
+def ink_candidates(
+    line, gray: np.ndarray, line_height: float, pitch: float = 0.0, above: list | None = None
+) -> list[Candidate]:
     """The call-shaped ink of a line, as candidates placed among its tokens: bracketed calls sized by the
     line `pitch` (`bracket_calls`, D87), then D83's clusters where none overlaps. The models' reading of
     the call, boxed on its ink («(”», «‘‘»), hides nothing and is replaced; a cluster whose word before is
@@ -567,6 +587,11 @@ def ink_candidates(line, gray: np.ndarray, line_height: float, pitch: float = 0.
     top, bottom = core_band(gray, line.bbox)
     centre = (top + bottom) / 2
     comps = components(gray, search_box(line.bbox, line_height, pitch))
+    # the search reaches above the line (`REACH_UP`, D93): the line above's own ink there is not this line's
+    # (a bracket of «أبادهم)» taken for a call, book 29 p. 193; a descender cutting a call in two, book 34);
+    # ink inside this line's own box stays (a call the models wrote as a line of its own, book 31 p. 91)
+    line_top = float(line.bbox[1])
+    comps = [c for c in comps if not ((c[1] + c[3]) / 2 < line_top and _inside(c, above))]
     found = bracket_calls(comps, boxes, top, pitch)
     for box in call_clusters(comps, boxes, centre, line_height) if OLD_CLUSTERS else []:
         if not any(_overlap_x(box, other) > 0.3 for other in found):
@@ -580,7 +605,7 @@ def ink_candidates(line, gray: np.ndarray, line_height: float, pitch: float = 0.
                 for i, t in enumerate(tokens)
                 if t.get("bbox")
                 and not (t.get("res") or t.get("call"))
-                and is_reading_token(t)
+                and (is_reading_token(t) or _LETTER_READING.match(_text(t)))
                 and _overlap_x(t["bbox"], box) >= 0.4
             ),
             None,
@@ -829,10 +854,11 @@ def page_plan(
     anchors = present_calls(body, markers)
     pitch = line_pitch(body, 4.5 * float(line_height or 20.0))
     out: list[Candidate] = []
-    for line in body:
+    for k, line in enumerate(body):
+        above = body[k - 1].bbox if k and body[k - 1].bbox and body[k - 1].bbox[1] < line.bbox[1] else None
         found = [
             c
-            for c in ink_candidates(line, gray, line_height, pitch)
+            for c in ink_candidates(line, gray, line_height, pitch, above)
             if not any(
                 box and _position(line.order, c.bbox)[0] == pos[0] and _overlap_x(box, c.bbox) >= 0.4
                 for pos, _n, box in anchors

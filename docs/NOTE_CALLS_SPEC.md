@@ -11,19 +11,24 @@ task (`ocr.tasks.read_numbers`, default queue, one Kraken process per page), so 
 pages already read. Never on an approved page or a reviewed line; a line the reviewer changes while Kraken reads is
 left as they made it (the page row locked, `updated_at` compared, as the numbers pass does).
 
-**What is wanted.** Only a page with footnote lines has calls to find. Its *wanted* numbers are the numbers of
+**What is wanted.** Only a page with footnote lines has calls to find. Their markers are set when the lines are
+built, from Kraken's reading of the footnote lines and the page's run of numbers (D103, `ocr/markers.py`): the
+models renumber the notes after one they dropped. Its *wanted* numbers are the numbers of
 its notes as the linker parses them (`note_numbers` calls `assembly.pipeline.page_notes`, so its repairs count:
 lookalike markers, a number restored or put back in sequence, a «=» line continuing the note before; D85, D87)
 minus the bracketed numbers already in its body lines; a page whose first note has no marker wants 1 too (that
 note heads the page). Nothing wanted → nothing is read.
 
 **Candidates** (body-kind lines only, `ocr.services.line_kind`, with a line box):
-0. *A bracketed call by its shape* (D87, `bracket_calls`, the first source): raised components 0.14–0.40 of the
+0. *A bracketed call by its shape* (D87, `bracket_calls`, the first source): raised components 0.14–0.46 of the
    line pitch tall whose bottom ends above the line's core top, joined while close at one height; a group of 2–5
    whose outer parts are thin brackets of one height and top, 0.1–3.2 heights apart, is a call. Sized by the
    line pitch, not by `median_line_height` (the core band: 12 px on book 31, where the brackets are 25). A word's
-   box does not hide it (Tesseract boxes «الشافعي(٢)» as one word). The clusters of item 2 follow where none
-   overlaps. A model's reading of the call boxed on its ink (`is_reading_token`) is replaced by it.
+   box does not hide it (Tesseract boxes «الشافعي(٢)» as one word). The search reaches 0.45 pitch above the line
+   box (D93: Kraken's bands are tight at the top); ink there whose middle lies above the box and which sits
+   inside the line above's box is that line's and is left out (D103). The clusters of item 2 follow where none
+   overlaps. A model's reading of the call boxed on its ink (`is_reading_token`, or a bracket and one letter,
+   «(ك» for «(٣)», D103) is replaced by it.
 1. *A misread token with a box*: a bracket holding an alef, a quote stroke, nothing, or one or two digits
    («(ا)», «(”)», «()», «(١١)»): its own word box is the crop.
 2. *Uncovered ink*: the line box, widened to its left by 5 line heights (a call after the last boxed

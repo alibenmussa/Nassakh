@@ -1003,6 +1003,8 @@
           case 'missing': return `كلمات أضافتها القراءة الثانية: قرأها ${S} وTesseract ولم يقرأها ${P}.`;
           default:
             if (tok.call) return 'علامة حاشية قرأها Kraken من الصورة: قابِلها بالصورة.';
+            // D103: a note's number set from Kraken's reading of its line and the page's run of numbers
+            if (tok.marker && tok.src === 'kraken') return 'رقم الحاشية من قراءة Kraken للسطر وتسلسل حواشي الصفحة: قابِله بالصورة.';
             return !why.length && tok.digit ? 'رقم: قابِله بالصورة.' : '';
         }
       },

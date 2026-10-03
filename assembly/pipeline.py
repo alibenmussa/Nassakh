@@ -1045,6 +1045,43 @@ def apply_line_styles(pages: Sequence[PageIn], styles: dict[str, str]) -> list[P
     return out
 
 
+_RE_LEADING_CALL = re.compile(rf"^[\(\[]\s*[{_DIGITS}]{{1,3}}\s*[\)\]]([.،:؛,]*)$")
+_RE_MARKS_ONLY = re.compile(r"^[.،:؛,]+$")
+
+
+def pull_leading_calls(lines: list[LineIn]) -> list[LineIn]:
+    """Body lines with a call that opens a line handed back to the line above (D103): a printed call never
+    starts a line, the models put it on the next one («النسيان» / «(1). [حكم سجود السهو]», book 33 p. 1),
+    where it opened a paragraph of its own and linked to no word. Only a call with nothing but punctuation
+    after it moves («(1).», «(١) ،»); «(١) ما رواه» is a numbered item of the text. The line above must be a
+    body line of the same role. Copies; the input is not changed."""
+    out = list(lines)
+    for i in range(1, len(out)):
+        above, line = out[i - 1], out[i]
+        if above.role != line.role or above.role != ROLE_BODY:
+            continue
+        words = (line.text or "").split()
+        match = _RE_LEADING_CALL.match(words[0]) if words else None
+        if match is None:
+            continue
+        take = 1
+        if not match.group(1) and len(words) > 1 and _RE_MARKS_ONLY.match(words[1]):
+            take = 2
+        if not match.group(1) and take == 1 and len(words) > 1:
+            continue
+        above_words = (above.text or "").split()
+        moved_uncertain = [len(above_words) + k for k in line.uncertain if k < take]
+        out[i - 1] = dataclasses.replace(
+            above,
+            text=" ".join(above_words + words[:take]),
+            uncertain=list(above.uncertain) + moved_uncertain,
+        )
+        out[i] = dataclasses.replace(
+            line, text=" ".join(words[take:]), uncertain=[k - take for k in line.uncertain if k >= take]
+        )
+    return [line for line in out if (line.text or "").strip()]
+
+
 def split_paragraphs(page: PageIn) -> list[Block]:
     """The body lines of one page as paragraphs and headings, in reading order (§2.3).
 
@@ -1056,6 +1093,7 @@ def split_paragraphs(page: PageIn) -> list[Block]:
     lines = [line for line in page.lines if line.kind != FOOTNOTE and (line.text or "").strip()]
     if not lines:
         return []
+    lines = pull_leading_calls(lines)
     measure = text_measure(lines)
     shapes = [line_shape(line.box, measure) for line in lines]
     blocks: list[Block] = []

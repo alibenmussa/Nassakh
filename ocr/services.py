@@ -41,7 +41,7 @@ from core.arabic import normalize, normalize_ws, parse_output, to_western_digits
 from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
-from . import boxes, chooser, flags
+from . import boxes, chooser, flags, markers
 from .alignment import build_lines, merged_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
@@ -1642,8 +1642,9 @@ def build_region(
     before its last token) or by `two`.
     """
     single = one_model(rt)
+    text = rt.text
     built = build_lines(
-        rt.text,
+        text,
         rt.alt_text,
         rt.tess_lines,
         bands,
@@ -1652,7 +1653,7 @@ def build_region(
         partial=rt.alt_partial,
         box_lines=rt.box_lines,
     )
-    primary = rt.text.split()
+    primary = text.split()
     secondary = (rt.alt_text or "").split()
     runs: list[flags.Run] = []
     if secondary and primary and not rt.fallback:
@@ -1663,7 +1664,7 @@ def build_region(
     around = built  # the lines Tesseract's support is looked for on: its own (D92: not Kraken's)
     if runs and rt.tess_lines and rt.box_lines is not None:
         around = build_lines(
-            rt.text, rt.alt_text, rt.tess_lines, bands, gray, single=single, partial=rt.alt_partial
+            text, rt.alt_text, rt.tess_lines, bands, gray, single=single, partial=rt.alt_partial
         )
     for run in runs:
         run.support = round(flags.run_support(run, around, rt.tess_lines), 2) if rt.tess_lines else 0.0
@@ -1685,6 +1686,10 @@ def build_region(
             inserted={i: next_group + n for i, n in inserted.items()},
             box_lines=rt.box_lines,
         )
+    if rt.target.kind in FOOTNOTE_KINDS and rt.box_lines and not rt.fallback:
+        markers.fix_markers(
+            built, rt.box_lines
+        )  # the notes' markers from Kraken's reading of their lines (D103)
     gaps = [(position[run.at - 1] if run.at > 0 else -1, run) for run in unsupported]
     if rt.fallback:
         readers = READERS_TESSERACT

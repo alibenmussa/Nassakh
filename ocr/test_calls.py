@@ -377,6 +377,16 @@ def test_a_bracketed_call_is_found_by_its_shape_sized_by_the_line_pitch():
     assert calls.bracket_calls([*comps, damma], [], core_top, 101.5) == [[235, 428, 289, 453]]
 
 
+def test_the_line_aboves_own_ink_is_no_part_of_a_call():
+    """D103: the search reaches above the line (`REACH_UP`, D93); ink there inside the line above's box is
+    that line's: a descender between a call's brackets (book 34 p. 2), a bracket of «أبادهم)» (book 29
+    p. 193)."""
+    above = [40, 300, 1000, 405]
+    descender = (240, 380, 246, 401)
+    assert calls._inside(descender, above) and not calls._inside((235, 428, 244, 453), above)
+    assert not calls._inside(descender, None) and not calls._inside(descender, [400, 300, 1000, 405])
+
+
 def test_a_word_with_the_calls_reading_glued_to_it_gives_it_to_the_call():
     """Book 34 p. 6: «المنع””؛» — the models wrote the raised «(٨)» as two quote strokes on the word."""
     tokens = [{"t": "والراجح", "bbox": [265, 10, 400, 30]}, {"t": "المنع””؛"}]

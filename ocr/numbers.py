@@ -25,7 +25,8 @@ The pass, for one finalised page (`read_page_numbers`):
 4. `apply_reading`: the token's digits become Kraken's (in Arabic-Indic digits; what surrounds them,
    brackets, «هـ», «م», stays Qari's), Qari's readings are kept under `qari` for the record and dropped
    from the offered readings (`alt`, `tess` → None), `src` = "kraken"; the token stays low-confidence
-   (D17) until the reviewer confirms it. Reviewed lines and resolved tokens are never touched.
+   (D17) until the reviewer confirms it. Reviewed lines and resolved tokens are never touched, nor a
+   note's marker checked against its page's run of markers (`marker`, `ocr.markers`, D103).
 
 Numbers Qari wrote as letters (D51): Qari writes some Arabic-Indic digits as the letter they look
 like (١ → «ا», ٥ → «ه», ٤ → «ع»: «(ج ا، ص…)», «(ه) الخزر», a footnote mark «ا») or drops a date's
@@ -269,7 +270,7 @@ def apply_reading(token: dict, numbers: list[str] | None = None, whole: str = ""
     """Put Kraken's `numbers` into `token` (or its reading of the token's whole box, `whole`; see the
     module docstring); False when nothing changed or the token must not change (resolved by the
     reviewer, or already read)."""
-    if token.get("res") or token.get("src") == "kraken" or not (numbers or whole):
+    if token.get("res") or token.get("src") == "kraken" or token.get("marker") or not (numbers or whole):
         return False
     text = str(token.get("t") or "")
     runs = list(_RUN.finditer(text))
@@ -334,7 +335,7 @@ def _plain(text) -> str:
 
 def is_letter_digit(token: dict) -> bool:
     """A lone letter Qari may have written for a digit (not a number, not resolved, not read yet)."""
-    if token.get("res") or token.get("src") == "kraken" or is_number(token):
+    if token.get("res") or token.get("src") == "kraken" or token.get("marker") or is_number(token):
         return False
     return bool(LETTER_TOKEN.match(str(token.get("t") or "")))
 
@@ -652,6 +653,13 @@ class PageNumbers:
         return {k: getattr(self, k) for k in keys}
 
 
+def _settled(token: dict) -> bool:
+    """A number the pass leaves as it is: resolved by the reviewer, already read, or a note's marker checked
+    against its page's sequence of markers (`ocr.markers`, D103: Kraken's own reading of a marker misreads a
+    digit or reads the bracket as a one, «(٢)١»)."""
+    return bool(token.get("res") or token.get("src") == "kraken" or token.get("marker"))
+
+
 def _unreviewed_lines(page) -> list:
     return [line for line in page.lines.filter(is_reviewed=False).order_by("order") if line.bbox]
 
@@ -663,7 +671,7 @@ def page_areas(page, lines: list | None = None) -> tuple[list[dict], list[tuple]
     for line in _unreviewed_lines(page) if lines is None else lines:
         tokens = line.tokens or []
         for k, area in enumerate(number_areas(tokens, line.bbox)):
-            if all(tokens[i].get("res") or tokens[i].get("src") == "kraken" for i in area.tokens):
+            if all(_settled(tokens[i]) for i in area.tokens):
                 continue  # every number of the area was already read or resolved
             requests.append({"id": f"{line.pk}:{k}", "bbox": area.bbox})
             index.append((line, area))
@@ -679,7 +687,7 @@ def page_weak_boxes(page, lines: list | None = None) -> tuple[list[dict], list[t
         for i, token in enumerate(line.tokens or []):
             if not (token.get("bbox") and token.get("bq") == WEAK and is_number(token)):
                 continue
-            if token.get("res") or token.get("src") == "kraken":
+            if _settled(token):
                 continue
             requests.append({"id": f"{line.pk}:weak{i}", "bbox": in_line_rows(token["bbox"], line.bbox)})
             index.append((line, i))

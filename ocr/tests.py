@@ -2268,7 +2268,8 @@ def test_a_piece_that_loops_on_a_dotted_separator_is_empty_not_a_loop(page, monk
 
 
 def test_run_full_ocr_reads_a_footnote_again_at_1x_when_both_models_loop_on_the_2x_strip(page):
-    # book 38 p. 5: a wide, short footnote strip makes both models repeat its first line at 2×; at 1× they read it
+    # book 38 p. 5: a wide, short footnote strip makes both models repeat its first line at 2×; at 1× they
+    # read it
     add_regions(page)
     fakes = engines()
     for name in ("qari_v03", "qari_v02"):

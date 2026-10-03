@@ -913,3 +913,46 @@ books to another.
   membership, a book without an organisation, the switcher and the admin. The suites' users join the first
   organisation (`accounts.testing.member`); the root `conftest.py` gives a test book created without an
   organisation the first one, as every real book has.
+
+## D103 — A page's note markers from Kraken's reading of their lines; calls found past the line above; a call that opens a line goes back up (2026-10-03, amends D50, D87, D93)
+
+**Why.** After D93 the hand-marked calls of the ten test books stood at 146 of 166 with the lines rebuilt from
+their stored runs. Most misses were not the call pass's but the notes': the models read the «(٣)» that starts a
+footnote as part of a sequence, not from the ink. When they drop one they number the notes after it one lower
+(book 35 p. 2: printed (١)…(٥), read (1), nothing, (2), (3), (ه)), so the linker joined two notes, the page wanted
+the wrong calls and the call pass refused or renumbered calls it had read right. Kraken's reading of the
+region's lines (D92) keeps the markers where they are printed (one odd digit misread, «(8)» for ٥).
+
+**Decision.**
+- **Markers (`ocr/markers.py`, in `build_region` for footnote regions with Kraken's lines).** A line starts a note
+  when Kraken read a bracketed number or empty brackets at its start, before its first word; a marker only the
+  models wrote starts one when the run fits it better (a «(2)،» opening a carried line is a reference, book 33
+  p. 6; a line Kraken starts with «=» is carried, D87). The starts take one consecutive run of numbers, the one
+  most readings agree with (Kraken's digit +2, a disagreeing one −1, the models' +1; model-only starts tried in
+  and out), kept only when half of Kraken's digits agree with it. A missing marker is put in (a marker the line
+  building left at the end of the line above moves down), a different one replaced («(ه)», «(٢م)», «(3)» for
+  (٤)), in the digits Kraken read; every marker of the run is marked `marker`. A set one is low, `src: kraken`,
+  the models' reading under `qari`; review names it «رقم الحاشية من قراءة Kraken للسطر وتسلسل حواشي الصفحة».
+  Lettered notes («(أ)», «(ب)») are left alone. The edits are made on the built tokens: put into the text, a
+  marker was moved back up by the alignment.
+- **The numbers pass (D50) leaves a `marker` token alone**: Kraken's reading of a marker's own box misreads its
+  digit or reads the bracket as a one («(٦)١» for (٤), book 39 p. 6), where the run had it right.
+- **The call pass: the line above's own ink is not this line's.** The search reaches 0.45 pitch above the line
+  (D93); a component there whose middle lies above the line's box and which sits inside the line above's box
+  (`ABOVE_INSIDE` 0.8 of its height) is left out: a descender between a call's brackets cut it in two (book 34
+  pp. 2, 5, 6), a bracket of «أبادهم)» made a call (book 29 p. 193). A call the models wrote as a line of its own
+  keeps its ink (book 31 p. 91).
+- **A bracket and one letter boxed on a call's ink is the models' reading of it** («(ك» for «(٣)», book 34 p. 5)
+  and the call replaces it; a lettered item of the text sits on the line and is no raised call shape.
+- **The assembly: a call that opens a line goes back to the line above** (`pull_leading_calls`): «النسيان» /
+  «(1). [حكم سجود السهو]» (book 33 p. 1) opened a paragraph and linked to no word. Only a call with nothing but
+  punctuation after it moves; «(١) ما رواه» is a numbered item of the text.
+
+**Measured** (`playground/footnotes-2026-10-03/`, every page rebuilt from its stored runs with and without the
+change, the numbers and call pass inline; book 35 pp. 2, 4, 5 carry the owner's review edits and were measured
+in a rolled-back transaction): hand-marked calls right 146 → 157 of 166, wrong links 7 → 7; per book 29 24 → 24,
+31 25 → 26, 32 11, 33 12 → 13, 34 24 → 27, 35 17 → 20, 36 13 → 15, 37 6, 38 3, 39 11 → 12. Of the 9 left, three
+are the call in its right place after a word the OCR misread (29 p. 104, 34 p. 1, 37 p. 2); the others are two
+regions Tesseract stands for (37 p. 3, 38 p. 5: a re-read under D100), a line the models invented (35 p. 6), two
+notes printed on one line (36 p. 2), a repeated word that took the other line's box (34 p. 6) and a vowelled line
+(31 p. 86).
