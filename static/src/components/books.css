@@ -31,13 +31,7 @@
     overflow: auto;
   }
 
-  /* ------------------------------------------------------------ books list */
-  .books-title { display: block; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
-  .books-title:hover { color: var(--color-accent-text); }
-  .books-subtitle { display: block; margin-top: 2px; }
-  .books-progress-col { min-width: 160px; }
-  .books-progress-cell { min-width: 160px; }
-  .books-progress-cell .progress { margin-bottom: 4px; }
+  /* the books list (the home) is library.css */
 
   /* ------------------------------------------------------------ new book form */
   .form-column { max-width: 680px; }
@@ -74,7 +68,6 @@
   .range-line { margin: -4px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--color-text-2); font-variant-numeric: tabular-nums; }
   .range-line:empty { display: none; }
   .range-line.is-error { color: var(--color-danger-text); font-weight: 500; }
-  .books-waiting { color: var(--color-warning-text); white-space: nowrap; }
   .split-preview-line {
     position: absolute;
     top: 0;
@@ -165,6 +158,5 @@
   @media (max-width: 560px) {
     .field-row { grid-template-columns: minmax(0, 1fr); }
     .page-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
-    .books-progress-col, .books-progress-cell { min-width: 110px; }
   }
 }

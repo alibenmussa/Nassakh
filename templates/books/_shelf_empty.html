@@ -1,0 +1,26 @@
+{% comment %}The books home with no book (library.css `lb-empty`): an empty shelf waiting for its first book, how a book
+goes from a scan to its files (the six steps of the stage bar, D76), and «كتاب جديد» for those who may add one —
+the page's only primary action. Context: role.{% endcomment %}
+<section class="lb-empty" aria-labelledby="lb-empty-title">
+  <div class="lb-empty-shelf" aria-hidden="true">
+    <span class="lb-ghost"></span><span class="lb-ghost"></span><span class="lb-ghost is-leaning"></span>
+  </div>
+  <h2 id="lb-empty-title" class="empty-title">لا كتب بعد</h2>
+  <p class="empty-text">ارفع ملف PDF لكتاب مصوّر أو رقمي، وحدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة. يستخرج نسّاخ الصفحات ويكتشف مناطقها، ثم تضغط «بدء المعالجة» ليتعرّف على نصّها.</p>
+  <ol class="lb-empty-steps">
+    <li><span class="lb-empty-n num">1</span><span><b>التخطيط</b> تُستخرج الصفحات وتُكشف مناطقها.</span></li>
+    <li><span class="lb-empty-n num">2</span><span><b>المعالجة</b> يتعرّف النموذجان على نص كل صفحة.</span></li>
+    <li><span class="lb-empty-n num">3</span><span><b>المراجعة</b> تحسم ما اختلف فيه القارئان وتعتمد الصفحة.</span></li>
+    <li><span class="lb-empty-n num">4</span><span><b>المخطوطة</b> تُجمَع الصفحات في نص واحد متّصل.</span></li>
+    <li><span class="lb-empty-n num">5</span><span><b>الكتاب</b> تنسّق الكتاب وترتّب صفحاته.</span></li>
+    <li><span class="lb-empty-n num">6</span><span><b>الإخراج</b> Word وPDF وEPUB.</span></li>
+  </ol>
+  {% if role == 'admin' or role == 'editor' %}
+  <a class="btn btn-primary" href="{% url 'books:create' %}">
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+    <span>كتاب جديد</span>
+  </a>
+  {% else %}
+  <p class="meta">يضيف الكتبَ المحرّرون والمديرون؛ تظهر هنا حين يُضاف أولها.</p>
+  {% endif %}
+</section>

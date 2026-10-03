@@ -1,0 +1,34 @@
+{% comment %}«تابع من حيث توقفت» (library.css `lb-resume`): the book with the newest activity that has a step left, with its
+exact steps (books.shelf `_resume`): its cover with the page the step continues at slipped out of it (the next page
+to review, else the first), the six steps with their details, and «متابعة …», the page's one primary action.
+Context: row (books.shelf resume).{% endcomment %}
+<section class="lb-resume" aria-labelledby="lb-resume-title">
+  <a class="lb-resume-art" href="{{ row.next_url }}" tabindex="-1" aria-hidden="true">
+    {% if row.page_url %}<span class="lb-resume-sheet"><img src="{{ row.page_url }}" alt="" decoding="async"></span>{% endif %}
+    {% include "books/_shelf_cover.html" %}
+  </a>
+  <div class="lb-resume-body">
+    <p class="lb-eyebrow">تابع من حيث توقفت</p>
+    <h2 id="lb-resume-title" class="lb-resume-title"><a href="{{ row.dashboard_url }}" dir="auto">{{ row.book.title }}</a></h2>
+    <p class="meta lb-resume-meta">{% if row.byline %}<span dir="auto">{{ row.byline }}</span> · {% endif %}{{ row.pages_label }} · آخر نشاط {{ row.activity_label }}</p>
+    <ol class="lb-journey" aria-label="مراحل الكتاب">
+      {% for s in row.steps %}
+      <li class="lb-journey-step is-{{ s.state }}{% if s.key == row.current.key %} is-at{% endif %}">
+        <a class="lb-journey-link"{% if s.url %} href="{{ s.url }}"{% else %} aria-disabled="true"{% endif %} title="{{ s.hint }}"{% if s.key == row.current.key %} aria-current="step"{% endif %}>
+          <span class="lb-seg is-{{ s.state }}{% if s.state == 'active' and s.key != 'review' %} is-running{% endif %}" aria-hidden="true"><span class="lb-seg-fill" style="width: {{ s.percent }}%"></span></span>
+          <span class="lb-journey-label"><span class="lb-mark is-{{ s.state }}" aria-hidden="true">{% if s.state == 'done' %}<svg class="icon"><use href="#i-check"/></svg>{% endif %}</span><span>{{ s.label }}</span></span>
+          <span class="lb-journey-detail">{{ s.detail }}</span>
+          <span class="sr-only">، {{ s.state_label }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="lb-resume-actions">
+      <a class="btn btn-primary" href="{{ row.next_url }}">
+        <span>{{ row.action }}</span>
+        <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+      </a>
+      {% if row.current.hint %}<p class="meta lb-resume-hint">{{ row.current.hint }}</p>{% endif %}
+    </div>
+  </div>
+</section>

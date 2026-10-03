@@ -1,0 +1,18 @@
+{% comment %}A book on the shelf (library.css `lb-book`): the cover over its first page. The cover is the one rendered on
+the book page when the book has one (D80), else a typographic cover in the book's cloth and ink; the first page is
+the first scan, seen when the cover swings open on hover. Decorative: the card's title link names the book.
+Context: row (books.shelf row).{% endcomment %}
+<span class="lb-book" style="--cloth: {{ row.cover.cloth }}; --ink: {{ row.cover.ink }};" aria-hidden="true">
+  <span class="lb-book-page">{% if row.scan_url %}<img src="{{ row.scan_url }}" alt="" loading="lazy" decoding="async">{% endif %}</span>
+  <span class="lb-book-face">
+    {% if row.cover.url %}
+    <img class="lb-book-img" src="{{ row.cover.url }}" alt="" loading="lazy" decoding="async">
+    {% else %}
+    <span class="lb-book-type">
+      <span class="lb-book-title" dir="auto">{{ row.book.title }}</span>
+      <span class="lb-book-orn"></span>
+      {% if row.author %}<span class="lb-book-author" dir="auto">{{ row.author }}</span>{% endif %}
+    </span>
+    {% endif %}
+  </span>
+</span>

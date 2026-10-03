@@ -1,0 +1,398 @@
+/* The books home (templates/books/list.html and its _shelf_* partials, books/shelf.py, static/src/js/library.js).
+   Classes are prefixed lb-. A book is an object, not a card: its cover (the rendered cover, else a typographic one in
+   the book's cloth and ink, set in Amiri, the book face) bound on the spine side, its first page under it; on hover
+   the cover swings open on its spine and shows that page. Under it the title, the byline, the six steps of its stage
+   bar as six segments (done in ink, the step it is at in accent to its share, attention red, out of date amber) and
+   «متابعة». Muted palette as the review screen; the only continuous motion is the sweep over a step a machine is
+   running (D24). Motion 120–260 ms on transform and opacity (DESIGN.md §8); prefers-reduced-motion zeroes it
+   (app.css) and keeps the covers shut. RTL first: logical properties, `--lb-fore` is the fore-edge's direction on
+   the x axis (−1 in RTL, where books bind on the right). */
+@layer components {
+  .lb, .lb-empty {
+    --lb-fore: -1;
+    --lb-ink: var(--color-text-2);
+    --lb-paper: #f8f6f0;
+    --lb-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  [dir="ltr"] .lb, [dir="ltr"] .lb-empty { --lb-fore: 1; }
+  .lb { display: flex; flex-direction: column; gap: 40px; width: 100%; max-width: 1360px; margin-inline: auto; }
+
+  /* ------------------------------------------------------------ the book object */
+  .lb-book { position: relative; display: block; aspect-ratio: 17 / 24; perspective: 1400px; }
+  .lb-book-page {
+    position: absolute;
+    inset-block: 1.6%;
+    inset-inline-start: 1.5%;
+    inset-inline-end: 1.6%;
+    overflow: hidden;
+    border-radius: 1px 2px 2px 1px;
+    background: var(--lb-paper);
+    box-shadow: inset 0 0 0 1px rgba(16, 16, 20, 0.07);
+  }
+  .lb-book-page img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+  /* the shadow of the opening cover on the page, at the spine */
+  .lb-book-page::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 0;
+    width: 40%;
+    background: linear-gradient(to left, rgba(16, 16, 20, 0.22), transparent);
+    opacity: 0;
+    transition: opacity 260ms var(--lb-ease);
+  }
+  [dir="ltr"] .lb-book-page::after { background: linear-gradient(to right, rgba(16, 16, 20, 0.22), transparent); }
+  .lb-book-face {
+    position: absolute;
+    inset: 0;
+    display: block;
+    container-type: inline-size;
+    overflow: hidden;
+    border-start-start-radius: 2px;
+    border-end-start-radius: 2px;
+    border-start-end-radius: 4px;
+    border-end-end-radius: 4px;
+    background: var(--cloth, #f4efe4);
+    color: var(--ink, #2a2419);
+    transform-origin: right center;
+    /* the page block's edge at the fore-edge and the foot, then the book's own shadow */
+    box-shadow:
+      calc(var(--lb-fore) * 2px) 2px 0 -0.5px var(--lb-paper),
+      calc(var(--lb-fore) * 2px) 2px 0 0 var(--color-border-strong),
+      var(--shadow-md);
+    transition: transform 260ms var(--lb-ease), box-shadow 260ms var(--lb-ease);
+  }
+  [dir="ltr"] .lb-book-face { transform-origin: left center; }
+  /* the spine: a shade at the bound edge and the hinge's groove */
+  .lb-book-face::before, .lb-book-face::after { content: ""; position: absolute; inset-block: 0; z-index: 1; pointer-events: none; }
+  .lb-book-face::before {
+    inset-inline-start: 0;
+    width: 7%;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.04) 62%, rgba(255, 255, 255, 0.1) 82%, transparent);
+  }
+  [dir="ltr"] .lb-book-face::before { background: linear-gradient(to right, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.04) 62%, rgba(255, 255, 255, 0.1) 82%, transparent); }
+  .lb-book-face::after { inset-inline-start: 7.5%; width: 1px; background: rgba(0, 0, 0, 0.12); box-shadow: calc(var(--lb-fore) * -1px) 0 0 rgba(255, 255, 255, 0.1); }
+  .lb-book-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  /* a typographic cover: a double rule, the title, a small lozenge, the author */
+  .lb-book-type {
+    position: absolute;
+    inset-block: 7.5% 8%;
+    inset-inline-start: 13%;
+    inset-inline-end: 8%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6cqi;
+    padding: 8cqi 6cqi;
+    border: 1px solid color-mix(in srgb, var(--ink, #2a2419) 34%, transparent);
+    outline: 1px solid color-mix(in srgb, var(--ink, #2a2419) 20%, transparent);
+    outline-offset: 2.4cqi;
+    text-align: center;
+  }
+  .lb-book-title {
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-family: "Amiri", "Noto Naskh Arabic", serif;
+    font-size: 10.5cqi;
+    font-weight: 700;
+    line-height: 1.5;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  .lb-book-orn { position: relative; flex: none; width: 34cqi; height: 3cqi; }
+  .lb-book-orn::before, .lb-book-orn::after { content: ""; position: absolute; top: 50%; }
+  .lb-book-orn::before { inset-inline: 0; height: 1px; background: linear-gradient(to left, transparent, color-mix(in srgb, var(--ink, #2a2419) 45%, transparent) 30%, transparent 44%, transparent 56%, color-mix(in srgb, var(--ink, #2a2419) 45%, transparent) 70%, transparent); }
+  .lb-book-orn::after { left: 50%; width: 2.6cqi; height: 2.6cqi; background: color-mix(in srgb, var(--ink, #2a2419) 62%, transparent); transform: translate(-50%, -50%) rotate(45deg); }
+  .lb-book-author {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: "Amiri", "Noto Naskh Arabic", serif;
+    font-size: 6.4cqi;
+    opacity: 0.86;
+  }
+
+  /* ------------------------------------------------------------ marks (the stage bar's: ✓, dots, rings) */
+  .lb-mark { display: inline-grid; place-items: center; width: 12px; height: 12px; flex: none; }
+  .lb-mark .icon { width: 12px; height: 12px; stroke-width: 2.2; color: var(--color-success); }
+  .lb-mark:not(.is-done)::before { content: ""; width: 7px; height: 7px; border-radius: var(--radius-pill); }
+  .lb-mark.is-active::before { background: var(--color-accent); }
+  .lb-mark.is-stale::before { background: var(--color-warning); }
+  .lb-mark.is-attention::before { background: var(--color-danger); }
+  .lb-mark.is-todo::before { box-shadow: inset 0 0 0 1.5px var(--color-text-3); }
+  .lb-mark.is-blocked::before { box-shadow: inset 0 0 0 1.5px var(--color-border-strong); }
+  .lb-mark.is-step::before { background: var(--color-neutral); }
+
+  /* ------------------------------------------------------------ the six segments */
+  .lb-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; margin: 0; padding: 0; list-style: none; }
+  .lb-seg { position: relative; display: block; height: 3px; overflow: hidden; border-radius: 2px; background: var(--color-border); }
+  .lb-seg-fill { position: absolute; inset-block: 0; inset-inline-start: 0; display: block; width: 0; border-radius: inherit; background: var(--lb-ink); transition: width 320ms var(--lb-ease); }
+  .lb-seg.is-active .lb-seg-fill { min-width: 3px; background: var(--color-accent); }
+  .lb-seg.is-blocked { background: var(--color-bg-muted); }
+  .lb-seg.is-stale { background: var(--color-warning); }
+  .lb-seg.is-attention { background: var(--color-danger); }
+  .lb-seg.is-stale .lb-seg-fill, .lb-seg.is-attention .lb-seg-fill { display: none; }
+  /* a step a machine runs (pages, recognition, assembly, export): a light sweeps over it */
+  .lb-seg.is-running::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 45%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+    animation: lb-sweep 1.6s ease-in-out infinite;
+  }
+  @keyframes lb-sweep { from { transform: translateX(-100%); } to { transform: translateX(240%); } }
+
+  /* ------------------------------------------------------------ «تابع من حيث توقفت» */
+  .lb-resume {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 40px;
+    padding: 28px 32px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--color-bg-subtle);
+  }
+  .lb-resume-art { position: relative; display: block; width: 132px; margin-inline-end: 52px; }
+  .lb-resume-art .lb-book { z-index: 1; }
+  .lb-resume-sheet {
+    position: absolute;
+    inset-block: 3%;
+    inset-inline: 0;
+    overflow: hidden;
+    border-radius: 2px;
+    background: #fff;
+    box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.06);
+    transform: translateX(calc(var(--lb-fore) * 36%)) rotate(calc(var(--lb-fore) * 3deg));
+    transform-origin: 50% 100%;
+    transition: transform 260ms var(--lb-ease);
+  }
+  .lb-resume-sheet img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
+  .lb-resume-art:hover .lb-resume-sheet { transform: translateX(calc(var(--lb-fore) * 42%)) rotate(calc(var(--lb-fore) * 4.5deg)); }
+  .lb-resume-art:hover .lb-book-face { box-shadow: calc(var(--lb-fore) * 2px) 2px 0 -0.5px var(--lb-paper), calc(var(--lb-fore) * 2px) 2px 0 0 var(--color-border-strong), var(--shadow-hover); }
+  .lb-resume-body { min-width: 0; }
+  .lb-eyebrow { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
+  .lb-resume-title { margin-top: 2px; font-family: "Amiri", "Noto Naskh Arabic", serif; font-size: 28px; font-weight: 700; line-height: 1.4; }
+  .lb-resume-title a { color: var(--color-text); transition: color 120ms ease; }
+  .lb-resume-title a:hover { color: var(--color-accent-text); }
+  .lb-resume-meta { margin-top: 2px; }
+  .lb-journey { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; max-width: 780px; margin: 22px 0 0; padding: 0; list-style: none; }
+  .lb-journey-link { display: flex; flex-direction: column; gap: 7px; height: 100%; padding-bottom: 2px; border-radius: var(--radius-xs); color: var(--color-text-2); }
+  .lb-journey-link:not([href]) { cursor: default; }
+  .lb-journey .lb-seg { height: 4px; }
+  .lb-journey-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 500; transition: color 120ms ease; }
+  .lb-journey-link[href]:hover .lb-journey-label { color: var(--color-text); }
+  .lb-journey-step.is-at .lb-journey-label { color: var(--color-text); font-weight: 600; }
+  .lb-journey-step.is-blocked .lb-journey-label { color: var(--color-text-3); }
+  .lb-journey-detail { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 11.5px; line-height: 1.45; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .lb-journey-step.is-at .lb-journey-detail { color: var(--color-text-2); }
+  .lb-journey-step.is-stale .lb-journey-detail { color: var(--color-warning-text); }
+  .lb-journey-step.is-attention .lb-journey-detail { color: var(--color-danger-text); }
+  .lb-resume-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+  .lb-resume-hint { margin-inline-start: 6px; }
+
+  /* ------------------------------------------------------------ the library: head, search, sort, views, filters */
+  .lb-library { display: flex; flex-direction: column; gap: 16px; }
+  .lb-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; }
+  .lb-head-start { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .lb-head-title { font-size: 15px; font-weight: 600; }
+  .lb-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .lb-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 280px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-muted);
+    color: var(--color-text-3);
+    cursor: text;
+    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .lb-search:focus-within { border-color: var(--color-accent); background: var(--color-surface); box-shadow: var(--ring); }
+  .lb-search-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: none; background: transparent; font-size: 13px; color: var(--color-text); }
+  .lb-search-input::-webkit-search-cancel-button { display: none; }
+  .lb-search-clear { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: var(--radius-xs); color: var(--color-text-3); }
+  .lb-search-clear:hover { background: var(--color-hover); color: var(--color-text); }
+  .lb-tools .lb-sort { width: auto; height: 30px; font-size: 12.5px; }
+  .lb-tools .lb-views > button { width: 30px; padding: 0; }
+  .lb-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+  .lb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface);
+    color: var(--color-text-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+  .lb-chip:hover { background: var(--color-bg-subtle); color: var(--color-text); }
+  .lb-chip[aria-pressed="true"] { border-color: transparent; background: var(--color-accent-soft); color: var(--color-accent-text); }
+  .lb-chip-count { font-size: 11.5px; color: var(--color-text-3); }
+  .lb-chip[aria-pressed="true"] .lb-chip-count { color: inherit; }
+
+  /* ------------------------------------------------------------ the shelf */
+  .lb-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); gap: 40px 28px; margin: 4px 0 0; padding: 0; list-style: none; }
+  .lb-card { position: relative; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .lb-card[hidden] { display: none; }
+  .lb-card-cover { display: block; margin-bottom: 5px; padding-inline-end: 3px; border-radius: var(--radius-xs); }
+  .lb-card-cover .lb-book { transition: transform 200ms var(--lb-ease); }
+  .lb-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .lb-card-title { font-size: 13.5px; font-weight: 600; line-height: 1.45; }
+  /* two lines kept for every title, so the segments line up along a row of books */
+  .lb-card-title a { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.9em; overflow: hidden; color: var(--color-text); transition: color 120ms ease; }
+  .lb-card-title a:hover { color: var(--color-accent-text); }
+  .lb-card-byline { min-height: 1.45em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb-card-facts { display: none; }
+  .lb-next {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 26px;
+    margin: -4px -6px 0;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--color-text-3);
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .lb-next:hover { background: var(--color-hover); }
+  .lb-next-label { flex: none; font-weight: 600; color: var(--color-text); }
+  .lb-next-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* the chevron points forward (scaleX: mirrored in RTL, as .icon-mirror) and steps forward on hover */
+  .lb-next-go { margin-inline-start: auto; color: var(--color-text-2); opacity: 0; transform: scaleX(var(--lb-fore)) translateX(-3px); transition: opacity 120ms ease, transform 150ms ease-out; }
+  [dir="ltr"] .lb-next-go { transform: translateX(-3px); }
+  .lb-next:hover .lb-next-go, .lb-next:focus-visible .lb-next-go { opacity: 1; transform: scaleX(var(--lb-fore)); }
+  [dir="ltr"] .lb-next:hover .lb-next-go, [dir="ltr"] .lb-next:focus-visible .lb-next-go { transform: none; }
+
+  /* the cover swings open on its spine and the first page shows; the book lifts */
+  @media (hover: hover) {
+    .lb-shelf:not(.is-list) .lb-card-cover:hover .lb-book, .lb-shelf:not(.is-list) .lb-card:focus-within .lb-book { transform: translateY(-3px); }
+    .lb-shelf:not(.is-list) .lb-card-cover:hover .lb-book-face, .lb-shelf:not(.is-list) .lb-card:focus-within .lb-book-face {
+      transform: rotateY(calc(var(--lb-fore) * -32deg));
+      box-shadow: calc(var(--lb-fore) * 2px) 2px 0 -0.5px var(--lb-paper), calc(var(--lb-fore) * 2px) 2px 0 0 var(--color-border-strong), var(--shadow-hover);
+    }
+    .lb-shelf:not(.is-list) .lb-card-cover:hover .lb-book-page::after, .lb-shelf:not(.is-list) .lb-card:focus-within .lb-book-page::after { opacity: 1; }
+  }
+  @media (hover: none) { .lb-next-go { opacity: 1; transform: scaleX(var(--lb-fore)); } [dir="ltr"] .lb-next-go { transform: none; } }
+
+  /* «…»: every step of the book, over its cover (on hover; always on touch) */
+  .lb-more > summary {
+    position: absolute;
+    top: 8px;
+    inset-inline-end: 11px;
+    z-index: 3;
+    list-style: none;
+    border-color: var(--color-border);
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: var(--shadow-sm);
+    opacity: 0;
+    transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+  }
+  .lb-more > summary::-webkit-details-marker { display: none; }
+  .lb-more > summary:hover { background: #fff; }
+  .lb-card:hover .lb-more > summary, .lb-card:focus-within .lb-more > summary, .lb-more[open] > summary { opacity: 1; }
+  @media (hover: none) { .lb-more > summary { opacity: 1; } }
+  .lb-more .lb-menu { position: absolute; top: 42px; inset-inline: -6px; z-index: 30; min-width: 0; max-width: none; animation: lb-pop 120ms ease-out; }
+  .lb-menu-item { gap: 8px; }
+  .lb-menu-item[aria-disabled="true"] { color: var(--color-text-3); cursor: default; }
+  .lb-menu-item[aria-disabled="true"]:hover { background: transparent; }
+  .lb-menu-label { flex: none; }
+  .lb-menu-detail { min-width: 0; margin-inline-start: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @keyframes lb-pop { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+  /* the list view: a row per book */
+  .lb-shelf.is-list { grid-template-columns: minmax(0, 1fr); gap: 0; border-top: 1px solid var(--color-border); }
+  .lb-shelf.is-list .lb-card {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 2fr) minmax(170px, 1.2fr) minmax(0, 1.5fr) 30px;
+    grid-template-areas:
+      "cover text steps facts more"
+      "cover text next facts more";
+    align-items: center;
+    gap: 4px 20px;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--color-border);
+    transition: background-color 120ms ease;
+  }
+  .lb-shelf.is-list .lb-card:hover { background: var(--color-hover); }
+  .lb-shelf.is-list .lb-card-cover { grid-area: cover; margin: 0; padding: 0; }
+  .lb-shelf.is-list .lb-book-type { display: none; }
+  .lb-shelf.is-list .lb-book-face { box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(16, 16, 20, 0.06); }
+  .lb-shelf.is-list .lb-card-text { grid-area: text; }
+  .lb-shelf.is-list .lb-card-title a { -webkit-line-clamp: 1; min-height: 0; }
+  .lb-shelf.is-list .lb-steps { grid-area: steps; align-self: end; }
+  .lb-shelf.is-list .lb-next { grid-area: next; align-self: start; margin: 0 -6px; height: 24px; }
+  .lb-shelf.is-list .lb-card-facts { grid-area: facts; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+  .lb-shelf.is-list .lb-more > summary { position: static; grid-area: more; }
+  .lb-shelf.is-list .lb-more { grid-area: more; }
+  .lb-shelf.is-list .lb-more .lb-menu { top: calc(100% - 6px); inset-inline: auto 8px; width: 300px; }
+
+  .lb-none { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px; text-align: center; }
+
+  /* ------------------------------------------------------------ the empty shelf */
+  .lb-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 480px; margin: 48px auto; text-align: center; }
+  .lb-empty-shelf { display: flex; align-items: flex-end; gap: 7px; height: 92px; margin-bottom: 14px; padding: 0 22px; border-bottom: 2px solid var(--color-border-strong); }
+  .lb-ghost { display: block; width: 44px; height: 68px; border: 1.5px dashed var(--color-border-strong); border-start-start-radius: 2px; border-end-start-radius: 2px; border-start-end-radius: 4px; border-end-end-radius: 4px; background: var(--color-bg-subtle); }
+  .lb-ghost:nth-child(2) { width: 38px; height: 78px; }
+  .lb-ghost.is-leaning { transform: rotate(calc(var(--lb-fore) * 14deg)); transform-origin: 100% 100%; margin-inline-start: 10px; }
+  [dir="ltr"] .lb-ghost.is-leaning { transform-origin: 0 100%; }
+  .lb-empty-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 10px 0 8px; padding: 0; list-style: none; font-size: 12.5px; line-height: 1.5; text-align: start; color: var(--color-text-2); }
+  .lb-empty-steps li { display: flex; align-items: baseline; gap: 8px; }
+  .lb-empty-steps b { margin-inline-end: 4px; font-weight: 600; color: var(--color-text); }
+  .lb-empty-n { display: inline-grid; place-items: center; flex: none; width: 18px; height: 18px; border-radius: var(--radius-pill); background: var(--color-bg-muted); font-size: 11px; font-weight: 600; color: var(--color-text-2); }
+
+  /* ------------------------------------------------------------ responsive (DESIGN.md §5) */
+  @media (max-width: 1180px) {
+    .lb-shelf.is-list .lb-card { grid-template-columns: 34px minmax(0, 2fr) minmax(150px, 1.2fr) minmax(0, 1fr) 30px; }
+  }
+  @media (max-width: 900px) {
+    .lb-resume { gap: 28px; padding: 24px; }
+    .lb-journey { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 10px; }
+    .lb-shelf.is-list .lb-card {
+      grid-template-columns: 34px minmax(0, 1fr) minmax(140px, 0.8fr) 30px;
+      grid-template-areas:
+        "cover text steps more"
+        "cover text next more";
+    }
+    .lb-shelf.is-list .lb-card-facts { display: none; }
+  }
+  @media (max-width: 640px) {
+    .lb { gap: 28px; }
+    .lb-resume { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 20px 16px; }
+    .lb-resume-art { width: 104px; margin-inline: auto; transform: translateX(calc(var(--lb-fore) * -22px)); }
+    .lb-resume-title { font-size: 24px; }
+    .lb-head, .lb-tools { width: 100%; }
+    .lb-search { flex: 1 1 100%; width: auto; }
+    .lb-shelf { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 32px 18px; }
+    .lb-shelf.is-list .lb-card {
+      grid-template-columns: 30px minmax(0, 1fr) 30px;
+      grid-template-areas:
+        "cover text more"
+        "cover steps more"
+        "cover next more";
+      gap: 6px 12px;
+    }
+    .lb-empty-steps { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lb-book-face, .lb-card-cover .lb-book { transform: none !important; }
+    .lb-seg.is-running::after { animation: none; display: none; }
+  }
+}

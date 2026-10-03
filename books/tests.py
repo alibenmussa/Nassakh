@@ -888,7 +888,8 @@ def test_list_shows_an_empty_state_then_rows(editor_client):
     assert "كتاب الاختبار" in body and "مؤلف" in body
     assert reverse("books:detail", args=[book.pk]) in body
     assert 'class="dot dot-neutral"' in body and "مرفوع" in body
-    assert 'role="progressbar"' in body and "0%" in body
+    # the shelf (books/test_shelf.py): its six steps, the step it is at with its share of the pages
+    assert 'class="lb-steps"' in body and "التخطيط" in body and '<bdi class="lb-next-text">0/2</bdi>' in body
 
 
 def test_create_view_renders_the_form(editor_client):

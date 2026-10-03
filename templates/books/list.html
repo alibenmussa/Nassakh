@@ -1,12 +1,17 @@
 {% extends "base.html" %}
-{% load nassakh %}
+{% load static nassakh %}
+{% comment %}The books home (books/shelf.py, static/src/components/library.css, static/src/js/library.js): the book to
+resume, then the shelf — every book as a cover with the six steps of its stage bar (D76) and the step it is at —
+searched («/»), filtered by step and sorted in the page; the view (shelf or list) and the sort are remembered per
+browser (a cookie, so the page is drawn that way at once). Context: rows, resume, filters, summary
+(books.shelf.books_shelf), view, sort and role.{% endcomment %}
 {% block head_title %}الكتب · نسّاخ{% endblock %}
 {% block title %}الكتب{% endblock %}
 
 {% block header_actions %}
-  {# With no books the empty state carries the only primary action (DESIGN.md: one primary per view). #}
+  {# With no books the empty state carries the only primary action; with a book to resume, «متابعة» is the primary (DESIGN.md: one primary per view). #}
   {% if rows %}{% if role == 'admin' or role == 'editor' %}
-  <a class="btn btn-primary btn-sm" href="{% url 'books:create' %}">
+  <a class="btn{% if not resume %} btn-primary{% endif %} btn-sm" href="{% url 'books:create' %}">
     <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
     <span>كتاب جديد</span>
   </a>
@@ -14,51 +19,73 @@
 {% endblock %}
 
 {% block content %}
-{% if role == 'admin' or role == 'editor' %}{% url 'books:create' as create_url %}{% endif %}
 {% if not rows %}
-  {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب بعد" text="ارفع ملف PDF لكتاب مصوّر أو رقمي، وحدّد الصفحات التي تُتجاوز وعدد الصفحات في كل ورقة. يستخرج نسّاخ الصفحات ويكتشف مناطقها، ثم تضغط «بدء المعالجة» ليتعرّف على نصّها." action_url=create_url action_label="كتاب جديد" %}
+  {% include "books/_shelf_empty.html" %}
 {% else %}
-  <div class="page-header">
-    <p class="meta">عدد الكتب: <span class="num">{{ rows|length }}</span></p>
-  </div>
-  <div class="table-wrap">
-    <table class="table books-table">
-      <thead>
-        <tr>
-          <th scope="col">الكتاب</th>
-          <th scope="col" class="num">الصفحات</th>
-          <th scope="col">الحالة</th>
-          <th scope="col" class="books-progress-col">التقدّم</th>
-          <th scope="col">آخر تعديل</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td class="books-title-cell">
-            <a class="books-title" href="{% url 'books:detail' row.book.pk %}">{{ row.book.title }}</a>
-            {% if row.book.author or row.book.original_year %}
-            <span class="meta books-subtitle">{{ row.book.author }}{% if row.book.author and row.book.original_year %} · {% endif %}{% if row.book.original_year %}{{ row.book.original_year }}{% endif %}</span>
-            {% endif %}
-          </td>
-          <td class="num">
-            {% if row.total %}{{ row.total }}{% else %}<span class="meta">{{ row.book.source_page_count }} في الملف</span>{% endif %}
-          </td>
-          <td>{% include "partials/_status_dot.html" with status=row.status label=row.status_label %}</td>
-          <td class="books-progress-cell">
-            {% if row.waiting %}
-            {# «تم التخطيط» waits for the owner: a full green bar would read as finished (§3.12) #}
-            <span class="meta books-waiting">بانتظار «بدء المعالجة»</span>
-            {% else %}
-            {% progress_bar percent=row.percent state=row.bar_state label="نسبة التقدّم" %}
-            <span class="meta num">{{ row.percent }}%</span>
-            {% endif %}
-          </td>
-          <td class="meta" dir="ltr">{{ row.book.updated_at|date:"Y/m/d H:i" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+<svg xmlns="http://www.w3.org/2000/svg" class="hidden" aria-hidden="true">
+  <symbol id="i-shelf" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="9" rx="1"/><rect x="13.5" y="4" width="6.5" height="9" rx="1"/><path d="M4 17h6.5M13.5 17h6.5M4 20h4.5M13.5 20h4.5"/></symbol>
+</svg>
+<div class="lb" x-data="bookShelf({ view: '{{ view }}', sort: '{{ sort }}' })" @keydown.window="onKey($event)" @click.window="closeMenus($event)">
+  {% if resume %}{% include "books/_shelf_resume.html" with row=resume %}{% endif %}
+
+  <section class="lb-library" aria-labelledby="lb-library-title">
+    <div class="lb-head">
+      <div class="lb-head-start">
+        <h2 id="lb-library-title" class="lb-head-title">المكتبة</h2>
+        <p class="meta lb-summary">{{ summary.books_label }} · {{ summary.pages_label }}</p>
+      </div>
+      <div class="lb-tools">
+        <label class="lb-search">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+          <span class="sr-only">ابحث في العناوين والمؤلفين</span>
+          <input type="search" class="lb-search-input" x-ref="search" x-model="q" placeholder="ابحث بالعنوان أو المؤلف" autocomplete="off" spellcheck="false" @keydown.escape.stop="q ? q = '' : $el.blur()">
+          <button type="button" class="lb-search-clear" x-show="q" x-cloak @click="q = ''; $refs.search.focus()" aria-label="مسح البحث" title="مسح البحث">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+          </button>
+          <kbd class="kbd lb-search-kbd" x-show="!q" aria-hidden="true">/</kbd>
+        </label>
+        <label class="sr-only" for="lb-sort">ترتيب الكتب</label>
+        <select id="lb-sort" class="select lb-sort" x-model="sort">
+          <option value="activity"{% if sort == 'activity' %} selected{% endif %}>آخر نشاط</option>
+          <option value="progress"{% if sort == 'progress' %} selected{% endif %}>الأبعد مرحلةً</option>
+          <option value="title"{% if sort == 'title' %} selected{% endif %}>العنوان</option>
+          <option value="added"{% if sort == 'added' %} selected{% endif %}>الأحدث إضافة</option>
+        </select>
+        <div class="segmented lb-views" role="group" aria-label="طريقة العرض">
+          <button type="button" :aria-pressed="view === 'grid' ? 'true' : 'false'" aria-pressed="{% if view == 'grid' %}true{% else %}false{% endif %}" @click="view = 'grid'" title="رفّ الأغلفة" aria-label="رفّ الأغلفة">
+            <svg class="icon" aria-hidden="true"><use href="#i-shelf"/></svg>
+          </button>
+          <button type="button" :aria-pressed="view === 'list' ? 'true' : 'false'" aria-pressed="{% if view == 'list' %}true{% else %}false{% endif %}" @click="view = 'list'" title="قائمة" aria-label="قائمة">
+            <svg class="icon" aria-hidden="true"><use href="#i-list"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    {% if filters|length > 2 %}
+    <div class="lb-filters" role="group" aria-label="عرض الكتب حسب مرحلتها">
+      {% for chip in filters %}
+      <button type="button" class="lb-chip is-{{ chip.key }}" :aria-pressed="stage === '{{ chip.key }}' ? 'true' : 'false'" aria-pressed="{% if chip.key == 'all' %}true{% else %}false{% endif %}" @click="stage = stage === '{{ chip.key }}' ? 'all' : '{{ chip.key }}'">
+        {% if chip.key != 'all' %}<span class="lb-mark is-{% if chip.key == 'complete' %}done{% elif chip.key == 'attention' %}attention{% else %}step{% endif %}" aria-hidden="true">{% if chip.key == 'complete' %}<svg class="icon"><use href="#i-check"/></svg>{% endif %}</span>{% endif %}
+        <span>{{ chip.label }}</span>
+        <span class="lb-chip-count num">{{ chip.count }}</span>
+      </button>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <ol class="lb-shelf{% if view == 'list' %} is-list{% endif %}" :class="{ 'is-list': view === 'list' }" x-ref="shelf" aria-labelledby="lb-library-title">
+      {% for row in rows %}{% include "books/_shelf_book.html" %}{% endfor %}
+    </ol>
+
+    <div class="lb-none" x-show="total && !shown" x-cloak role="status">
+      <p class="empty-title">لا كتاب يطابق البحث</p>
+      <p class="empty-text" x-text="q ? 'لم نجد «' + q.trim() + '» في العناوين ولا في أسماء المؤلفين.' : 'لا كتب في هذه المرحلة الآن.'"></p>
+      <button type="button" class="btn" @click="reset()">عرض كل الكتب</button>
+    </div>
+  </section>
+</div>
 {% endif %}
 {% endblock %}
+
+{% block scripts %}<script src="{% static 'src/js/library.js' %}"></script>{% endblock %}

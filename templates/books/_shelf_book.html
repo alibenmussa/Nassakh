@@ -1,0 +1,42 @@
+{% load nassakh %}{% comment %}One book on the shelf (library.css `lb-card`): the cover and the title open the dashboard; the six
+segments are the steps of its stage bar (D76: done in ink, the step it is at in accent to its share, attention in
+red, out of date in amber); «متابعة» under them opens the step the book is at; «…» reaches every step. The `data-*`
+feed the page's search, filters and sort (library.js); the facts line shows in the list view. Context: row
+(books.shelf row).{% endcomment %}
+<li class="lb-card{% if row.attention %} is-attention{% endif %}" data-book="{{ row.book.pk }}" data-title="{{ row.book.title }}" data-author="{{ row.author }}" data-stage="{{ row.stage_key }}" data-attention="{% if row.attention %}1{% else %}0{% endif %}" data-activity="{{ row.activity|date:'U' }}" data-created="{{ row.book.created_at|date:'U' }}" data-rank="{{ row.rank }}">
+  <a class="lb-card-cover" href="{{ row.dashboard_url }}" tabindex="-1" aria-hidden="true">{% include "books/_shelf_cover.html" %}</a>
+  <div class="lb-card-text">
+    <h3 class="lb-card-title"><a href="{{ row.dashboard_url }}" dir="auto">{{ row.book.title }}</a></h3>
+    <p class="meta lb-card-byline" dir="auto">{{ row.byline }}</p>
+  </div>
+  <ol class="lb-steps" aria-label="مراحل الكتاب">
+    {% for s in row.steps %}
+    <li class="lb-seg is-{{ s.state }}{% if row.current and s.key == row.current.key %} is-at{% endif %}{% if s.state == 'active' and s.key != 'review' %} is-running{% endif %}" title="{{ s.label }}: {{ s.detail }}"><span class="lb-seg-fill" style="width: {{ s.percent }}%"></span><span class="sr-only">{{ s.label }}: {{ s.state_label }}{% if s.detail %}، {{ s.detail }}{% endif %}</span></li>
+    {% endfor %}
+  </ol>
+  <a class="lb-next" href="{{ row.next_url }}" title="{% if row.current %}{{ row.current.hint }}{% else %}{{ row.next_text }}{% endif %}">
+    <span class="lb-mark is-{% if row.current %}{{ row.current.state }}{% else %}done{% endif %}" aria-hidden="true">{% if not row.current %}<svg class="icon"><use href="#i-check"/></svg>{% endif %}</span>
+    {% if row.current %}<span class="sr-only">متابعة:</span>{% endif %}
+    <span class="lb-next-label">{{ row.next_label }}</span>
+    {% if row.next_text %}<bdi class="lb-next-text">{{ row.next_text }}</bdi>{% endif %}
+    <svg class="icon icon-sm icon-mirror lb-next-go" aria-hidden="true"><use href="#i-chevron-end"/></svg>
+  </a>
+  <p class="lb-card-facts">
+    <span class="status"><span class="dot {{ row.book.status|status_dot }}" aria-hidden="true"></span><span>{{ row.book.get_status_display }}</span></span>
+    <span class="meta">{{ row.pages_label }}</span>
+    <span class="meta" title="{{ row.activity|date:'Y/m/d H:i' }}">{{ row.activity_label }}</span>
+  </p>
+  <details class="lb-more">
+    <summary class="btn-icon btn-icon-sm" aria-label="مراحل «{{ row.book.title }}»" title="الانتقال إلى مرحلة"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></summary>
+    <nav class="menu lb-menu" aria-label="مراحل «{{ row.book.title }}»">
+      {% for s in row.steps %}
+      <a class="menu-item lb-menu-item is-{{ s.state }}"{% if s.url %} href="{{ s.url }}"{% else %} aria-disabled="true"{% endif %} title="{{ s.detail }}">
+        <span class="lb-mark is-{{ s.state }}" aria-hidden="true">{% if s.state == 'done' %}<svg class="icon"><use href="#i-check"/></svg>{% endif %}</span>
+        <span class="lb-menu-label">{{ s.label }}</span>
+        {% if s.count %}<bdi class="meta lb-menu-detail">{{ s.count }}</bdi>{% endif %}
+        <span class="sr-only">، {{ s.state_label }}{% if s.detail %}، {{ s.detail }}{% endif %}</span>
+      </a>
+      {% endfor %}
+    </nav>
+  </details>
+</li>

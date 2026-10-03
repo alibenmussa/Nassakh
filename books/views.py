@@ -14,7 +14,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from books import services
+from books import services, shelf
 from books.forms import BookForm
 from books.models import Book, Page
 from core.decorators import role_required
@@ -22,8 +22,11 @@ from core.decorators import role_required
 
 @login_required
 def book_list(request: HttpRequest) -> HttpResponse:
-    """Books table with status, progress and last update; empty state explains how to start."""
-    return render(request, "books/list.html", {"rows": services.books_overview()})
+    """The books home (`books.shelf`): the book to resume, then every book as a cover with its six steps,
+    searched, filtered and sorted in the page; the empty state explains how to start. The view and the sort
+    the browser last chose (`shelf.PREFS_COOKIE`) are drawn at once, with no flash of the defaults."""
+    view, sort = shelf.prefs(request.COOKIES.get(shelf.PREFS_COOKIE))
+    return render(request, "books/list.html", {**shelf.books_shelf(sort), "view": view, "sort": sort})
 
 
 @role_required("editor")

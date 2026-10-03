@@ -1660,7 +1660,7 @@ def test_guides_mode_for_a_proofreader_shows_the_layout_without_controls(client)
 def test_books_list_waits_for_the_start_instead_of_a_full_bar(editor_client):
     _awaiting(Book.Status.NEEDS_GUIDES, [Page.Status.PREPROCESSED] * 2)
     body = editor_client.get(reverse("books:list")).content.decode()
-    row = _between(body, "<tbody>", "</tbody>")
+    row = _between(body, '<li class="lb-card', '<details class="lb-more">')  # the book on the shelf
     assert "بانتظار «بدء المعالجة»" in row and 'role="progressbar"' not in row and "dot-warning" in row
     assert "تم التخطيط" in row
 
