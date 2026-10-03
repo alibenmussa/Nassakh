@@ -1026,6 +1026,21 @@ def run_full_ocr(page: Page) -> None:
                 log.info("page %s %s: primary %s failed sanity (%s)", page.pk, target.kind, primary, reason)
             _record_check(secondary_run, reference)
             n_model_runs += 2
+            both_read = primary_run.status == OcrRun.Status.OK and secondary_run.status == OcrRun.Status.OK
+            if both_read and scale > 1 and select_reading(primary_run, secondary_run, tess).fallback:
+                # a wide, short strip at 2× (book 38 p. 5: two footnote lines, 3030 × 400 px) makes both
+                # models repeat its first line; at 1× they read it: read again without the upscale
+                scale, variant = 1, "gray"
+                log.info("page %s %s: both models failed at 2×; read again at 1×", page.pk, target.kind)
+                image_path = _save_temp(
+                    _crop_image(gray, target.bbox), tmpdir, f"{variant}-{i}-{target.kind}"
+                )
+                primary_run, secondary_run = _read_models(
+                    page, (primary, secondary), target, image_path, variant, cap, scale
+                )
+                _record_check(primary_run, reference)
+                _record_check(secondary_run, reference)
+                n_model_runs += 2
             if select_reading(primary_run, secondary_run, tess).fallback and _worth_pieces(tess, reference):
                 pieces = piece_boxes(pre.line_boxes, target.bbox)
                 if pieces:

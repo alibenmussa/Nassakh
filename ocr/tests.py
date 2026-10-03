@@ -2263,3 +2263,30 @@ def test_a_piece_that_loops_on_a_dotted_separator_is_empty_not_a_loop(page, monk
         and joined.parsed_text == PRIMARY_BODY
     )
     assert "ocr_fallback" not in page.attention_flags
+
+
+def test_run_full_ocr_reads_a_footnote_again_at_1x_when_both_models_loop_on_the_2x_strip(page):
+    # book 38 p. 5: a wide, short footnote strip makes both models repeat its first line at 2×; at 1× they read it
+    add_regions(page)
+    fakes = engines()
+    for name in ("qari_v03", "qari_v02"):
+        original = fakes[name].recognize
+
+        def recognize(path, max_new_tokens=None, hints=None, _orig=original):
+            result = _orig(path, max_new_tokens, hints) if hints else _orig(path, max_new_tokens)
+            if "gray_2x" in str(path) and str(path).endswith("footnote.png"):
+                return OcrResult(
+                    text="(1) حاشية (1) حاشية", duration_s=1.0, output_tokens=1000, finish="length"
+                )
+            return result
+
+        fakes[name].recognize = recognize
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        services.run_full_ocr(page)
+    variants = {
+        r.input_variant for r in page.ocr_runs.filter(engine_name="qari_v03", region__kind="footnote")
+    }
+    assert variants == {"gray_2x", "gray"}
+    again = page.ocr_runs.filter(engine_name="qari_v03", region__kind="footnote", input_variant="gray").get()
+    assert again.looped is False

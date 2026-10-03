@@ -838,3 +838,14 @@ two texts in rows inside a quiet box with «نصّي | المراجعة» under 
 The pages' scrubber: a range from the first page to the last pinned at the foot of «الصفحات» (the screen's bottom
 left; the first page on the right), the page under the thumb shown while dragging, the filmstrip following, the
 page turned after a 140 ms rest and at once on release or a key.
+
+## D100 — A footnote strip both models loop on is read again at 1×
+
+Book 38 p. 5 (and p. 3): a footnote region of two printed lines, 1515 × 200 px, is read at 2× (3030 × 400) and both
+Qari models repeat its first line until the token cap («(1) الإحكام … (1) الإحكام …»), so the region fell back
+to Tesseract's garbled text and the page said «تعذّرت قراءة هذه الصفحة بالنموذجين». Measured on the crop: at 1×
+both models read both lines and stop (v0.3 with a few word slips, v0.2 nearly right); each line alone at 2×
+reads well; the rule line above the notes and padding are not the cause. When both models of a region read
+without error but fail the sanity check at an upscale above 1, `run_full_ocr` reads the region again at 1× (the
+newer runs are the ones `select_reading` sees); pieces (D90) still follow if that fails too. A region of
+three or more lines at 2× was not affected on the test books. A tall region's 2× read stays the first try.
