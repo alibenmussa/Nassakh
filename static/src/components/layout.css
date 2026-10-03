@@ -292,7 +292,7 @@
      sizes in points, the picture in its fit) with a thin shimmer along the foot; the render fades in over it. A
      muted hint only for no picture or a failure. A click opens its section, so the sheet is a button with the
      page's focus ring inside its edge */
-  .lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff); color: var(--cover-fg, #1b1b1b); cursor: pointer; }
+  .lp-page.lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff); color: var(--cover-fg, #1b1b1b); cursor: pointer; }
   .lp-cover:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
   .lp-cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 220ms ease; }
   .lp-cover-img.is-shown { opacity: 1; }
