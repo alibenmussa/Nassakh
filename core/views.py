@@ -1,5 +1,7 @@
 """Shared views: home redirect and login-protected media."""
 
+import posixpath
+
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import default_storage
@@ -23,7 +25,12 @@ def protected_media(request: HttpRequest, path: str) -> HttpResponse:
 
     Derived images are rewritten in place when a stage is re-run, so the response asks the
     browser to revalidate (`no-cache`) and answers `304 Not Modified` from the file's mtime.
+    An organisation's files (`orgs/`: its licensed fonts, D98) are never served here, only to its
+    members through `accounts:font_file`.
     """
+    normal = posixpath.normpath(str(path or "").replace("\\", "/")).lstrip("/")
+    if normal == "orgs" or normal.startswith("orgs/"):
+        raise Http404("file not found")
     try:
         if not path or not default_storage.exists(path):
             raise Http404("file not found")

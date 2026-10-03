@@ -3,14 +3,15 @@
 Mount points (each app fills its own `urls.py`; this file stays untouched):
 
 - `/admin/`                 Django admin (users and groups are managed here for now)
-- `/accounts/`              login / logout                       namespace `accounts`
+- `/accounts/`              login / logout, the organisation's   namespace `accounts`
+                            page and its font files
 - `/books/`                 books app HTML routes                namespace `books`
 - `/books/`                 review screens (Phase 3)             namespace `review`
 - `/books/`                 manuscript view (Phase 4)            namespace `assembly`
 - `/books/`                 editor and layout pages (Phase 5)    namespace `editor`
 - `/books/`                 the export page and downloads (6)    namespace `publishing`
 - `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
-- `/api/`                   JSON routes from books/processing/ocr/review/assembly/editor/publishing
+- `/api/`                   JSON routes from books/processing/ocr/review/assembly/editor/publishing/accounts
                             `api_urlpatterns`, all in the single namespace `api` (reverse as
                             `api:<name>`; the «التخطيط» mode's `api:book_guides` and
                             `api:book_guides_preview` come from processing)
@@ -20,6 +21,7 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 from django.contrib import admin
 from django.urls import include, path
 
+from accounts import urls as accounts_urls
 from assembly import urls as assembly_urls
 from books import urls as books_urls
 from core import views as core_views
@@ -37,6 +39,7 @@ api_urlpatterns = (
     + assembly_urls.api_urlpatterns
     + editor_urls.api_urlpatterns
     + publishing_urls.api_urlpatterns
+    + accounts_urls.api_urlpatterns
 )
 
 urlpatterns = [

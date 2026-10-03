@@ -186,6 +186,10 @@ NASSAKH = {
             "/System/Library/Fonts",
         ],
     ),
+    # D98: the name of the first organisation (created by the migration or the first book; renamed on its
+    # page) and the largest font file an organisation may upload (MB).
+    "ORGANIZATION_NAME": env("ORGANIZATION_NAME", default="المؤسسة"),
+    "ORG_FONT_MAX_MB": env.int("ORG_FONT_MAX_MB", default=20),
     # Render the edited chapter and the book in the background after editor saves (D44, debounced).
     "PREVIEW_AUTORENDER": env.bool("PREVIEW_AUTORENDER", default=True),
     # The numbers pass (D50): Kraken, in its own environment (`make kraken`), reads the Arabic-Indic

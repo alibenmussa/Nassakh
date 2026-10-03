@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static organization %}
 {% comment %}
 The book page (PHASE5_SPEC §9, D47): the one place to preview and to edit the book. The dashboard viewer (turns,
 keys, wheel, spread, fit modes) draws live pages: every line of the WeasyPrint layout as positioned text in the
@@ -112,6 +112,8 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
   <p class="sr-only" aria-live="polite" x-text="liveMessage"></p>
   {# the render's faces for the live pages (publishing.fonts.browser_font_css): the same families as the PDF #}
   <style data-font-css x-text="fontCss">{{ config.fontCss }}</style>
+  {# the organisation's faces in themselves for the font menus (D98, accounts/templatetags/organization.py) #}
+  {% org_font_faces book %}
 
   {% include "editor/_book_toolbar.html" %}
 

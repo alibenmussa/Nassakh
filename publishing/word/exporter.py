@@ -168,13 +168,21 @@ def static_notes(
     the live layout, so no layout runs first)."""
     plan = FacePlan(fonts)
     rows: list[dict] = []
-    if plan.embedded_faces():
+    embedded = plan.embedded_faces()
+    if any(not F.is_org_key(face.key) for face in embedded):
         rows.append(note("font_embedded"))
+    for face in embedded:  # D98: an organisation's face its licence lets Word carry
+        if F.is_org_key(face.key):
+            rows.append(note("font_embedded_org", name=face.name))
     for face in plan.not_embedded():
-        rows.append(note("font_not_embedded", name=face.name))
+        reason = F.word_refusal(face)
+        if reason:
+            rows.append(note("font_not_embedded_org", name=face.name, reason=reason))
+        else:
+            rows.append(note("font_not_embedded", name=face.name))
     for missing in fonts.missing:
         row = note(
-            "font_missing",
+            "font_removed" if missing.get("removed") else "font_missing",
             name=missing.get("name") or missing.get("key") or "",
             fallback=fallback_name(missing.get("fallback")),
         )
@@ -309,7 +317,8 @@ class DocxExporter:
             layout_current=plan is None or plan.source == "live",
             book_id=job.book_id,
         )
-        warnings = [row for row in warnings if row["code"] != "font_embedded"] + list(result.warnings)
+        embedded = ("font_embedded", "font_embedded_org")
+        warnings = [row for row in warnings if row["code"] not in embedded] + list(result.warnings)
         stats = dict(result.stats)
         stats["validated"] = validate
         log_lines = list(result.log)

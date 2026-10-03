@@ -5,7 +5,9 @@ preview's `unicode-range` sends them), the font table, and the embedding of Amir
 Only open-licence faces are embedded (`EMBEDDABLE`, that is Amiri) and only whole, obfuscated as
 ECMA-376 Part 1 §17.8.1 asks: the first 32 bytes of the file XORed with the 16-byte key, whose bytes
 are the GUID's hex digits taken in reverse order. The key of a face is `uuid5("nassakh:<family>:<style>")`
-so the same file gives the same bytes.
+so the same file gives the same bytes. An organisation's face (D98) is embedded the same way when its
+licence allows an editable document and its outlines are TrueType (`publishing.fonts.org_embeds`); the
+organisation confirmed its licence when it uploaded it.
 """
 
 from __future__ import annotations
@@ -82,7 +84,10 @@ def os2_info(path: Path) -> tuple[str, int]:
 
 
 def embeddable(face: F.Face) -> bool:
-    """True for an open-licence face whose file allows embedding."""
+    """True for an open-licence face whose file allows embedding, or an organisation's face whose licence
+    allows an editable document (D98)."""
+    if F.is_org_key(face.key):
+        return F.org_embeds(face, "docx")
     if face.key not in EMBEDDABLE:
         return False
     _panose, fs_type = os2_info(face.files.regular)

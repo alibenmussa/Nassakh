@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% comment %}
+Applying a format template to a book (D98; accounts.views.template_apply): choose the book, see what changes field by
+field (accounts.styles.template_changes: the panel's words, before ← after) and a face of the template the organisation
+removed since (left out), then «تطبيق على الكتاب» (the stylesheet's own save) opens the book's «التنسيق».
+Context: organization, template, summary, books, book (or None), preview ({changes, skipped, same} or None).
+{% endcomment %}
+{% block head_title %}تطبيق القالب «{{ template.name }}» · نسّاخ{% endblock %}
+{% block title %}تطبيق القالب «{{ template.name }}»{% endblock %}
+
+{% block content %}
+<div class="form-column stack-lg og-page">
+  <section class="card stack">
+    <div class="card-header">
+      <h2 class="section-title">{{ template.name }}</h2>
+      <a class="link" href="{% url 'accounts:organization' %}#templates">قوالب المؤسسة</a>
+    </div>
+    {% if template.description %}<p class="help">{{ template.description }}</p>{% endif %}
+    <p class="meta"><bdi>{{ summary }}</bdi></p>
+    <form method="get" class="og-inline-form" data-choose-book>
+      <label class="label" for="og-apply-book">الكتاب</label>
+      <select id="og-apply-book" name="book" class="select" onchange="this.form.submit()">
+        <option value="">اختر كتابًا…</option>
+        {% for item in books %}<option value="{{ item.pk }}"{% if book and book.pk == item.pk %} selected{% endif %}>{{ item.title }}</option>{% endfor %}
+      </select>
+      <noscript><button type="submit" class="btn btn-sm">عرض التغييرات</button></noscript>
+    </form>
+  </section>
+
+  {% if book and preview %}
+  <section class="card stack" data-template-preview>
+    <div class="card-header">
+      <h2 class="section-title">ما يتغيّر في «{{ book.title }}»</h2>
+      <a class="link" href="{% url 'editor:layout' book.pk %}?tab=format">فتح الكتاب</a>
+    </div>
+    {% if preview.same %}
+    <p class="help">تنسيق الكتاب مطابق للقالب؛ لا شيء يتغيّر.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="table og-changes-table">
+        <thead><tr><th scope="col">الإعداد</th><th scope="col">الآن</th><th scope="col">بعد التطبيق</th></tr></thead>
+        <tbody>
+          {% for change in preview.changes %}
+          <tr><td>{{ change.label }}</td><td><bdi>{{ change.before }}</bdi></td><td><bdi>{{ change.after }}</bdi></td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% for item in preview.skipped %}
+    <div class="banner" role="note">
+      <svg class="icon" aria-hidden="true"><use href="#i-info"/></svg>
+      <span class="grow">لا يُطبَّق {{ item.label }} «{{ item.name }}»: {{ item.message }} يبقى خط الكتاب الحالي.</span>
+    </div>
+    {% endfor %}
+    {% if not preview.same %}
+    <form method="post" class="og-inline-form">
+      {% csrf_token %}
+      <input type="hidden" name="book" value="{{ book.pk }}">
+      <button type="submit" class="btn btn-primary btn-sm" data-apply>تطبيق على الكتاب</button>
+      <span class="meta">تُرتَّب صفحات الكتاب من جديد بعد التطبيق. يمكن الرجوع بتغيير القيم في «التنسيق».</span>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

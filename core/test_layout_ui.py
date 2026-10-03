@@ -231,10 +231,10 @@ def test_book_page_first_paint_before_any_layout(editor):
     for key in ("chapters", "pages", "find", "format", "block", "source", "uncertain", "changes"):
         assert f'data-panel="{key}"' in side and f"x-show=\"tab === '{key}'\"" in side, key
     assert 'x-text="uncertain.count"' in side and "bp-badge is-warn" in side
-    # «التنسيق»: seven accordions in order (the cover first, D80: core/test_cover_ui.py), with the book
-    # details and the D47 fields
+    # «التنسيق»: eight accordions in order (the cover first, D80: core/test_cover_ui.py), with the book
+    # details and the D47 fields; the organisation's templates last (D98: accounts/test_templates.py)
     sections = re.findall(r'data-section="(\w+)"', side)
-    assert sections == ["cover", "trim", "margins", "fonts", "text", "page", "details"]
+    assert sections == ["cover", "trim", "margins", "fonts", "text", "page", "details", "templates"]
     for needle in (
         'field="widows"',
         'field="orphans"',

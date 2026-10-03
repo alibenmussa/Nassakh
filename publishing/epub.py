@@ -30,7 +30,9 @@ with a back link «(n)» to its call.
 whole, with Amiri's `OFL.txt`. The CSS declares the preview's roles (`nk-body`, `nk-heading`, `nk-latin`,
 with the same unicode ranges): each is the book's face where the reading device has it installed
 (`local()`), else Amiri — so another face falls back to Amiri, as D45 says, and a face missing on this
-Mac is Amiri, as in the preview. `ibooks:specified-fonts` lets Apple Books use them.
+Mac is Amiri, as in the preview. `ibooks:specified-fonts` lets Apple Books use them. An organisation's
+face (D98) whose licence allows embedding goes in whole as `fonts/org-<pk>-<style>.<ttf|otf>`, with its
+licence notice beside it (`fonts/org-<pk>-licence.txt`), and its roles use that file.
 
 **The check** reads the file back with ebooklib and lxml: `mimetype` first and stored, every XHTML
 document well formed and right to left, every noteref's target and every back link present, the spine
@@ -78,6 +80,14 @@ COPYRIGHT_PAGE = "صفحة الحقوق"
 BODY_START = "بداية الكتاب"
 
 FONT_EMBEDDED = "خط أميري مضمَّن في الملف."
+FONT_EMBEDDED_ORG = "خط «{name}» من خطوط المؤسسة مضمَّن في الملف."  # D98
+FONT_TYPES: dict[str, str] = {".ttf": "font/ttf", ".otf": "font/otf"}
+_STYLE_NAMES: dict[tuple[str, str], str] = {
+    ("400", "normal"): "regular",
+    ("700", "normal"): "bold",
+    ("400", "italic"): "italic",
+    ("700", "italic"): "bolditalic",
+}
 FONT_FALLBACK = (
     "خط «{name}» لا يُضمَّن في EPUB (ترخيصه لا يسمح)؛ يظهر به النص على جهاز مثبّت عليه، وإلا فبخط أميري."
 )
@@ -147,8 +157,18 @@ def _em(value: float) -> str:
 def _font_rules(family: str, face: F.Face, ranges: str | None) -> list[str]:
     """`@font-face` rules of a role: the book's face through `local()` where the reader has it, then the
     embedded Amiri (the face's own file when it is Amiri). A face without a bold file gets no bold rule:
-    the reader emboldens its regular, as WeasyPrint does in the preview."""
+    the reader emboldens its regular, as WeasyPrint does in the preview. An organisation's face that is
+    embedded (D98) uses its own files only."""
     rules = []
+    if F.org_embeds(face, "epub"):
+        for weight, style, path in face.files.styles():
+            extra = f" unicode-range: {F.face_ranges(path, ranges)};" if ranges else ""
+            name = org_file_name(face, weight, style, path)
+            rules.append(
+                f'@font-face {{ font-family: "{family}"; src: url("../fonts/{name}");'
+                f" font-weight: {weight}; font-style: {style};{extra} }}"
+            )
+        return rules
     for weight, amiri_name in AMIRI_FILES:
         path = face.files.regular if weight == "normal" else face.files.bold
         if path is None and face.key != "amiri":
@@ -165,6 +185,28 @@ def _font_rules(family: str, face: F.Face, ranges: str | None) -> list[str]:
             f" font-style: normal;{extra} }}"
         )
     return rules
+
+
+def org_file_name(face: F.Face, weight: str, style: str, path: Path) -> str:
+    """The package name of an organisation face's file: `org-<pk>-<regular|bold|italic|bolditalic>.<ext>`."""
+    return f"{face.key}-{_STYLE_NAMES.get((weight, style), 'regular')}{path.suffix.lower()}"
+
+
+def org_font_items(fonts: F.ResolvedFonts) -> list[tuple[str, Path, str]]:
+    """The organisation faces' files the EPUB carries (D98): `(package name, path, media type)`, each face
+    once, and its licence notice as `(name, None, text)` when it has one."""
+    out: list[tuple[str, Path | None, str]] = []
+    seen: set[str] = set()
+    for face in (fonts.body, fonts.heading, fonts.latin):
+        if face.key in seen or not F.org_embeds(face, "epub"):
+            continue
+        seen.add(face.key)
+        for weight, style, path in face.files.styles():
+            media_type = FONT_TYPES.get(path.suffix.lower(), "font/ttf")
+            out.append((org_file_name(face, weight, style, path), path, media_type))
+        if face.licence.strip():
+            out.append((f"{face.key}-licence.txt", None, face.licence.strip()))
+    return out
 
 
 def epub_css(setup: PageSetup, fonts: F.ResolvedFonts) -> str:
@@ -550,6 +592,11 @@ def build_epub(
     for index, (_weight, name) in enumerate(AMIRI_FILES, start=1):
         item(f"font-{index}", f"fonts/{name}", FONT_TYPE, (amiri / name).read_bytes())
     item("ofl", "fonts/OFL.txt", "text/plain", Path(OFL_FILE).read_bytes())
+    for index, (name, path, media_type) in enumerate(org_font_items(fonts), start=1):  # D98
+        if path is None:  # the face's licence notice
+            item(f"org-licence-{index}", f"fonts/{name}", "text/plain", media_type.encode())
+        else:
+            item(f"org-font-{index}", f"fonts/{name}", media_type, path.read_bytes())
 
     spine: list = []
     landmarks: list[tuple[str, str, str]] = []
@@ -652,9 +699,15 @@ def check_epub(data: bytes) -> list[str]:
         errors.append(f"the spine's page-progression-direction is {package.direction!r}")
     if not package.spine:
         errors.append("the spine is empty: a reader has no document to open")
-    fonts = [item.file_name for item in package.get_items() if item.media_type == FONT_TYPE]
-    if len(fonts) != len(AMIRI_FILES):
+    fonts = [item.file_name for item in package.get_items() if item.media_type in FONT_TYPES.values()]
+    if any(f"fonts/{name}" not in fonts for _weight, name in AMIRI_FILES):
         errors.append(f"the fonts in the manifest are {fonts}")
+    for item in package.get_items():  # every face the CSS names is in the package (D98)
+        if item.media_type != "text/css":
+            continue
+        for name in re.findall(r'url\("\.\./(fonts/[^"]+)"\)', item.content.decode("utf-8", "replace")):
+            if name not in fonts:
+                errors.append(f"{item.file_name}: the font {name} is not in the package")
     navs = [item for item in package.get_items() if isinstance(item, epub.EpubNav)]
     if len(navs) != 1:
         errors.append("the package has no nav document")
@@ -699,6 +752,9 @@ def epub_notes(book_id: int | None, setup: PageSetup, fonts: F.ResolvedFonts) ->
         if face.key == "amiri" or face.key in seen:
             continue
         seen.add(face.key)
+        if F.org_embeds(face, "epub"):  # D98: the organisation's face goes in whole
+            rows.append(row("font_embedded_org", INFO, FONT_EMBEDDED_ORG.format(name=face.name)))
+            continue
         rows.append(row("font_fallback", INFO, FONT_FALLBACK.format(name=face.name)))
     if book_id is not None:
         rows += missing_font_rows(book_id, setup, code="missing_font")
@@ -758,7 +814,8 @@ class EpubExporter:
         errors = check_epub(built.data)
         if errors:
             raise InvalidExport("\n".join(errors[:30]))
-        warnings = [item for item in epub_notes(job.book_id, setup, fonts) if item["code"] != "font_embedded"]
+        embedded = ("font_embedded", "font_embedded_org")
+        warnings = [item for item in epub_notes(job.book_id, setup, fonts) if item["code"] not in embedded]
         stats = dict(built.stats)
         stats["documents"] = built.documents
         if cover is not None:

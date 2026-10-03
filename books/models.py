@@ -82,6 +82,16 @@ class Book(models.Model):
         on_delete=models.SET_NULL,
         related_name="books",
     )
+    # D98: the organisation the book belongs to (its fonts and format templates); `create_book` sets the
+    # creator's, the migration gave every older book the first organisation.
+    organization = models.ForeignKey(
+        "accounts.Organization",
+        verbose_name="المؤسسة",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="books",
+    )
     created_at = models.DateTimeField("أُنشئ في", auto_now_add=True)
     updated_at = models.DateTimeField("عُدّل في", auto_now=True)
 

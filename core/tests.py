@@ -248,11 +248,12 @@ def test_user_role_and_has_role(users):
 def test_nav_context_processor(users):
     request = RequestFactory().get("/")
     request.user = users.admin
-    assert nav(request) == {"is_admin": True, "role": "admin", "role_label": "مدير"}
+    # no organisation yet: the sidebar shows no «المؤسسة» (D98: accounts/test_fonts.py)
+    assert nav(request) == {"is_admin": True, "role": "admin", "role_label": "مدير", "nav_organization": None}
     request.user = users.editor
     assert nav(request)["is_admin"] is False
     request.user = AnonymousUser()
-    assert nav(request) == {"is_admin": False, "role": None, "role_label": ""}
+    assert nav(request) == {"is_admin": False, "role": None, "role_label": "", "nav_organization": None}
 
 
 # ---------------------------------------------------------------- protected media

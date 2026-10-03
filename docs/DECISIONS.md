@@ -768,3 +768,31 @@ per burst now (`CHECKPOINT_WINDOW_S`, 10 min), the main version kept once at a b
 twin «حفظ نسخة الآن» answered with the first copy. (5) The cover's sheet paints from the cached render embedded in
 the page (`cover_payload(render=False)`), each stylesheet save answers with the render (`cover_render`), and between
 a change and its render the sheet draws the cover from its values; the hint is kept for no picture or a failure.
+
+## D98 — The organisation: its own fonts and its format templates (2026-10-03, extends D45, D57, D47)
+Owner review items 9 and 10. There was no organisation in the app (roles are global groups), so `accounts` gains
+`Organization` and `Membership` (one organisation per user, role `admin` | `member`), and `Book.organization`; the
+migration gives every existing book and user the first organisation («المؤسسة», renamed on its page; superusers and
+the `admin` group are its admins), a new book takes its creator's. A user without a membership belongs to the only
+organisation while there is one. Book access stays global (single publisher today): only the organisation's assets
+are scoped. Its page is «المؤسسة» in the sidebar (`/accounts/organization/`).
+- **Fonts.** An admin uploads TTF / OTF / WOFF2 (≤ 20 MB a file, `ORG_FONT_MAX_MB`), read with fontTools: a
+  collection, a variable face, a bitmap-only face, a face with neither the Arabic nor the Latin letters, and an OS/2
+  `fsType` that forbids embedding or subsetting are refused with the reason; WOFF/WOFF2 are stored decompressed. The
+  family and the weight (600+ is bold) and italic come from the file: one face per family, up to four files, stored
+  by content at `orgs/<org>/fonts/<sha256>.<ttf|otf>` (never served by `/media/`; members only, through
+  `accounts:font_file`). The admin confirms the organisation's licence allows embedding; the licence notice is typed
+  or taken from the file. In a stylesheet the face is `org-<pk>`, next to the registry's keys: it resolves like any
+  face (`publishing.fonts`), so the preview, both PDFs (subset, as every face) and the cover use it; Word embeds it
+  whole when its licence allows an editable document and it is TrueType (the Word notes say why not otherwise,
+  amends D57 for these faces); EPUB carries it whole with its licence notice. The font menus list the organisation's
+  faces after the built-in ones, each shown in itself, with «المؤسسة». Removing a face is soft: the books that use it
+  keep its key and fall back to Amiri with a notice in «التنسيق», the page checks and the export notes («حُذف الخط من
+  خطوط المؤسسة»); it can be restored, and deleted for good (files too) once no book uses it.
+- **Templates.** A template is the stylesheet's values (`STYLESHEET_FIELDS`: trim, margins, bleed, the three faces,
+  sizes, leading, indent, heading sizes, footnotes, page furniture, widows/orphans, which front pages print — a field
+  the stylesheet gains later is carried too) without the book's details and cover. Editors save one from a book (on
+  the page or in «التنسيق» → «قوالب المؤسسة», the panel's last section: the cover stays first, D80) and apply one to a
+  book after seeing what changes field by field; applying goes through the stylesheet's own validation and save, so
+  the book page lays out again as after any change. A face the organisation removed since is left out and said.
+  Admins rename, update from a book and delete.

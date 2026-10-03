@@ -204,8 +204,9 @@ media/books/{book_id}/pages/{n:04d}/thumb.webp         ≤ 240 px, grids
 ```
 
 Media is served by Django at `/media/<path>` to signed-in users only (`core.views.protected_media`, also with
-`DEBUG=false`). Every engine call is an `OcrRun` row (engine, model revision, prompt, raw output, duration,
-sanity-check result) visible at `/api/pages/<id>/runs/`.
+`DEBUG=false`); an organisation's licensed fonts (`media/orgs/<org>/fonts/`, D98) never through it, only to its
+members at `/accounts/fonts/<id>/<file>`. Every engine call is an `OcrRun` row (engine, model revision, prompt, raw
+output, duration, sanity-check result) visible at `/api/pages/<id>/runs/`.
 
 `/api/pages/<id>/status/` and `/api/pages/<id>/text/` return a failure as `error` (the Arabic headline) plus
 `error_detail` (the technical lines); the status payload also carries `images` (the three image-tab URLs).
@@ -476,6 +477,26 @@ replaces the edited text but keeps it as a snapshot that is never pruned.
   for the same version and name gives the first copy back.
 - The cover sheet paints at once from its cached render; a change shows at once (the sheet draws the cover from its
   values) and the render comes with the stylesheet save's answer.
+
+**The organisation's fonts and format templates (D98, owner review items 9–10).** Upgrading: `make migrate`
+(`accounts.0002`–`0003`, `books.0010`: the first organisation «المؤسسة» is created and every book and user joins it;
+superusers and the `admin` group are its admins) and `npm run build:css` (`static/src/components/org.css`).
+- «المؤسسة» in the sidebar (`/accounts/organization/`): rename it, add fonts, manage templates. Members are set in
+  Django admin (Organization → its memberships, role «مدير المؤسسة» or «عضو»); a user without a membership belongs to
+  the only organisation while there is one.
+- Fonts (admins): choose the family's files at once (regular and bold, italic too), TTF / OTF / WOFF2 up to 20 MB each
+  (`ORG_FONT_MAX_MB`), tick the licence confirmation. The weight comes from the file; a face whose licence forbids
+  embedding or subsetting, a variable face and a font collection are refused with the reason. The face then shows in
+  «التنسيق» → «الخطوط» after Nassakh's own, in itself, with «المؤسسة», and goes into the preview, both PDFs, Word
+  (embedded when its licence allows an editable file and it is TrueType; otherwise the export notes say why) and
+  EPUB (embedded, with its licence notice). «حذف…» says which books use it; they fall back to Amiri with a notice
+  until another face is chosen or the face is restored from «الخطوط المحذوفة»; «حذف نهائي» once no book uses it.
+- Templates: in «التنسيق» → «قوالب المؤسسة» (the last section) choose a template to see what it changes in this book,
+  «تطبيق القالب…» (a confirmation, then the pages lay out again), or «حفظ التنسيق قالبًا…»; on the organisation's page,
+  «تطبيق على كتاب…» shows the same changes for a chosen book before applying. A template keeps the trim, margins,
+  faces, sizes, leading, headings, footnotes and page settings, never the book details or the cover.
+- Files: `media/orgs/<org>/fonts/<sha256>.<ttf|otf>`; `/media/` refuses `orgs/` (members load them through
+  `/accounts/fonts/<id>/<file>`).
 
 ### The numbers pass (D50)
 Every OCR model misreads Arabic-Indic digits; Kraken with the OpenITI printed Arabic-script model reads them far better

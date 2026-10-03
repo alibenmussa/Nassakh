@@ -508,13 +508,13 @@ def page_checks(
     """
     out: list[dict] = []
     for item in missing_fonts or []:
+        why = "حُذف من خطوط المؤسسة" if item.get("removed") else "غير مثبّت على هذا الجهاز"  # D98
         out.append(
             {
                 "code": "missing_font",
                 "page": None,
                 "block": None,
-                "message": f"الخط «{item.get('name')}» غير مثبّت على هذا الجهاز؛"
-                f" استُعمل «{item.get('fallback')}» بدلًا منه.",
+                "message": f"الخط «{item.get('name')}» {why}؛ استُعمل «{item.get('fallback')}» بدلًا منه.",
             }
         )
     calls: dict[str, tuple[int, str | None]] = {}

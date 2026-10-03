@@ -34,6 +34,7 @@ from django.utils import timezone
 import numpy as np
 import pymupdf
 
+from accounts.services import default_organization, organization_for
 from books import runs
 from books.models import ALL_PAGES_FAILED_MESSAGES, Book, Page
 from core.arabic import arabic_ratio, normalize_ws, to_western_digits
@@ -143,6 +144,7 @@ def create_book(data: dict, pdf: UploadedFile, user) -> Book:
     book = Book(**fields, awaits_ocr_start=True)
     if getattr(user, "is_authenticated", False):
         book.created_by = user
+    book.organization = organization_for(user) or default_organization()  # its fonts and templates (D98)
     book.save()
 
     target = book_source_path(book, pdf.name)

@@ -10,6 +10,7 @@
 @import "./components/export.css";
 @import "./components/offline.css";
 @import "./components/library.css";
+@import "./components/org.css";
 
 @source "../../templates";
 @source "./js";

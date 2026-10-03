@@ -910,7 +910,7 @@ def _layout_block(book: Book, manuscript, sheet, setup, document: dict) -> dict:
     from editor import document as doc
     from editor.models import TRIM_PRESETS
 
-    from .fonts import FONTS
+    from .fonts import display_name
     from .models import PreviewRender
     from .preview import ABANDONED_AFTER, setup_hash
     from .relayout import live_of
@@ -934,13 +934,12 @@ def _layout_block(book: Book, manuscript, sheet, setup, document: dict) -> dict:
         else f"{sheet.width_mm:g}×{sheet.height_mm:g} مم"
     )
     size = float(setup.body_size_pt)
-    face = FONTS.get(setup.body_font)
     return {
         "state": state,
         "trim_label": trim,
         "page_count": live.page_count if live is not None else None,
         "chapters": len(doc.chapters_of(document)),
-        "body_font": face.name if face is not None else setup.body_font,
+        "body_font": display_name(setup.body_font),  # an organisation's face by its name (D98)
         "body_size_pt": int(size) if size.is_integer() else size,
     }
 

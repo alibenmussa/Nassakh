@@ -275,7 +275,8 @@
 
       // ------------------------------------------------------------ faces
       font(key) { return this.fonts.find((f) => f.key === key) || null; },
-      fontChoices(role) { return role === 'latin' ? this.fonts.filter((f) => f.latin) : this.fonts; },
+      // the organisation's faces (D98) after the built-in ones; a removed one is no choice, a Latin-only one none for Arabic
+      fontChoices(role) { return this.fonts.filter((f) => !f.removed && (role === 'latin' ? f.latin : f.arabic !== false)); },
       fontLabel(key) { const f = this.font(key); return f ? f.label : key || ''; },
       fontInstalled(key) { const f = this.font(key); return Boolean(f && f.installed); },
       faceStyle(key) {
@@ -292,9 +293,14 @@
       },
       get missingFontText() {
         if (!this.missingFonts.length) return '';
-        const names = [...new Set(this.missingFonts.map((m) => m.name))];
         const fallback = this.missingFonts[0].fallback || 'Amiri';
-        return `${names.join('، ')} غير مثبّت على هذا الجهاز؛ تُرتَّب الصفحات بخط ${fallback} بدلًا منه.`;
+        const said = (items, why) => [...new Set(items.map((m) => m.name))].join('، ') + why;
+        const removed = this.missingFonts.filter((m) => m.removed); // D98: taken off the organisation's fonts
+        const absent = this.missingFonts.filter((m) => !m.removed);
+        const parts = [];
+        if (absent.length) parts.push(said(absent, ' غير مثبّت على هذا الجهاز'));
+        if (removed.length) parts.push(said(removed, ' حُذف من خطوط المؤسسة'));
+        return `${parts.join('، و')}؛ تُرتَّب الصفحات بخط ${fallback} بدلًا منه.`;
       },
 
       // ------------------------------------------------------------ the page diagram and labels

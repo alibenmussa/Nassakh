@@ -1,0 +1,90 @@
+{% comment %}«قوالب المؤسسة» in «التنسيق» (D98, static/src/js/org.js bookTemplates): the organisation's format templates,
+each with what it changes in this book; a chosen one shows its changes and «تطبيق القالب…» (a confirmation, then the
+stylesheet's own save: the panel and the pages follow as after any change); «حفظ التنسيق قالبًا…» keeps this book's
+format under a name; an admin can take this book's format into a chosen template. The management (rename, delete,
+fonts) is on the organisation's page. Context: book.{% endcomment %}
+<section class="bp-acc og-book-templates" data-section="templates" data-book-templates
+         x-data="bookTemplates({ list: '{% url 'api:book_templates' book.pk %}', apply: '{% url 'api:book_template_apply' book.pk 0 %}'.replace('/templates/0/', '/templates/__tid__/'), update: '{% url 'api:book_template_update' book.pk 0 %}'.replace('/templates/0/', '/templates/__tid__/'), manage: '{% url 'accounts:organization' %}#templates' })">
+  <button type="button" class="bp-acc-head" :aria-expanded="open ? 'true' : 'false'" aria-controls="bp-sec-templates" @click="toggle()">
+    <svg class="icon icon-sm" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+    <span class="bp-acc-title">قوالب المؤسسة</span><span class="lo-head-meta num" x-text="headMeta"></span>
+  </button>
+  <div class="lo-section" id="bp-sec-templates" x-show="open" x-cloak>
+    <p class="help" x-show="loading && !loaded">تُحمَّل القوالب…</p>
+    <p class="field-error" role="alert" x-show="error" x-text="error"></p>
+    <p class="help" x-show="loaded && !list.length">لا قوالب في المؤسسة بعد. القالب يحفظ القطع والهوامش والخطوط والأحجام وإعدادات الصفحة لتُطبَّق على كتب أخرى.</p>
+
+    <div class="og-tpls" role="radiogroup" aria-label="قوالب المؤسسة" x-show="list.length">
+      <template x-for="t in list" :key="t.id">
+        <button type="button" class="og-tpl" role="radio" :aria-checked="selectedId === t.id ? 'true' : 'false'" @click="select(t.id)" :data-template="t.id">
+          <span class="og-tpl-name" x-text="t.name"></span>
+          <span class="og-tpl-meta meta"><bdi x-text="summaryOf(t)"></bdi></span>
+          <span class="badge" x-show="t.same">مطابق لتنسيق الكتاب</span>
+        </button>
+      </template>
+    </div>
+
+    <template x-if="selected">
+      <div class="og-tpl-detail" data-template-detail>
+        <p class="help" x-show="selected.description" x-text="selected.description"></p>
+        <p class="help" x-show="selected.source">أُخذ من «<span x-text="selected.source ? selected.source.title : ''"></span>».</p>
+        <p class="group-label" x-show="!selected.same">ما يتغيّر في هذا الكتاب</p>
+        <ul class="og-changes" x-show="!selected.same">
+          <template x-for="c in selected.changes" :key="c.field">
+            <li class="og-change"><span class="og-change-label" x-text="c.label"></span><span class="og-change-values"><bdi class="og-before" x-text="c.before"></bdi><span aria-hidden="true"> ← </span><span class="sr-only"> إلى </span><bdi class="og-after" x-text="c.after"></bdi></span></li>
+          </template>
+        </ul>
+        <template x-for="s in selected.skipped" :key="s.field">
+          <p class="lo-note">لا يُطبَّق <span x-text="s.label"></span> «<span x-text="s.name"></span>»: <span x-text="s.message"></span></p>
+        </template>
+        <div class="og-tpl-actions" x-show="canSave || canManage">
+          <button type="button" class="btn btn-sm" x-show="canSave" :disabled="selected.same || busy" @click="askApply()" data-apply-template>تطبيق القالب…</button>
+          <button type="button" class="btn btn-ghost btn-sm" x-show="canManage" :disabled="selected.same || busy" @click="updateFromBook()" title="يأخذ القالب تنسيق هذا الكتاب كما هو الآن">تحديث القالب من هذا الكتاب</button>
+        </div>
+      </div>
+    </template>
+
+    <div class="og-save" x-show="canSave">
+      <button type="button" class="btn btn-ghost btn-sm" x-show="!saving.open" @click="openSave()" data-save-template>
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+        <span>حفظ التنسيق قالبًا…</span>
+      </button>
+      <form class="og-save-form bp-details" x-show="saving.open" x-cloak @submit.prevent="save()" @keydown.escape.stop="closeSave()">
+        <label class="bp-detail">
+          <span class="lo-stepper-label">اسم القالب</span>
+          <input type="text" dir="auto" autocomplete="off" x-ref="templateName" x-model="saving.name" :maxlength="nameMax" placeholder="مثل: سلسلة التراث 17×24">
+        </label>
+        <label class="bp-detail">
+          <span class="lo-stepper-label">وصف (اختياري)</span>
+          <input type="text" dir="auto" autocomplete="off" x-model="saving.description" maxlength="300">
+        </label>
+        <p class="help">يحفظ القطع والهوامش والخطوط والأحجام وإعدادات الصفحة؛ بيانات الكتاب والغلاف لا تدخل فيه.</p>
+        <p class="field-error" role="alert" x-show="saving.error" x-text="saving.error"></p>
+        <div class="og-tpl-actions">
+          <button type="submit" class="btn btn-sm" :disabled="saving.busy">حفظ القالب</button>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closeSave()">إلغاء</button>
+        </div>
+      </form>
+    </div>
+    <a class="link og-manage" href="{% url 'accounts:organization' %}#templates">قوالب المؤسسة وخطوطها</a>
+  </div>
+
+  {# the confirmation: what changes, then the stylesheet's own save #}
+  <template x-teleport="body">
+    <div class="rv-scrim" x-show="confirming" x-cloak x-transition.opacity.duration.150ms @click.self="closeApply()">
+      <div class="rv-modal og-apply-dialog" role="alertdialog" aria-modal="true" aria-labelledby="og-apply-title" @keydown.escape.stop.prevent="closeApply()" data-apply-dialog>
+        <h2 class="rv-modal-title" id="og-apply-title">تطبيق القالب «<span x-text="selected ? selected.name : ''"></span>» على هذا الكتاب؟</h2>
+        <p class="meta">يتغيّر تنسيق الكتاب كما في القائمة، وتُرتَّب صفحاته من جديد. يمكن الرجوع بتغيير القيم في «التنسيق» أو بتطبيق قالب آخر.</p>
+        <ul class="og-changes" x-show="selected && selected.changes.length">
+          <template x-for="c in (selected ? selected.changes : [])" :key="c.field">
+            <li class="og-change"><span class="og-change-label" x-text="c.label"></span><span class="og-change-values"><bdi x-text="c.before"></bdi><span aria-hidden="true"> ← </span><bdi x-text="c.after"></bdi></span></li>
+          </template>
+        </ul>
+        <div class="rv-modal-actions">
+          <button type="button" class="btn" @click="closeApply()">إلغاء</button>
+          <button type="button" class="btn btn-primary btn-sm" :disabled="busy" @click="apply()" data-confirm-apply>تطبيق</button>
+        </div>
+      </div>
+    </div>
+  </template>
+</section>

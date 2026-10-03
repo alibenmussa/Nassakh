@@ -1676,9 +1676,12 @@ def stylesheet_payload(book: Book) -> dict:
     """`api:stylesheet` GET: `{stylesheet, saved, trims, fonts, choices, limits, missing_fonts,
     field_defaults}` (`field_defaults`: the book details used when a field is empty — the Book's title
     and author)."""
-    from publishing.fonts import LATIN_FONTS, font_status, resolve
+    from accounts.services import book_organization
+    from publishing.fonts import font_status, latin_keys, resolve
 
     sheet = stylesheet_for(book)
+    organization = book_organization(book)  # its fonts join the menus (D98)
+    faces = (sheet.body_font, sheet.latin_font, sheet.heading_font)
     values = stylesheet_values(sheet)
     return {
         "stylesheet": values,
@@ -1690,8 +1693,8 @@ def stylesheet_payload(book: Book) -> dict:
             ),
             {"key": CUSTOM_TRIM, "label": StyleSheet.Trim.CUSTOM.label, "width_mm": None, "height_mm": None},
         ],
-        "fonts": font_status(),
-        "latin_fonts": list(LATIN_FONTS),
+        "fonts": font_status(organization, keep=faces),
+        "latin_fonts": latin_keys(organization),
         "choices": {
             name: [{"value": value, "label": str(label)} for value, label in choices.choices]
             for name, choices in CHOICE_FIELDS.items()
@@ -1916,11 +1919,14 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
     """Validate and save the posted stylesheet fields (any subset; unknown keys are ignored).
 
     A preset `trim` sets the width and height; `custom` keeps the posted (or stored) ones. Faces must be
-    registry keys (the Latin face one with Latin glyphs); a face not installed is accepted (it renders in
-    Amiri and the panel says «غير مثبّت»). `front_matter.cover` takes any subset of the cover's keys
-    (`_cover_update`, D80). Raises `StyleSheetError` with every bad field. Returns `(stylesheet, changed)`.
+    registry keys or active faces of the book's organisation (D98; `publishing.fonts.face_error`: the Latin
+    face one with Latin glyphs, an organisation's body or heading face one with Arabic letters); a face not
+    installed is accepted (it renders in Amiri and the panel says «غير مثبّت»). `front_matter.cover` takes
+    any subset of the cover's keys (`_cover_update`, D80). Raises `StyleSheetError` with every bad field.
+    Returns `(stylesheet, changed)`.
     """
-    from publishing.fonts import FONTS, LATIN_FONTS
+    from accounts.services import book_organization
+    from publishing.fonts import face_error
 
     data = data if isinstance(data, dict) else {}
     errors: dict[str, str] = {}
@@ -1945,17 +1951,13 @@ def update_stylesheet(book: Book, data, user=None) -> tuple[StyleSheet, bool]:
             sheet.width_mm, sheet.height_mm = TRIM_PRESETS[sheet.trim][1:]
             errors.pop("width_mm", None)
             errors.pop("height_mm", None)
-        for name in ("body_font", "heading_font"):
-            if name in data:
-                if not isinstance(data[name], str) or data[name] not in FONTS:
-                    errors[name] = "الخط غير معروف."
+        for name, role in (("body_font", "body"), ("heading_font", "heading"), ("latin_font", "latin")):
+            if name in data:  # a registry face, or an active face of the book's organisation (D98)
+                message = face_error(data[name], book_organization(book), role)
+                if message:
+                    errors[name] = message
                 else:
                     setattr(sheet, name, data[name])
-        if "latin_font" in data:
-            if not isinstance(data["latin_font"], str) or data["latin_font"] not in LATIN_FONTS:
-                errors["latin_font"] = "اختر للنص اللاتيني خطًّا فيه حروف لاتينية."
-            else:
-                sheet.latin_font = data["latin_font"]
         if "heading_scale" in data:
             scale = data["heading_scale"]
             merged = {"h1": 1.6, "h2": 1.25, **(sheet.heading_scale or {})}

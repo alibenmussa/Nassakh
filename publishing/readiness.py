@@ -74,6 +74,7 @@ NO_IMPRINT = "صفحة الحقوق بلا ناشر ولا سنة."
 NO_HEADINGS = "لا عناوين فصول في الكتاب؛ ستخلو المحتويات."
 CLEAR = "كل الصفحات مُراجَعة ولا ملاحظات؛ الكتاب جاهز للإخراج."
 MISSING_FONT = "الخط «{name}» غير مثبّت على هذا الجهاز؛ يُستعمل {fallback} بدلًا منه، كما في المعاينة."
+REMOVED_FONT = "حُذف الخط «{name}» من خطوط المؤسسة؛ يُستعمل {fallback} بدلًا منه، كما في المعاينة."
 
 UNCERTAIN_LABEL = "غير المؤكَّدة"
 REVIEW_LABEL = "المراجعة"
@@ -477,7 +478,8 @@ def missing_font_rows(book_id: int, setup, code: str = "font_missing") -> list[d
         seen.add(name)
         used = str(item.get("fallback") or "Amiri")
         fallback = "أميري" if used == "Amiri" else f"«{used}»"
-        message = MISSING_FONT.format(name=name, fallback=fallback)
+        template = REMOVED_FONT if item.get("removed") else MISSING_FONT  # D98: removed by its organisation
+        message = template.format(name=name, fallback=fallback)
         out.append(row(code, WARN, message, action(FONTS_LABEL, book_id, "format")))
     return out
 
