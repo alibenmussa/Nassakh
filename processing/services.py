@@ -578,6 +578,144 @@ def guide_regions(
     return [(str(kind), box) for kind, box in specs if box[3] > box[1] and box[2] > box[0]]
 
 
+# ---------------------------------------------------------------- the running-head cut, fitted per page (owner 18)
+
+# `(top, offset)` in page widths: the first text row's top on the page the book cut was set on, and the cut's
+# distance below it. Widths, not heights: the pages of a book share the scan's scale, while their heights follow
+# the crop (a shorter page, a deeper top margin).
+HeaderAnchor = tuple[float, float]
+HEADER_TOP_TOLERANCE = 1.5  # a page's first row may sit this many anchor offsets from the anchor's own top
+HEADER_MAX = 0.5  # = `clean_guides`' bound: a fitted cut never goes lower than half the page
+
+
+def _text_rows(pre: Preprocess) -> list[tuple[float, float]]:
+    """The page's text rows top to bottom: `_line_boxes` merged where they overlap vertically, `(y0, y1)` px."""
+    rows: list[list[float]] = []
+    for line in sorted(_line_boxes(pre), key=lambda ln: ln["y0"]):
+        if rows and line["y0"] <= rows[-1][1]:
+            rows[-1][1] = max(rows[-1][1], line["y1"])
+        else:
+            rows.append([line["y0"], line["y1"]])
+    return [(y0, y1) for y0, y1 in rows]
+
+
+def _row_cut(rows: list[tuple[float, float]], y: float) -> int | None:
+    """The index of the row a cut at `y` runs through (more than `LINE_CUT_MARGIN` px inside it), else None."""
+    m = LINE_CUT_MARGIN
+    return next((i for i, (y0, y1) in enumerate(rows) if y0 + m < y < y1 - m), None)
+
+
+def _gap_of(rows: list[tuple[float, float]], y: float) -> int | None:
+    """The gap between rows a cut at `y` lies in (0: above the first row), None when it runs through a row."""
+    if _row_cut(rows, y) is not None:
+        return None
+    return sum(1 for y0, y1 in rows if (y0 + y1) / 2 < y)
+
+
+def _out_of_rows(rows: list[tuple[float, float]], y: float, h: float) -> float:
+    """A cut moved out of the row it runs through, to the middle of the nearer gap (above or below the row)."""
+    i = _row_cut(rows, y)
+    if i is None:
+        return y
+    y0, y1 = rows[i]
+    if y - y0 < y1 - y:
+        return ((rows[i - 1][1] if i else 0.0) + y0) / 2
+    return (y1 + (rows[i + 1][0] if i + 1 < len(rows) else h)) / 2
+
+
+def header_anchor(ratio: float | None, pre: Preprocess | None) -> HeaderAnchor | None:
+    """Where the book's running-head cut `ratio` sits on `pre`'s page, as a `HeaderAnchor`.
+
+    None when that page cannot anchor it: no prepared image or no text, no row above the cut (the band would
+    hold no running head there) or a cut through a line.
+    """
+    if ratio is None or not _has_pre(pre):
+        return None
+    rows = _text_rows(pre)
+    if not rows:
+        return None
+    w, h = float(pre.output_width), float(pre.output_height)
+    cut = float(ratio) * h
+    if rows[0][1] > cut + LINE_CUT_MARGIN or _row_cut(rows, cut) is not None:
+        return None
+    return (rows[0][0] / w, (cut - rows[0][0]) / w)
+
+
+def fit_header_cut(ratio: float, pre: Preprocess, anchor: HeaderAnchor | None = None) -> float:
+    """The book's running-head cut on one page, from the page's own geometry: a ratio of its height (owner 18).
+
+    One book ratio fell at the same x % of pages whose heights and top margins differ, so it cut above the
+    running head of one page and through the first body line of another. Here, with an `anchor` (the page the
+    cut was set on, `header_anchor`) and a first text row near the anchor's own (within `HEADER_TOP_TOLERANCE`
+    offsets), the cut sits the same distance below this page's first row, moved out of a line it would cut,
+    kept above half the page and with text left below it; it replaces the plain ratio only when the two fall in
+    different gaps between the lines, so a page where the ratio already works never moves (no re-reading). Any
+    other page keeps the ratio, moved out of a line it would cut. A page without detected lines keeps the ratio.
+    """
+    h, w = float(pre.output_height or 0), float(pre.output_width or 0)
+    rows = _text_rows(pre) if h > 0 and w > 0 else []
+    if not rows:
+        return ratio
+    plain = float(ratio) * h
+    if anchor is not None:
+        top_w, offset_w = anchor
+        if abs(rows[0][0] / w - top_w) <= HEADER_TOP_TOLERANCE * offset_w:
+            fitted = _out_of_rows(rows, rows[0][0] + offset_w * w, h)
+            left_below = any((y0 + y1) / 2 > fitted for y0, y1 in rows)
+            if fitted <= HEADER_MAX * h and left_below and _gap_of(rows, fitted) != _gap_of(rows, plain):
+                return round(fitted) / h  # on a whole pixel: the band `guide_regions` draws, to the pixel
+    if _row_cut(rows, plain) is None:
+        return ratio
+    return round(min(_out_of_rows(rows, plain, h), HEADER_MAX * h)) / h
+
+
+def header_reference(pages, ratio: float | None, preferred: int | None = None) -> int | None:
+    """The page a book running-head cut `ratio` is anchored on (stored as `LayoutGuides.reference_page`).
+
+    `preferred` (the page the value came from) when it can anchor it, else the page with the book's usual
+    geometry: among the non-excluded pages the ratio already fits, the one whose first text row sits at the
+    median height (in page widths). None when no page can anchor it. Reads the loaded pages (no query).
+    """
+    if ratio is None:
+        return None
+    anchors: dict[int, HeaderAnchor] = {}
+    for page in pages:
+        if page.is_excluded:
+            continue
+        anchor = header_anchor(ratio, _pre_of(page))
+        if anchor is not None:
+            anchors[page.pk] = anchor
+    if preferred in anchors:
+        return preferred
+    if not anchors:
+        return None
+    tops = sorted(anchor[0] for anchor in anchors.values())
+    median = tops[len(tops) // 2]
+    return min(anchors, key=lambda pk: (abs(anchors[pk][0] - median), pk))
+
+
+def guides_anchor(guides: LayoutGuides | None, pres: Mapping[int, Preprocess | None] | None = None) -> HeaderAnchor | None:
+    """The `HeaderAnchor` of the book guides: their `header_cut` on their `reference_page`.
+
+    `pres` maps page ids to their loaded `Preprocess` (the bulk paths, no query); else the reference page's
+    Preprocess comes from `select_related("reference_page__preprocess")` when the caller loaded it, or one query.
+    """
+    if guides is None or guides.header_cut is None or not guides.reference_page_id:
+        return None
+    if pres is not None:
+        pre = pres.get(guides.reference_page_id)
+    elif LayoutGuides.reference_page.is_cached(guides):
+        pre = _pre_of(guides.reference_page) if guides.reference_page is not None else None
+    else:
+        pre = Preprocess.objects.filter(page_id=guides.reference_page_id).first()
+    return header_anchor(guides.header_cut, pre)
+
+
+def _book_guides(book_id: int) -> LayoutGuides | None:
+    """The book's guides with their reference page's Preprocess (one query), for `guides_anchor`."""
+    return LayoutGuides.objects.select_related("reference_page__preprocess").filter(book_id=book_id).first()
+
+
 @dataclass(slots=True)
 class PageLayout:
     """Where a page's footnotes and page number come from, resolved per page (see `resolve_layout`)."""
@@ -591,7 +729,11 @@ class PageLayout:
 
 
 def resolve_layout(
-    book_values: Mapping, manual_book: bool, override: Mapping | None, pre: Preprocess
+    book_values: Mapping,
+    manual_book: bool,
+    override: Mapping | None,
+    pre: Preprocess,
+    anchor: HeaderAnchor | None = None,
 ) -> PageLayout:
     """Resolve the footnote top and the page-number region of one page (pure: no query).
 
@@ -603,7 +745,8 @@ def resolve_layout(
 
     Page number: the override's zone (`none` switches it off), else the detected box, else the
     book's zone only when the book guides are manual, else none. The running-header cut comes from
-    the override when it has the key, else from the book guides.
+    the override when it has the key (as the owner set it on the page), else from the book guides, fitted
+    to the page's own geometry with the guides' `anchor` (`fit_header_cut`, owner 18).
     """
     override = override or {}
     values = dict(book_values)
@@ -642,13 +785,15 @@ def resolve_layout(
     resolved["footnote_line"] = None
     resolved["page_number_zone"] = zone
     header_source = "override" if "header_cut" in override else "book"
+    if header_source == "book" and resolved.get("header_cut") is not None and h:
+        resolved["header_cut"] = fit_header_cut(resolved["header_cut"], pre, anchor)
     return PageLayout(resolved, footnote_y, footnote_source, box, page_number_source, header_source)
 
 
 def page_layout(page: Page, pre: Preprocess) -> PageLayout:
-    """`resolve_layout` for a stored page: loads the book guides (one query) and the page override."""
-    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
-    return resolve_layout(guides_values(guides), is_manual(guides), page.guides_override, pre)
+    """`resolve_layout` for a stored page: loads the book guides with their anchor (one query) and the page override."""
+    guides = _book_guides(page.book_id)
+    return resolve_layout(guides_values(guides), is_manual(guides), page.guides_override, pre, guides_anchor(guides))
 
 
 def layout_specs(layout: PageLayout, pre: Preprocess) -> list[Spec]:
@@ -663,16 +808,20 @@ def layout_specs(layout: PageLayout, pre: Preprocess) -> list[Spec]:
 
 
 def page_bands(
-    pre: Preprocess, book_values: Mapping, manual_book: bool, override: Mapping | None
+    pre: Preprocess,
+    book_values: Mapping,
+    manual_book: bool,
+    override: Mapping | None,
+    anchor: HeaderAnchor | None = None,
 ) -> list[Spec]:
     """The bands of a page: `guide_regions(resolve_layout(…))`, the specs `layout_page` writes (pure)."""
-    return layout_specs(resolve_layout(book_values, manual_book, override, pre), pre)
+    return layout_specs(resolve_layout(book_values, manual_book, override, pre, anchor), pre)
 
 
 def page_region_specs(page: Page, pre: Preprocess) -> list[Spec]:
-    """Region specs of a stored page: `page_bands` with its book guides and override."""
-    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
-    return page_bands(pre, guides_values(guides), is_manual(guides), page.guides_override)
+    """Region specs of a stored page: `page_bands` with its book guides, their anchor and the page override."""
+    guides = _book_guides(page.book_id)
+    return page_bands(pre, guides_values(guides), is_manual(guides), page.guides_override, guides_anchor(guides))
 
 
 # ---------------------------------------------------------------- pages worth a look (D67)
@@ -818,9 +967,9 @@ def _image_url(pre: Preprocess) -> str | None:
     return _versioned_url(pre.display_image) or _versioned_url(pre.gray_image) or None
 
 
-def _page_view(pre: Preprocess, book_values, manual_book, override, rows: list[Region] | None):
+def _page_view(pre: Preprocess, book_values, manual_book, override, rows: list[Region] | None, anchor=None):
     """`(specs, sources, layout, derived)`: the stored guide rows once derived, else the computed bands."""
-    layout = resolve_layout(book_values, manual_book, override, pre)
+    layout = resolve_layout(book_values, manual_book, override, pre, anchor)
     guide_rows = [r for r in rows or [] if r.source == Region.Source.GUIDES]
     if guide_rows:
         return _rows_specs(guide_rows), band_sources(layout), layout, True
@@ -838,13 +987,15 @@ def page_guides_payload(
     manual_book: bool,
     rows: list[Region] | None = None,
     locked: str | None = None,
+    anchor: HeaderAnchor | None = None,
 ) -> dict:
     """The `guides` block of a sheet item (§3.11): bands, guide lines, rows, override, doubts, image.
 
     The bands are the page's stored guide regions once derived (`derived: true`), else the bands
     `layout_page` would write. Every value is a ratio of the prepared image (4 decimals). `rows`
     are the page's `Region` rows when the caller loaded them (None: queried here); `locked` is the
-    page's `page_lock` when known (None: computed here, one query). Excluded pages carry no doubt.
+    page's `page_lock` when known (None: computed here, one query); `anchor` the book guides'
+    `guides_anchor` (the book cut fitted to the page, owner 18). Excluded pages carry no doubt.
     """
     override = dict(page.guides_override or {})
     if locked is None:
@@ -864,7 +1015,7 @@ def page_guides_payload(
     if rows is None:
         rows = list(page.regions.all())
     w, h = int(pre.output_width), int(pre.output_height)
-    specs, sources, layout, derived = _page_view(pre, book_values, manual_book, override, rows)
+    specs, sources, layout, derived = _page_view(pre, book_values, manual_book, override, rows, anchor)
     bands = [
         {
             "kind": kind,
@@ -903,14 +1054,20 @@ def _compact_bands(specs: list[Spec], w: int, h: int) -> list[list]:
 
 
 def compact_entry(
-    page: Page, pre: Preprocess | None, book_values, manual_book, rows: list[Region] | None, locked: str
+    page: Page,
+    pre: Preprocess | None,
+    book_values,
+    manual_book,
+    rows: list[Region] | None,
+    locked: str,
+    anchor: HeaderAnchor | None = None,
 ) -> dict:
     """One page of `api:book_guides` (about 60 B): id, number, bands, doubt count, override, lock, status."""
     override = page.guides_override or {}
     bands: list[list] = []
     n_doubts = 0
     if _has_pre(pre):
-        specs, _sources, layout, _derived = _page_view(pre, book_values, manual_book, override, rows)
+        specs, _sources, layout, _derived = _page_view(pre, book_values, manual_book, override, rows, anchor)
         bands = _compact_bands(specs, int(pre.output_width), int(pre.output_height))
         if not page.is_excluded:
             n_doubts = len(layout_doubts(pre, layout, override, specs))
@@ -1018,6 +1175,11 @@ def _pre_of(page: Page) -> Preprocess | None:
         return None
 
 
+def _pres_of(pages) -> dict[int, Preprocess | None]:
+    """`{page id: Preprocess}` of loaded pages, for `guides_anchor` (no query)."""
+    return {page.pk: _pre_of(page) for page in pages}
+
+
 def book_guides_state(book: Book, first: int | None = None, last: int | None = None) -> dict:
     """`GET api:book_guides`: the book guides, the detection line, the chip counts and one compact entry
     per page (`first..last` when given; the counts always cover the whole book). ≤ 4 queries whatever
@@ -1025,6 +1187,7 @@ def book_guides_state(book: Book, first: int | None = None, last: int | None = N
     awaits = bool(book.awaits_ocr_start)
     pages, regions_of, review_pages, guides = _load_book_pages(book, awaits)
     values, manual = guides_values(guides), is_manual(guides)
+    anchor = guides_anchor(guides, _pres_of(pages))
     entries = [
         compact_entry(
             page,
@@ -1033,6 +1196,7 @@ def book_guides_state(book: Book, first: int | None = None, last: int | None = N
             manual,
             regions_of.get(page.pk),
             page_lock(page, awaits, review_pages),
+            anchor,
         )
         for page in pages
     ]
@@ -1167,16 +1331,18 @@ def check_stage(book_id: int, stage: str | None) -> bool:
 
 
 def _stored_guides(guides: LayoutGuides | None) -> dict | None:
-    """A `LayoutGuides` row as an undo value (`source` + the four values), None without a row."""
+    """A `LayoutGuides` row as an undo value (`source`, the four values and the `reference_page` the running-head
+    cut is anchored on, owner 18), None without a row."""
     if guides is None:
         return None
-    return {"source": guides.source, **guides_values(guides)}
+    return {"source": guides.source, **guides_values(guides), "reference_page": guides.reference_page_id}
 
 
 @dataclass(slots=True)
 class _GuidesPlan:
     """A book-guides change: the stored values after it (None: no row), their source, the page
-    overrides it rewrites (`{page id: override | None}`) and the keys it sets."""
+    overrides it rewrites (`{page id: override | None}`), the keys it sets and the page its running-head cut
+    is anchored on (`header_reference`; None: the stored one stays)."""
 
     values: dict | None
     source: str
@@ -1230,7 +1396,9 @@ def _plan_change(book: Book, guides, pages, changes, reset_overrides, from_page)
             raise ValidationError(["الصفحة غير صالحة."]) from None
     keys = frozenset(clean)
     overrides = _override_changes(pages, _clean_keys(reset_overrides), source_page, keys)
-    return _GuidesPlan(values, LayoutGuides.Source.MANUAL, overrides, keys)
+    # a new running-head cut is anchored on the page it came from, else on the book's usual page (owner 18)
+    reference = header_reference(pages, clean["header_cut"], source_page) if clean.get("header_cut") is not None else None
+    return _GuidesPlan(values, LayoutGuides.Source.MANUAL, overrides, keys, reference)
 
 
 def _plan_undo(pages, undo) -> _GuidesPlan:
@@ -1240,12 +1408,13 @@ def _plan_undo(pages, undo) -> _GuidesPlan:
     stored = undo.get("book")
     values: dict | None = None
     source = LayoutGuides.Source.AUTO
+    reference: int | None = None
     if stored is not None:
         if not isinstance(stored, Mapping) or stored.get("source") not in LayoutGuides.Source.values:
             raise ValidationError(["بيانات التراجع غير صالحة."])
         source = stored["source"]
         values = clean_guides(stored)
-        values.pop("reference_page", None)
+        reference = values.pop("reference_page", None)
     known = {page.pk for page in pages}
     overrides: dict[int, dict | None] = {}
     raw = undo.get("overrides") or {}
@@ -1261,7 +1430,7 @@ def _plan_undo(pages, undo) -> _GuidesPlan:
         clean = clean_guides(value, partial=True) if isinstance(value, Mapping) else {}
         clean.pop("reference_page", None)
         overrides[page_id] = clean or None
-    return _GuidesPlan(values, source, overrides, frozenset())
+    return _GuidesPlan(values, source, overrides, frozenset(), reference if reference in known else None)
 
 
 def _plan_reset(book: Book) -> _GuidesPlan:
@@ -1282,21 +1451,32 @@ def _new_override(page: Page, plan: _GuidesPlan) -> dict:
     return dict(page.guides_override or {})
 
 
+def _plan_anchor(plan: _GuidesPlan, guides: LayoutGuides | None, pres: Mapping) -> HeaderAnchor | None:
+    """The `HeaderAnchor` of a plan's running-head cut: on its new reference page, else on the stored one."""
+    if plan.values is None or plan.values.get("header_cut") is None:
+        return None
+    reference = plan.reference_page if plan.reference_page is not None else getattr(guides, "reference_page_id", None)
+    return header_anchor(plan.values["header_cut"], pres.get(reference)) if reference else None
+
+
 def _evaluate(plan: _GuidesPlan, awaits: bool, pages, regions_of, review_pages, guides) -> list[dict]:
     """Per prepared, non-excluded page: would its bands change, is it locked, would a line cut a line
-    or a band hide text afterwards, does its own override keep a set key."""
+    or a band hide text afterwards, does its own override keep a set key, and where its running-head cut
+    lands (`header`, a ratio of its height; None without one)."""
     old_values, old_manual = guides_values(guides), is_manual(guides)
     new_values = plan.values if plan.values is not None else guides_values(None)
+    pres = _pres_of(pages)
+    old_anchor, new_anchor = guides_anchor(guides, pres), _plan_anchor(plan, guides, pres)
     out = []
     for page in pages:
         pre = _pre_of(page)
         if page.is_excluded or not _has_pre(pre):
             continue
         override = _new_override(page, plan)
-        layout = resolve_layout(new_values, plan.manual, override, pre)
+        layout = resolve_layout(new_values, plan.manual, override, pre, new_anchor)
         after = layout_specs(layout, pre)
         if awaits:
-            before = page_bands(pre, old_values, old_manual, page.guides_override)
+            before = page_bands(pre, old_values, old_manual, page.guides_override, old_anchor)
         else:
             before = _rows_specs([r for r in regions_of.get(page.pk, []) if r.source == Region.Source.GUIDES])
         doubts = set(layout_doubts(pre, layout, override, after))
@@ -1307,6 +1487,7 @@ def _evaluate(plan: _GuidesPlan, awaits: bool, pages, regions_of, review_pages, 
                 "locked": page_lock(page, awaits, review_pages),
                 "cut": bool(doubts & {"line_cut", "text_hidden"}),
                 "kept": bool(plan.set_keys & set(override)),
+                "header": layout.guides.get("header_cut") if layout.header_source == "book" else None,
             }
         )
     return out
@@ -1330,12 +1511,14 @@ def preview_book_guides(
 ) -> dict:
     """What a book-guides change would do, without writing anything (§3.12 «معاينة»).
 
-    `{changed, pages, cut, kept_overrides, locked, reocr, minutes}`: the pages whose bands change
+    `{changed, pages, cut, kept_overrides, locked, reocr, minutes, header_at}`: the pages whose bands change
     (in «المعالجة» against their stored regions, locked pages apart), those that would then show
     `line_cut` or `text_hidden`, those whose own override keeps a set key, the approved / review-work
     pages that stay (only in «المعالجة»), how many pages are re-read and the model time (null in
-    «التخطيط»). With `reset` it previews «إزالة الضبط العام» (`reset_book_guides`'s plan; `changes`
-    are ignored). A constant number of queries whatever the page count.
+    «التخطيط»), and `{page id: ratio}` of the pages where the book's running-head cut, fitted to the page
+    (`fit_header_cut`, owner 18), lands elsewhere than the plain ratio (the side panel draws its draft there).
+    With `reset` it previews «إزالة الضبط العام» (`reset_book_guides`'s plan; `changes` are ignored). A
+    constant number of queries whatever the page count.
     """
     awaits = check_stage(book.pk, stage)
     pages, regions_of, review_pages, guides = _load_book_pages(book, awaits)
@@ -1346,6 +1529,7 @@ def preview_book_guides(
     rows = _evaluate(plan, awaits, pages, regions_of, review_pages, guides)
     changed = [r for r in rows if r["changed"] and not r["locked"]]
     reocr = 0 if awaits else len(changed)
+    ratio = (plan.values or {}).get("header_cut")
     return {
         "changed": len(changed),
         "pages": [r["page"].number for r in changed],
@@ -1354,6 +1538,11 @@ def preview_book_guides(
         "locked": [r["page"].number for r in rows if r["changed"] and r["locked"]],
         "reocr": reocr,
         "minutes": None if awaits else _minutes(book, reocr),
+        "header_at": {
+            str(r["page"].pk): _r4(r["header"])
+            for r in rows
+            if ratio is not None and r["header"] is not None and _r4(r["header"]) != _r4(ratio)
+        },
     }
 
 
@@ -1388,10 +1577,8 @@ def _commit(book: Book, plan: _GuidesPlan, awaits: bool, loaded, user=None) -> d
             for key in GUIDE_KEYS:
                 setattr(guides, key, plan.values[key])
             guides.source = plan.source
-            if plan.reference_page:
-                guides.reference_page = (
-                    book.pages.filter(pk=plan.reference_page).first() or guides.reference_page
-                )
+            if plan.reference_page and plan.reference_page in by_id:  # a page of this book (no query)
+                guides.reference_page = by_id[plan.reference_page]
             guides.save()
         for pk, value in plan.overrides.items():
             if pk in by_id:
@@ -1423,6 +1610,7 @@ def _commit(book: Book, plan: _GuidesPlan, awaits: bool, loaded, user=None) -> d
         regions_of = {**regions_of, **fresh}
         for page in Page.objects.filter(pk__in=touched).only("id", "status"):
             by_id[page.pk].status = page.status
+    anchor = guides_anchor(guides, _pres_of(pages))
     entries = [
         compact_entry(
             page,
@@ -1431,6 +1619,7 @@ def _commit(book: Book, plan: _GuidesPlan, awaits: bool, loaded, user=None) -> d
             manual,
             regions_of.get(page.pk),
             page_lock(page, awaits, review_pages),
+            anchor,
         )
         for page in pages
         if page.pk in touched
@@ -1497,7 +1686,10 @@ def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
     awaits = book_awaits_start(book.pk)
     loaded = _load_book_pages(book, awaits)
     values = {key: clean[key] for key in GUIDE_KEYS}
-    plan = _GuidesPlan(values, LayoutGuides.Source.MANUAL, {}, frozenset(values), clean.get("reference_page"))
+    reference = clean.get("reference_page")
+    if values["header_cut"] is not None:  # the running-head cut's anchor (owner 18)
+        reference = header_reference(loaded[0], values["header_cut"], reference) or reference
+    plan = _GuidesPlan(values, LayoutGuides.Source.MANUAL, {}, frozenset(values), reference)
     _commit(book, plan, awaits, loaded, user)
     return LayoutGuides.objects.get(book=book)
 
@@ -1577,7 +1769,7 @@ def set_page_guides_override(
 def page_guides_answer(page: Page, regions: list[Region], enqueued: bool, undo: dict | None) -> dict:
     """The answer of `api:page_guides_override`: today's fields plus the `guides` block and the undo."""
     page.refresh_from_db(fields=["status", "guides_override", "reviewed_at", "is_excluded"])
-    guides = LayoutGuides.objects.filter(book_id=page.book_id).first()
+    guides = _book_guides(page.book_id)
     pre = Preprocess.objects.filter(page=page).first()
     rows = list(page.regions.all())
     awaits = book_awaits_start(page.book_id)
@@ -1594,7 +1786,9 @@ def page_guides_answer(page: Page, regions: list[Region], enqueued: bool, undo: 
         "override": page.guides_override,
         "regions": region_items(rows),
         "ocr_enqueued": enqueued,
-        "guides": page_guides_payload(page, pre, guides_values(guides), is_manual(guides), rows, locked),
+        "guides": page_guides_payload(
+            page, pre, guides_values(guides), is_manual(guides), rows, locked, guides_anchor(guides)
+        ),
         "undo": undo,
     }
 

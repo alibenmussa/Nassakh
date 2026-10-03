@@ -499,10 +499,28 @@
   .ms-warn:last-child { border-bottom: 0; }
   .ms-warn.is-current { margin-inline: -8px; padding-inline: 8px; border-radius: var(--radius-sm); background: var(--color-accent-soft); }
   .ms-warn-msg { color: var(--color-text); }
-  .ms-warn-actions { display: flex; align-items: center; gap: 10px; font-size: 12px; }
-  .ms-warn-page { color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .ms-warn-link { border: 0; background: none; padding: 0; font: inherit; font-weight: 500; cursor: pointer; }
-  .ms-warn-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 3px; }
+  /* owner 17: a row's actions are quiet chips (= the «التخطيط» side panel's), not a run of blue words */
+  .ms-warn-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 12px; }
+  .ms-warn-page { margin-inline-end: 4px; color: var(--color-text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ms-warn-actions .ms-warn-link {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 7px;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: var(--color-bg-muted);
+    color: var(--color-text-2);
+    font: inherit;
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .ms-warn-actions .ms-warn-link:hover { background: var(--color-active); color: var(--color-text); text-decoration: none; }
+  .ms-warn.is-current .ms-warn-link { background: var(--color-surface); }
+  .ms-warn-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
   /* ------------------------------------------------------------ the source drawer («عرض الأصل») */
   .ms-drawer {

@@ -450,7 +450,7 @@ def test_book_progress_counts_percent_active_and_flags():
     assert progress["by_status"]["error"] == 1
     assert progress["by_status"]["uploaded"] == 1
     assert progress["by_status"]["excluded"] == 0
-    assert progress["percent"] == round(100 * (3 + 2) / 12)  # ocr_done 3/3 + layout_done 2/3 over 4 pages
+    assert progress["percent"] == 25  # owner 13: one page read of four, the step's «1/4»
     assert progress["active"] is True
     assert progress["flags"] == 2  # one flagged page, one errored page
     assert progress["status_label"] == "قيد المعالجة"
@@ -459,6 +459,30 @@ def test_book_progress_counts_percent_active_and_flags():
     book.save()
     assert services.book_progress(book)["active"] is False
     assert services.book_progress(Book.objects.create(title="فارغ"))["percent"] == 0
+
+
+def test_processing_percent_follows_the_read_pages_not_the_preparation():
+    """Owner 13: a book that leaves «التخطيط» brings its pages prepared (D64); «المعالجة»'s bar starts at 0 and fills
+    with the pages read, the same ratio as the step's count «n/total», never a weight for preparing or layout."""
+    book, pages = _book_with_pages(4)
+    Page.objects.filter(book=book).update(status=Page.Status.PREPROCESSED)
+    book.status = Book.Status.OCR
+    book.save()
+    assert services.book_progress(book)["percent"] == 0  # every page prepared, none read: nothing done in this step
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.LAYOUT_DONE, text_state=Page.TextState.PROVISIONAL)
+    assert services.book_progress(book)["percent"] == 0  # Tesseract's provisional text is not the models' reading
+    Page.objects.filter(pk__in=[pages[1].pk, pages[2].pk]).update(status=Page.Status.OCR_DONE)
+    Page.objects.filter(pk=pages[3].pk).update(status=Page.Status.REVIEWED)
+    progress = services.book_progress(book)
+    assert progress["percent"] == 75 and progress["percent"] == round(100 * 3 / progress["total"])
+    stages = {s["key"]: s for s in services.book_stages(book, "ocr")}
+    assert stages["ocr"]["count"] == "3/4"  # the step's count and its bar say the same thing
+    # in «التخطيط» the bar is still the prepared share
+    Book.objects.filter(pk=book.pk).update(awaits_ocr_start=True, status=Book.Status.PROCESSING)
+    Page.objects.filter(book=book).update(status=Page.Status.UPLOADED)
+    Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.PREPROCESSED)
+    book.refresh_from_db()
+    assert services.book_progress(book)["percent"] == 25
 
 
 def test_toggle_exclude_flips_status_and_restores_completed_stage():

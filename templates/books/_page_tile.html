@@ -16,7 +16,7 @@ opens review. Context: t (tile dict or None), book, role, request, guides_mode.{
         <svg class="icon icon-lg" aria-hidden="true"><use href="#i-image"/></svg>
       </span>
       <img class="page-tile-img page-tile-scan"{% if t.scan_thumb_url %} src="{{ t.scan_thumb_url }}"{% else %} hidden{% endif %} alt="" loading="lazy" decoding="async">
-      <img class="page-tile-img page-tile-clean"{% if t.thumb_url %} src="{{ t.thumb_url }}"{% else %} hidden{% endif %} alt="" loading="lazy" decoding="async">
+      <img class="page-tile-img page-tile-clean{% if t.thumb_url %} is-ready{% endif %}"{% if t.thumb_url %} src="{{ t.thumb_url }}"{% else %} hidden{% endif %} alt="" loading="lazy" decoding="async">
       {% if guides_mode %}<span class="gd-bands" aria-hidden="true"></span><span class="tile-mark-doubt" hidden title="تستحق نظرة"><span class="sr-only">تستحق نظرة</span></span>{% endif %}
       <span class="page-tile-flag badge badge-dark num"{% if not t.n_flags %} hidden{% endif %} title="{% if t.flag_labels %}{{ t.flag_labels|join:'، ' }}{% endif %}">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-flag"/></svg>

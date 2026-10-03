@@ -119,17 +119,8 @@ GUTTER_SEARCH_SPAN = 0.15  # search ± this share of the width around the book's
 GUTTER_MIN_CONFIDENCE = 0.3  # below this the split ratio is used as is
 SPLIT_MIN_RATIO, SPLIT_MAX_RATIO = 0.2, 0.8
 
-# Weight of each page status towards the book's pipeline percentage (3 = through Phase 2).
-_STATUS_WEIGHT: dict[str, int] = {
-    Page.Status.UPLOADED: 0,
-    Page.Status.PREPROCESSED: 1,
-    Page.Status.LAYOUT_DONE: 2,
-    Page.Status.OCR_DONE: 3,
-    Page.Status.REVIEWED: 3,
-    Page.Status.ASSEMBLED: 3,
-    Page.Status.ERROR: 0,
-    Page.Status.EXCLUDED: 0,
-}
+# The statuses of a page whose text the models have read: «المعالجة»'s percentage counts these (owner 13).
+_READ_STATUSES: frozenset[str] = frozenset({Page.Status.OCR_DONE, Page.Status.REVIEWED, Page.Status.ASSEMBLED})
 
 
 class IngestError(ValueError):
@@ -894,25 +885,29 @@ def _bar_state(status: str) -> str:
 
 
 def _pipeline_percent(by_status: dict[str, int], total: int, layout_stage: bool = False) -> int:
-    """Share (0-100) of the Phase 2 pipeline the non-excluded pages have gone through.
+    """Share (0-100) of the current step the non-excluded pages have gone through.
 
-    In «التخطيط» (`layout_stage`) it is the prepared share: pages past `uploaded` that did not fail.
+    In «التخطيط» (`layout_stage`) it is the prepared share: pages past `uploaded` that did not fail. In
+    «المعالجة» it is the read share, pages whose text the models have read (`_READ_STATUSES`) over all pages:
+    the same ratio as the step's count «3/40», so the bar fills with it (owner 13). The old weighting (a
+    third for preprocessing, a third for layout) put a book that had just left «التخطيط» at 33-67 % with no
+    page read yet, since its pages arrive there already prepared (D64).
     """
     if total <= 0:
         return 0
     if layout_stage:
         prepared = total - by_status.get(Page.Status.UPLOADED, 0) - by_status.get(Page.Status.ERROR, 0)
         return int(round(100 * prepared / total))
-    weight = sum(_STATUS_WEIGHT.get(status, 0) * count for status, count in by_status.items())
-    return int(round(100 * weight / (3 * total)))
+    read = sum(by_status.get(status, 0) for status in _READ_STATUSES)
+    return int(round(100 * read / total))
 
 
 def book_progress(book: Book) -> dict:
     """Dashboard numbers: `total`, `by_status`, `percent`, `active`, `flags` (+ status and its label).
 
     `error_headline` / `error_detail` split the book's error message ('' unless the book is in error).
-    `percent` weights each non-excluded page by how far it is through the Phase 2 pipeline
-    (preprocessed 1/3, layout done 2/3, OCR done 3/3). `flags` counts pages that carry attention
+    `percent` is the current step's share of the non-excluded pages (`_pipeline_percent`): prepared pages
+    in «التخطيط», pages whose text was read in «المعالجة». `flags` counts pages that carry attention
     flags or are in error. `active` is true while the book is processing or in OCR. `review` is
     `review.services.book_review_summary` (reviewed / total pages, unresolved words, next URL).
     `manuscript` is `assembly.services.manuscript_state` (exists, latest run, stale pages, …).
@@ -1591,19 +1586,21 @@ def book_sheets(book: Book, first: int, last: int, guides: bool = False) -> dict
 
 
 def _add_guides_blocks(book: Book, pages: list[Page], regions_of: dict[int, list], items: list[dict]) -> None:
-    """Put the `guides` block on each sheet item (two queries: the book guides, the review work)."""
+    """Put the `guides` block on each sheet item (two queries: the book guides with the reference page their
+    running-head cut is anchored on, owner 18, and the review work)."""
     from processing import services as processing  # other app: lazy imports
     from processing.models import LayoutGuides
 
-    guides = LayoutGuides.objects.filter(book=book).first()
+    guides = LayoutGuides.objects.select_related("reference_page__preprocess").filter(book=book).first()
     values, manual = processing.guides_values(guides), processing.is_manual(guides)
+    anchor = processing.guides_anchor(guides)
     awaits = bool(book.awaits_ocr_start)
     review = set() if awaits else processing.review_work_pages(book.pk, [page.pk for page in pages])
     for page, item in zip(pages, items, strict=True):
         locked = processing.page_lock(page, awaits, review)
         pre = _preprocess_of(page)
         item["guides"] = processing.page_guides_payload(
-            page, pre, values, manual, regions_of[page.pk], locked
+            page, pre, values, manual, regions_of[page.pk], locked, anchor
         )
 
 

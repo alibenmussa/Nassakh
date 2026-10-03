@@ -233,9 +233,12 @@ today's.{% endcomment %}
         <kbd class="kbd" aria-hidden="true">G</kbd>
       </label>
       {% if not guides_mode %}
-      <button type="button" class="btn-icon bk-follow" x-show="active" x-cloak :aria-pressed="follow" @click="toggleFollow()" title="تتبّع المعالجة: ينتقل إلى آخر صفحة تقدّمت" aria-label="تتبّع المعالجة">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-eye"/></svg>
-        <span>تتبّع المعالجة</span>
+      {# owner 14: a toggle chip of the viewer while the models read: on, the viewer shows the page being read now and
+         moves on with it (books.js readingPage); a page the reader chooses switches it off #}
+      <button type="button" class="bk-follow" x-show="active && view === 'sheets'" x-cloak :aria-pressed="follow ? 'true' : 'false'" @click="toggleFollow()"
+              title="يعرض تلقائيًا الصفحة التي يُتعرَّف على نصّها الآن وينتقل معها؛ يتوقف حين تختار صفحة بنفسك">
+        <span class="bk-follow-dot" aria-hidden="true"></span>
+        <span>تتبّع الصفحة الجارية</span>
       </button>
       {% endif %}
     </div>

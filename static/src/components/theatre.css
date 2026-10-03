@@ -79,15 +79,61 @@
   .bk-manuscript { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
   .bk-manuscript .bk-side-head { align-self: stretch; }
   .bk-manuscript-line { color: var(--color-text); font-weight: 500; white-space: normal; }
-  .bk-manuscript-open, .bk-manuscript-convert { font-size: 12.5px; font-weight: 500; }
-  .bk-manuscript-convert { padding: 0; border: 0; background: none; cursor: pointer; }
-  .bk-manuscript-convert:hover { text-decoration: underline; }
   /* Phase 5 (PHASE5_SPEC §5, §9): the «الكتاب» block, trim and page count, the drift line, the link to the book page */
   .bk-book { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 12px; border-top: 1px solid var(--color-border); }
   .bk-book .bk-side-head { align-self: stretch; }
   .bk-book-line { color: var(--color-text); font-weight: 500; white-space: normal; font-variant-numeric: tabular-nums; }
   .bk-book-drift { color: var(--color-warning-text); white-space: normal; }
-  .bk-book-open { font-size: 12.5px; font-weight: 500; }
+  /* owner 17: the side panel's actions are rows of the side lists (= ms-toc-link, the attention summary), not blue
+     running text: gray, a hover ground, a small chevron toward the reading direction (RTL: the left) */
+  .bk-side :is(.bk-manuscript-open, .bk-manuscript-convert, .bk-book-changes, .bk-book-open, .gd-reset-book, .gd-stage-delete) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: stretch;
+    min-height: 28px;
+    margin: 0 -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-2);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.4;
+    text-align: start;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .bk-side :is(.bk-manuscript-open, .bk-manuscript-convert, .bk-book-changes, .bk-book-open, .gd-reset-book, .gd-stage-delete)::after {
+    content: "";
+    flex: none;
+    width: 5px;
+    height: 5px;
+    margin-inline-start: auto;
+    border-left: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    opacity: 0.45;
+    transform: rotate(45deg);
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+  .bk-side :is(.bk-manuscript-open, .bk-manuscript-convert, .bk-book-changes, .bk-book-open, .gd-reset-book, .gd-stage-delete):hover {
+    background: var(--color-hover);
+    color: var(--color-text);
+    text-decoration: none;
+  }
+  .bk-side :is(.bk-manuscript-open, .bk-manuscript-convert, .bk-book-changes, .bk-book-open, .gd-reset-book, .gd-stage-delete):hover::after { opacity: 0.8; transform: translateX(-2px) rotate(45deg); }
+  .bk-side :is(.bk-manuscript-open, .bk-manuscript-convert, .bk-book-changes, .bk-book-open, .gd-reset-book, .gd-stage-delete):focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+  /* the step forward of a block (open the manuscript, open the book) is the one in ink */
+  .bk-side :is(.bk-manuscript-open, .bk-book-open) { color: var(--color-text); }
+  .bk-side .gd-stage-delete { color: var(--color-danger-text); }
+  .bk-side .gd-stage-delete:hover { background: var(--color-danger-bg); color: var(--color-danger-text); }
+  .bk-side .gd-stage-delete::after { display: none; }
+  /* the attention list: «صفحة 12» in ink, the accent only under the pointer (owner 17) */
+  .bk-attention-row > .link { color: var(--color-text); font-weight: 500; white-space: nowrap; }
+  .bk-attention-row > .link:hover { color: var(--color-accent-text); text-decoration: none; }
 
   /* ------------------------------------------------------------ sticky toolbar (§2.2) */
   .bk-toolbar {
@@ -147,7 +193,31 @@
   .bk-jump input:focus { outline: none; box-shadow: var(--ring); }
   .bk-jump input::-webkit-outer-spin-button, .bk-jump input::-webkit-inner-spin-button { appearance: none; }
   .bk-jump .kbd { position: absolute; right: 8px; pointer-events: none; }
-  .bk-follow { width: auto; padding: 0 8px; gap: 6px; font-size: 12.5px; font-weight: 500; display: inline-flex; align-items: center; }
+  /* owner 14: «تتبّع الصفحة الجارية», a toggle chip of the filter chips' size (DESIGN §6); on, its dot breathes */
+  .bk-follow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--color-text-2);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+  }
+  .bk-follow:hover { background: var(--color-hover); color: var(--color-text); }
+  .bk-follow:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .bk-follow[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); border-color: transparent; }
+  .bk-follow-dot { flex: none; width: 7px; height: 7px; border-radius: var(--radius-pill); box-shadow: inset 0 0 0 1.5px currentColor; }
+  .bk-follow[aria-pressed="true"] .bk-follow-dot { background: var(--color-accent); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); animation: bk-follow-pulse 1.6s ease-out infinite; }
+  @keyframes bk-follow-pulse { from { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45); } to { box-shadow: 0 0 0 5px rgba(37, 99, 235, 0); } }
+  @media (prefers-reduced-motion: reduce) { .bk-follow[aria-pressed="true"] .bk-follow-dot { animation: none; } }
 
   /* ------------------------------------------------------------ banners and summary strip (§2.3, §2.4) */
   .bk-banners { display: flex; flex-direction: column; gap: 8px; margin-top: -16px; }
@@ -402,9 +472,12 @@
     border-radius: var(--radius-sm);
     background: var(--color-bg-muted);
     box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.06);
-    overflow: hidden;
+    /* owner 28: not clipped, so the hovered line's number beside it is never cut by the frame's edge; only the
+       sweep, which travels past the frame, is clipped while it runs */
+    overflow: visible;
   }
-  .sheet-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .sheet-scan.scan-sweep { overflow: hidden; }
+  .sheet-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; border-radius: inherit; }
   .sheet-img[hidden] { display: none; }
   .sheet-img-scan { filter: saturate(0.85); }
   .sheet-img-clean { opacity: 0; transition: opacity 200ms ease; }
@@ -435,12 +508,15 @@
   }
   .sheet-line.is-lit { opacity: 1; background: var(--color-accent-soft); box-shadow: inset 0 1px 0 rgba(37, 99, 235, 0.16), inset 0 -1px 0 rgba(37, 99, 235, 0.16); } /* = rv-band */
   .sheet-line.is-lit-2 { opacity: 0.5; background: var(--color-accent-soft); }
-  .sheet-line.is-hot { opacity: 1; background: rgba(37, 99, 235, 0.12); box-shadow: 0 0 0 1.5px rgba(37, 99, 235, 0.7), 0 0 0 6px rgba(37, 99, 235, 0.14); } /* = rv-box.is-hot */
+  .sheet-line.is-hot { z-index: 3; opacity: 1; background: rgba(37, 99, 235, 0.12); box-shadow: 0 0 0 1.5px rgba(37, 99, 235, 0.7), 0 0 0 6px rgba(37, 99, 235, 0.14); } /* = rv-box.is-hot */
+  /* owner 28: the line's number sits at its start, the physical right of an Arabic line (the layer is dir="ltr"),
+     clear of the 6 px ring, above the other boxes */
   .sheet-line.is-hot::before {
     content: attr(data-n);
     position: absolute;
-    right: 100%;
-    margin-right: 6px;
+    left: 100%;
+    margin-left: 8px;
+    z-index: 3;
     top: 50%;
     transform: translateY(-50%);
     font: 10.5px/15px var(--font-sans);
@@ -603,6 +679,8 @@
     bottom: 0;
     height: 3px;
     background: rgba(16, 16, 20, 0.08);
+    border-radius: 0 0 var(--radius-xs) var(--radius-xs); /* the frame does not clip (owner 4): the bar rounds itself */
+    overflow: hidden;
     opacity: 1;
     transition: opacity 200ms ease 200ms;
   }
@@ -610,20 +688,21 @@
   .tile-stage.is-done { opacity: 0; }
   .tile-stage.is-done .tile-stage-fill { background: var(--color-accent); }
   .tile-stage.is-error .tile-stage-fill { background: var(--color-danger); }
-  .page-tile-thumb::after { content: ""; position: absolute; left: 0; right: 0; top: 0; pointer-events: none; opacity: 0; }
+  /* the sweep and the reading line are a background moving inside the frame's own box: nothing leaves the frame,
+     so the frame needs no `overflow: hidden` that would clip the review marks on its corner (owner 4) */
+  .page-tile-thumb::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; background-repeat: no-repeat; }
   .page-grid.is-active .page-tile.is-near[data-status="uploaded"] .page-tile-thumb::after {
     opacity: 1;
-    height: 14%;
-    background: linear-gradient(to bottom, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.4) 50%, rgba(255, 255, 255, 0));
-    border-bottom: 1px solid rgba(37, 99, 235, 0.25);
-    animation: bk-sweep 2.4s linear infinite;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.4) 50%, rgba(255, 255, 255, 0) calc(100% - 1px), rgba(37, 99, 235, 0.25) calc(100% - 1px));
+    background-size: 100% 14%;
+    animation: bk-tile-sweep 2.4s linear infinite;
   }
   .page-grid.is-active .page-tile.is-near[data-status="preprocessed"] .page-tile-thumb::after,
   .page-grid.is-active .page-tile.is-near[data-status="layout_done"] .page-tile-thumb::after {
     opacity: 1;
-    height: 1px;
-    background: rgba(24, 24, 27, 0.18);
-    animation: bk-read 2.4s linear infinite;
+    background-image: linear-gradient(rgba(24, 24, 27, 0.18), rgba(24, 24, 27, 0.18));
+    background-size: 100% 1px;
+    animation: bk-tile-read 2.4s linear infinite;
   }
   .page-tile.is-excluded .page-tile-thumb::after, .page-tile.is-error .page-tile-thumb::after { display: none; }
   .bk-mark-check { /* = rv-thumb-mark.is-check */
@@ -668,6 +747,9 @@
   .bk-dashboard.is-guides .bk-viewer .sheet-body { gap: 0; }
   .bk-dashboard.is-guides .bk-viewer .gd-page { width: min(calc(100cqh * var(--ar-n, .7)), 100cqw); }
   .bk-dashboard.is-guides .page-tile-thumb { aspect-ratio: var(--tile-ar, 3 / 4); }
+  /* owner 3: the bands are drawn in the prepared image's space, so a page that has a prepared thumbnail never shows
+     its original scan (another crop, another angle) under them, not even while the thumbnail loads */
+  .bk-dashboard.is-guides .page-tile-thumb:has(> .page-tile-clean:not([hidden])) > .page-tile-scan { visibility: hidden; }
   /* the head speaks of the layout: no text states; the status only while a page is not prepared */
   .bk-dashboard.is-guides .sheet-head :is(.bk-provisional, .sheet-unresolved, .bk-reviewed, .sheet-flags, .sheet-actions, .sheet-printed) { display: none; }
   .bk-dashboard.is-guides .page-sheet:not([data-status="uploaded"]):not([data-status="error"]) .sheet-head > .status { display: none; }
@@ -692,7 +774,10 @@
   @keyframes bk-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
   @keyframes bk-sheen { from { background-position-x: 0%; } to { background-position-x: 100%; } }
   @keyframes bk-sweep { from { transform: translateY(-100%); } to { transform: translateY(814%); } }
-  @keyframes bk-read { from { top: 0; } to { top: 100%; } }
+  /* the grid tile's sweep and reading line as a moving background (a 14 % band: -16.3 % is just above the frame,
+     116.3 % just below it) */
+  @keyframes bk-tile-sweep { from { background-position: 0 -16.3%; } to { background-position: 0 116.3%; } }
+  @keyframes bk-tile-read { from { background-position: 0 0; } to { background-position: 0 100%; } }
 
   /* ------------------------------------------------------------ responsive + reduced motion (§2.6, §10) */
   /* D34 amended: in the viewer the whole side panel scrolls (summary, manuscript, thumbnails as one column); the

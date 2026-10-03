@@ -200,6 +200,7 @@ document.addEventListener('alpine:init', () => {
   const SHEET_RETRY_MS = 2000; // a failed sheets request is retried after 2 s, 4 s, 8 s … up to 15 s
   const SHEET_RETRY_MAX_MS = 15000;
   const FOLLOW_MIN_MS = 2000;
+  const FOLLOW_LINGER_MS = 2600; // the page on screen got its final text: its wave lands before the viewer moves on
   const SCROLL_SAVE_MS = 1200; // the grid saves its scroll this long after it stops
   const DONE_TOAST_MS = 8000;
   const PULSE_MS = 500;
@@ -346,6 +347,7 @@ document.addEventListener('alpine:init', () => {
     let thumbTpl = null;
     let focusedId = null;
     let lastFollowAt = 0;
+    let followTimer = null; // the turn that waits for the wave of the page on screen
     let scrollSaveTimer = null;
     let resizeTimer = null;
     let doneTimer = null;
@@ -471,6 +473,7 @@ document.addEventListener('alpine:init', () => {
       clearTimeout(filmTimer);
       clearTimeout(wheelTimer);
       clearTimeout(scrollSaveTimer);
+      clearTimeout(followTimer);
       handles.forEach((h) => h.destroy());
       handles.clear();
       if (nearObserver) { nearObserver.disconnect(); farObserver.disconnect(); }
@@ -655,7 +658,7 @@ document.addEventListener('alpine:init', () => {
         this.liveMessage = `الصفحة ${last.number}: ${last.status_label}`;
         // refetched now: the pages on screen or near it, and the viewer's next turns (its neighbours and the
         // follow target), so a turn lands on laid-out text instead of a skeleton (§11)
-        const ahead = new Set([this.neighbour(1), this.neighbour(-1), this.active && this.follow ? this.followTarget(changed) : null]);
+        const ahead = new Set([this.neighbour(1), this.neighbour(-1), this.active && this.follow ? this.readingPage() : null]);
         changed.forEach(({ after }) => { if (mounted.has(id(after)) || this.tileNear(id(after)) || ahead.has(after.number)) this.queueSheet(after.number); });
       }
       // the mode's bands and doubts follow the pages that changed (a page prepared, failed or re-included)
@@ -1115,34 +1118,56 @@ document.addEventListener('alpine:init', () => {
     get filmCount() {
       return this.counts[this.filter] || 0;
     },
+    // «تتبّع الصفحة الجارية» (§8.3 as amended, owner 14): the viewer shows the page the models are reading now and
+    // moves on with them; switched on, it goes there at once.
     toggleFollow() {
       this.follow = !this.follow;
       writeLocal(FOLLOW_KEY, this.follow ? '1' : '0');
+      clearTimeout(followTimer);
+      followTimer = null;
+      if (this.follow) { lastFollowAt = 0; this.followChanged([]); }
     },
     userScrolled() {
+      clearTimeout(followTimer);
+      followTimer = null;
       if (!this.follow) return;
       this.follow = false;
       writeLocal(FOLLOW_KEY, '0');
       toast('أُوقف التتبّع');
     },
-    // The highest-numbered page that just entered provisional text or finished OCR (§8.3), or null.
-    followTarget(changed) {
-      let best = null;
-      changed.forEach(({ before, after }) => {
-        const entered = (before.text_state !== 'provisional' && after.text_state === 'provisional')
-          || (before.status !== 'ocr_done' && after.status === 'ocr_done');
-        if (entered && !after.is_excluded && (best === null || after.number > best)) best = after.number;
+    // The page the models are reading now, or null (§8.3 as amended, owner 14): they read the pages in order, so it
+    // is the lowest-numbered page still in progress that has Tesseract's provisional text, else the lowest-numbered
+    // page still in progress. (The old target, the highest page that just got provisional text, ran ahead to the
+    // book's end within a minute, since Tesseract's quick pass reads every page long before the models.)
+    readingPage() {
+      let reading = null;
+      let next = null;
+      pages.forEach((p) => {
+        if (p.is_excluded || p.error || !PROCESSING_STATUSES.includes(p.status)) return;
+        if (p.text_state === 'provisional' && (reading === null || p.number < reading)) reading = p.number;
+        if (next === null || p.number < next) next = p.number;
       });
-      return best;
+      return reading !== null ? reading : next;
     },
+    // After a poll (and when switched on): turn to the page being read, at most once every 2 s; when the page on
+    // screen has just got its final text, its wave (D28) plays first and the viewer moves on after it.
     followChanged(changed) {
-      if (this.view !== 'sheets') return; // in the viewer, following turns to the page that advanced
-      const n = this.followTarget(changed);
-      if (n === null) return;
-      const now = Date.now();
-      if (now - lastFollowAt < FOLLOW_MIN_MS) return;
-      lastFollowAt = now;
-      this.goTo(n, false);
+      if (!this.follow || !this.active || this.view !== 'sheets') return;
+      const n = this.readingPage();
+      if (n === null || n === this.current) return;
+      const go = () => {
+        followTimer = null;
+        if (!this.follow || !this.active || this.view !== 'sheets') return;
+        const m = this.readingPage();
+        if (m === null || m === this.current) return;
+        lastFollowAt = Date.now();
+        this.goTo(m, false);
+      };
+      const finished = (changed || []).some(({ before, after }) => after.number === this.current && !DONE_STATUSES.includes(before.status) && DONE_STATUSES.includes(after.status));
+      if (finished) { clearTimeout(followTimer); followTimer = setTimeout(go, FOLLOW_LINGER_MS); return; }
+      if (followTimer) return; // a wave is playing: the timer turns afterwards
+      if (Date.now() - lastFollowAt < FOLLOW_MIN_MS) return;
+      go();
     },
 
     // ------------------------------------------------------------ jump, keyboard, position
@@ -1795,6 +1820,10 @@ document.addEventListener('alpine:init', () => {
         if (cleanSrc && cleanImg.getAttribute('src') !== cleanSrc) {
           cleanImg.classList.remove('is-ready');
           cleanImg.setAttribute('src', cleanSrc);
+        }
+        // owner 3: a tile rendered by the server already has its src, so its readiness is wired here too (else
+        // the prepared thumbnail stayed at opacity 0 and the grid showed the original scan under the bands)
+        if (cleanSrc && !cleanImg.classList.contains('is-ready')) {
           cleanImg.onload = () => cleanImg.classList.add('is-ready');
           if (cleanImg.complete && cleanImg.naturalWidth) cleanImg.classList.add('is-ready');
         }

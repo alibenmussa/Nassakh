@@ -1309,6 +1309,93 @@ def test_layout_doubts_one_per_code_and_their_suppression(book):
     assert services.doubt_items(["line_cut"]) == [{"code": "line_cut", "label": "خط يقطع سطرًا"}]
 
 
+# ---------------------------------------------------------------- owner 18: the running-head cut fitted per page
+
+# Real geometry (book 30, read only): a usual page, a page with a deeper top margin, a shorter page, a chapter
+# opening, a page scanned at half the scale, a narrow strip with one line. `(w, h, rows)`, rows `(y0, y1)` px.
+FIT_PAGES = {
+    "usual": (1476, 2262, [(69, 97), (437, 458), (585, 603)]),
+    "deep": (1483, 2417, [(145, 164), (267, 293), (476, 496)]),
+    "short": (1457, 836, [(69, 95), (380, 394)]),
+    "chapter": (1476, 2262, [(600, 680), (800, 820)]),
+    "half": (738, 1131, [(35, 49), (219, 229)]),
+    "strip": (770, 152, [(78, 104)]),
+}
+
+
+def _fit_page(book: Book, number: int, name: str) -> Page:
+    w, h, rows = FIT_PAGES[name]
+    page = make_page(book, number, w=w, h=h)
+    boxes = [{"x0": 40, "y0": y0, "x1": w - 40, "y1": y1} for y0, y1 in rows]
+    Preprocess.objects.filter(page=page).update(line_boxes=boxes, n_lines=len(boxes))
+    return Page.objects.select_related("preprocess").get(pk=page.pk)
+
+
+@pytest.mark.django_db
+def test_header_cut_fitted_to_each_page_from_its_own_geometry(book):
+    """One book ratio (6 %) set on the usual page: the page with a deeper top margin and the shorter page get the
+    cut the same distance under their running head (in page widths), where 6 % of their height fell above it;
+    pages where 6 % already works (the half-scale scan) never move; a chapter opening far from the usual top and a
+    strip where the cut would pass half the page keep the plain ratio; with no anchor a cut through a line moves
+    to the nearer gap; a page without lines keeps the ratio."""
+    pages = {name: _fit_page(book, n, name) for n, name in enumerate(FIT_PAGES, start=1)}
+    pre = {name: page.preprocess for name, page in pages.items()}
+    anchor = services.header_anchor(0.06, pre["usual"])
+    assert anchor == pytest.approx((69 / 1476, (0.06 * 2262 - 69) / 1476))
+    fit = {name: services.fit_header_cut(0.06, p, anchor) for name, p in pre.items()}
+    assert fit["usual"] == 0.06 and fit["half"] == 0.06 and fit["chapter"] == 0.06 and fit["strip"] == 0.06
+    assert fit["deep"] * 2417 == round(145 + anchor[1] * 1483)  # under the head (145-164), above 267, whole px
+    assert 164 < fit["deep"] * 2417 < 267 and 0.06 * 2417 < 164  # the plain 6 % left the head in the body
+    assert 95 < fit["short"] * 836 < 380 and 0.06 * 836 < 69  # the plain 6 % fell above the head
+    # no page anchors a cut above its first row or through a line
+    assert services.header_anchor(0.06, pre["deep"]) is None and services.header_anchor(0.06, pre["short"]) is None
+    assert services.header_anchor(0.05, pre["usual"]) is not None and services.header_anchor(0.035, pre["usual"]) is None
+    # without an anchor: a cut through a line goes to the nearer gap (100-130: 10 px to its foot, 20 to its top)
+    lone = _pre(pages["usual"], output_height=2000, line_boxes=[{"x0": 0, "y0": 100, "x1": 900, "y1": 130}, {"x0": 0, "y0": 500, "x1": 900, "y1": 520}])
+    assert services.fit_header_cut(0.06, lone) == (130 + 500) / 2 / 2000
+    assert services.fit_header_cut(0.06, _pre(pages["chapter"], line_boxes=[], n_lines=0), anchor) == 0.06
+
+
+@pytest.mark.django_db
+def test_header_reference_prefers_the_page_it_came_from_else_the_usual_page(book):
+    pages = [_fit_page(book, n, name) for n, name in enumerate(FIT_PAGES, start=1)]
+    by = dict(zip(FIT_PAGES, pages, strict=True))
+    assert services.header_reference(pages, 0.06, by["usual"].pk) == by["usual"].pk
+    # the deeper page cannot anchor 6 % (its head lies under it): the usual geometry is chosen instead
+    assert services.header_reference(pages, 0.06, by["deep"].pk) in (by["usual"].pk, by["half"].pk)
+    assert services.header_reference(pages, None) is None
+    assert services.header_reference([by["chapter"]], 0.06) is None
+
+
+@pytest.mark.django_db
+def test_applying_a_running_head_to_all_pages_fits_each_page_and_undo_restores_its_anchor(waiting):
+    """Owner 18 through the side panel: «تطبيق على كل الصفحات» of a 6 % cut taken from the usual page stores that page
+    as the anchor; every page's band follows its own geometry (the compact entries, the preview's `header_at`, the
+    regions `layout_page` writes); the undo restores the previous value and anchor exactly."""
+    pages = {name: _fit_page(waiting, n, name) for n, name in enumerate(FIT_PAGES, start=1)}
+    usual = pages["usual"]
+    preview = services.preview_book_guides(waiting, {"header_cut": 0.06}, from_page=usual.pk, stage="layout")
+    assert set(preview["header_at"]) == {str(pages["deep"].pk), str(pages["short"].pk)}
+    first = services.apply_book_guides(waiting, {"header_cut": 0.06}, from_page=usual.pk, stage="layout")
+    guides = LayoutGuides.objects.get(book=waiting)
+    assert guides.reference_page_id == usual.pk and first["undo"] == {"book": None, "overrides": {}}
+    head = {e["id"]: e["b"][0] for e in first["pages"]}  # [kind, y0, y1]: the running head first
+    for name in ("usual", "half", "chapter"):  # the plain 6 % (to the pixel)
+        assert head[pages[name].pk][:2] == ["h", 0.0] and head[pages[name].pk][2] == pytest.approx(0.06, abs=5e-4)
+    assert head[pages["deep"].pk][2] == preview["header_at"][str(pages["deep"].pk)] > 0.06
+    assert head[pages["short"].pk][2] == preview["header_at"][str(pages["short"].pk)] > 0.06
+    # the regions written at «بدء المعالجة» take the same per-page cut (one query for the guides and their anchor)
+    deep = Page.objects.select_related("preprocess").get(pk=pages["deep"].pk)
+    specs = services.page_region_specs(deep, deep.preprocess)
+    assert specs[0][0] == "running_header" and 164 < specs[0][1][3] < 267
+    # a second value typed in the side panel (no page): anchored on the book's usual page; its undo is exact
+    second = services.apply_book_guides(waiting, {"header_cut": 0.05}, stage="layout")
+    assert second["undo"]["book"]["header_cut"] == 0.06 and second["undo"]["book"]["reference_page"] == usual.pk
+    services.restore_book_guides(waiting, second["undo"], stage="layout")
+    guides.refresh_from_db()
+    assert (guides.header_cut, guides.reference_page_id) == (0.06, usual.pk)
+
+
 # ---------------------------------------------------------------- Phase 7a: guide edits and the stage rule
 
 

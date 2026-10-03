@@ -196,7 +196,7 @@
   }
 
   /* ---------------------------------------------------------- bands on the grid tiles and the filmstrip */
-  .gd-bands { position: absolute; inset: 0; pointer-events: none; }
+  .gd-bands { position: absolute; inset: 0; pointer-events: none; border-radius: inherit; overflow: hidden; } /* the tile frame itself does not clip (owner 4) */
   .gd-b { position: absolute; background: hsl(var(--region-h) 60% 52% / 0.12); box-shadow: inset 0 0 0 1px hsl(var(--region-h) 60% 44% / 0.55); }
   .gd-b.region-body { background: transparent; box-shadow: inset 0 0 0 1px hsl(var(--region-h) 60% 44% / 0.35); }
   .bk-thumb .gd-b { box-shadow: inset 0 0 0 0.5px hsl(var(--region-h) 60% 44% / 0.6); }
@@ -216,23 +216,60 @@
   .bk-chip .gd-doubt-dot { margin-inline-end: 1px; }
 
   /* ---------------------------------------------------------- the side panel (on the end side, D34) */
-  .gd-side .link { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
-  .gd-side .link:hover { text-decoration: underline; }
+  /* owner 17: no blue running text here. «إزالة الضبط العام» and «حذف الكتاب…» are side-list rows (theatre.css, with the
+     dashboard's «فتح المخطوطة»); «من هذه الصفحة» and the median are quiet chips beside their field; the page numbers of
+     the preview stay in the line's own colour, dotted */
+  .gd-side .gd-preview-pages .link { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+  .gd-side .gd-preview-pages .link:hover { text-decoration-style: solid; }
   .gd-stage { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-size: 12.5px; }
   .gd-stage .bk-side-head { align-self: stretch; }
   .gd-stage-line { color: var(--color-text); font-weight: 500; font-variant-numeric: tabular-nums; white-space: normal; }
-  .gd-stage-doubts { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--color-warning-text); font: inherit; font-weight: 500; cursor: pointer; }
-  .gd-stage-doubts:hover span:last-child { text-decoration: underline; }
+  .gd-stage-doubts {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    align-self: stretch;
+    min-height: 28px;
+    margin: 0 -8px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-warning-text);
+    font: inherit;
+    font-weight: 500;
+    text-align: start;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .gd-stage-doubts:hover { background: var(--color-warning-bg); }
+  .gd-stage-doubts:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
   .gd-stage-range { font-variant-numeric: tabular-nums; }
-  .gd-side .gd-stage-delete { color: var(--color-danger); font-size: 12.5px; }
   .gd-all { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--color-border); font-size: 12.5px; }
   .gd-field { display: flex; flex-direction: column; gap: 6px; }
   .gd-field .check { font-size: 12.5px; font-weight: 500; }
   .gd-input { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding-inline-start: 23px; }
   .gd-input .input { width: 64px; height: 28px; padding: 0 8px; text-align: left; font-variant-numeric: tabular-nums; }
-  .gd-input .link { font-size: 12px; }
+  .gd-input .link {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-muted);
+    color: var(--color-text-2);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .gd-input .link:hover { background: var(--color-active); color: var(--color-text); text-decoration: none; }
+  .gd-input .link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
   .gd-stats { margin: 0; line-height: 1.55; }
-  .gd-side .gd-reset-book { align-self: flex-start; font-size: 12px; color: var(--color-text-2); }
   .gd-preview {
     display: flex;
     flex-direction: column;

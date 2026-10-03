@@ -97,11 +97,13 @@
     border-radius: var(--radius-xs);
     background: var(--color-bg-muted);
     box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.06);
-    overflow: hidden;
+    /* owner 4: not clipped, so the review marks (`.bk-mark-check`, `.bk-mark-count`) hang over the corner whole;
+       what lies inside keeps the rounded frame itself (`border-radius: inherit`), the sweep is a background */
+    overflow: visible;
     transition: transform 150ms ease-out, box-shadow 150ms ease-out;
   }
   .page-tile:hover .page-tile-thumb { transform: translateY(-2px); box-shadow: var(--shadow-hover), inset 0 0 0 1px rgba(16, 16, 20, 0.06); }
-  .page-tile-img { display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; }
+  .page-tile-img { display: block; width: 100%; height: 100%; object-fit: contain; background: #fff; border-radius: inherit; }
   /* The reveal: the scan shows first, the cleaned thumbnail fades in over it (no spinner). */
   .page-tile-scan, .page-tile-clean { position: absolute; inset: 0; }
   .page-tile-clean { opacity: 0; transition: opacity 200ms ease; }

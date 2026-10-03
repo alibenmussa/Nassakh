@@ -16,7 +16,8 @@
           "header_cut": null,
           "footnote_line": 0.781,
           "page_number_zone": "bottom",
-          "page_number_height": 0.06
+          "page_number_height": 0.06,
+          "reference_page": 812
         },
         "overrides": {}
       },
@@ -104,7 +105,8 @@
           "header_cut": null,
           "footnote_line": 0.781,
           "page_number_zone": "bottom",
-          "page_number_height": 0.06
+          "page_number_height": 0.06,
+          "reference_page": 812
         },
         "overrides": {}
       },
@@ -120,7 +122,8 @@
           "header_cut": 0.062,
           "footnote_line": null,
           "page_number_zone": "none",
-          "page_number_height": 0.06
+          "page_number_height": 0.06,
+          "reference_page": 812
         },
         "overrides": {}
       },

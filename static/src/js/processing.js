@@ -354,6 +354,7 @@
             if (JSON.stringify(this.draftBody()) !== asked) return null; // the draft moved on meanwhile
             this.preview = data;
             this.live = [this.previewChanged, this.previewCut, this.previewReocr].filter(Boolean).join(' ');
+            if (data && data.header_at && Object.keys(data.header_at).length) this.redraw(); // the draft at this page's own cut
             return data;
           } catch (err) {
             this.failed(err, true); // a value the server refuses is said under the controls, not in a toast
@@ -478,8 +479,15 @@
           });
           const change = pending.get(String(pid));
           if (change) { applyChange(v, change); v.pending = true; }
-          if (this.draft && this.draft.set && String(pid) === this.pageId) v.draft = draftLines(base, this.draft.set);
+          if (this.draft && this.draft.set && String(pid) === this.pageId) v.draft = draftLines(base, this.fittedSet(pid, this.draft.set));
           return v;
+        },
+        // Owner 18: the book's running-head cut lands on each page from the page's own geometry; the preview names the
+        // pages where that is not the plain value (`header_at`), and the draft is drawn there.
+        fittedSet(pid, set) {
+          const at = this.preview && this.preview.header_at ? this.preview.header_at[String(pid)] : undefined;
+          if (at === undefined || !set || set.header_cut === null || set.header_cut === undefined) return set;
+          return Object.assign({}, set, { header_cut: Number(at) });
         },
         // A change to one page: saved at once in «التخطيط», held for the explicit save in «المعالجة».
         change(pid, change, focusKind) {

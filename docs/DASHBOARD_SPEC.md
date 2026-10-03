@@ -89,8 +89,9 @@ backdrop-filter: blur(12px); border-bottom: 1px solid var(--color-border)`, grou
   Persisted `nassakh.bookFilter.<book_id>`; default «الكل». Excluded pages match only «الكل».
 - End: **jump field** (search-input style: 34 px, `--color-bg-muted`, no border, width 112 px,
   `inputmode="numeric"`, `dir="ltr"`, placeholder «إلى صفحة…», `aria-label="الانتقال إلى صفحة"`,
-  trailing `<kbd class="kbd">G</kbd>`), then the **follow toggle** `.bk-follow` (`btn-icon` with label
-  «تتبّع المعالجة», `aria-pressed`, visible only while `active`; §8).
+  trailing `<kbd class="kbd">G</kbd>`), then the **follow toggle** `.bk-follow` (a 26 px toggle chip of the
+  filter chips' look with a dot that breathes when on, label «تتبّع الصفحة الجارية», `aria-pressed`, visible only
+  in «صفحات» while `active`; §8; owner review 2026-10-03 item 14, was an icon button «تتبّع المعالجة»).
 - Below 900 px the toolbar wraps to two 40 px rows; chips scroll horizontally
   (`overflow-x: auto; scrollbar-width: none`).
 
@@ -543,10 +544,14 @@ tiles too (`hidden`). Density: 132 px min (104 px below 560 px).
 2. **Filters** (§2.2) set `hidden` on non-matching shells/tiles in one loop; the empty result shows the
    review-style line «لا صفحات تطابق هذا المرشّح»; counts update from every poll without layout shifts
    (`tabular-nums`, chips have `min-width`).
-3. **Follow processing** («تتبّع المعالجة», default off, persisted `nassakh.bookFollow`): when on, after a
-   poll the viewer turns (at most once per 2 s) to the highest-numbered page that just entered
-   `provisional` or `ocr_done`; any page the reader chooses (turn, key, wheel, swipe, filmstrip, jump)
-   turns it off with a quiet toast «أُوقف التتبّع». Only in «صفحات» view while `active`.
+3. **Follow processing** («تتبّع الصفحة الجارية», default off, persisted `nassakh.bookFollow`): when on, the
+   viewer shows the page the models are reading now (`readingPage`: the lowest-numbered page in progress with
+   Tesseract's provisional text, else the lowest in progress; the models read in order) — at once when switched
+   on, then after each poll (at most once per 2 s); when the page on screen has just got its final text its
+   wave plays first (2.6 s) and the viewer moves on after it. Any page the reader chooses (turn, key, wheel,
+   swipe, filmstrip, jump) turns it off with a quiet toast «أُوقف التتبّع». Only in «صفحات» view while `active`.
+   (Owner review 2026-10-03, item 14: the old target, the highest page that just got provisional text, ran to
+   the book's end within a minute, since Tesseract's quick pass reads every page long before the models.)
 4. **Attention where the page is.** Flags, sequence issue and the error headline sit in the sheet head with
    the inline «إعادة <stage>» retry; the side panel's `<details>` and the «تحتاج انتباهًا» chip give the overview.
 5. **Hover linking** both ways with the line-number badge on the scan; click a final line → the review page.

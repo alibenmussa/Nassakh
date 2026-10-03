@@ -98,7 +98,11 @@ def test_dashboard_toolbar_static_shells_and_grid_cards(editor_client):
     for name in ("all", "processing", "review", "attention", "reviewed"):
         assert f"setFilter('{name}')" in chips and f'x-text="counts.{name}"' in chips
     assert 'inputmode="numeric" dir="ltr" placeholder="إلى صفحة…" aria-label="الانتقال إلى صفحة"' in body
-    assert '<kbd class="kbd" aria-hidden="true">G</kbd>' in body and 'class="btn-icon bk-follow"' in body
+    assert '<kbd class="kbd" aria-hidden="true">G</kbd>' in body and 'class="bk-follow"' in body
+    # owner 14: the follow toggle says what it does and lives in the viewer only
+    assert "تتبّع الصفحة الجارية" in body and "x-show=\"active &amp;&amp; view === 'sheets'\"" in body or (
+        "x-show=\"active && view === 'sheets'\"" in body
+    )
     assert 'class="bk-toolbar"' in body and 'class="bk-summary"' in body and 'class="bk-attention"' in body
     # summary strip: the five stage counters replace the cards
     assert "stage-card" not in body and "attention-card" not in body
@@ -779,12 +783,38 @@ out.phase5 = { fresh: p5fresh, drift: p5drift, stale: p5stale, reader: p5reader,
 const dEnd = mk();
 dEnd.apply({ total: 3, percent: 100, flags: 0, status: 'ready_for_review', status_label: 'جاهز للمراجعة', dot: 'dot-success', by_status: {}, active: false, review: { reviewed: 0, total: 2, unresolved_total: 4, next_review_url: '/books/1/review/1/' }, pages: [] });
 out.end = { active: dEnd.active, toast: { ...dEnd.doneToast }, reloaded: out.reloaded || false, primary: dEnd.primary, label: dEnd.statusText };
-out.follow = dEnd.followTarget([
-  { before: { status: 'layout_done', text_state: 'none' }, after: { number: 5, status: 'layout_done', text_state: 'provisional' } },
-  { before: { status: 'layout_done', text_state: 'provisional' }, after: { number: 7, status: 'ocr_done', text_state: 'final' } },
-  { before: { status: 'uploaded', text_state: 'none' }, after: { number: 9, status: 'preprocessed', text_state: 'none' } },
-  { before: { status: 'layout_done', text_state: 'none' }, after: { number: 11, status: 'ocr_done', text_state: 'final', is_excluded: true } },
-]);
+// owner 14: «تتبّع الصفحة الجارية» shows the page the models read now (the lowest page in progress with Tesseract's
+// provisional text; error and excluded pages skipped), at once when switched on; the page on screen that just got its
+// final text keeps the viewer until its wave has played (a 2.6 s timer), then the viewer moves on
+const reader = mk({ pages: [
+  { id: 21, number: 1, status: 'ocr_done', text_state: 'final' },
+  { id: 22, number: 2, status: 'layout_done', text_state: 'provisional', error: true },
+  { id: 23, number: 3, status: 'layout_done', text_state: 'provisional', is_excluded: true },
+  { id: 24, number: 4, status: 'layout_done', text_state: 'provisional' },
+  { id: 25, number: 5, status: 'layout_done', text_state: 'provisional' },
+  { id: 26, number: 6, status: 'preprocessed', text_state: 'none' },
+] });
+const turned = [];
+reader.goTo = (n) => { turned.push(n); reader.current = n; };
+reader.view = 'sheets'; reader.follow = false; reader.current = 1;
+const followOut = { target: reader.readingPage() };
+reader.toggleFollow();
+followOut.onTurn = turned.slice();
+const lingerFrom = timers.length;
+reader.apply({ total: 6, percent: 17, flags: 0, status: 'ocr', status_label: 'قيد المعالجة', dot: 'dot-accent', by_status: {}, active: true,
+  pages: [{ id: 24, number: 4, status: 'ocr_done', text_state: 'final' }] });
+followOut.afterFinish = turned.slice();
+const linger = timers.slice(lingerFrom).filter((t) => t.ms === 2600);
+followOut.linger = linger.length;
+linger.forEach((t) => t.fn());
+followOut.afterWave = turned.slice();
+reader.view = 'grid'; reader.apply({ total: 6, percent: 33, flags: 0, status: 'ocr', status_label: 'قيد المعالجة', dot: 'dot-accent', by_status: {}, active: true,
+  pages: [{ id: 25, number: 5, status: 'ocr_done', text_state: 'final' }] });
+timers.slice(lingerFrom).filter((t) => t.ms === 2600).forEach((t) => t.fn());
+followOut.inGrid = turned.slice(); // the grid never moves by itself
+reader.toggleFollow();
+followOut.off = reader.follow;
+out.follow = followOut;
 out.keys = [dash.keyAction({ key: 'g', code: 'KeyG' }, false), dash.keyAction({ key: 'g', code: 'KeyG' }, true), dash.keyAction({ key: 'ArrowLeft' }, false), dash.keyAction({ key: 'Escape' }, true), dash.keyAction({ key: 'n', code: 'KeyN', metaKey: true }, false), dash.keyAction({ key: '2' }, false),
   dash.keyAction({ key: 'ر', code: 'KeyV' }, false), dash.keyAction({ key: 'ل', code: 'KeyG' }, false), dash.keyAction({ key: 'v', code: 'KeyV', isComposing: true }, false)];
 // auth loss stops polling quietly
@@ -1351,7 +1381,16 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
         "primary": "review",
         "label": "جاهز للمراجعة",
     }
-    assert out["follow"] == 7  # highest page that entered provisional / ocr_done (excluded pages skipped)
+    # owner 14: the page the models read now; at once when switched on; after the wave of the page on screen
+    assert out["follow"] == {
+        "target": 4,
+        "onTurn": [4],
+        "afterFinish": [4],
+        "linger": 1,
+        "afterWave": [4, 5],
+        "inGrid": [4, 5],
+        "off": False,
+    }
     # D69: the view moved from 1 / 2 to V, matched by the physical key (the Arabic layout types «ر» there); a
     # composing key is never a shortcut
     assert out["keys"] == ["jump", None, "nextSheet", "blur", None, None, "toggleView", "jump", None]
