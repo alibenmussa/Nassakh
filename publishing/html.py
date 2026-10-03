@@ -9,7 +9,9 @@ aligns the laid-out lines with it, D47).
 
 Scopes: `book`; `chapter` (the chapters of the model, no front matter: a chapter preview or re-layout);
 `window` (like `chapter`, the first chapter starting at `start_block`: the forward re-layout of a book
-without chapter breaks starts at a block that opens a page).
+without chapter breaks starts at a block that opens a page; `stop_block` ends a window of a long chapter);
+`front` (the front matter alone, the contents' page numbers written in from `contents_pages`: the
+re-layout of a heading's edit lays out the contents page without the whole book).
 
 Markup contract (used by `publishing.css`, `publishing.pdf` and `publishing.layout`):
 
@@ -43,7 +45,7 @@ from html import escape
 
 from .model import Block, Book, Footnote, LineBreak, NoteRef, Run, SourceMark, page_setup
 
-SCOPES: tuple[str, ...] = ("book", "chapter", "window")
+SCOPES: tuple[str, ...] = ("book", "chapter", "window", "front")
 CONTENTS_TITLE = "المحتويات"
 _TAGS: dict[str, str] = {"chapter-title": "h1", "section-title": "h2"}
 # the layout's line kind of each model style (D47)
@@ -292,10 +294,16 @@ def render_markup(
     start_block: str | None = None,
     labels: bool = False,
     note_links: bool = False,
+    stop_block: str | None = None,
+    contents_pages: dict[str, int] | None = None,
 ) -> Markup:
     """The print HTML of `book` and the plain text of its tagged elements (`scope` `book`: front matter
     and every chapter; `chapter`: the chapters in the model only, no front matter; `window`: the same,
-    the first chapter from the block `start_block` on). `stylesheet`, when given, replaces the model's page
+    the first chapter from the block `start_block` on). `stop_block` (`chapter` and `window`) ends the
+    markup before that block (a window of a long chapter laid out a few pages past an edit, D47; the pages
+    the cut reaches are not kept). `front`: the front matter alone, each contents entry with its heading's
+    page from `contents_pages` (heading block id → page; `data-page`, printed by the front scope's CSS in
+    place of `target-counter`). `stylesheet`, when given, replaces the model's page
     setup; `numbers` (note id or element id → shown number) fixes the footnote numbers (D46 pass 2);
     `labels` adds the headings' outline labels (`data-label`, the PDF exports), `note_links` the links from
     the footnote calls to their notes (the screen PDF)."""
@@ -314,11 +322,13 @@ def render_markup(
         "</head>",
         f'<body class="nk-book nk-scope-{scope}">',
     ]
-    if scope == "book" and front.title_page and front.title:
+    with_front = scope in ("book", "front")
+    if with_front and front.title_page and front.title:
         parts.extend(writer.title_page())
-    if scope == "book" and front.copyright_page and front.title:
+    if with_front and front.copyright_page and front.title:
         parts.extend(writer.copyright_page())
-    entries = book.contents() if scope == "book" and front.contents else []
+    entries = book.contents() if with_front and front.contents else []
+    pages = contents_pages if scope == "front" else None
     if entries:
         parts.append('<nav class="nk-front nk-contents" id="front-contents">')
         parts.append(
@@ -332,16 +342,23 @@ def render_markup(
             level = min(entry.level, 2)
             key = f"toc-{number}"
             writer.texts[key] = entry.text
+            page = f' data-page="{int(pages[entry.target])}"' if pages and entry.target in pages else ""
             parts.append(
                 f'<li class="nk-toc-{level}" id="{key}"{_tags(key, "contents", f"contents-{level}")}'
-                f' data-target="{_attr(entry.target)}"><a href="#{_attr(target)}">'
+                f' data-target="{_attr(entry.target)}"><a href="#{_attr(target)}"{page}>'
                 f'<span class="nk-toc-text">{_text(entry.text)}</span></a></li>'
             )
         parts.append("</ol></nav>")
+    if scope == "front":
+        parts.append("</body></html>")
+        return Markup("\n".join(part for part in parts if part), writer.texts, {})
     first_section = True
     started = scope != "window" or not start_block
     body_started = False
+    stopped = False
     for chapter in book.chapters:
+        if stopped:
+            break
         blocks = chapter.blocks
         if not started:
             index = next((i for i, block in enumerate(blocks) if block.id == start_block), None)
@@ -349,6 +366,10 @@ def render_markup(
                 continue  # the window starts in a later chapter
             blocks = blocks[index:]
             started = True
+        if stop_block and scope != "book":
+            end = next((i for i, block in enumerate(blocks) if block.id == stop_block), None)
+            if end is not None:
+                blocks, stopped = blocks[:end], True
         if not blocks:
             continue  # nothing to print (a chapter left with empty paragraphs): no blank page for it
         parts.append(

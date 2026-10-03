@@ -217,14 +217,24 @@ def layout_path(render: PreviewRender) -> Path:
 
 
 def layout_document(
-    render: PreviewRender, rendered: Rendered, setup, *, first_page: int, chapters: list[dict]
+    render: PreviewRender,
+    rendered: Rendered,
+    setup,
+    *,
+    first_page: int,
+    chapters: list[dict],
+    blocks: dict | None = None,
 ) -> dict:
     """What `layout.json` holds (D47): the render's pages (each with its image reference `src`), chapters,
-    checks, the footnote numbers shown and the page geometry the client needs to move pages."""
+    checks, the footnote numbers shown and the page geometry the client needs to move pages; a book
+    render also records the text its pages show (`blocks`: `relayout.block_digests`), so once it is the
+    live layout a re-layout lays out only the pages around an edit."""
     pages = []
     for index, page in enumerate(rendered.layout, start=1):
         pages.append(dict(page, src={"render": render.pk, "index": index}))
+    extra = {"blocks": blocks} if blocks is not None else {}
     return {
+        **extra,
         "format": LAYOUT_FORMAT,
         "engine": get_engine().version,
         "render": render.pk,
@@ -469,10 +479,20 @@ def _run(row: PreviewRender, job: RenderJob) -> None:
             chapters = [
                 dict(item, first=row.first_page, last=row.first_page + pages - 1) for item in chapters[:1]
             ]
+        blocks = None
+        if row.scope == PreviewRender.Scope.BOOK:
+            from .relayout import block_digests
+
+            blocks = block_digests(job.document)
         write_json(
             target / LAYOUT_FILE,
             layout_document(
-                row, rendered, page_setup(job.stylesheet), first_page=job.first_page, chapters=chapters
+                row,
+                rendered,
+                page_setup(job.stylesheet),
+                first_page=job.first_page,
+                chapters=chapters,
+                blocks=blocks,
             ),
         )
         finished = PreviewRender.objects.filter(pk=row.pk, status=PreviewRender.Status.RUNNING).update(

@@ -109,10 +109,12 @@ class RenderJob:
     reuse: bool = False
     continues: bool = False  # a window that goes on from the pages before it (not the book's first text page)
     output: PdfOutput | None = None
+    stop_block: str | None = None  # `chapter` / `window`: the markup ends before this block (D47, a window)
+    contents_pages: dict | None = None  # `front`: heading block id → page, written into the contents
 
     def wanted(self) -> list[str] | None:
-        """The chapters the job renders (None: all of them)."""
-        if self.scope == "book":
+        """The chapters the job renders (None: all of them; the front matter lists every heading)."""
+        if self.scope in ("book", "front"):
             return None
         if self.chapter_ids:
             return list(self.chapter_ids)
@@ -225,6 +227,8 @@ class WeasyPrintEngine:
             start_block=job.start_block,
             labels=output is not None,
             note_links=output is not None and output.note_links,
+            stop_block=job.stop_block,
+            contents_pages=job.contents_pages,
         )
         css = stylesheet_css(
             setup, fonts, scope=job.scope, first_page=job.first_page, continues=job.continues, output=output

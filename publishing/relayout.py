@@ -16,10 +16,19 @@ low-priority task, `render_layout_images`):
   an outer page number goes to the other corner); with recto openings the blank page before the next
   chapter appears or disappears instead, so the chapters after it keep their sides. A chapter split in
   two by a new heading, or merged with the next one, is laid out with them.
+- *A long chapter* (`_window`, the owner's review of 2026-10-03): only the pages around the edit — from a
+  page before it that opens a paragraph, a few pages at a time (`stop_block`), until a page after it
+  opens with the same line as before (convergence), else to the chapter's end. Where the edit begins and
+  ends comes from the record of the text the pages show (`blocks`: each chapter's blocks with a digest,
+  written by every book render and re-layout). Book 41's chapter of 120 pages: 0.2–0.5 s an edit, 3–4 s
+  before. Notes numbered through the chapter or the book, or no record: the whole chapter.
 - *A book without chapter breaks* (sections run on): the window starts at the last page before the
   section whose first line is the first line of a paragraph, and is laid out forward section by section
   until a page after the edited section starts with the same line as before (convergence: from there the
   old pages are the same, shifted by the delta), or up to the end of the book.
+- *A heading added, removed, renamed or re-levelled* (the contents page changes, `_with_front`): the
+  chapter as above, then the front matter alone (scope `front`, the contents' numbers written in); a front
+  that grows or shrinks moves every later page. The result is `full` (the client fetches its pages again).
 
 Every result says what changed, so the client can renumber at once:
 
@@ -71,6 +80,9 @@ from .models import LiveLayout, PreviewRender
 
 log = logging.getLogger(__name__)
 
+WINDOW_MIN_PAGES = 6  # a chapter on fewer pages is laid out whole (about as fast as a window)
+WINDOW_PAGES = 3  # a window ends this many old pages past the edit's old end; each next one goes twice as far
+WINDOW_MAX = 12  # windows of one re-layout before the whole chapter is laid out instead
 LIVE_KEPT = 3  # live revision files kept per book (the newest; older ones are deleted)
 LAYOUT_ROWS_KEPT = 40  # re-layout rows kept per book beyond those the live layout's pages refer to
 MAX_RANGE = 120  # pages served by one layout request
@@ -553,6 +565,41 @@ def _with_src(pages: list[dict], row: PreviewRender, offset: int = 0) -> list[di
     return [dict(page, src={"render": row.pk, "index": offset + i}) for i, page in enumerate(pages, start=1)]
 
 
+def _digest(value) -> str:
+    raw = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def chapter_blocks(document: dict, chapter) -> list[list[str]]:
+    """A chapter's blocks in order as `[id, digest]` (a blockquote's paragraphs one by one, each with its
+    quote's own attributes): what a layout records of the text its pages show (the live layout's `blocks`),
+    so a later re-layout finds where an edit begins and ends (`_window`)."""
+    rows: list[list[str]] = []
+    for node in chapter.nodes(document):
+        if not isinstance(node, dict):
+            continue
+        if node.get("type") == doc.BLOCKQUOTE:
+            frame = {key: value for key, value in node.items() if key != "content"}
+            rows.extend(
+                [doc.node_id(child), _digest([frame, child])]
+                for child in node.get("content") or []
+                if isinstance(child, dict)
+            )
+        else:
+            rows.append([doc.node_id(node), _digest(node)])
+    return rows
+
+
+def block_digests(document: dict, chapter_ids=None) -> dict[str, list[list[str]]]:
+    """`{chapter id: chapter_blocks}` of every chapter of `document` (or of those in `chapter_ids`)."""
+    wanted = set(chapter_ids) if chapter_ids is not None else None
+    return {
+        chapter.id: chapter_blocks(document, chapter)
+        for chapter in doc.chapters_of(document)
+        if wanted is None or chapter.id in wanted
+    }
+
+
 def _relayout(book: Book, manuscript: Manuscript, row: PreviewRender, live: LiveLayout) -> dict:
     from .preview import geometry, setup_hash, write_json
 
@@ -562,13 +609,11 @@ def _relayout(book: Book, manuscript: Manuscript, row: PreviewRender, live: Live
     data = read_json(live.path) if live.revision and live.path else None
     chapters = doc.chapters_of(document)
     before = live.revision
-    if (
-        data is None
-        or live.setup_hash != digest
-        or not data.get("pages")
-        or _contents_changed(book, document, setup, data["pages"])
-    ):
+    if data is None or live.setup_hash != digest or not data.get("pages"):
         outcome = _full(book, document, setup, row)
+    elif _contents_changed(book, document, setup, data["pages"]):
+        # a heading added, removed or renamed: the chapter as usual and the front matter alone
+        outcome = _with_front(book, document, setup, row, data, chapters) or _full(book, document, setup, row)
     elif all(chapter.kind == "section" for chapter in chapters):
         outcome = _sections(book, document, setup, row, data, chapters)
     else:
@@ -580,12 +625,23 @@ def _relayout(book: Book, manuscript: Manuscript, row: PreviewRender, live: Live
     refresh_contents(all_pages)
     fonts = resolve(setup.body_font, setup.latin_font, setup.heading_font)
     checks = page_checks(all_pages, ranges, fonts.missing)
+    # the text the pages show, per chapter: the chapters laid out now are the document's; the others keep
+    # what was recorded (a chapter with an edit not laid out yet keeps its old record)
+    if outcome.get("mode") == "book":
+        blocks = block_digests(document)
+    else:
+        blocks = {key: value for key, value in (data.get("blocks") or {}).items()} if data else {}
+        current = {chapter.id for chapter in chapters}
+        laid = [row.chapter_id] if outcome.get("mode") == "sections" else outcome.get("laid_out") or []
+        blocks = {key: value for key, value in blocks.items() if key in current and key not in laid}
+        blocks.update(block_digests(document, laid))
     live_data = {
         "format": 1,
         "setup_hash": digest,
         "geometry": geometry(setup),
         "chapters": ranges,
         "checks": checks,
+        "blocks": blocks,
         "pages": all_pages,
     }
     _write_live(live, live_data, version=manuscript.version)
@@ -624,23 +680,113 @@ def _relayout(book: Book, manuscript: Manuscript, row: PreviewRender, live: Live
 
 def _contents_changed(book: Book, document: dict, setup, pages: list[dict]) -> bool:
     """True when the contents page would list other headings than the live layout's (a heading added,
-    removed or renamed): the front matter must be laid out again, so the whole book is."""
+    removed, renamed, or made a chapter title from a section title: its entry's indent): the front matter
+    must be laid out again (`_with_front`)."""
     from .model import book_model
 
     if not setup.contents:
         return False
     wanted = [
-        (entry.target, " ".join(entry.text.split()))
+        (entry.target, " ".join(entry.text.split()), f"contents-{min(entry.level, 2)}")
         for entry in book_model(document, setup, title=book.title, author=book.author).contents()
     ]
     shown: dict[str, list] = {}
     for page in pages:
         for line in page.get("lines") or []:
             if line.get("kind") == "contents" and line.get("block"):
-                item = shown.setdefault(line["block"], [line.get("target"), []])
+                item = shown.setdefault(line["block"], [line.get("target"), [], line.get("style")])
                 item[1].extend(run["text"] for run in line.get("runs") or [] if run["end"] > run["start"])
-    have = [(target, " ".join(" ".join(texts).split())) for target, texts in shown.values()]
+    have = [(target, " ".join(" ".join(texts).split()), style) for target, texts, style in shown.values()]
     return have != wanted
+
+
+def _heading_pages(pages: list[dict]) -> dict[str, int]:
+    """Block id → the page of its first line (what a contents entry prints for its heading)."""
+    first: dict[str, int] = {}
+    for page in pages:
+        for line in body_lines(page):
+            if line.get("block") and line.get("first"):
+                first.setdefault(line["block"], page["n"])
+    return first
+
+
+def _with_front(book: Book, document: dict, setup, row: PreviewRender, data: dict, chapters) -> dict | None:
+    """The contents page lists other headings now (a heading added, removed or renamed; the owner's review,
+    2026-10-03: making a paragraph a chapter title laid the whole book out again): the chapter laid out as
+    usual (`_chapters` — a window of a long chapter — or `_sections`), then the front matter alone
+    (`scope="front"`, the contents' page numbers written in from the new pages). When the front matter takes
+    more or fewer pages, every page after it moves by the difference and the front is laid out once more
+    with the moved numbers. The client fetches the pages it shows again (`full`). None when the whole book
+    is laid out instead: no chapter ranges, an odd difference with recto openings, a front matter that will
+    not settle."""
+    by_id = {item["id"]: item for item in data.get("chapters") or [] if isinstance(item, dict)}
+    if not by_id:
+        return None
+    old = list(data["pages"])
+    body_old = _body_start(old, by_id)
+    if all(chapter.kind == "section" for chapter in chapters):
+        body = _sections(book, document, setup, row, data, chapters)
+    else:
+        body = _chapters(book, document, setup, row, data, chapters)
+    if body.get("mode") == "book":
+        return body  # laid out whole already (notes numbered through the book)
+    body_pages = [page for page in body["all_pages"] if page["n"] >= body_old]
+    heads = _heading_pages(body_pages)
+    shift = 0
+    passes = body.get("passes") or 1
+    for _attempt in range(2):
+        rendered = get_engine().render(
+            _job(
+                book,
+                document,
+                setup,
+                scope="front",
+                contents_pages={block: n + shift for block, n in heads.items()},
+            )
+        )
+        passes = max(passes, rendered.passes)
+        front = _with_src(rendered.layout, row)
+        start = len(front) + 1
+        blank = bool(front) and setup.chapter_opening == "recto" and start % 2 == 0
+        if blank:
+            start += 1
+        moved = start - body_old
+        if moved == shift:
+            break
+        if moved % 2 and setup.chapter_opening == "recto":
+            return None
+        shift = moved
+    else:
+        return None
+    blanks = [blank_page(len(front) + 1, front[-1])] if blank else []
+    tail = shift_pages(body_pages, shift, setup) if shift else body_pages
+    ranges = [
+        dict(item, first=item["first"] + shift, last=item["last"] + shift) if shift else dict(item)
+        for item in body["ranges"]
+    ]
+    all_pages = front + blanks + tail
+    return {
+        "mode": "front",
+        "full": True,  # the client fetches the pages it shows again: the front and the body both moved
+        "laid_out": body.get("laid_out") or [row.chapter_id],
+        "from": 1,
+        "to": old[-1]["n"] if old else 0,
+        "delta": len(all_pages) - len(old),
+        "chapter_delta": body.get("chapter_delta", 0),
+        "shifted_from": None,
+        "flip": False,
+        "blank_changes": [],
+        "front_pages": len(front) + len(blanks),
+        "front_shift": shift,
+        "body": {
+            key: body[key] for key in ("mode", "from", "to", "windows", "rendered_pages") if key in body
+        },
+        "passes": passes,
+        "job": body.get("job"),
+        "new_pages": front + blanks,
+        "all_pages": all_pages,
+        "ranges": ranges,
+    }
 
 
 def _full(book: Book, document: dict, setup, row: PreviewRender) -> dict:
@@ -689,6 +835,11 @@ def _chapters(book, document, setup, row, data, chapters) -> dict:
         low = previous["last"] + 1 if previous is not None else _body_start(old, by_id)
     high = by_id[following]["first"] - 1 if following is not None else old[-1]["n"]
     high = max(high, low - 1)
+    if render_ids == [row.chapter_id] and row.chapter_id in by_id:
+        # a long chapter: only the pages around the edit, when the record of the pages' text allows it
+        windowed = _window(book, document, setup, row, data, chapters, low, high, following is not None)
+        if windowed is not None:
+            return windowed
     replaced = [page for page in old if low <= page["n"] <= high]
     rendered = get_engine().render(
         _job(
@@ -749,6 +900,241 @@ def _chapters(book, document, setup, row, data, chapters) -> dict:
         "job": {"scope": "chapter", "chapter_ids": render_ids, "first_page": low},
         "new_pages": new_pages,
         "all_pages": all_pages,
+        "ranges": ranges,
+    }
+
+
+def _changed_span(old: list, new: list) -> tuple[int, int, int] | None:
+    """Where `new` differs from `old` (two `chapter_blocks` lists): `(start, new_end, old_end)` — the length
+    of their common head, and where their common tail begins in each; None when they are equal."""
+    if old == new:
+        return None
+    start = 0
+    limit = min(len(old), len(new))
+    while start < limit and old[start] == new[start]:
+        start += 1
+    old_end, new_end = len(old), len(new)
+    while old_end > start and new_end > start and old[old_end - 1] == new[new_end - 1]:
+        old_end -= 1
+        new_end -= 1
+    return start, new_end, old_end
+
+
+def _window(book, document, setup, row, data, chapters, low: int, high: int, followed: bool) -> dict | None:
+    """A long chapter with chapter breaks (the owner's review, 2026-10-03: lay out only the pages around an
+    edit): laid out from a page before the edit a few pages at a time, until a page after it opens with the
+    same line as before (convergence: from there the old pages stay, renumbered by the delta), as `_sections`
+    does for a book without breaks. Where the edit begins and ends comes from the live layout's record of the
+    text its pages show (`blocks`). None when the whole chapter is laid out instead (`_chapters`): a short
+    chapter, notes numbered through the chapter or the book, no record, nothing changed, no page to start
+    from, an odd delta with recto openings (the blank page before the next chapter changes), no convergence
+    before the chapter's end, or too many windows."""
+    if setup.footnote_numbering != "page" or high - low + 1 < WINDOW_MIN_PAGES:
+        return None
+    chapter = next((item for item in chapters if item.id == row.chapter_id), None)
+    recorded = (data.get("blocks") or {}).get(row.chapter_id)
+    if chapter is None or not recorded:
+        return None
+    current = chapter_blocks(document, chapter)
+    span = _changed_span(recorded, current)
+    if span is None:
+        return None
+    start, new_end, old_end = span
+    old = list(data["pages"])
+    by_n = {page["n"]: page for page in old}
+    mine = [page for page in old if low <= page["n"] <= high]
+    starts: dict[str, int] = {}  # block id → the old page of its first line
+    for page in mine:
+        for line in body_lines(page):
+            if line.get("first") and line.get("block"):
+                starts.setdefault(line["block"], page["n"])
+    # the window opens on the page of the block two before the edit (a heading kept with the next block moves
+    # with it), back to a page whose first line opens a paragraph
+    begin = low
+    for index in range(max(0, start - 2), -1, -1):
+        if recorded[index][0] in starts:
+            begin = starts[recorded[index][0]]
+            break
+    while begin > low:
+        lines = body_lines(by_n[begin]) if begin in by_n else []
+        if lines and lines[0].get("first"):
+            break
+        begin -= 1
+    # the unchanged tail (one block more: a block's scan page mark depends on the block before it): a page
+    # that opens inside it with the same line as before is where the old pages take over
+    tail_new = min(len(current), new_end + 1)
+    tail_old = min(len(recorded), old_end + 1)
+    settled_ids = {block_id for block_id, _digest_value in current[tail_new:]}
+    tail_page = next((starts[item[0]] for item in recorded[tail_old:] if item[0] in starts), None)
+    old_tops: dict[tuple, int] = {}
+    for page in mine:
+        top = page_top(page)
+        if page["n"] > begin and top is not None and top[0] in settled_ids:
+            old_tops.setdefault(top, page["n"])
+
+    def stop_after(page_n: int) -> str | None:
+        """The first block of the unchanged tail whose first line is on old page `page_n` or later."""
+        return next(
+            (item[0] for item in recorded[tail_old:] if item[0] in starts and starts[item[0]] >= page_n), None
+        )
+
+    lines = body_lines(by_n[begin]) if begin in by_n else []
+    start_block = lines[0]["block"] if begin > low and lines else None
+    first_job = {
+        "scope": "window" if start_block else "chapter",
+        "chapter_window": True,
+        "chapter_ids": [row.chapter_id],
+        "start_block": start_block,
+        "continues": bool(start_block),
+        "first_page": begin,
+    }
+    kept: list[dict] = []
+    page_from = begin
+    reach = (tail_page if tail_page is not None else begin) + WINDOW_PAGES
+    stats = {"windows": 0, "rendered_pages": 0, "passes": 1}
+    stop: str | None = None
+    for attempt in range(WINDOW_MAX):
+        stop = stop_after(reach) if tail_page is not None else None
+        values = (
+            {"scope": "window", "start_block": start_block, "continues": True}
+            if start_block
+            else {"scope": "chapter"}
+        )
+        rendered = get_engine().render(
+            _job(
+                book,
+                document,
+                setup,
+                chapter_ids=(row.chapter_id,),
+                first_page=page_from,
+                seed=_seed([page for page in old if page["n"] >= page_from]),
+                stop_block=stop,
+                **values,
+            )
+        )
+        stats["windows"] += 1
+        stats["passes"] = max(stats["passes"], rendered.passes)
+        new = _with_src(rendered.layout, row, offset=len(kept))
+        stats["rendered_pages"] += len(new)
+        settled = new[:-1] if stop else new  # the page the cut reaches is not the book's
+        for position, page in enumerate(settled):
+            top = page_top(page)
+            if position == 0 or top is None or top[0] not in settled_ids:
+                continue
+            old_n = old_tops.get(top)
+            if old_n is None:
+                continue
+            delta = page["n"] - old_n
+            if delta % 2 and setup.chapter_opening == "recto" and followed:
+                return None
+            # converged: the old pages from `old_n` on (the rest of the chapter, the later ones) renumbered
+            return _window_outcome(
+                data,
+                chapters,
+                chapter,
+                document,
+                setup,
+                old,
+                begin,
+                high,
+                kept + new[:position],
+                old_n,
+                delta,
+                {**stats, "converged": True, "job": {**first_job, "stop_block": stop}},
+            )
+        if not stop:
+            # the chapter's end reached without meeting the old pages: the chapter's new end, as `_chapters`
+            # makes it (the blank page before a recto opening comes or goes), the later chapters renumbered
+            segment = kept + new
+            own = begin - low + len(segment)  # the chapter's pages now (without a blank one)
+            if setup.chapter_opening == "recto" and followed and segment and (low + own) % 2 == 0:
+                segment = [*segment, blank_page(low + own, segment[-1])]
+            delta = (begin - low + len(segment)) - (high - low + 1)
+            old_blank = bool(mine) and bool(mine[-1].get("blank"))
+            new_blank = bool(segment) and bool(segment[-1].get("blank"))
+            changes = []
+            if old_blank and not new_blank:
+                changes.append({"page": high, "change": "removed"})
+            if new_blank and not old_blank:
+                changes.append({"page": begin + len(segment) - 1, "change": "added"})
+            old_own = high - low + 1 - (1 if old_blank else 0)
+            return _window_outcome(
+                data,
+                chapters,
+                chapter,
+                document,
+                setup,
+                old,
+                begin,
+                high,
+                segment,
+                high + 1,
+                delta,
+                {**stats, "converged": False, "job": {**first_job, "stop_block": None}},
+                chapter_delta=own - old_own,
+                blank_changes=changes,
+            )
+        # go on from the last settled page that opens a paragraph (nothing before it changes any more); with
+        # none, from the same start, farther
+        for position in range(len(settled) - 1, 0, -1):
+            opening = body_lines(settled[position])
+            if opening and opening[0].get("first"):
+                kept += new[:position]
+                start_block = opening[0]["block"]
+                page_from = settled[position]["n"]
+                break
+        known = starts.get(start_block) if start_block else None
+        reach = max(reach, known if known is not None else reach) + WINDOW_PAGES * 2 ** (attempt + 1)
+    return None
+
+
+def _window_outcome(
+    data,
+    chapters,
+    chapter,
+    document,
+    setup,
+    old,
+    begin,
+    high,
+    segment,
+    shifted_from,
+    delta,
+    extra,
+    *,
+    chapter_delta=None,
+    blank_changes=(),
+) -> dict:
+    """A window's result (`_window`): the old pages before `begin`, the new `segment`, the old pages from
+    `shifted_from` on renumbered by `delta`; the chapter's range ends `delta` later, later chapters move."""
+    tail = shift_pages([item for item in old if item["n"] >= shifted_from], delta, setup)
+    ids = {item.id for item in chapters}
+    ranges = []
+    for item in data.get("chapters") or []:
+        if not isinstance(item, dict) or item.get("id") not in ids:
+            continue
+        if item["id"] == chapter.id:
+            ranges.append(
+                dict(item, last=item["last"] + delta, version=doc.chapter_version(chapter.nodes(document)))
+            )
+        elif item["first"] > high:
+            ranges.append(dict(item, first=item["first"] + delta, last=item["last"] + delta))
+        else:
+            ranges.append(dict(item))
+    return {
+        "mode": "window",
+        "full": False,
+        "laid_out": [chapter.id],
+        "from": begin,
+        "to": shifted_from - 1,
+        "delta": delta,
+        "chapter_delta": delta if chapter_delta is None else chapter_delta,
+        "shifted_from": shifted_from,
+        "flip": delta % 2 != 0,
+        "blank_changes": list(blank_changes),
+        **extra,
+        "new_pages": segment,
+        "all_pages": [item for item in old if item["n"] < begin] + segment + tail,
         "ranges": ranges,
     }
 
@@ -969,7 +1355,14 @@ def render_layout_images(row_id: int) -> PreviewRender | None:
     setup = current_setup(book)
     document = manuscript.document or {}
     values = {"scope": job["scope"], "first_page": int(job.get("first_page") or 1)}
-    if job["scope"] == "chapter":
+    if job.get("chapter_window"):
+        # a window of a long chapter (`_window`): the same start, to its last window's stop
+        values.update(
+            chapter_ids=tuple(job.get("chapter_ids") or [row.chapter_id]), stop_block=job.get("stop_block")
+        )
+        if job["scope"] == "window":
+            values.update(start_block=job.get("start_block"), continues=bool(job.get("continues")))
+    elif job["scope"] == "chapter":
         values["chapter_ids"] = tuple(job.get("chapter_ids") or [row.chapter_id])
     else:
         chapters = doc.chapters_of(document)

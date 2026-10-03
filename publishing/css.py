@@ -218,6 +218,10 @@ def stylesheet_css(
         " line-height: 0; font-weight: normal; font-style: normal; }",
         '.nk-fn::footnote-marker { content: "(" attr(data-n) ")\\00a0"; }',
     ]
+    if scope == "front":
+        # the front matter laid out alone (a heading's re-layout, D47): the headings are not in the document,
+        # their pages are written into the entries (`data-page`)
+        parts.append(".nk-toc a::after { content: leader('.') attr(data-page); }")
     if s.print_source_pages:
         side = max(min(s.inner_mm, s.outer_mm) - 3, 4)
         parts += [
