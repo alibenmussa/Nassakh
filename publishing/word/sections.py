@@ -69,14 +69,17 @@ class Para:
     direct_after: float | None = None
     sect_pr: etree._Element | None = None
     extra: list[etree._Element] = field(default_factory=list)  # more pPr children (direct formatting)
+    line: int | None = None  # D99: an exact line pitch of its own (twips: a block's text size option)
 
     def element(self) -> etree._Element:
         spacing = None
-        if self.direct_before is not None or self.direct_after is not None:
+        if self.direct_before is not None or self.direct_after is not None or self.line is not None:
             spacing = w(
                 "spacing",
                 before=twips_mm(self.direct_before) if self.direct_before is not None else None,
                 after=twips_mm(self.direct_after) if self.direct_after is not None else None,
+                line=self.line,
+                lineRule="exact" if self.line is not None else None,
             )
         ppr = w(
             "pPr",

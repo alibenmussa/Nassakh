@@ -30,7 +30,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-ENGINE_VERSION = "nk-print-5"  # D60: the Latin-face fix, no bleed or crop marks in the preview
+# D60: the Latin-face fix, no bleed or crop marks in the preview; D99: subtitles start on the right, the text
+# options of a block, empty lines and blank pages, the layout's line alignment and page-break marks
+ENGINE_VERSION = "nk-print-6"
 
 
 PDF_KINDS: tuple[str, ...] = ("print", "screen")

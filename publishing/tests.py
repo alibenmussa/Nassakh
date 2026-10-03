@@ -212,15 +212,16 @@ def test_the_model_maps_the_phase5_styles_and_marks_to_style_names():
             "attrs": {"id": "q1"},
             "content": [para("q2", "داخل الاقتباس"), para("q3", "بيت", style="verse")],
         },
-        para("p5", "   "),  # empty: left out
+        para("p5", "   "),  # empty: a blank line of its own (D99)
         para("p6", "نص", note("n1", text("حاشية ", "bold"), {"type": "hardBreak"}, "ثانية"), " بعدها"),
     )
     book = book_model(source, {"footnote_numbering": "book", "body_font": "lotus"})
     blocks = list(book.blocks())
     assert [b.style for b in blocks] == [
         "chapter-title", "body", "quote", "verse", "center",
-        "separator", "separator", "quote", "verse", "body",
+        "separator", "separator", "quote", "verse", "body", "body",
     ]  # fmt: skip
+    assert [b.id for b in blocks if b.empty] == ["p5"] and blocks[-2].runs == []
     assert blocks[1].runs == [
         Run("غامق", ("bold",)),
         Run(" ومائل", ("italic",)),

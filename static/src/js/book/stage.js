@@ -5,7 +5,8 @@
 //     pages shown are in the DOM, the layouts around them are fetched in windows from `api:preview_layout`
 //   - the live layout's revision: a re-layout's pages are spliced in place (later pages renumbered, sides
 //     swapped on an odd delta), a newer revision (the book render adopted) refetches the pages shown
-//   - the footprint, the page checks, the render pill, the polling of `api:preview`, the filmstrip thumbs
+//   - the footprint, the page checks, the render pill, the polling of `api:preview`, the filmstrip thumbs and,
+//     under them, the scrubber from the first page to the last (D99)
 //   - the cover (D80, cover.js): a sheet of its own before page 1 («الغلاف»: alone, on the right in a spread) and
 //     the first thumb; never a page — `onCover` sits beside the cursor (which stays on page 1), so the sequence,
 //     the numbers, the spreads, the footprint and every turn stay as they are; a turn back from page 1 reaches it
@@ -100,6 +101,8 @@
       failures: 0,
       stopped: false,
       retrying: false,
+      // D99: the pages' scrubber (the bottom of «الصفحات»): the page under the thumb while it is dragged
+      scrub: { active: false, value: 0 },
 
       _init_stage() {
         const initial = ctx.initial;
@@ -919,6 +922,42 @@
         });
         this.syncCoverThumb();
       },
+      // ------------------------------------------------------------ the scrubber (D99, the owner's review item 27)
+      // A range from the first page to the last pinned at the bottom of «الصفحات» (the screen's bottom left): a
+      // drag shows the page under the thumb, scrolls the filmstrip to it and turns there after a short rest (no
+      // fetch for every page passed); the release, a click or a key turns at once.
+      get scrubValue() {
+        void this.cursor; void this.pageCount;
+        if (this.scrub.active) return this.scrub.value;
+        return this.current || this.firstPage;
+      },
+      get scrubPct() {
+        const span = this.lastPage - this.firstPage;
+        return span > 0 ? ((this.scrubValue - this.firstPage) / span).toFixed(4) : '0';
+      },
+      onScrubInput(e) {
+        const n = G.scrubTarget(e && e.target ? e.target.value : this.scrubValue, this.firstPage, this.lastPage);
+        this.scrub = { active: true, value: n };
+        this.scrollFilmTo(n);
+        clearTimeout(T.scrub);
+        T.scrub = setTimeout(() => { if (this.scrub.active) this.showPage(n, { instant: true, manual: true }); }, 140);
+      },
+      onScrubChange(e) {
+        clearTimeout(T.scrub);
+        const n = G.scrubTarget(e && e.target ? e.target.value : this.scrubValue, this.firstPage, this.lastPage);
+        this.scrub = { active: false, value: n };
+        if (n !== this.current) this.showPage(n, { instant: true, manual: true });
+        return n;
+      },
+      // the thumb of page `n` brought into the panel's view (no smooth scroll: it follows the pointer)
+      scrollFilmTo(n) {
+        const film = ctx.dom.film;
+        if (!film || typeof film.querySelector !== 'function') return;
+        const idx = this.pages.findIndex((p) => p.n === n);
+        const item = idx >= 0 ? film.querySelector(`[data-index="${idx}"]`) : null;
+        if (item && typeof item.scrollIntoView === 'function') item.scrollIntoView({ block: 'center', inline: 'center' });
+      },
+
       centerFilm() {
         const film = ctx.dom.film;
         if (!film || typeof film.querySelector !== 'function' || this.tab !== 'pages') return;

@@ -670,6 +670,10 @@
           reviewed: a.reviewed !== false,
           separator: b.node.type === 'separator',
           noteFor: b.node.type === 'paragraph' ? this.noteMarkerOf(b.node) : '',
+          // D99: the text options apply to a paragraph or a heading; a blank page is said as one
+          textable: b.node.type === 'paragraph' || b.node.type === 'heading',
+          blank: Boolean(B() && B().isBlankPage && B().isBlankPage(b.node)),
+          empty: Boolean(B() && B().isEmptyBlock && B().isEmptyBlock(b.node)),
         };
       },
       // D74 on the book page (§5.4): a paragraph that starts with a footnote marker («(1)», «[1]», «1-»), or whose
@@ -1195,6 +1199,7 @@
         if (this.snapshots.open) return 'snapshots';
         if (this.digits.open) return 'digits';
         if (this.styleMenu) return 'styleMenu';
+        if (this.alignMenu || this.pageMenu) return 'textMenu'; // D99: the alignment and the page menus
         if (this.pop.kind) return this.pop.kind;
         if (this.drawerOpen) return 'drawer';
         return null;
@@ -1209,6 +1214,7 @@
         else if (layer === 'snapshots') this.closeSnapshots();
         else if (layer === 'digits') this.closeDigits();
         else if (layer === 'styleMenu') this.styleMenu = false;
+        else if (layer === 'textMenu') { this.alignMenu = false; this.pageMenu = false; }
         else if (layer === 'note' || layer === 'word') this.closePop(true);
         else if (layer === 'drawer') this.closeDrawer();
         else if (ctx.ed) { this.closeBlock({ commit: true }); this.focusStage(); return 'block'; }

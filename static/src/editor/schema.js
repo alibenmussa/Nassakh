@@ -3,7 +3,9 @@
 //   inline   text, hardBreak, pageBreak (a scan page mark, atom), footnote (atom with its own inline content)
 //   marks    bold, italic, uncertain
 // Every block carries id, sourcePages, sourceLineIds, reviewed, suggestedRole and the D47 flags breakBefore /
-// keepWithNext, and keeps them through edits (a split copies the source attrs, never the id). Plugins: fresh
+// keepWithNext (D99: breakAfter, and the text options align, dir, indent, firstLine, spaceBefore, spaceAfter,
+// size, drawn as `dir` / `data-*` attributes), and keeps them through edits (a split copies the source attrs,
+// never the id). D99 keys of the one-block editor: ⌘↩ a page break, ⌘⇧L / E / R / J the alignment. Plugins: fresh
 // ids for new and duplicated blocks and notes, footnote numbers as a `data-seq` decoration, the caret block
 // (`is-caret`), the find highlights, and the uncertain mark dropped from a word the owner retypes.
 // `extensions` is a whole chapter's schema; `blockExtensions` the one-block editor's (D47: a paragraph opened in
@@ -13,7 +15,7 @@ import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
-import { PARAGRAPH_STYLES, newId } from './convert.js';
+import { PARAGRAPH_STYLES, newId, textAttr } from './convert.js';
 
 const list = (value) => (Array.isArray(value) ? value.filter((n) => Number.isInteger(n)) : []);
 const parseList = (raw) => String(raw || '').split(',').map((v) => parseInt(v, 10)).filter((n) => Number.isFinite(n));
@@ -55,6 +57,36 @@ const sourceAttributes = () => ({
   // D47: «ابدأ صفحة جديدة» / «مع التالية» (true / false as saved; null: not set)
   breakBefore: { default: null, rendered: false },
   keepWithNext: { default: null, rendered: false },
+  // D99: the page ends after the block (a blank page: an empty paragraph with both breaks)
+  breakAfter: { default: null, rendered: false },
+  // D99: the text options; the block draws them in the page's editor as the static patch does (nodeHtml)
+  align: {
+    default: null,
+    parseHTML: (el) => textAttr('align', el.getAttribute('data-align')),
+    renderHTML: (attrs) => (attrs.align ? { 'data-align': attrs.align } : {}),
+  },
+  dir: {
+    default: null,
+    parseHTML: (el) => (el.getAttribute('dir') === 'ltr' ? 'ltr' : null),
+    renderHTML: (attrs) => (attrs.dir === 'ltr' ? { dir: 'ltr' } : {}),
+  },
+  indent: {
+    default: null,
+    parseHTML: (el) => textAttr('indent', parseInt(el.getAttribute('data-indent'), 10)),
+    renderHTML: (attrs) => (attrs.indent ? { 'data-indent': String(attrs.indent) } : {}),
+  },
+  firstLine: {
+    default: null,
+    parseHTML: (el) => (el.getAttribute('data-first') === 'none' ? false : null),
+    renderHTML: (attrs) => (attrs.firstLine === false ? { 'data-first': 'none' } : {}),
+  },
+  spaceBefore: { default: null, rendered: false },
+  spaceAfter: { default: null, rendered: false },
+  size: {
+    default: null,
+    parseHTML: (el) => textAttr('size', el.getAttribute('data-size')),
+    renderHTML: (attrs) => (attrs.size ? { 'data-size': attrs.size } : {}),
+  },
 });
 
 // ---------------------------------------------------------------- nodes
@@ -541,6 +573,16 @@ export const BlockKeys = Extension.create({
     const to = (name) => () => (this.options.handle ? Boolean(this.options.handle(name, this.editor)) : false);
     const set = (style) => () => this.editor.commands.setBlockStyle(style);
     return {
+      // D99, as Word: ⌘↩ a page break (⇧↩ stays the line break), ⌘⇧L / E / R / J the alignment (Google Docs)
+      'Mod-Enter': to('pageBreak'),
+      'Mod-Shift-l': to('alignLeft'),
+      'Mod-Shift-L': to('alignLeft'),
+      'Mod-Shift-e': to('alignCenter'),
+      'Mod-Shift-E': to('alignCenter'),
+      'Mod-Shift-r': to('alignRight'),
+      'Mod-Shift-R': to('alignRight'),
+      'Mod-Shift-j': to('alignJustify'),
+      'Mod-Shift-J': to('alignJustify'),
       Enter: to('Enter'),
       Backspace: to('Backspace'),
       Delete: to('Delete'),

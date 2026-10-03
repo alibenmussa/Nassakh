@@ -503,7 +503,7 @@ class PdfExporter:
 
     @property
     def version(self) -> str:
-        """The renderer's version (`nk-print-5/weasyprint-70.0`): a newer one marks older files stale."""
+        """The renderer's version (`nk-print-6/weasyprint-70.0`): a newer one marks older files stale."""
         from .engine import get_engine
 
         return get_engine().version

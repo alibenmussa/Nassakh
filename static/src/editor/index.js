@@ -12,7 +12,8 @@
 //   the start), `mergeForward` (Delete at the end), `up` / `down` (the arrows past the first or last line:
 //   `{x}`), `prev` / `next` (the reading-direction arrow at an edge), `escape`, `undo`, `redo`, `save`,
 //   `separator` (⌘⌥6), `paste` (several paragraphs: `{node, from, to, blocks}`). The editor has no history of
-//   its own: undo is the chapter's (the page keeps every version of the chapter it saved).
+//   its own: undo is the chapter's (the page keeps every version of the chapter it saved). D99: `pageBreak`
+//   (⌘↩: `{node, from, to}`); `textAttrs()` / `setTextAttrs(patch)` / `setAlign(value)` the text options.
 //   Offsets are plain-text offsets of the block (a footnote call one position, UTF-16), as in the page layout.
 import { Editor, getMarkRange } from '@tiptap/core';
 import { DOMSerializer, Fragment } from '@tiptap/pm/model';
@@ -46,7 +47,8 @@ export function createBlock(element, options = {}) {
   let ready = false;
   let numbers = typeof opts.numberOf === 'function' ? opts.numberOf : null;
   const block = () => editor.state.doc.child(0);
-  const rtl = () => (editor.view.dom && editor.view.dom.getAttribute('dir')) !== 'ltr';
+  // the block's own direction (D99: a left-to-right paragraph inside the right-to-left page)
+  const rtl = () => block().attrs.dir !== 'ltr' && (editor.view.dom && editor.view.dom.getAttribute('dir')) !== 'ltr';
   const boundary = (kind, info) => (typeof opts.onBoundary === 'function' ? opts.onBoundary(kind, info || {}) !== false : false);
 
   const api = {
@@ -93,6 +95,12 @@ export function createBlock(element, options = {}) {
       case 'save': return boundary('save', {});
       case 'separator': return boundary('separator', {});
       case 'footnote': { const note = api.insertFootnote(); if (note && opts.onFootnote) opts.onFootnote(note); return true; }
+      // D99: ⌘↩ a page break at the caret (the page cuts the block there); ⌘⇧L / E / R / J the alignment by side
+      case 'pageBreak': return boundary('pageBreak', { node: api.getNode(), from: r.from, to: r.to });
+      case 'alignLeft': api.setAlign(rtl() ? 'end' : 'start'); return true;
+      case 'alignRight': api.setAlign(rtl() ? 'start' : 'end'); return true;
+      case 'alignCenter': api.setAlign('center'); return true;
+      case 'alignJustify': api.setAlign('justify'); return true;
       default: return false;
     }
   }
@@ -208,6 +216,24 @@ export function createBlock(element, options = {}) {
       editor.view.dispatch(editor.state.tr.setNodeMarkup(0, undefined, attrs, node.marks));
       return api;
     },
+    // D99: the block's text options (every name, null when the style's own) and setting them (null, the
+    // default value or an unknown one clears an option); a heading or a paragraph only
+    textAttrs() { return convert.textAttrsOf(block().attrs); },
+    setTextAttrs(patch) {
+      const node = block();
+      if (node.type.name !== 'paragraph' && node.type.name !== 'heading') return false;
+      const clean = {};
+      Object.entries(patch || {}).forEach(([k, v]) => {
+        if (!convert.TEXT_ATTRS.includes(k)) return;
+        const value = convert.textAttr(k, v);
+        const plain = value === null || (k === 'indent' && value === 0) || ((k === 'spaceBefore' || k === 'spaceAfter') && value === 0) || (k === 'firstLine' && value === true) || (k === 'dir' && value === 'rtl');
+        clean[k] = plain ? null : value;
+      });
+      api.setAttrs(clean);
+      return true;
+    },
+    // the alignment chosen again clears it (the style's own), as Word's buttons toggle
+    setAlign(value) { return api.setTextAttrs({ align: block().attrs.align === value ? null : value }); },
     // the printed numbers of the calls changed (a new layout of the page)
     setNumbers(numberOf) {
       numbers = typeof numberOf === 'function' ? numberOf : null;
@@ -350,4 +376,7 @@ export const {
   OBJECT, BREAK, inlineText, plainText, normalizeContent, sliceContent, splitNode, mergeNodes, insertBlocks, locate, flatBlocks,
   replaceBlock, setBlockAttrs, findNote, noteOwner, noteIds, pageMarks, findPlain, replacePlain, unmarkPlain, editContent,
   replaceInBlock, nodeHtml,
+  // D99: the text options, empty lines, page breaks and blank pages
+  ALIGNS, SIZES, SPACES, INDENT_MAX, TEXT_ATTRS, MAX_EMPTY_RUN, textAttr, textAttrsOf, setTextAttrs, textAttrsHtml,
+  isEmptyBlock, isBlankPage, blankPage, emptyRunAt, pageBreakAt,
 } = convert;

@@ -13,6 +13,8 @@
 //                                                  renumbered by the delta, sides swapped on an odd delta
 //   shiftPage(page, delta, geometry)                = publishing.layout.shift_page
 //   around / shown                                  the pages worth fetching, the pages worth drawing
+//   breakMarksHtml / scrubTarget                    D99: the page-break and blank-page marks of edit mode, the page
+//                                                  a scrubber value stands for
 //   keyAction(event, ctx)                           the keyboard maps of both modes
 //   groupUncertain, snippet, chapterRowsHtml, arCount  the side panel's lists
 // Units: every layout number is in points from the page's top-left corner; the page element carries `--pw`
@@ -188,14 +190,40 @@
     return `<span class="${cls.join(' ')}" data-r="${r}"${range}${note} style="${style.join(';')}">${inner}</span>`;
   }
 
-  // The class list of a line: its kind (`k-body`, `k-note`…), justified (`is-j`) or centred (`is-c`).
+  // The class list of a line: its kind (`k-body`, `k-note`…), justified (`is-j`), centred (`is-c`) or kept to a
+  // side (D99: `is-r` / `is-l`, the engine's `align`; a layout from before it has none: the kind decides).
+  const ALIGN_CLASS = { center: 'is-c', right: 'is-r', left: 'is-l' };
   function lineClass(line) {
     const cls = ['lp-line', `k-${String(line.kind || 'other').replace(/[^\w-]/g, '')}`];
     if (line.justify) cls.push('is-j');
+    else if (line.align) { if (ALIGN_CLASS[line.align]) cls.push(ALIGN_CLASS[line.align]); }
     else if (CENTRED.has(line.kind)) cls.push('is-c');
+    if (line.empty) cls.push('is-empty');
     if (line.target) cls.push('is-link');
     if (FRONT.test(String(line.block || ''))) cls.push('is-front');
     return cls.join(' ');
+  }
+
+  // D99: the page breaks and blank pages of a page, marked in edit mode as Word's formatting marks: a dashed
+  // rule in the top margin over the first line of a block that starts the page by a break («فاصل صفحة»), a
+  // label in the middle of a blank page («صفحة فارغة»); each with a × that removes it (`data-unbreak`).
+  function breakMarksHtml(page, o) {
+    const marks = [];
+    const m = (page && page.margins) || {};
+    const x = Number(m.left) || 0;
+    const w = Math.max(0, (Number(page && page.width_pt) || 0) - x - (Number(m.right) || 0));
+    const remove = (block, label) => (o.breaks.removable ? `<button type="button" class="lp-brk-x" data-unbreak="${esc(block)}" aria-label="${label}" title="${label}">×</button>` : '');
+    (page.lines || []).forEach((line) => {
+      if (!line.block) return;
+      if (line.blank) {
+        const y = ((Number(page.height_pt) || 0) - (Number(m.bottom) || 0) + (Number(m.top) || 0)) / 2;
+        marks.push(`<div class="lp-brk is-blank" style="--x:${num(x)};--y:${num(y)};--w:${num(w)}"><span class="lp-brk-label">صفحة فارغة</span>${remove(line.block, 'حذف الصفحة الفارغة')}</div>`);
+      } else if (line.brk) {
+        const y = Math.max(4, Number(line.y) - 12);
+        marks.push(`<div class="lp-brk" style="--x:${num(x)};--y:${num(y)};--w:${num(w)}"><span class="lp-brk-label">فاصل صفحة</span>${remove(line.block, 'إزالة فاصل الصفحة')}</div>`);
+      }
+    });
+    return marks.join('');
   }
 
   // The first run with text sets the line's own face and size (the strut the engine measured the line with).
@@ -237,7 +265,8 @@
 
   // The whole page. opts: {plain(block) → text, decos(block) → [{start, end, cls}], marks(block) → [{offset, page}],
   // hidden: Set of blocks not drawn (an open paragraph, its continuation), below(line, i) → true for the lines
-  // that move with an open paragraph's growth, selected: a block outlined, flash: {block, i} a line pointed at}.
+  // that move with an open paragraph's growth, selected: a block outlined, flash: {block, i} a line pointed at,
+  // breaks: {removable} the page breaks and blank pages marked (edit mode, D99)}.
   function pageHtml(page, opts) {
     if (!page) return '';
     const o = opts || {};
@@ -247,6 +276,7 @@
     if (rule) out.push(`<div class="lp-rule" style="--x:${num(rule.x)};--y:${num(rule.y)};--w:${num(rule.w)}"></div>`);
     out.push(furnitureHtml(page.header, 'lp-header'));
     out.push(furnitureHtml(page.number, 'lp-number'));
+    if (o.breaks) out.push(breakMarksHtml(page, o));
     return out.join('');
   }
 
@@ -349,6 +379,15 @@
       delta,
       flip: Boolean(r.flip),
     };
+  }
+
+  // ---------------------------------------------------------------- the pages' scrubber (D99)
+  // The page a scrubber value stands for: a whole page number between the first and the last.
+  function scrubTarget(value, first, last) {
+    const lo = Number(first) || 1;
+    const hi = Math.max(lo, Number(last) || lo);
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : lo;
   }
 
   // ---------------------------------------------------------------- which pages
@@ -480,6 +519,6 @@
   NS.geo = {
     esc, num, arCount, runMap, hitOffset, lineAt, caretLine, blocksOn, bodyBottom, measure, runPieces, pageHtml, pageStyle,
     lineHtml, flowAround, flowAfter, shiftPage, applyRelayout, around, shown, keyAction, stepFit, snippet, groupUncertain,
-    chapterRowsHtml, STYLE_KEYS,
+    chapterRowsHtml, STYLE_KEYS, breakMarksHtml, scrubTarget,
   };
 })();

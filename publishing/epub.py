@@ -56,7 +56,7 @@ from pathlib import Path
 
 from . import fonts as F
 from .exporters import ExportCancelled, ExportJob, ExportResult, InvalidExport, OptionSpec, Progress
-from .html import CONTENTS_TITLE, CREDIT_LABELS, EDITION_LABEL, ISBN_LABEL
+from .html import CONTENTS_TITLE, CREDIT_LABELS, EDITION_LABEL, ISBN_LABEL, text_classes
 from .model import Block, Book, Chapter, Footnote, LineBreak, NoteRef, PageSetup, Run, book_model
 from .readiness import INFO, missing_font_rows, row
 
@@ -225,7 +225,10 @@ def epub_css(setup: PageSetup, fonts: F.ResolvedFonts) -> str:
         f"h1, h2 {{ font-family: {heading}; font-weight: bold; text-align: center;"
         " page-break-after: avoid; break-after: avoid; }",
         f"h1.chapter-title {{ font-size: {_em(setup.h1_scale)}; line-height: 1.35; margin: 2em 0 1.2em; }}",
-        f"h2.section-title {{ font-size: {_em(setup.h2_scale)}; line-height: 1.4; margin: 1.2em 0 0.6em; }}",
+        # D99: a subtitle starts on the start side (right), as in the preview; the chapter title stays centred
+        f"h2.section-title {{ font-size: {_em(setup.h2_scale)}; line-height: 1.4; margin: 1.2em 0 0.6em;"
+        " text-align: right; }",
+        "h2.section-title.ltr { text-align: left; }",
         f"p.body {{ text-indent: {_em(setup.indent_em)}; }}",
         "blockquote.quote { margin: 0.4em 2em; }",
         "p.verse, p.center, p.separator { text-align: center; text-indent: 0; margin: 0.4em 0; }",
@@ -253,8 +256,54 @@ def epub_css(setup: PageSetup, fonts: F.ResolvedFonts) -> str:
         "nav ol { list-style: none; margin: 0; padding: 0; }",
         "nav li { margin: 0.3em 0; } nav li li { padding-right: 1.5em; font-size: 0.95em; }",
         "nav a { text-decoration: none; color: inherit; }",
+        *epub_text_rules(setup),
     ]
     return "\n".join(rules) + "\n"
+
+
+# D99: the styles' own vertical margins in the EPUB (em of the element, = the rules above) that a block's
+# space before / after adds to
+EPUB_MARGINS_EM: dict[tuple[str, str], tuple[float, float]] = {
+    ("p", "body"): (0.0, 0.0),
+    ("p", "quote"): (0.0, 0.0),
+    ("p", "verse"): (0.4, 0.4),
+    ("p", "center"): (0.4, 0.4),
+    ("h1", "chapter-title"): (2.0, 1.2),
+    ("h2", "section-title"): (1.2, 0.6),
+}
+
+
+def epub_text_rules(setup: PageSetup) -> list[str]:
+    """The text options of a block (D99, `publishing.html.text_classes` without the prefix) for reading
+    systems: physical alignment (right to left unless `ltr`), indent steps, no first-line indent, space in
+    lines of the body's pitch, sizes, an empty paragraph's line."""
+    from editor import document as doc
+
+    from .html import space_key
+
+    step = doc.INDENT_STEP_REM
+    rules = [
+        ".a-start { text-align: right; } .ltr.a-start { text-align: left; }",
+        ".a-end { text-align: left; } .ltr.a-end { text-align: right; }",
+        ".a-center { text-align: center; } .a-justify { text-align: justify; }",
+        "p.nofirst, p.body.a-center, p.body.a-end, p.empty { text-indent: 0; }",
+    ]
+    for n in doc.INDENT_LEVELS:
+        rules.append(f".ind-{n} {{ margin-right: {_num(n * step)}rem; }}")
+        rules.append(f".ltr.ind-{n} {{ margin-right: 0; margin-left: {_num(n * step)}rem; }}")
+    for (tag, style), (top, bottom) in EPUB_MARGINS_EM.items():
+        size = {"chapter-title": setup.h1_scale, "section-title": setup.h2_scale}.get(style, 1.0)
+        for lines in doc.SPACES:
+            key, add = space_key(lines), lines * setup.line_height / size
+            rules.append(f"{tag}.{style}.sb-{key} {{ margin-top: {_em(top + add)}; }}")
+            rules.append(f"{tag}.{style}.sa-{key} {{ margin-bottom: {_em(bottom + add)}; }}")
+        for name, scale in doc.SIZE_SCALES.items():
+            rules.append(f"{tag}.{style}.sz-{name} {{ font-size: {_em(size * scale)}; }}")
+    return rules
+
+
+def _num(value: float) -> str:
+    return f"{round(float(value), 3):g}"
 
 
 # ====================================================================== the documents
@@ -342,14 +391,16 @@ class _ChapterWriter:
             classes.append("break")
         if block.keep_with_next:
             classes.append("keep")
+        classes += text_classes(block, prefix="").split()  # D99: the text options
         names = _attr(" ".join(classes))
-        body = self.inline(block)
+        direction = ' dir="ltr"' if block.direction == "ltr" else ""
+        body = self.inline(block) + ("<br/>" if block.empty else "")  # an empty paragraph keeps its line
         if block.style in ("chapter-title", "section-title"):
             tag = "h1" if block.style == "chapter-title" else "h2"
             element_id = self.ids.make("b-", block.id, f"h{len(self.headings) + 1}")
             self.headings.setdefault(block.id, element_id)
-            return f'<{tag} class="{names}" id="{element_id}">{body}</{tag}>'
-        return f'<p class="{names}">{body}</p>'
+            return f'<{tag} class="{names}" id="{element_id}"{direction}>{body}</{tag}>'
+        return f'<p class="{names}"{direction}>{body}</p>'
 
     def footnote(self, number: int, note: Footnote, first: bool) -> str:
         body = "".join(_run_html(run) if isinstance(run, Run) else "<br/>" for run in note.runs)

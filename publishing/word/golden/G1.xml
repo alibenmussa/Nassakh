@@ -115,7 +115,7 @@
       <w:keepNext/>
       <w:spacing w:before="283" w:after="170" w:line="455" w:lineRule="exact"/>
       <w:ind w:firstLine="0"/>
-      <w:jc w:val="center"/>
+      <w:jc w:val="start"/>
       <w:outlineLvl w:val="1"/>
     </w:pPr>
     <w:rPr>

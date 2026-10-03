@@ -6,7 +6,8 @@
   "Serif Narrow".
 - The preview CSS never prints bleed or crop marks, even with `bleed_mm = 3` (they belong to the print
   export, D61).
-- `ENGINE_VERSION` is `nk-print-5`, so every cached preview is laid out again.
+- `ENGINE_VERSION` is `nk-print-6` (D99: the subtitle's alignment, the text options, empty lines, blank
+  pages), so every cached preview is laid out again.
 """
 
 from __future__ import annotations
@@ -72,9 +73,9 @@ def _family(name: str) -> str:
     return name
 
 
-def test_engine_version_is_nk_print_5():
-    assert ENGINE_VERSION == "nk-print-5"
-    assert get_engine().version.startswith("nk-print-5/weasyprint-")
+def test_engine_version_is_nk_print_6():
+    assert ENGINE_VERSION == "nk-print-6"
+    assert get_engine().version.startswith("nk-print-6/weasyprint-")
 
 
 def test_a_role_in_the_latin_faces_file_has_no_unicode_range():

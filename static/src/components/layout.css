@@ -234,6 +234,17 @@
   .ed-glyph-i { font-style: italic; }
   .ed-glyph[aria-pressed="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); }
   .ed-tb-note-glyph { font: 600 10px/1 var(--font-sans); color: var(--color-accent-text); vertical-align: super; }
+  /* D99: the alignment and the page menus (an icon and a small chevron, the style menu's popover) */
+  .btn-icon.ed-tb-menu { display: inline-flex; align-items: center; width: auto; gap: 1px; padding: 0 4px 0 5px; }
+  .btn-icon.ed-tb-menu[aria-expanded="true"] { background: var(--color-active); color: var(--color-text); }
+  .ed-tb-chev { width: 10px; height: 10px; color: var(--color-text-3); }
+  .ed-tb-pop { position: absolute; top: calc(100% + 4px); inset-inline-start: 0; width: 248px; max-width: 248px; }
+  .ed-tb-pop .menu-item { gap: 8px; }
+  .ed-tb-pop .menu-item .icon { color: var(--color-text-2); }
+  .ed-tb-pop .menu-item[aria-checked="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); }
+  .ed-tb-pop .menu-item[aria-checked="true"] .icon { color: inherit; }
+  .ed-tb-pop .menu-item:disabled { opacity: 0.45; cursor: default; background: none; }
+  .ed-tb-pop .menu-item.is-danger .icon { color: inherit; }
   .lo-banners { display: flex; flex-direction: column; gap: 8px; flex: none; }
   .lo-banners:empty { display: none; }
   .lo-banners .banner { align-items: center; }
@@ -349,6 +360,9 @@
   }
   .lp-line.is-j { text-align: justify; text-align-last: justify; }
   .lp-line.is-c { text-align: center; text-align-last: center; }
+  /* D99: the side the engine kept a line's text on (a subtitle right, a paragraph's own alignment) */
+  .lp-line.is-r { text-align: right; text-align-last: right; }
+  .lp-line.is-l { text-align: left; text-align-last: left; }
   .lp-line.is-moved { transition: transform 120ms ease-out; }
   .lp-line.is-hidden, .lp-line.is-over { visibility: hidden; }
   .lp-line.is-link { cursor: pointer; }
@@ -400,6 +414,19 @@
   .lo-screen.is-edit .lp-line.is-front { cursor: default; }
   .lo-screen.is-edit .lp-run.is-sup, .lo-screen.is-edit .lp-line.k-note { cursor: pointer; }
   .lo-screen.is-edit .lp-line.k-note:hover { background: rgba(37, 99, 235, 0.05); }
+  /* D99: an empty paragraph (a blank line of the page) shows a faint ¶ at its start in edit mode, as Word's marks */
+  .lo-screen.is-edit .lp-line.is-empty::before { content: "¶"; position: absolute; inset-inline-start: 0; top: 0; font: 400 max(9px, calc(8 * var(--u)))/inherit var(--font-sans); color: var(--color-text-3); opacity: 0.55; pointer-events: none; }
+  .lo-screen.is-edit .lp-line.is-empty:hover { background: rgba(37, 99, 235, 0.04); }
+  /* D99: a page break (a dashed rule in the top margin over the block it moved, «فاصل صفحة») and a blank page («صفحة
+     فارغة» in the middle of it), edit mode only, each with a × that removes it */
+  .lp-brk { position: absolute; left: calc(var(--x) * var(--u)); top: calc(var(--y) * var(--u)); width: calc(var(--w) * var(--u)); display: flex; align-items: center; gap: 6px; height: 0; pointer-events: none; z-index: 2; }
+  .lp-brk::before, .lp-brk::after { content: ""; flex: 1 1 0; min-width: 8px; border-top: 1px dashed rgba(37, 99, 235, 0.42); }
+  .lp-brk-label { flex: none; padding: 2px 8px; border-radius: var(--radius-pill); background: #fff; box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28); font: 500 max(9.5px, calc(6.5 * var(--u)))/1.4 var(--font-sans); color: var(--color-accent-text); white-space: nowrap; }
+  .lp-brk-x { flex: none; order: 3; display: inline-grid; place-items: center; width: 18px; height: 18px; margin-inline-start: -4px; padding: 0; border: 0; border-radius: var(--radius-pill); background: #fff; box-shadow: inset 0 0 0 1px var(--color-border-strong); color: var(--color-text-2); font: 500 13px/1 var(--font-sans); cursor: pointer; pointer-events: auto; transition: background-color 120ms ease, color 120ms ease; }
+  .lp-brk::after { order: 4; }
+  .lp-brk-x:hover { background: var(--color-danger-bg); color: var(--color-danger); box-shadow: inset 0 0 0 1px var(--color-danger-border); }
+  .lp-brk-x:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+  .lp-brk.is-blank .lp-brk-label { padding: 4px 12px; font-size: max(11px, calc(8 * var(--u))); }
 
   /* ------------------------------------------------------------ a paragraph drawn by the browser: open in place, or edited and not laid out yet */
   .lp-edit { position: absolute; inset: 0; top: calc(var(--clip, 0) * var(--u)); bottom: calc(var(--clip-b, 0) * var(--u)); overflow: hidden; pointer-events: none; }
@@ -424,7 +451,15 @@
   .lp-patch.is-open { box-shadow: none; }
   .lp-patch.is-open::before { content: ""; position: absolute; inset-block: 0; inset-inline-start: calc(-7 * var(--u)); width: 2px; border-radius: 1px; background: var(--color-accent); opacity: 0.55; pointer-events: none; }
   .lp-patch.is-h1, .lp-patch.is-h2, .lp-patch.is-title { font-family: "nk-heading", "nk-latin", serif; font-weight: 700; text-align: center; text-align-last: center; }
+  /* D99: a subtitle starts on the start side (right), as the print */
+  .lp-patch.is-h2 { text-align: start; text-align-last: start; }
   .lp-patch.is-verse, .lp-patch.is-center { text-align: center; text-align-last: center; }
+  /* D99: a block's own alignment (its `data-align`, the editor's and the static patch's markup), no first-line indent */
+  .lp-patch :is(.ed-p, .ed-h1, .ed-h2)[data-align="start"] { text-align: start; text-align-last: start; }
+  .lp-patch :is(.ed-p, .ed-h1, .ed-h2)[data-align="center"] { text-align: center; text-align-last: center; }
+  .lp-patch :is(.ed-p, .ed-h1, .ed-h2)[data-align="end"] { text-align: end; text-align-last: end; }
+  .lp-patch :is(.ed-p, .ed-h1, .ed-h2)[data-align="justify"] { text-align: justify; text-align-last: start; }
+  .lp-patch.is-body .ed-p:is([data-first="none"], [data-align="center"], [data-align="end"]) { text-indent: 0; }
   .lp-patch .ed-doc { outline: none; white-space: pre-wrap; caret-color: var(--color-accent); font-variant-numeric: lining-nums; }
   .lp-patch .ed-doc ::selection { background: rgba(37, 99, 235, 0.22); }
   .lp-patch .ed-p, .lp-patch .ed-h1, .lp-patch .ed-h2, .lp-patch .ed-book-title { margin: 0; font: inherit; line-height: inherit; text-align: inherit; text-align-last: inherit; }
@@ -508,37 +543,52 @@
   .bp-changes-skel span:last-child { width: 88%; }
   .bp-changes-error, .bp-changes-stale { align-items: center; }
   .bp-changes-none { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  /* D99 (the owner's review, item 24): the list in the review screen's look — hairlines, not boxes; the chapter once
+     as a group label; a page as one quiet row (the reason a dot and a word, DESIGN §2); each change in the book's
+     face at the review's reading size, its kind above it in the UI face; a conflict's two texts as rows with the
+     choice under them; the apply pinned at the panel's foot */
   .bp-changes-pages { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-  .bp-cpage { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--color-border); }
-  .bp-cpage:last-child { border-bottom: 0; }
-  .bp-cpage.is-off .bp-citems { opacity: 0.5; }
-  .bp-cpage-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .bp-cpage-take { margin: 0; flex: none; }
-  .bp-cpage-title { min-width: 0; font-size: 12.5px; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bp-cpage-review { color: inherit; }
-  .bp-cpage-review:hover { color: var(--color-accent-text); text-decoration: underline; }
-  .bp-reason { flex: none; height: 18px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--color-bg-muted); color: var(--color-text-2); font-size: 11px; line-height: 18px; }
-  .bp-reason.is-added { background: var(--color-accent-soft); color: var(--color-accent-text); }
-  .bp-reason.is-removed { background: var(--color-warning-bg); color: var(--color-warning-text); }
-  .bp-cpage-more { margin-inline-start: auto; }
+  .bp-cpage { display: flex; flex-direction: column; gap: 2px; padding: 0 0 8px; }
+  .bp-cpage + .bp-cpage { padding-top: 8px; border-top: 1px solid var(--color-border); }
+  .bp-cpage.is-off .bp-citems { opacity: 0.45; }
+  .bp-cgroup { padding: 6px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--color-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bp-cpage + .bp-cpage .bp-cgroup { padding-top: 10px; }
+  .bp-cpage-head { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
+  .bp-cpage-take { margin: 0; flex: none; accent-color: var(--color-accent); }
+  .bp-cpage-title { flex: none; font-size: 12.5px; font-weight: 600; color: var(--color-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bp-cpage-review { color: inherit; text-decoration: none; }
+  .bp-cpage-review:hover { color: var(--color-accent-text); text-decoration: underline; text-underline-offset: 3px; }
+  .bp-reason { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 11.5px; color: var(--color-text-3); white-space: nowrap; }
+  .bp-reason-dot { flex: none; width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--color-neutral); }
+  .bp-reason.is-processing .bp-reason-dot { background: var(--color-accent); }
+  .bp-reason.is-added .bp-reason-dot { background: var(--color-success); }
+  .bp-reason.is-removed .bp-reason-dot { background: var(--color-warning); }
+  .bp-cpage-more { margin-inline-start: auto; opacity: 0; transition: opacity 120ms ease; }
+  .bp-cpage:hover .bp-cpage-more, .bp-cpage-more:focus-within, .bp-cpage-more:has([aria-expanded="true"]) { opacity: 1; }
+  @media (hover: none) { .bp-cpage-more { opacity: 1; } }
   .bp-cpage-menu { width: 250px; max-width: 250px; inset-inline-start: auto; inset-inline-end: 0; }
-  .bp-citems { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0 22px 0 0; list-style: none; }
-  [dir="ltr"] .bp-citems { padding: 0 0 0 22px; }
-  .bp-citem { display: flex; flex-direction: column; gap: 5px; }
-  .bp-citem-go { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; padding: 4px 6px; margin-inline: -6px; border-radius: var(--radius-sm); text-align: start; cursor: pointer; }
+  .bp-citems { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+  .bp-citem { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 6px; }
+  .bp-citem + .bp-citem { padding-top: 8px; border-top: 1px dashed var(--color-border); }
+  .bp-citem-go { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-sm); background: none; font: inherit; text-align: start; cursor: pointer; transition: background-color 120ms ease; }
   .bp-citem-go:hover { background: var(--color-hover); }
-  .bp-citem-chip { font-size: 11.5px; }
-  .bp-diff { font-size: 12.5px; line-height: 1.7; color: var(--color-text-2); }
-  .bp-diff del { color: var(--color-danger-text); background: var(--color-danger-bg); text-decoration: line-through; text-decoration-thickness: 1px; border-radius: 2px; padding-inline: 1px; }
-  .bp-diff ins { color: var(--color-text); background: rgba(22, 163, 74, 0.1); text-decoration: underline; text-decoration-color: var(--color-success); text-underline-offset: 3px; border-radius: 2px; padding-inline: 1px; }
-  .bp-citem-help { margin: 0; line-height: 1.5; }
-  .bp-citem-ask { display: flex; flex-direction: column; gap: 6px; }
-  .bp-citem-conflicts { display: flex; flex-direction: column; gap: 2px; margin: 0; font-size: 12px; }
-  .bp-citem-conflicts > div { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; }
-  .bp-citem-conflicts dt { color: var(--color-text-3); }
-  .bp-citem-conflicts dd { margin: 0; color: var(--color-text-2); }
+  .bp-citem-go:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+  .bp-citem-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; color: var(--color-text-2); }
+  .bp-citem-chip .dot { width: 6px; height: 6px; }
+  .bp-diff { font-family: "nk-body", var(--font-sans); font-size: 15px; line-height: 1.85; color: var(--color-text); overflow-wrap: anywhere; }
+  .bp-diff .bp-d-eq { color: var(--color-text-2); }
+  .bp-diff del { color: var(--color-danger-text); background: var(--color-danger-bg); text-decoration: line-through; text-decoration-color: rgba(220, 38, 38, 0.55); text-decoration-thickness: 1px; border-radius: 3px; padding-inline: 2px; }
+  .bp-diff ins { color: var(--color-text); background: rgba(22, 163, 74, 0.1); text-decoration: underline; text-decoration-color: var(--color-success); text-decoration-thickness: 1.5px; text-underline-offset: 4px; border-radius: 3px; padding-inline: 2px; }
+  .bp-citem-help { margin: 0; padding-inline: 8px; font-size: 12px; line-height: 1.55; color: var(--color-text-3); }
+  .bp-citem-ask { display: flex; flex-direction: column; gap: 8px; margin-inline: 8px; padding: 8px 10px 10px; border-radius: var(--radius-md); background: var(--color-bg-subtle); box-shadow: inset 0 0 0 1px var(--color-border); }
+  .bp-citem-ask .bp-citem-help { padding-inline: 0; }
+  .bp-citem-conflicts { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+  .bp-citem-conflicts > div { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 4px 10px; }
+  .bp-citem-conflicts dt { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); white-space: nowrap; }
+  .bp-citem-conflicts dd { margin: 0; font-family: "nk-body", var(--font-sans); font-size: 14.5px; line-height: 1.7; color: var(--color-text); overflow-wrap: anywhere; }
   .bp-citem-choice { align-self: flex-start; }
-  .bp-changes-foot { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding-top: 4px; }
+  .bp-citem-choice > button { min-width: 72px; }
+  .bp-changes-foot { position: sticky; bottom: -16px; z-index: 2; display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: -16px; padding: 10px 0 18px; background: var(--color-bg); border-top: 1px solid var(--color-border); } /* (over the scroller's 16 px foot padding) */
   .bp-changes-keep, .bp-changes-rebuild { align-self: center; font-size: 12.5px; }
   .bp-changes-rebuild { color: var(--color-text-2); }
   .bp-to-note { align-self: flex-start; }
@@ -821,6 +871,39 @@
   .bp-flag .help { grid-column: 2; }
   .bp-pages { display: flex; flex-wrap: wrap; gap: 6px; }
   .bp-pages .link { font-variant-numeric: tabular-nums; }
+  /* D99: «النص» — the text options as label + control rows (segments of the dashboard's look), and the page's acts */
+  .bp-text .bk-side-head { align-items: center; }
+  .bp-text-reset { margin-inline-start: auto; font-size: 12px; font-weight: 500; }
+  .bp-text-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 8px 10px; }
+  .bp-text-label { font-size: 12px; color: var(--color-text-2); white-space: nowrap; }
+  .bp-text-grid .segmented { display: flex; min-width: 0; }
+  .bp-text-grid .segmented > button { flex: 1 1 0; min-width: 0; padding: 0 6px; font-size: 12px; white-space: nowrap; }
+  .bp-seg-icons > button { display: inline-grid; place-items: center; }
+  .bp-seg-icons .icon { color: var(--color-text-2); }
+  .bp-seg-icons > button[aria-pressed="true"] .icon { color: var(--color-text); }
+  .bp-text-pair { display: contents; }
+  .bp-indent { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+  .bp-indent-n { min-width: 2ch; text-align: center; font-size: 12.5px; font-weight: 500; }
+  .bp-first { display: inline-flex; align-items: center; gap: 6px; margin-inline-start: 6px; font-size: 12px; color: var(--color-text-2); }
+  .bp-first input { accent-color: var(--color-accent); }
+  .bp-text .help { margin: 0; }
+  .bp-page-acts { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+  .bp-page-acts .btn { gap: 6px; }
+  .bp-page-acts .icon { color: var(--color-text-2); }
+  .bp-page-remove { color: var(--color-danger); }
+
+  /* D99 (item 27): الصفحات' scrubber, pinned to the panel's foot (the screen's bottom left): first page on the right */
+  .bp-pages-panel { min-height: 100%; }
+  .bp-pages-panel .lo-film { flex: 1 0 auto; }
+  .bp-scrub { position: sticky; bottom: -16px; z-index: 2; display: flex; flex-direction: column; gap: 4px; margin-bottom: -16px; padding: 10px 0 16px; background: var(--color-bg); border-top: 1px solid var(--color-border); }
+  .bp-scrub-track { position: relative; display: flex; align-items: center; height: 24px; }
+  .bp-scrub-range { width: 100%; height: 24px; margin: 0; background: transparent; accent-color: var(--color-accent); cursor: pointer; }
+  .bp-scrub-range:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+  .bp-scrub-bubble { position: absolute; bottom: calc(100% + 2px); inset-inline-start: calc(var(--p, 0) * (100% - 16px) + 8px); translate: 50% 0; padding: 2px 7px; border-radius: var(--radius-sm); background: rgba(20, 20, 24, 0.86); color: #fff; font-size: 11.5px; font-weight: 600; line-height: 1.4; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 120ms ease; }
+  [dir="ltr"] .bp-scrub-bubble { translate: -50% 0; }
+  .bp-scrub-track:is(.is-active, :hover, :focus-within) .bp-scrub-bubble { opacity: 1; }
+  .bp-scrub-ends { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--color-text-3); }
+  .bp-scrub-ends .meta { font-size: 11px; }
 
   /* الأصل: the scan of the block with its line bands (= the editor page's pane, ms-drawer) */
   .ed-source-pane { display: flex; flex-direction: column; gap: 8px; }
@@ -941,6 +1024,7 @@
     .lo-sheet.is-skeleton > span, .lp-skeleton > span, .lo-thumb.is-pending .lo-thumb-img, .ed-source-skeleton, .ed-sheet-skeleton, .ed-snap-skeleton span, .lp-cover-busy { animation: none; }
     .lp-cover-img { transition: none; }
     .lo-diagram-block, .lo-thumb, .lp-line.is-moved, .bp-acc-head .icon, .app-shell:has([data-rail]) .sidebar, .bp-drop, .bp-drop-progress > span, .bp-swatch, .bp-swatch-cover, .bp-color-box { transition: none; }
+    .bp-scrub-bubble, .lp-brk-x, .bp-cpage-more { transition: none; } /* D99 */
     .bp-panel, .ed-pop, .ed-drawer, .lp-line.is-flash, .lp-line.is-applied, .bp-changes-skel span { animation: none; }
   }
 }

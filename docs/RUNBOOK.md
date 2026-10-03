@@ -498,6 +498,22 @@ superusers and the `admin` group are its admins) and `npm run build:css` (`stati
 - Files: `media/orgs/<org>/fonts/<sha256>.<ttf|otf>`; `/media/` refuses `orgs/` (members load them through
   `/accounts/fonts/<id>/<file>`).
 
+**Text options, empty lines, page breaks, the scrubber (D99, owner review items 11, 23–27).** Upgrading: `npm run
+build` (the editor bundle and the CSS), then restart `make worker`: the engine is `nk-print-6`, so every book lays out
+once more the first time it opens (subtitles now start on the right; the layout's lines carry their side).
+- «الفقرة» → «النص» (edit mode, a paragraph or a heading): المحاذاة (right, centre, left, justified; also the toolbar's
+  alignment menu and ⇧⌘R / E / L / J, the same choice again goes back to the style's), الاتجاه (من اليسار for a Latin
+  paragraph), الحجم (أصغر · عادي · أكبر · أكبر جدًّا), الإزاحة (steps of twice the body size) and «بلا إزاحة أول
+  السطر», مسافة قبلها / بعدها (½, 1, 2 lines). «كما في النمط» clears them. They print the same in the preview, both PDFs,
+  Word and EPUB.
+- Enter on an empty line makes a blank line that stays (a faint ¶ marks it in edit mode); three in a row at most.
+- ⌘↩ (or the toolbar's page menu «فاصل صفحة عند المؤشّر») ends the page at the caret; «صفحة فارغة بعد الفقرة» adds a blank
+  page and puts the caret on it. Edit mode marks both on the page («فاصل صفحة» over the page's first line, «صفحة
+  فارغة» in its middle); the × removes them, as does Backspace at the start of the page (or Delete just before it).
+  ⇧↩ is the line break inside a paragraph.
+- «الصفحات»: the slider at the panel's foot jumps from the first page (right) to the last (left).
+- «تغييرات المراجعة» reads like the review screen (the chapter once, a quiet row per page, the changes in the book's face).
+
 ### The numbers pass (D50)
 Every OCR model misreads Arabic-Indic digits; Kraken with the OpenITI printed Arabic-script model reads them far better
 (92 % of 116 real numbers against Qari's 43 %, `playground/digits/REPORT.md`). After Qari finalises a page, `read_numbers`

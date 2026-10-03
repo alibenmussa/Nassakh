@@ -16,7 +16,12 @@ page is `SECTION_PAGES` or more after the section's first page. Such a chapter's
 - blocks: `title` {text, author} (optional inline content), `heading` {level 1–6, id, …}, `paragraph`
   {id, style: null | "quote" | "verse" | "center", …}, `separator` {id} (alias `horizontalRule`),
   `blockquote` (paragraphs inside; its paragraphs read as quotes); every block may carry
-  `breakBefore` («ابدأ صفحة جديدة») and `keepWithNext` («مع التالية»), booleans (D47)
+  `breakBefore` («ابدأ صفحة جديدة») and `keepWithNext` («مع التالية»), booleans (D47), and `breakAfter`
+  (the page ends after the block: an empty paragraph with both breaks is a blank page, D99)
+- the text options of a paragraph or a heading (D99, `TEXT_ATTRS`; absent: the style's own): `align`
+  (`start` | `center` | `end` | `justify`), `dir` (`rtl` | `ltr`), `indent` (1–4 steps of `INDENT_STEP_REM`
+  on the start side), `firstLine` (`false`: no first-line indent), `spaceBefore` / `spaceAfter` (0.5, 1 or
+  2 lines added to the style's space), `size` (`small` | `large` | `xlarge`, `SIZE_SCALES`)
 - inline: `text` with marks `bold`, `italic`, `uncertain`; `footnote` {id, number, marker, sourcePage,
   sourceLineIds, orphan} holding text / `hardBreak`; `pageBreak` {page, printed} (a source page mark,
   not a printed page break); `hardBreak`
@@ -60,7 +65,17 @@ INLINE_TYPES: frozenset[str] = frozenset({"text", "footnote", "pageBreak", "hard
 NOTE_INLINE_TYPES: frozenset[str] = frozenset({"text", "hardBreak"})
 MARK_TYPES: frozenset[str] = frozenset({"bold", "italic", "uncertain"})
 PARAGRAPH_STYLES: tuple[str, ...] = ("quote", "verse", "center")
-BLOCK_FLAGS: tuple[str, ...] = ("breakBefore", "keepWithNext")  # D47 page-break attrs (booleans)
+# D47 page-break attrs (booleans); `breakAfter` (D99) ends the page after the block
+BLOCK_FLAGS: tuple[str, ...] = ("breakBefore", "keepWithNext", "breakAfter")
+# D99: a paragraph's or a heading's text options (the editor's «النص»), each one optional
+ALIGNS: tuple[str, ...] = ("start", "center", "end", "justify")
+DIRECTIONS: tuple[str, ...] = ("rtl", "ltr")
+INDENT_LEVELS: tuple[int, ...] = (1, 2, 3, 4)
+INDENT_STEP_REM = 2.0  # one indent step: twice the body size (the quote's own indent)
+SPACES: tuple[float, ...] = (0.5, 1, 2)  # lines of the body's pitch added before / after
+SIZE_SCALES: dict[str, float] = {"small": 0.85, "large": 1.15, "xlarge": 1.3}
+TEXT_ATTRS: tuple[str, ...] = ("align", "dir", "indent", "firstLine", "spaceBefore", "spaceAfter", "size")
+MAX_EMPTY_RUN = 3  # D99: empty paragraphs in a row that print (a blank line each); more are left out
 OBJECT = "￼"  # a footnote call or a scan page mark in a block's plain text (one position)
 BREAK = "\n"  # a hard line break in a block's plain text
 
@@ -162,6 +177,67 @@ def node_id(node) -> str:
     """A block's id ('' when it has none)."""
     value = attrs_of(node).get("id")
     return value if isinstance(value, str) else ""
+
+
+def _number(value) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _text_attr_ok(name: str, value) -> bool:
+    if value is None:
+        return True
+    if name == "align":
+        return value in ALIGNS
+    if name == "dir":
+        return value in DIRECTIONS
+    if name == "indent":
+        whole = isinstance(value, int) and not isinstance(value, bool)
+        return whole and (value == 0 or value in INDENT_LEVELS)
+    if name == "firstLine":
+        return isinstance(value, bool)
+    if name in ("spaceBefore", "spaceAfter"):
+        return _number(value) and (value == 0 or value in SPACES)
+    if name == "size":
+        return value in SIZE_SCALES
+    return True
+
+
+def text_attrs_valid(attrs) -> bool:
+    """True when every text option of a block's attrs (D99, `TEXT_ATTRS`) is absent or one of its values."""
+    attrs = attrs if isinstance(attrs, dict) else {}
+    return all(_text_attr_ok(name, attrs.get(name)) for name in TEXT_ATTRS)
+
+
+def text_attrs(node) -> dict:
+    """A block's text options that change its print (D99): the valid, non-default ones only."""
+    attrs = attrs_of(node)
+    out: dict = {}
+    for name in TEXT_ATTRS:
+        value = attrs.get(name)
+        if value is None or not _text_attr_ok(name, value):
+            continue
+        if (name == "indent" and value == 0) or (name in ("spaceBefore", "spaceAfter") and value == 0):
+            continue
+        if (name == "firstLine" and value is True) or (name == "dir" and value == "rtl"):
+            continue
+        out[name] = value
+    return out
+
+
+def is_empty_block(node) -> bool:
+    """True for a paragraph with nothing to print: no text but white space, no footnote call (a scan page
+    mark or a line break alone counts as empty). A heading, a title or a separator is never «empty» here."""
+    if not isinstance(node, dict) or node.get("type") != PARAGRAPH:
+        return False
+    for item in node.get("content") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("type")
+        if kind == "footnote":
+            return False
+        if kind == "text" and str(item.get("text") or "").strip():
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -560,6 +636,8 @@ def _check_block(node, counter: list[int], top: bool) -> None:
     for flag in BLOCK_FLAGS:
         if attrs.get(flag) is not None and not isinstance(attrs.get(flag), bool):
             raise DocumentError("خاصية فاصل الصفحة غير صالحة.")
+    if not text_attrs_valid(attrs):
+        raise DocumentError("تنسيق الفقرة غير صالح.")
     content = node.get("content", [])
     if content is None:
         content = []

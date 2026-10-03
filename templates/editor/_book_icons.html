@@ -1,0 +1,13 @@
+{% comment %}The book page's own icons (D99: the text options and the page breaks), on base.html's grid: 24 px, stroke 1.6,
+round caps. The alignment icons are drawn as they look on the page (right, centre, left, justified); the indent icons
+for a right-to-left text (the start side is the right).{% endcomment %}
+<svg xmlns="http://www.w3.org/2000/svg" class="hidden" aria-hidden="true">
+  <symbol id="i-align-right" viewBox="0 0 24 24"><path d="M4 6h16M9 10h11M4 14h16M11 18h9"/></symbol>
+  <symbol id="i-align-center" viewBox="0 0 24 24"><path d="M4 6h16M7 10h10M4 14h16M8 18h8"/></symbol>
+  <symbol id="i-align-left" viewBox="0 0 24 24"><path d="M4 6h16M4 10h11M4 14h16M4 18h9"/></symbol>
+  <symbol id="i-align-justify" viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h16"/></symbol>
+  <symbol id="i-indent-more" viewBox="0 0 24 24"><path d="M4 5.5h16M4 10h10M4 14h10M4 18.5h16"/><path d="M20.5 9.5 17.5 12l3 2.5"/></symbol>
+  <symbol id="i-indent-less" viewBox="0 0 24 24"><path d="M4 5.5h16M4 10h10M4 14h10M4 18.5h16"/><path d="M17.5 9.5l3 2.5-3 2.5"/></symbol>
+  <symbol id="i-page-break" viewBox="0 0 24 24"><path d="M6 3.5v4a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-4M6 20.5v-4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v4"/><path d="M3 12h2M8 12h2M14 12h2M19 12h2"/></symbol>
+  <symbol id="i-page-blank" viewBox="0 0 24 24"><path d="M14 3.5H7.5A1.5 1.5 0 0 0 6 5v14a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 18 19V7.5z"/><path d="M14 3.5v4h4M12 11v6M9 14h6"/></symbol>
+</svg>

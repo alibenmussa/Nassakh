@@ -18,7 +18,11 @@ Markup contract (used by `publishing.css`, `publishing.pdf` and `publishing.layo
 - `section.nk-chapter.is-<kind>#ch-<chapter id>` (its first page is found from this anchor)
 - blocks: `h1.nk-chapter-title` / `h2.nk-section-title` / `p.nk-<style>`, `id="b-<block id>"`; headings
   and the zero-height `div.nk-run-mark` carry `data-running` (the running header's text, D46 `string-set`);
-  `.nk-break` starts a new page before the block, `.nk-keep` keeps it with the next one (D47)
+  `.nk-break` starts a new page before the block (with `data-brk`, D99), `.nk-keep` keeps it with the next
+  one (D47)
+- D99: the text options as classes (`text_classes`: `nk-a-<align>`, `nk-ltr` with `dir="ltr"`,
+  `nk-ind-<n>`, `nk-nofirst`, `nk-sb-<k>` / `nk-sa-<k>`, `nk-sz-<size>`); an empty paragraph is
+  `.nk-empty[data-empty]` holding one `<br>` (a blank page's also `data-blank`)
 - layout tags (D47): every element whose lines the layout reports has `data-block` (the block's, the note's
   or the front matter item's id), `data-kind` (`body`, `heading`, `note`, `title`, `contents`, …) and
   `data-style` (the model style); a footnote element also has `data-note` (its call is a pseudo-element of
@@ -110,6 +114,35 @@ def _note_html(note: Footnote, element_id: str, number: str) -> str:
     )
 
 
+def space_key(lines: float) -> str:
+    """A space option's class suffix (D99): 0.5 → `05`, 1 → `1`, 2 → `2`."""
+    return f"{float(lines):g}".replace(".", "")
+
+
+def text_classes(block: Block, prefix: str = "nk-") -> str:
+    """The classes of a block's text options (D99), each with a leading space: `nk-a-<align>`, `nk-ltr`,
+    `nk-ind-<n>`, `nk-nofirst`, `nk-sb-<k>` / `nk-sa-<k>`, `nk-sz-<size>`, `nk-empty` (the EPUB's without
+    the prefix)."""
+    out: list[str] = []
+    if block.align:
+        out.append(f"a-{block.align}")
+    if block.direction == "ltr":
+        out.append("ltr")
+    if block.indent:
+        out.append(f"ind-{int(block.indent)}")
+    if not block.first_line:
+        out.append("nofirst")
+    if block.space_before:
+        out.append(f"sb-{space_key(block.space_before)}")
+    if block.space_after:
+        out.append(f"sa-{space_key(block.space_after)}")
+    if block.size:
+        out.append(f"sz-{block.size}")
+    if block.empty:
+        out.append("empty")
+    return "".join(f" {prefix}{name}" for name in out)
+
+
 def _tags(key: str, kind: str, style: str) -> str:
     """The layout tags of an element (D47)."""
     return f' data-block="{_attr(key)}" data-kind="{_attr(kind)}" data-style="{_attr(style)}"'
@@ -189,7 +222,9 @@ class _Writer:
                 )
         return "".join(parts)
 
-    def block(self, block: Block, chapter_running: str, opens_page: bool = False) -> str:
+    def block(
+        self, block: Block, chapter_running: str, opens_page: bool = False, window_start: bool = False
+    ) -> str:
         tag = _TAGS.get(block.style, "p")
         element_id = self.block_ids[id(block)]
         extra = ""
@@ -200,15 +235,26 @@ class _Writer:
         classes = f"nk-{block.style}"
         if block.break_before and not opens_page:  # (a block that opens a page anyway: no empty page first)
             classes += " nk-break"
+        if block.break_before and (not opens_page or window_start):
+            # D99: the layout marks the page break on the block's first line (also where a window of the
+            # re-layout starts at it: the same mark as the whole book's render)
+            extra += ' data-brk="1"'
         if block.keep_with_next:
             classes += " nk-keep"
+        classes += text_classes(block)
+        if block.direction == "ltr":
+            extra += ' dir="ltr"'
+        if block.empty:
+            extra += ' data-empty="1"' + (' data-blank="1"' if block.blank_page else "")
         self.texts[element_id] = block.plain
         for note in block.footnotes:
             note_element = self.note_ids.get((id(block), note.id))
             if note_element is not None:
                 self.texts[note_element] = note.plain
         tags = _tags(block.id or element_id, KINDS.get(block.style, "body"), block.style)
-        return f'<{tag} class="{classes}" id="{_attr(element_id)}"{tags}{extra}>{self.inline(block)}</{tag}>'
+        # an empty paragraph keeps one line (D99): a lone `<br>` gives it a line box of the style's pitch
+        body = self.inline(block) + ("<br>" if block.empty else "")
+        return f'<{tag} class="{classes}" id="{_attr(element_id)}"{tags}{extra}>{body}</{tag}>'
 
     def front(self, tag: str, style: str, key: str, text: str, kind: str = "front") -> str:
         """One tagged front matter element (its printed text is its plain text)."""
@@ -385,7 +431,8 @@ def render_markup(
         first_section = first_section and chapter.kind != "section"
         for index, block in enumerate(blocks):
             opens = not body_started or (index == 0 and chapter.kind != "section")
-            parts.append(writer.block(block, running, opens))
+            window_start = scope == "window" and bool(start_block) and not body_started
+            parts.append(writer.block(block, running, opens, window_start))
             body_started = True
         parts.append("</section>")
     parts.append("</body></html>")

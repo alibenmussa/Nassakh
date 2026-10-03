@@ -54,7 +54,8 @@ theirs; between anchors it takes theirs where mine equals base, mine where their
 both made the same change, and otherwise records a conflict (keeping mine). A conflict of one footnote token
 against one footnote token of the same note is merged again on the note's own tokens.
 
-**Rebuild.** A 1:1 take keeps mine's `id`, `breakBefore` and `keepWithNext` (theirs' attributes otherwise,
+**Rebuild.** A 1:1 take keeps mine's `id`, `breakBefore`, `keepWithNext`, `breakAfter` and the text options
+(D99: alignment, direction, indent, spacing, size — the owner's own formatting) (theirs' attributes otherwise,
 all of theirs when the block type changed). A merged result is cut into blocks at its `¶` tokens; each block
 takes the attributes of the block that produced its `¶` (mine's, else the fresh one's), `sourceLineIds` and
 `sourcePages` are the union of the blocks its tokens came from and `reviewed` comes from the fresh blocks
@@ -88,7 +89,8 @@ VOLATILE: frozenset[str] = frozenset(
 )
 CONTEXT_WORDS = 5  # words of context around each change in an item's `diff`
 CONFLICT_WORDS = 3  # words of context around a conflicting stretch
-FLAGS: tuple[str, ...] = doc.BLOCK_FLAGS  # mine's page-break attrs, kept by a 1:1 take
+# mine's page-break attrs and (D99) text options — the owner's choices for the paragraph — kept by a 1:1 take
+FLAGS: tuple[str, ...] = (*doc.BLOCK_FLAGS, *doc.TEXT_ATTRS)
 
 TAKE, MERGED, CONFLICT, CHOOSE, INSERT, REMOVE = "take", "merged", "conflict", "choose", "insert", "remove"
 MINE, THEIRS, MERGE = "mine", "theirs", "merged"

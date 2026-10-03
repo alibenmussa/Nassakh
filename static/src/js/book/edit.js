@@ -14,6 +14,11 @@
 //   - a block edited but not laid out again yet is drawn by the browser in the page's faces in its place
 //     (a patch), so the page never shows the old text beside the new
 //   - style picker, B / I, footnotes (one overlay: the note editor or a word's readings), «الفقرة» flags
+//   - D99 (the owner's review, 2026-10-03): the text options of a block (alignment, direction, indent steps,
+//     first-line indent, space before / after, size: `setTextAttr`, the toolbar's alignment menu, «الفقرة»);
+//     an empty paragraph made with Enter is a blank line that stays (at most MAX_EMPTY_RUN in a row); ⌘↩ or
+//     «فاصل صفحة» cuts the page at the caret, «صفحة فارغة» adds a blank page; edit mode marks both on the
+//     page with a × that removes them, and Backspace / Delete next to them removes them as Word does
 (function () {
   'use strict';
 
@@ -193,6 +198,11 @@
       word: { from: 0, to: 0, text: '', typed: '', readings: [], item: null },
       styles: [],
       flags: { breakBefore: false, keepWithNext: false },
+      // D99: the open (or chosen) block's text options (null: the style's own), its blank page, the menus
+      textAttrs: { align: null, dir: null, indent: null, firstLine: null, spaceBefore: null, spaceAfter: null, size: null },
+      blankOpen: false,
+      alignMenu: false,
+      pageMenu: false,
 
       _init_edit() {
         this.styles = (B() && B().STYLES) || [];
@@ -350,6 +360,9 @@
         const n = this.shownNumbers[side];
         const page = n ? ctx.pages.get(n) : null;
         if (!page) return false;
+        // D99: a page-break marker's × (edit mode): the break goes (a blank page goes whole)
+        const unbreak = U.closest(e.target, '[data-unbreak]');
+        if (unbreak && this.mode === 'edit') { if (e.stopPropagation) e.stopPropagation(); return this.removeBreak(unbreak.getAttribute('data-unbreak'), n); }
         const lineEl = U.closest(e.target, '.lp-line');
         const line = lineEl ? page.lines[Number(lineEl.dataset.i)] : null;
         if (this.mode !== 'edit') {
@@ -525,10 +538,23 @@
           else if (style === 'verse' || style === 'center') { cls = `is-${style}`; indent = 0; }
           else if (!lines.length || lines[0].style === 'body' || lines[0].kind === 'body') cls = 'is-body';
         }
-        if (lead && Number(lead.size_pt)) fs = Number(lead.size_pt);
-        if (lines.length && Number(lines[0].h)) lh = Number(lines[0].h);
+        // D99: the block's own text options — its size, its start-side indent steps, no first-line indent (also
+        // when centred or end-aligned, as the print), its direction (the start side of a left-to-right one)
+        const t = B() && B().textAttrsOf ? B().textAttrsOf(node.attrs) : {};
+        const sized = (B() && B().SIZES && B().SIZES[t.size]) || 1;
+        fs *= sized;
+        lh *= sized;
+        indent *= sized;
+        if (t.firstLine === false || t.align === 'center' || t.align === 'end' || (B() && B().isEmptyBlock && B().isEmptyBlock(node))) indent = 0;
+        const steps = (Number(t.indent) || 0) * 2 * body; // editor.document.INDENT_STEP_REM
+        // the laid-out lines give the engine's own size and pitch, unless the size option changed since
+        if (lead && Number(lead.size_pt)) {
+          const ratio = fs / Number(lead.size_pt);
+          if (Math.abs(ratio - 1) < 0.02) { fs = Number(lead.size_pt); if (lines.length && Number(lines[0].h)) lh = Number(lines[0].h); } else if (lines.length && Number(lines[0].h)) lh = Number(lines[0].h) * ratio;
+        } else if (lines.length && Number(lines[0].h)) lh = Number(lines[0].h);
+        const ltr = t.dir === 'ltr';
         // a footnote call is FOOTNOTE_CALL_SCALE of the body text, whatever the block (publishing/css.py)
-        return { cls, x: m.x + inset, w: Math.max(40, m.w - 2 * inset), fs, lh, indent, call: body * 0.62 };
+        return { cls, x: m.x + inset + (ltr ? steps : 0), w: Math.max(40, m.w - 2 * inset - steps), fs, lh, indent, call: body * 0.62 };
       },
       styleBox(el, node, page) {
         const box = el || ctx.box;
@@ -737,6 +763,8 @@
           selected: this.selected ? this.selected.block : null,
           flash: this.flash && this.flash.n === n ? this.flash : null,
           applied: this.appliedBlocks || null, // D78: the blocks an apply of review's changes rewrote, lit once
+          // D99: the page breaks and blank pages marked in edit mode (as Word's formatting marks), removable
+          breaks: this.mode === 'edit' ? { removable: Boolean(this.canEdit) } : null,
         };
       },
       // A separator (or another block without text) chosen: outlined; Delete removes it, the style picker
@@ -777,6 +805,8 @@
         const node = ctx.ed.getNode() || {};
         const a = node.attrs || {};
         this.flags = { breakBefore: a.breakBefore === true, keepWithNext: a.keepWithNext === true };
+        this.textAttrs = typeof ctx.ed.textAttrs === 'function' ? ctx.ed.textAttrs() : B().textAttrsOf(a);
+        this.blankOpen = Boolean(B().isBlankPage && B().isBlankPage(node));
         this.followCaret();
       },
       // The caret moved (arrows, a click, Home / End) onto text the layout put on another page: the view turns
@@ -885,12 +915,16 @@
           case 'down': this.moveTo(1, info.x, 'first'); return true;
           case 'prev': this.moveTo(-1, null, 'end'); return true;
           case 'next': this.moveTo(1, null, 'start'); return true;
-          case 'escape': this.closeBlock({ commit: true }); this.focusStage(); return true;
+          case 'escape':
+            // a toolbar menu open over the paragraph closes first (the caret stays in it)
+            if (this.styleMenu || this.alignMenu || this.pageMenu) { this.styleMenu = false; this.alignMenu = false; this.pageMenu = false; return true; }
+            this.closeBlock({ commit: true }); this.focusStage(); return true;
           case 'undo': this.undo(); return true;
           case 'redo': this.redo(); return true;
           case 'save': this.saveNow(); return true;
           case 'separator': this.addSeparator(); return true;
           case 'paste': this.pasteBlocks(info); return true;
+          case 'pageBreak': this.pageBreak(info); return true;
           default: return false;
         }
       },
@@ -900,7 +934,9 @@
         if (i < 0) return null;
         return flat[i + dir] || null;
       },
-      // Enter: the paragraph is cut at the caret; the second half opens under the first.
+      // Enter: the paragraph is cut at the caret; the second half opens under the first. An empty paragraph made
+      // so is a blank line of the page (D99, kept in every export); more than MAX_EMPTY_RUN in a row would not
+      // print, so Enter says so instead of making one.
       splitOpen(info) {
         const id = ctx.openId;
         const node = info.node || ctx.ed.getNode();
@@ -908,6 +944,14 @@
         const to = Number(info.to) || from;
         const base = to > from ? Object.assign({}, node, { content: B().replacePlain(node.content || [], from, to, '') }) : node;
         const [a, b] = B().splitNode(base, from);
+        if (B().emptyRunAt && (B().isEmptyBlock(a) || B().isEmptyBlock(b))) {
+          const next = B().replaceBlock(ctx.nodes, id, [a, b]);
+          const run = Math.max(B().emptyRunAt(next, a.attrs.id), B().emptyRunAt(next, b.attrs.id));
+          if (run > B().MAX_EMPTY_RUN) {
+            U.toast(`لا يُطبع أكثر من ${B().MAX_EMPTY_RUN} أسطر فارغة متتالية؛ للمسافة استعمل «مسافة قبل» في «الفقرة»، ولصفحة جديدة ⌘↩.`);
+            return false;
+          }
+        }
         const anchor = ctx.anchor ? Object.assign({}, ctx.anchor) : null;
         this.pushHistory();
         ctx.nodes = B().replaceBlock(ctx.nodes, id, [a, b]);
@@ -920,9 +964,34 @@
       // next one to it. A separator next to it is removed instead; a chapter's edge stays.
       mergeOpen(dir) {
         const id = ctx.openId;
+        const current = ctx.ed.getNode();
+        // D99, as Word deletes a page break before its text: a blank page goes whole; Backspace at the start of
+        // a block that starts a page takes its page break off first
+        if (B().isBlankPage(current)) return this.removeBlankPage(id, dir);
+        if (dir < 0 && current && current.attrs && current.attrs.breakBefore === true) {
+          ctx.ed.setAttrs({ breakBefore: null });
+          this.onBlockSelection();
+          this.pause();
+          this.undoToast('أُزيل فاصل الصفحة', () => this.undo(), true);
+          return true;
+        }
         const other = this.neighbourOf(id, dir);
         if (!other) { U.toast(dir < 0 ? 'هذه أول فقرة في الفصل' : 'هذه آخر فقرة في الفصل'); return false; }
-        const current = ctx.ed.getNode();
+        if (B().isBlankPage(other.node)) {
+          this.commitOpen();
+          this.change(B().replaceBlock(ctx.nodes, other.id, []));
+          this.paint();
+          this.undoToast('حُذفت الصفحة الفارغة', () => this.undo(), true);
+          return true;
+        }
+        if (dir > 0 && other.node.attrs && other.node.attrs.breakBefore === true) {
+          // Delete at the end, before a block that starts a page: the page break goes, the texts stay apart
+          this.commitOpen();
+          this.change(B().setBlockAttrs(ctx.nodes, other.id, { breakBefore: null }));
+          this.paint();
+          this.undoToast('أُزيل فاصل الصفحة', () => this.undo(), true);
+          return true;
+        }
         if (other.node.type === 'separator') {
           this.commitOpen();
           this.change(B().replaceBlock(ctx.nodes, other.id, []));
@@ -997,6 +1066,175 @@
         const target = result.blocks[result.caret.index];
         return this.openBlock(target.attrs.id, result.caret.offset, { n, after: result.caret.index ? result.blocks[result.caret.index - 1].attrs.id : null });
       },
+      // ------------------------------------------------------------ D99: page breaks and blank pages (as Word)
+      // ⌘↩ or «فاصل صفحة»: the page ends at the caret — the block is cut there and its second half starts the
+      // next page (at the block's start, or in an empty one, the block itself starts it); the caret goes on.
+      pageBreak(info = {}) {
+        if (!ctx.ed || !ctx.openId || !this.canEdit) { U.toast('ضع المؤشّر في فقرة أولًا'); return false; }
+        const id = ctx.openId;
+        const node = info.node || ctx.ed.getNode();
+        const r = ctx.ed.range ? ctx.ed.range() : { from: ctx.ed.offset(), to: ctx.ed.offset() };
+        const from = info.from !== undefined ? Number(info.from) || 0 : r.from;
+        const to = info.to !== undefined ? Number(info.to) || from : r.to;
+        if (node.type === 'title' || node.type === 'separator') return false;
+        const base = to > from ? Object.assign({}, node, { content: B().replacePlain(node.content || [], from, to, '') }) : node;
+        const result = B().pageBreakAt(base, from);
+        const n = ctx.anchor ? ctx.anchor.n : this.current;
+        this.pushHistory();
+        ctx.nodes = B().replaceBlock(ctx.nodes, id, result.blocks);
+        this.textDirty = true;
+        this.dropEditor();
+        this.saveChapter();
+        this.liveMessage = 'فاصل صفحة';
+        const target = result.blocks[result.caret.index];
+        return this.openBlock(target.attrs.id, result.caret.offset, { n, after: result.caret.index ? id : null });
+      },
+      // «صفحة فارغة»: a blank page after the open (or chosen) block — an empty paragraph alone on its page,
+      // opened (what is typed there prints on that page)
+      insertBlankPage() {
+        this.pageMenu = false;
+        if (!this.canEdit) return false;
+        const pointed = this.pointed && B() && B().locate(ctx.nodes, this.pointed) ? this.pointed : null;
+        const id = ctx.openId || (this.selected && this.selected.block) || pointed;
+        if (!id) { U.toast('ضع المؤشّر في فقرة أولًا'); return false; }
+        if (ctx.ed) this.commitOpen();
+        const at = B().locate(ctx.nodes, id);
+        if (!at) return false;
+        const page = B().blankPage();
+        const n = ctx.anchor ? ctx.anchor.n : this.current;
+        this.dropEditor();
+        this.selected = null;
+        this.change(B().replaceBlock(ctx.nodes, id, [at.node, page]));
+        this.undoToast('أُضيفت صفحة فارغة', () => this.undo(), true);
+        return this.openBlock(page.attrs.id, 0, { n, after: id });
+      },
+      // A blank page removed (its marker's ×, Backspace or Delete in it): the block goes; the caret goes to the
+      // block before it (at its end), else to the one after it.
+      removeBlankPage(id, dir = -1) {
+        if (!this.canEdit || !id) return false;
+        const at = B().locate(ctx.nodes, id);
+        if (!at) return false;
+        const before = this.neighbourOf(id, -1);
+        const after = this.neighbourOf(id, 1);
+        const open = ctx.openId === id;
+        if (open) this.dropEditor();
+        this.change(B().replaceBlock(ctx.nodes, id, []));
+        this.paint();
+        this.undoToast('حُذفت الصفحة الفارغة', () => this.undo(), true);
+        if (!open) return true;
+        const target = dir < 0 ? before || after : after || before;
+        if (!target || target.node.type === 'separator') return true;
+        const end = dir < 0 && target === before ? B().plainText(target.node).length : 0;
+        const c = G.caretLine(ctx.pages, target.id, end);
+        return this.openBlock(target.id, end, { n: c && this.sideOf(c.n) ? c.n : this.current });
+      },
+      // The page-break marker's × on a page (edit mode): the break before that block goes (a blank page goes
+      // whole); the chapter is loaded first when it is not the one being edited.
+      async removeBreak(block, n) {
+        if (!this.canEdit || !block) return false;
+        if (ctx.ed && ctx.openId !== block) await this.closeBlock({ commit: true });
+        const cid = await this.chapterFor(block, n || this.current);
+        if (!cid) return false;
+        const at = B().locate(ctx.nodes, block);
+        if (!at) return false;
+        if (B().isBlankPage(at.node)) return this.removeBlankPage(block, 1);
+        if (ctx.ed && ctx.openId === block) {
+          ctx.ed.setAttrs({ breakBefore: null });
+          this.onBlockSelection();
+          this.pause();
+        } else {
+          // the break may come from the block before it (its page ends after it)
+          const prev = this.neighbourOf(block, -1);
+          const patch = at.node.attrs && at.node.attrs.breakBefore === true ? [block, { breakBefore: null }] : prev && prev.node.attrs && prev.node.attrs.breakAfter === true ? [prev.id, { breakAfter: null }] : null;
+          if (!patch) return false;
+          this.change(B().setBlockAttrs(ctx.nodes, patch[0], patch[1]));
+        }
+        this.paint();
+        this.undoToast('أُزيل فاصل الصفحة', () => this.undo(), true);
+        return true;
+      },
+
+      // ------------------------------------------------------------ D99: the text options of a block
+      // The block they apply to: the open one, else the chosen or the pointed one (its chapter loaded).
+      textTarget() {
+        if (ctx.ed && ctx.openId) return { id: ctx.openId, open: true };
+        const pointed = this.pointed && B() && B().locate(ctx.nodes, this.pointed) ? this.pointed : null;
+        const id = (this.selected && this.selected.block) || pointed;
+        return id ? { id, open: false } : null;
+      },
+      // One option set (null: the style's own); an open paragraph changes in place and is saved after the pause.
+      setTextAttr(name, value) {
+        if (!this.canEdit) return false;
+        const t = this.textTarget();
+        if (!t) { U.toast('ضع المؤشّر في فقرة أولًا'); return false; }
+        if (t.open) {
+          if (!ctx.ed.setTextAttrs({ [name]: value })) { U.toast('هذه الخيارات للفقرات والعناوين'); return false; }
+          this.onBlockSelection();
+          this.styleBox();
+          this.pause();
+          return true;
+        }
+        const at = B().locate(ctx.nodes, t.id);
+        if (!at || (at.node.type !== 'paragraph' && at.node.type !== 'heading')) { U.toast('هذه الخيارات للفقرات والعناوين'); return false; }
+        this.change(B().setTextAttrs(ctx.nodes, t.id, { [name]: value }));
+        this.textAttrs = B().textAttrsOf((B().locate(ctx.nodes, t.id) || at).node.attrs);
+        this.paint();
+        return true;
+      },
+      // the text options of the block they apply to (the open one's live, else the chosen or pointed one's)
+      get targetText() {
+        void this.textAttrs; void this.open; void this.selected; void this.flags; void this.pointedNode; void this.painted;
+        if (ctx.ed && ctx.openId) return this.textAttrs;
+        const b = this.currentBlock;
+        return b && B() ? B().textAttrsOf(b.node.attrs) : this.textAttrs;
+      },
+      get targetStyle() {
+        void this.open; void this.selected; void this.pointedNode; void this.blockStyle;
+        if (ctx.ed && ctx.openId) return this.blockStyle;
+        const b = this.currentBlock;
+        return b && B() ? B().styleOf(b.node) : this.blockStyle;
+      },
+      // The alignment by its side on the page (the toolbar's and the panel's buttons): right, centre, left,
+      // justified; the one in force chosen again goes back to the style's own.
+      get textDir() { return this.targetText.dir === 'ltr' ? 'ltr' : 'rtl'; },
+      sideOfAlign(align) {
+        if (align === 'start') return this.textDir === 'ltr' ? 'left' : 'right';
+        if (align === 'end') return this.textDir === 'ltr' ? 'right' : 'left';
+        return align || '';
+      },
+      // the alignment shown: the block's own, else its style's (a subtitle right, a title centred, D99)
+      get alignSide() {
+        const own = this.targetText.align;
+        if (own) return this.sideOfAlign(own);
+        const style = this.targetStyle;
+        if (['heading1', 'title', 'verse', 'center', 'separator'].includes(style)) return 'center';
+        if (style === 'heading2') return this.sideOfAlign('start');
+        return 'justify';
+      },
+      alignTo(side) {
+        this.alignMenu = false;
+        const value = side === 'center' || side === 'justify' ? side : side === (this.textDir === 'ltr' ? 'left' : 'right') ? 'start' : 'end';
+        return this.setTextAttr('align', this.targetText.align === value ? null : value);
+      },
+      stepIndent(dir) {
+        const now = Number(this.targetText.indent) || 0;
+        const next = Math.max(0, Math.min(B().INDENT_MAX || 4, now + dir));
+        if (next === now) return false;
+        return this.setTextAttr('indent', next);
+      },
+      resetText() {
+        if (!this.canEdit) return false;
+        const patch = Object.fromEntries((B().TEXT_ATTRS || []).map((k) => [k, null]));
+        const t = this.textTarget();
+        if (!t) return false;
+        if (t.open) { ctx.ed.setTextAttrs(patch); this.onBlockSelection(); this.styleBox(); this.pause(); return true; }
+        this.change(B().setTextAttrs(ctx.nodes, t.id, patch));
+        this.textAttrs = B().textAttrsOf({});
+        this.paint();
+        return true;
+      },
+      get hasTextOptions() { return Object.values(this.targetText || {}).some((v) => v !== null && v !== undefined); },
+
       dropEditor() {
         clearTimeout(T.pause);
         this.closePop();
@@ -1502,7 +1740,18 @@
         this.pop = Object.assign({}, this.pop, placed);
         return true;
       },
+      // D99: the toolbar's alignment and page menus, one overlay at a time with the style menu and the pop
+      toggleMenu(name) {
+        const key = name === 'page' ? 'pageMenu' : 'alignMenu';
+        const was = this[key];
+        this.closePop();
+        this.styleMenu = false;
+        this[key] = !was;
+        return this[key];
+      },
       closePop(refocus) {
+        this.alignMenu = false;
+        this.pageMenu = false;
         const kind = this.pop.kind;
         if (!kind) return null;
         if (kind === 'note' && noteEd) { noteEd.destroy(); noteEd = null; const host = this.$refs && this.$refs.noteHost; if (host) host.textContent = ''; }

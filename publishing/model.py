@@ -34,9 +34,17 @@ Phase 5 styles, see `editor.document`) into plain dataclasses that know nothing 
   export hashes) leaves it out: a stylesheet without a cover key gives the setup, the hashes and the
   files it gave before.
 
-Empty paragraphs are left out (spacing comes from the styles). `direction_flags` (over a paragraph's
-whole text) and `direction_runs` (over one text) cut text into right-to-left and left-to-right pieces for
-renderers that need explicit direction (Word's `w:rtl`), so that they order it as the preview does.
+**Empty paragraphs and the text options (D99).** An empty paragraph the owner made (Enter on an empty
+line) is a block of its own (`empty`), printed as one blank line in every renderer; of a run of them only
+the first `editor.document.MAX_EMPTY_RUN` print, and a chapter of empty lines only prints nothing. Empty
+headings and titles are still left out. `breakAfter` sets the next block's `break_before` (across
+chapters), so an empty paragraph with both breaks is a blank page (`Block.blank_page`). A paragraph's or a
+heading's text options (`editor.document.TEXT_ATTRS`: alignment, direction, indent, first-line indent,
+space before / after, size) are plain fields of its block; renderers map them as they map the styles.
+
+`direction_flags` (over a paragraph's whole text) and `direction_runs` (over one text) cut text into
+right-to-left and left-to-right pieces for renderers that need explicit direction (Word's `w:rtl`), so
+that they order it as the preview does.
 """
 
 from __future__ import annotations
@@ -373,8 +381,30 @@ class Block:
     source_pages: tuple[int, ...] = ()
     level: int = 0  # 1 / 2 for chapter and section titles
     plain: str = ""  # the block's text as the layout counts it (`editor.document.object_kinds`)
-    break_before: bool = False  # «ابدأ صفحة جديدة» (D47)
+    break_before: bool = False  # «ابدأ صفحة جديدة» (D47); also set by the block before's `breakAfter` (D99)
     keep_with_next: bool = False  # «مع التالية» (D47)
+    # D99: the page ends after this block (the next block's `break_before` is set from it)
+    break_after: bool = False
+    # D99: an empty paragraph the owner made (Enter on an empty line): one blank line in every renderer
+    empty: bool = False
+    # D99, the text options (`editor.document.TEXT_ATTRS`); the defaults are the style's own look
+    align: str = ""  # start | center | end | justify ('' : the style's)
+    direction: str = ""  # 'ltr' for a left-to-right paragraph ('' : the book's, right to left)
+    indent: int = 0  # start-side indent steps (`editor.document.INDENT_STEP_REM` each)
+    first_line: bool = True  # False: no first-line indent (a body paragraph's)
+    space_before: float = 0.0  # lines of the body's pitch added before / after the style's own space
+    space_after: float = 0.0
+    size: str = ""  # small | large | xlarge ('' : the style's size), `editor.document.SIZE_SCALES`
+
+    @property
+    def blank_page(self) -> bool:
+        """An empty paragraph alone on its page (D99, «صفحة فارغة»): a break before and after it."""
+        return self.empty and self.break_after
+
+    @property
+    def size_scale(self) -> float:
+        """The block's text size as a share of its style's (1 without a size option)."""
+        return doc.SIZE_SCALES.get(self.size, 1.0)
 
     def text(self) -> str:
         """The block's text without notes and marks."""
@@ -712,9 +742,24 @@ def _has_content(runs: list) -> bool:
     return any(isinstance(run, NoteRef) or (isinstance(run, Run) and run.text.strip()) for run in runs)
 
 
+def _text_options(node: dict) -> dict:
+    """The `Block` fields of a paragraph's or a heading's text options (D99, `editor.document.text_attrs`)."""
+    found = doc.text_attrs(node)
+    return {
+        "align": found.get("align", ""),
+        "direction": "ltr" if found.get("dir") == "ltr" else "",
+        "indent": int(found.get("indent", 0)),
+        "first_line": found.get("firstLine", True) is not False,
+        "space_before": float(found.get("spaceBefore", 0)),
+        "space_after": float(found.get("spaceAfter", 0)),
+        "size": found.get("size", ""),
+    }
+
+
 def _block(node: dict, counters: _Counters, style_override: str | None = None) -> list[Block]:
     """The model block(s) of one document block (a blockquote gives one block per paragraph; its own
-    `breakBefore` goes to the first, its `keepWithNext` to the last)."""
+    `breakBefore` goes to the first, its `keepWithNext` and `breakAfter` to the last). An empty paragraph
+    (D99) is a block of its own, `empty`, with no runs but its scan page marks."""
     kind = node.get("type")
     attrs = doc.attrs_of(node)
     if kind == doc.BLOCKQUOTE:
@@ -726,12 +771,14 @@ def _block(node: dict, counters: _Counters, style_override: str | None = None) -
         if out:
             out[0].break_before = out[0].break_before or attrs.get("breakBefore") is True
             out[-1].keep_with_next = out[-1].keep_with_next or attrs.get("keepWithNext") is True
+            out[-1].break_after = out[-1].break_after or attrs.get("breakAfter") is True
         return out
     pages = tuple(sorted(set(doc.source_pages(node))))
     block_id = doc.node_id(node)
     flags = {
         "break_before": attrs.get("breakBefore") is True,
         "keep_with_next": attrs.get("keepWithNext") is True,
+        "break_after": attrs.get("breakAfter") is True,
     }
     if kind in (doc.SEPARATOR, "horizontalRule"):
         return [Block("separator", [Run(SEPARATOR_TEXT)], id=block_id, source_pages=pages, **flags)]
@@ -754,12 +801,57 @@ def _block(node: dict, counters: _Counters, style_override: str | None = None) -
     else:
         style = style_override or PARAGRAPH_STYLE_OF.get(attrs.get("style"), "body")
     runs = _trim_edges(_tidy_breaks(runs))
-    if not _has_content(runs):
-        return []
+    options = _text_options(node) if kind in (doc.HEADING, doc.PARAGRAPH) else {}
     plain = doc.object_kinds(node.get("content") or [])
+    if not _has_content(runs):
+        if kind != doc.PARAGRAPH:
+            return []  # an empty heading or title prints nothing
+        # D99: an empty paragraph the owner made is a blank line (its scan page marks stay)
+        marks = [run for run in runs if isinstance(run, SourceMark)]
+        return [
+            Block(
+                style, marks, [], id=block_id, source_pages=pages, plain=plain, empty=True, **flags, **options
+            )
+        ]
     if kind == doc.TITLE and not plain.strip():
         plain = str(attrs.get("text") or "").strip()  # printed from its attrs
-    return [Block(style, runs, notes, id=block_id, source_pages=pages, level=level, plain=plain, **flags)]
+    return [
+        Block(
+            style, runs, notes, id=block_id, source_pages=pages, level=level, plain=plain, **flags, **options
+        )
+    ]
+
+
+@dataclass
+class _Flow:
+    """What the blocks before tell the next one (D99): a page asked to end after them, the empty lines in a
+    row."""
+
+    pending: bool = False
+    empties: int = 0
+
+
+def _flow(blocks: list[Block], flow: _Flow) -> list[Block]:
+    """The blocks of a chapter as they print (D99): a block after one with `break_after` starts a page, and
+    of a run of empty paragraphs only the first `MAX_EMPTY_RUN` print (a new page starts a new run)."""
+    out: list[Block] = []
+    for block in blocks:
+        if flow.pending:
+            block.break_before = True
+            flow.pending = False
+        if block.break_before:
+            flow.empties = 0
+        if block.empty:
+            flow.empties += 1
+            if flow.empties > doc.MAX_EMPTY_RUN:
+                flow.pending = flow.pending or block.break_after
+                continue
+        else:
+            flow.empties = 0
+        out.append(block)
+        if block.break_after:
+            flow.pending = True
+    return out
 
 
 def _trim_edges(runs: list[Inline]) -> list[Inline]:
@@ -811,6 +903,7 @@ def book_model(
     )
     wanted = set(chapter_ids) if chapter_ids is not None else None
     counters = _Counters(editorial=editorial)
+    flow = _Flow()
     chapters: list[Chapter] = []
     for chapter in doc.chapters_of(document):
         counters.chapter = 0
@@ -818,6 +911,9 @@ def book_model(
         for node in chapter.nodes(document):
             if isinstance(node, dict):
                 blocks.extend(_block(node, counters))
+        blocks = _flow(blocks, flow)
+        if blocks and all(block.empty and not block.blank_page for block in blocks):
+            blocks = []  # a chapter of empty lines only prints nothing (no blank page for it)
         if wanted is not None and chapter.id not in wanted:
             continue
         chapters.append(

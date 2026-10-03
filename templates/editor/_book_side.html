@@ -45,9 +45,20 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
     </section>
 
     {# ---------------------------------------------------------- الصفحات: the filmstrip (static thumbs) #}
-    <section class="bp-panel" id="bp-panel-pages" role="tabpanel" aria-labelledby="bp-tab-pages" x-show="tab === 'pages'" x-cloak data-panel="pages">
+    <section class="bp-panel bp-pages-panel" id="bp-panel-pages" role="tabpanel" aria-labelledby="bp-tab-pages" x-show="tab === 'pages'" x-cloak data-panel="pages">
       <div class="bk-side-head"><span>الصفحات</span><bdi class="num" x-text="pageCount || ''"></bdi></div>
       <nav class="lo-film" aria-label="شريط الصفحات"><div class="lo-film-track" data-film-track></div></nav>
+      {# D99 (item 27): the scrubber, pinned to the panel's foot (the screen's bottom left): first page on the right, #}
+      {# last on the left; a drag shows the page under the thumb and turns there, the arrows step one page #}
+      <div class="bp-scrub" x-show="pageCount > 1" data-scrub>
+        <div class="bp-scrub-track" :class="{ 'is-active': scrub.active }">
+          <input type="range" class="bp-scrub-range" :min="firstPage" :max="lastPage" step="1" :value="scrubValue"
+                 @input="onScrubInput($event)" @change="onScrubChange($event)"
+                 aria-label="الانتقال السريع بين الصفحات" :aria-valuetext="'صفحة ' + scrubValue + ' من ' + pageCount" data-scrub-range>
+          <span class="bp-scrub-bubble num" :style="'--p:' + scrubPct" aria-hidden="true"><bdi x-text="scrubValue"></bdi></span>
+        </div>
+        <div class="bp-scrub-ends num" aria-hidden="true"><bdi x-text="firstPage"></bdi><span class="meta">انتقال سريع</span><bdi x-text="lastPage"></bdi></div>
+      </div>
     </section>
 
     {# ---------------------------------------------------------- بحث: find & replace, the matches with their pages #}
@@ -132,12 +143,72 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
             </div>
             {% endif %}
           </div>
+          {% if can_edit %}
+          {# D99 (the owner's review, item 11): the paragraph's text options, as Word's paragraph dialog — alignment, #}
+          {# direction, size, indent, first-line indent, space before and after (in lines); each one printed the same in #}
+          {# the preview, both PDFs, Word and EPUB. Unset, the style's own («كما في النمط» clears them all). #}
+          <div class="bp-group bp-text" x-show="blockInfo.textable" data-text-options>
+            <div class="bk-side-head"><span>النص</span><button type="button" class="link bp-text-reset" x-show="hasTextOptions && mode === 'edit'" @mousedown.prevent @click="resetText()">كما في النمط</button></div>
+            <div class="bp-text-grid">
+              <span class="bp-text-label" id="bp-t-align">المحاذاة</span>
+              <div class="segmented bp-seg-icons" role="radiogroup" aria-labelledby="bp-t-align">
+                <template x-for="a in [['right', 'يمين'], ['center', 'وسط'], ['left', 'يسار'], ['justify', 'ضبط من الجانبين']]" :key="a[0]">
+                  <button type="button" role="radio" :aria-checked="alignSide === a[0] ? 'true' : 'false'" :aria-pressed="alignSide === a[0] ? 'true' : 'false'" :title="a[1]" :aria-label="a[1]" :disabled="mode !== 'edit'" @mousedown.prevent @click="alignTo(a[0])">
+                    <svg class="icon icon-sm" aria-hidden="true"><use :href="'#i-align-' + a[0]"/></svg>
+                  </button>
+                </template>
+              </div>
+              <span class="bp-text-label" id="bp-t-dir">الاتجاه</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="bp-t-dir">
+                <button type="button" role="radio" :aria-checked="textDir === 'rtl' ? 'true' : 'false'" :aria-pressed="textDir === 'rtl' ? 'true' : 'false'" :disabled="mode !== 'edit'" @mousedown.prevent @click="setTextAttr('dir', null)" title="نص عربي: يبدأ من اليمين">من اليمين</button>
+                <button type="button" role="radio" :aria-checked="textDir === 'ltr' ? 'true' : 'false'" :aria-pressed="textDir === 'ltr' ? 'true' : 'false'" :disabled="mode !== 'edit'" @mousedown.prevent @click="setTextAttr('dir', 'ltr')" title="نص لاتيني: يبدأ من اليسار">من اليسار</button>
+              </div>
+              <span class="bp-text-label" id="bp-t-size">الحجم</span>
+              <div class="segmented" role="radiogroup" aria-labelledby="bp-t-size">
+                <template x-for="s in [['small', 'أصغر'], [null, 'عادي'], ['large', 'أكبر'], ['xlarge', 'أكبر جدًّا']]" :key="String(s[0])">
+                  <button type="button" role="radio" :aria-checked="(targetText.size || null) === s[0] ? 'true' : 'false'" :aria-pressed="(targetText.size || null) === s[0] ? 'true' : 'false'" :disabled="mode !== 'edit'" @mousedown.prevent @click="setTextAttr('size', s[0])" x-text="s[1]"></button>
+                </template>
+              </div>
+              <span class="bp-text-label" id="bp-t-indent">الإزاحة</span>
+              <div class="bp-indent" role="group" aria-labelledby="bp-t-indent">
+                <button type="button" class="btn-icon btn-icon-sm" :disabled="mode !== 'edit' || !targetText.indent" @mousedown.prevent @click="stepIndent(-1)" aria-label="إنقاص الإزاحة" title="إنقاص الإزاحة"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-indent-less"/></svg></button>
+                <bdi class="bp-indent-n num" x-text="targetText.indent || 0"></bdi>
+                <button type="button" class="btn-icon btn-icon-sm" :disabled="mode !== 'edit' || (targetText.indent || 0) >= 4" @mousedown.prevent @click="stepIndent(1)" aria-label="زيادة الإزاحة" title="زيادة الإزاحة"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-indent-more"/></svg></button>
+                <label class="check bp-first" x-show="blockInfo.style === 'paragraph'"><input type="checkbox" :checked="targetText.firstLine === false" :disabled="mode !== 'edit'" @mousedown.prevent @change="setTextAttr('firstLine', targetText.firstLine === false ? null : false)"> <span>بلا إزاحة أول السطر</span></label>
+              </div>
+              <template x-for="side in [['spaceBefore', 'قبلها'], ['spaceAfter', 'بعدها']]" :key="side[0]">
+                <div class="bp-text-pair">
+                  <span class="bp-text-label" x-text="'مسافة ' + side[1]"></span>
+                  <div class="segmented" role="radiogroup" :aria-label="'مسافة ' + side[1] + ' بالأسطر'">
+                    <template x-for="v in [[null, 'لا'], [0.5, '½'], [1, '1'], [2, '2']]" :key="String(v[0])">
+                      <button type="button" role="radio" :aria-checked="(targetText[side[0]] || null) === v[0] ? 'true' : 'false'" :aria-pressed="(targetText[side[0]] || null) === v[0] ? 'true' : 'false'" :disabled="mode !== 'edit'" @mousedown.prevent @click="setTextAttr(side[0], v[0])" :title="v[0] ? v[0] + ' سطر' : 'بلا مسافة زائدة'"><bdi x-text="v[1]"></bdi></button>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+            <p class="help">المسافة بأسطر المتن، تُضاف إلى مسافة النمط. يُطبع كل ذلك كما تراه في PDF وWord وEPUB.</p>
+          </div>
+          {% endif %}
           <div class="bp-group">
             <div class="bk-side-head"><span>الصفحة</span></div>
             <div class="bp-flags">
               <label class="bp-flag"><input type="checkbox" :checked="blockInfo.breakBefore" @mousedown.prevent @change="toggleFlag('breakBefore')" {% if not can_edit %}disabled{% endif %} :disabled="mode !== 'edit'"><span>ابدأ صفحة جديدة</span><span class="help">تبدأ الفقرة أعلى صفحة جديدة.</span></label>
               <label class="bp-flag"><input type="checkbox" :checked="blockInfo.keepWithNext" @mousedown.prevent @change="toggleFlag('keepWithNext')" {% if not can_edit %}disabled{% endif %} :disabled="mode !== 'edit'"><span>مع التالية</span><span class="help">لا تُفصل عن الفقرة التي بعدها في آخر الصفحة.</span></label>
             </div>
+            {% if can_edit %}
+            {# D99 (item 25): Word's page break and blank page; each one is marked on the page in edit mode with a × #}
+            <div class="bp-page-acts" x-show="mode === 'edit'" data-page-actions>
+              <button type="button" class="btn btn-sm" :disabled="!open" @mousedown.prevent @click="pageBreak()" title="تنتهي الصفحة عند المؤشّر (⌘↩)">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-page-break"/></svg><span>فاصل صفحة</span>
+              </button>
+              <button type="button" class="btn btn-sm" @mousedown.prevent @click="insertBlankPage()" title="صفحة فارغة بعد هذه الفقرة">
+                <svg class="icon icon-sm" aria-hidden="true"><use href="#i-page-blank"/></svg><span>صفحة فارغة</span>
+              </button>
+              <button type="button" class="btn btn-sm btn-ghost bp-page-remove" x-show="blockInfo.blank" @mousedown.prevent @click="removeBlankPage(blockInfo.id, -1)">حذف الصفحة الفارغة</button>
+            </div>
+            <p class="help" x-show="blockInfo.blank">هذه صفحة فارغة: ما يُكتب فيها يُطبع وحده في صفحته.</p>
+            {% endif %}
           </div>
           <div class="bp-group">
             <div class="bk-side-head"><span>الصفحات الأصلية</span></div>
@@ -263,13 +334,18 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
         </div>
       </template>
 
+      {# D99 (the owner's review, item 24): the list in the review screen's look — the chapter once as a group label, #}
+      {# each page a quiet row (its checkbox, «ص N» to review, the reason as a dot and a word, «⋯» on hover), each #}
+      {# paragraph's change in the book's face with its kind above it, a conflict's two texts side by side in rows #}
+      {# with the choice under them; the apply stays pinned at the foot #}
       <ol class="bp-changes-pages" x-show="changes.state === 'ready' && changesRows.length">
-        <template x-for="row in changesRows" :key="'cp' + row.number">
+        <template x-for="(row, ri) in changesRows" :key="'cp' + row.number">
           <li class="bp-cpage" :class="{ 'is-off': !row.taken }">
+            <div class="bp-cgroup" x-show="row.chapter_title && (ri === 0 || changesRows[ri - 1].chapter_title !== row.chapter_title)" x-text="row.chapter_title"></div>
             <div class="bp-cpage-head">
               {% if can_edit %}<input type="checkbox" class="bp-cpage-take" :checked="row.taken" @change="togglePage(row)" :aria-label="'أخذ تغييرات الصفحة ' + row.number">{% endif %}
-              <span class="bp-cpage-title"><span x-show="row.chapter_title" x-text="row.chapter_title + ' · '"></span><a class="bp-cpage-review" :href="reviewUrl(row.number)" title="فتح الصفحة في المراجعة">ص <bdi class="num" x-text="row.number"></bdi></a></span>
-              <span class="bp-reason" :class="'is-' + row.reason" x-text="reasonLabel(row)"></span>
+              <span class="bp-cpage-title"><a class="bp-cpage-review" :href="reviewUrl(row.number)" title="فتح الصفحة في المراجعة">ص <bdi class="num" x-text="row.number"></bdi></a></span>
+              <span class="bp-reason" :class="'is-' + row.reason"><span class="bp-reason-dot" aria-hidden="true"></span><span x-text="reasonLabel(row)"></span></span>
               {% if can_edit %}
               <div class="menu-anchor bp-cpage-more" x-data="{ open: false }" @keydown.escape="open = false">
                 <button type="button" class="btn-icon btn-icon-sm" @click="open = !open" :aria-expanded="open" aria-haspopup="menu" :aria-label="'خيارات الصفحة ' + row.number">
@@ -286,15 +362,15 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
               <template x-for="item in row.items" :key="item.id">
                 <li class="bp-citem" :class="'is-' + item.kind" :data-item="item.id">
                   <button type="button" class="bp-citem-go" @click="goToItem(item)" :title="'الانتقال إلى الفقرة في صفحتها'">
-                    <span class="status bp-citem-chip"><span class="dot" :class="'dot-' + itemTone(item)" aria-hidden="true"></span><span x-text="item.chip"></span></span>
+                    <span class="bp-citem-chip"><span class="dot" :class="'dot-' + itemTone(item)" aria-hidden="true"></span><span x-text="item.chip"></span></span>
                     <span class="bp-diff" dir="rtl"><template x-for="(part, pi) in item.diff" :key="item.id + ':' + pi"><span :class="'bp-d-' + part[0]"><template x-if="part[0] === 'del'"><del x-text="part[1]"></del></template><template x-if="part[0] === 'ins'"><ins x-text="part[1]"></ins></template><template x-if="part[0] === 'eq'"><span x-text="part[1]"></span></template><span x-text="pi < item.diff.length - 1 ? ' ' : ''"></span></span></template></span>
                   </button>
-                  <p class="help bp-citem-help" x-show="item.help" x-text="item.help"></p>
                   <template x-if="item.ask">
                     <div class="bp-citem-ask">
+                      <p class="bp-citem-help" x-show="item.help" x-text="item.help"></p>
                       <dl class="bp-citem-conflicts" x-show="(item.conflicts || []).some((c) => c.mine)">
                         <template x-for="(c, ci) in (item.conflicts || [])" :key="item.id + ':c' + ci">
-                          <div><dt>نصّك:</dt><dd dir="rtl" x-text="c.mine ? '«' + c.mine + '»' : '—'"></dd><dt>المراجعة:</dt><dd dir="rtl" x-text="c.theirs ? '«' + c.theirs + '»' : '—'"></dd></div>
+                          <div><dt>نصّك</dt><dd dir="rtl" x-text="c.mine || '—'"></dd><dt>المراجعة</dt><dd dir="rtl" x-text="c.theirs || '—'"></dd></div>
                         </template>
                       </dl>
                       {% if can_edit %}
@@ -305,6 +381,7 @@ Inside the bookPage component (layout.html). Context: can_edit.{% endcomment %}
                       {% endif %}
                     </div>
                   </template>
+                  <p class="help bp-citem-help" x-show="item.help && !item.ask" x-text="item.help"></p>
                 </li>
               </template>
             </ul>

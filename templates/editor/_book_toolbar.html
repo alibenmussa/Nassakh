@@ -56,6 +56,56 @@ the bookPage component (layout.html). Context: can_edit.{% endcomment %}
       <span class="bp-sep" aria-hidden="true"></span>
       <button type="button" class="btn-icon ed-glyph" :aria-pressed="bold" title="غامق (⌘B)" aria-label="غامق" :disabled="!open" @mousedown.prevent @click="toggleBold()"><span class="ed-glyph-b" aria-hidden="true">B</span></button>
       <button type="button" class="btn-icon ed-glyph" :aria-pressed="italic" title="مائل (⌘I)" aria-label="مائل" :disabled="!open" @mousedown.prevent @click="toggleItalic()"><span class="ed-glyph-i" aria-hidden="true">I</span></button>
+      {# D99: the alignment of the paragraph (its icon shows the one in force: its own, else its style's), as Word's #}
+      {# buttons; the same choice again goes back to the style's own. The rest of the text options are in «الفقرة». #}
+      <div class="menu-anchor ed-align" @keydown.escape.stop="alignMenu = false">
+        <button type="button" class="btn-icon ed-tb-menu" @mousedown.prevent @click="toggleMenu('align')" :aria-expanded="alignMenu" aria-haspopup="menu" aria-label="محاذاة الفقرة" title="محاذاة الفقرة (⇧⌘R / E / L / J)" :disabled="!open" data-align-picker>
+          <svg class="icon" aria-hidden="true"><use :href="'#i-align-' + (alignSide || 'right')" href="#i-align-right"/></svg>
+          <svg class="icon icon-xs ed-tb-chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </button>
+        <div class="menu ed-tb-pop" role="menu" aria-label="محاذاة الفقرة" x-show="alignMenu" x-cloak @click.outside="alignMenu = false" x-transition.opacity.duration.120ms
+             @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)">
+          <template x-for="a in [['right', 'يمين', '⇧⌘R'], ['center', 'وسط', '⇧⌘E'], ['left', 'يسار', '⇧⌘L'], ['justify', 'ضبط من الجانبين', '⇧⌘J']]" :key="a[0]">
+            <button type="button" class="menu-item" role="menuitemradio" :aria-checked="alignSide === a[0] ? 'true' : 'false'" @mousedown.prevent @click="alignTo(a[0])">
+              <svg class="icon icon-sm" aria-hidden="true"><use :href="'#i-align-' + a[0]"/></svg>
+              <span class="ed-style-name" x-text="a[1]"></span>
+              <kbd class="kbd ed-style-key" x-text="a[2]"></kbd>
+            </button>
+          </template>
+          <div class="menu-sep" role="separator"></div>
+          <button type="button" class="menu-item" role="menuitem" @mousedown.prevent @click="alignMenu = false; setTextAttr('align', null)" :disabled="!targetText.align">
+            <span class="ed-style-name">محاذاة النمط</span>
+            <span class="meta ms-auto" x-show="!targetText.align">الآن</span>
+          </button>
+        </div>
+      </div>
+      {# D99: the page — a page break at the caret (⌘↩, as Word) and a blank page after the paragraph #}
+      <div class="menu-anchor ed-page" @keydown.escape.stop="pageMenu = false">
+        <button type="button" class="btn-icon ed-tb-menu" @mousedown.prevent @click="toggleMenu('page')" :aria-expanded="pageMenu" aria-haspopup="menu" aria-label="الصفحة" title="فاصل صفحة (⌘↩) · صفحة فارغة" :disabled="!open && !selected" data-page-picker>
+          <svg class="icon" aria-hidden="true"><use href="#i-page-break"/></svg>
+          <svg class="icon icon-xs ed-tb-chev" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </button>
+        <div class="menu ed-tb-pop" role="menu" aria-label="الصفحة" x-show="pageMenu" x-cloak @click.outside="pageMenu = false" x-transition.opacity.duration.120ms
+             @keydown.arrow-down.prevent="moveIn($el, 1)" @keydown.arrow-up.prevent="moveIn($el, -1)">
+          <button type="button" class="menu-item" role="menuitem" :disabled="!open" @mousedown.prevent @click="pageMenu = false; pageBreak()" data-page-break>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-page-break"/></svg>
+            <span class="ed-style-name">فاصل صفحة عند المؤشّر</span>
+            <kbd class="kbd ed-style-key">⌘↩</kbd>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" @mousedown.prevent @click="insertBlankPage()" data-blank-page>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-page-blank"/></svg>
+            <span class="ed-style-name">صفحة فارغة بعد الفقرة</span>
+          </button>
+          <button type="button" class="menu-item is-danger" role="menuitem" x-show="blankOpen" @mousedown.prevent @click="pageMenu = false; removeBlankPage(open && open.block, -1)" data-remove-blank>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+            <span class="ed-style-name">حذف هذه الصفحة الفارغة</span>
+          </button>
+          <button type="button" class="menu-item" role="menuitem" x-show="flags.breakBefore && !blankOpen" @mousedown.prevent @click="pageMenu = false; toggleFlag('breakBefore')" data-remove-break>
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-x"/></svg>
+            <span class="ed-style-name">إزالة الفاصل قبل هذه الفقرة</span>
+          </button>
+        </div>
+      </div>
       <span class="bp-sep" aria-hidden="true"></span>
       <button type="button" class="btn btn-ghost btn-sm" title="إدراج حاشية عند المؤشّر (⌘⇧F)" :disabled="!open" @mousedown.prevent @click="insertFootnote()" data-footnote-button>
         <span class="ed-tb-note-glyph" aria-hidden="true">١</span>

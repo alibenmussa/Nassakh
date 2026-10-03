@@ -18,6 +18,9 @@
 - widows and orphans from the stylesheet (default 2), headings kept with the next line (`keep_headings`,
   default on), a new page before a block (`.nk-break`) and a block kept with the next (`.nk-keep`), D47.
 - the title page with the book details, the copyright page (D47).
+- D99: a subtitle (`.nk-section-title`) starts on the start side (right), the chapter title stays centred;
+  the text options of a block (`text_option_rules`: alignment, a left-to-right paragraph, indent steps, no
+  first-line indent, space before / after in lines of the body's pitch, sizes) win over its style.
 - the faces' `@font-face` rules from the font registry (`publishing.fonts`).
 
 For a chapter (or a window, D47) rendered alone, `first_page` makes the page counter start at that
@@ -190,17 +193,23 @@ def stylesheet_css(
         f".nk-chapter-title {{ string-set: running attr(data-running); font-family: {heading_font};"
         f" font-size: {_num(s.h1_scale)}em; font-weight: bold; line-height: 1.35; text-align: center;"
         f" margin: 16mm 0 9mm; break-after: {keep}; }}",
+        # D99 (the owner's review, 2026-10-03): a subtitle reads from the start side (right), the chapter
+        # title stays centred; a block's own alignment wins (`text_option_rules`)
         f".nk-section-title {{ font-family: {heading_font}; font-size: {_num(s.h2_scale)}em;"
         " font-weight: bold;"
-        f" line-height: 1.4; text-align: center; margin: 5mm 0 3mm; break-after: {keep}; }}",
+        f" line-height: 1.4; text-align: start; text-align-last: start; margin: 5mm 0 3mm;"
+        f" break-after: {keep}; }}",
         # First-line indent as a start-side spacer: WeasyPrint puts `text-indent` on the left of an RTL line.
         f'.nk-body::before {{ content: ""; display: inline-block; width: {_num(s.indent_em)}em; }}',
         ".nk-body { text-indent: 0; }",
-        ".nk-quote { margin: 2mm 2em; text-indent: 0; }",
+        # (rem: a quote's sides stay twice the body size whatever its own size, D99; = Word's quote style)
+        ".nk-quote { margin: 2mm 2rem; text-indent: 0; }",
         ".nk-verse { text-align: center; text-align-last: center; text-indent: 0; margin: 2mm 0; }",
         ".nk-center { text-align: center; text-align-last: center; text-indent: 0; margin: 2mm 0; }",
         ".nk-separator { text-align: center; text-align-last: center; text-indent: 0; margin: 4mm 0; }",
         ".nk-book-title:not(:first-child) { margin-top: 8mm; }",
+        # D99: a paragraph's or a heading's own text options (after the style rules: they win over them)
+        *text_option_rules(s),
         # D47 block attrs (after the style rules: they win over a heading's `keep_headings: off`)
         ".nk-break { break-before: page; }",
         ".nk-keep { break-after: avoid; }",
@@ -236,6 +245,66 @@ def stylesheet_css(
     if output is not None and output.is_print:
         css = pure_black(css)
     return "\n".join(part for part in (parts[0], css) if part)
+
+
+# D99: the styles' own vertical margins (mm, = the rules above and `publishing.word.styles`) that a block's
+# space before / after adds to, and their text sizes (multiples of the body size)
+STYLE_MARGINS_MM: dict[str, tuple[float, float]] = {
+    "body": (0.0, 0.0),
+    "quote": (2.0, 2.0),
+    "verse": (2.0, 2.0),
+    "center": (2.0, 2.0),
+    "chapter-title": (16.0, 9.0),
+    "section-title": (5.0, 3.0),
+}
+QUOTE_SIDE_EM = 2.0  # `.nk-quote`'s side margins
+
+
+def line_mm(setup: PageSetup) -> float:
+    """The body's line pitch in millimetres (the unit of a block's space before / after, D99)."""
+    return float(setup.line_height) * float(setup.body_size_pt) * 25.4 / 72
+
+
+def style_size(setup: PageSetup, style: str) -> float:
+    """A style's text size as a multiple of the body size."""
+    return {"chapter-title": setup.h1_scale, "section-title": setup.h2_scale}.get(style, 1.0)
+
+
+def text_option_rules(setup: PageSetup) -> list[str]:
+    """The rules of the text options (D99, `publishing.html.text_classes`): alignment, the left-to-right
+    paragraph's start side, start-side indent steps, no first-line indent (also for a centred or end-aligned
+    body paragraph, and an empty one), space added before / after the style's own, the sizes."""
+    from editor import document as doc
+
+    from .html import space_key
+
+    step = doc.INDENT_STEP_REM
+    rules = [
+        ".nk-a-start { text-align: start; text-align-last: start; }",
+        ".nk-a-center { text-align: center; text-align-last: center; }",
+        ".nk-a-end { text-align: end; text-align-last: end; }",
+        ".nk-a-justify { text-align: justify; text-align-last: start; }",
+        ".nk-body.nk-a-center::before, .nk-body.nk-a-end::before, .nk-nofirst::before,"
+        " .nk-empty::before { content: none; }",
+    ]
+    for n in doc.INDENT_LEVELS:
+        rules += [
+            f".nk-ind-{n} {{ margin-right: {_num(n * step)}rem; }}",
+            f".nk-ltr.nk-ind-{n} {{ margin-right: 0; margin-left: {_num(n * step)}rem; }}",
+            f".nk-quote.nk-ind-{n} {{ margin-right: {_num(QUOTE_SIDE_EM + n * step)}rem; }}",
+            f".nk-quote.nk-ltr.nk-ind-{n} {{ margin-right: {_num(QUOTE_SIDE_EM)}rem;"
+            f" margin-left: {_num(QUOTE_SIDE_EM + n * step)}rem; }}",
+        ]
+    pitch = line_mm(setup)
+    for style, (top, bottom) in STYLE_MARGINS_MM.items():
+        for lines in doc.SPACES:
+            key = space_key(lines)
+            rules.append(f".nk-{style}.nk-sb-{key} {{ margin-top: {_mm(top + lines * pitch)}; }}")
+            rules.append(f".nk-{style}.nk-sa-{key} {{ margin-bottom: {_mm(bottom + lines * pitch)}; }}")
+        for name, scale in doc.SIZE_SCALES.items():
+            size = _num(style_size(setup, style) * scale)
+            rules.append(f".nk-{style}.nk-sz-{name} {{ font-size: {size}em; }}")
+    return rules
 
 
 def export_rules(output) -> list[str]:

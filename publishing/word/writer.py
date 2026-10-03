@@ -27,13 +27,23 @@ from datetime import UTC, datetime
 
 from lxml import etree
 
+from editor import document as doc
+from publishing.css import line_mm
 from publishing.fonts import ResolvedFonts
 from publishing.model import STYLES, Block, Book, Chapter
 
 from . import ooxml
 from .faces import FacePlan, font_rels
-from .ooxml import Package, Part, Rel, iso_datetime, root, serialize, w
-from .options import COMPAT_MODE, WORD_VERSION, WordOptions, comments_phrase, note, words_phrase
+from .ooxml import Package, Part, Rel, half_points, iso_datetime, root, serialize, twips, w
+from .options import (
+    BIDI_LEFT_IS_START,
+    COMPAT_MODE,
+    WORD_VERSION,
+    WordOptions,
+    comments_phrase,
+    note,
+    words_phrase,
+)
 from .runs import CommentsPart, FootnotesPart, RunWriter, WriteStats
 from .sections import (
     NUMBERING_RESTART,
@@ -48,7 +58,59 @@ from .sections import (
     sect_pr,
     title_page,
 )
-from .styles import style_table, styles_xml, text_width_mm
+from .styles import ParaStyle, style_table, styles_xml, text_width_mm
+
+
+def _sized_runs(content: list[etree._Element], half: int) -> None:
+    """Every run of `content` at `half` half-points (D99, a block's size option), but a footnote call's
+    and a comment's (their own styles size them)."""
+    tag = f"{{{ooxml.W_NS}}}"
+    for item in content:
+        for node in item.iter(f"{tag}r"):
+            props = node.find(f"{tag}rPr")
+            rstyle = props.find(f"{tag}rStyle") if props is not None else None
+            if rstyle is not None and rstyle.get(f"{tag}val") in ("FootnoteReference", "CommentReference"):
+                continue
+            kept = list(props) if props is not None else []
+            sized = w("rPr", *kept, w("sz", val=half), w("szCs", val=half))
+            if props is not None:
+                node.replace(props, sized)
+            else:
+                node.insert(0, sized)
+
+
+def text_format(para: Para, block: Block, style: ParaStyle, setup, justify_jc: str) -> None:
+    """A block's text options (D99) as its paragraph's direct formatting, the preview's
+    `publishing.css.text_option_rules` one for one: `w:bidi w:val=0` for a left-to-right paragraph, `w:jc`
+    (justified as the body: the kashida choice), `w:ind` (the start side's indent steps, no first-line
+    indent), the space before / after (the CSS margins the flow collapses), the size (every run's `w:sz`
+    and the exact pitch with it)."""
+    if block.direction == "ltr":
+        para.ltr = True
+    if block.align:
+        para.jc = {"start": "start", "center": "center", "end": "end"}.get(block.align, justify_jc)
+    scale = block.size_scale
+    normal = style.id == "Normal"
+    own_first = style.first_line if normal else 0.0
+    first = own_first * scale
+    if not block.first_line or block.empty or block.align in ("center", "end"):
+        first = 0.0
+    start = style.indent + block.indent * doc.INDENT_STEP_REM * setup.body_size_pt
+    if start != style.indent or abs(first - own_first) > 0.005:
+        start_side = "left" if BIDI_LEFT_IS_START or block.direction == "ltr" else "right"
+        end_side = "right" if start_side == "left" else "left"
+        para.extra.append(
+            w("ind", **{start_side: twips(start), end_side: twips(style.indent), "firstLine": twips(first)})
+        )
+    pitch = line_mm(setup)
+    if block.space_before:
+        para.css_before = style.before + block.space_before * pitch
+    if block.space_after:
+        para.css_after = style.after + block.space_after * pitch
+    if scale != 1.0:
+        _sized_runs(para.content, half_points(style.size * scale))
+        para.line = twips(style.pitch * style.size * scale)
+
 
 LAST_MODIFIED_BY = "نسّاخ"
 # the run face role of each model style
@@ -376,14 +438,19 @@ class BookWriter:
     def block_para(self, block: Block, chapter: Chapter, opens_page: bool) -> Para:
         style = STYLES[block.style].word if block.style in STYLES else "Normal"
         role = _ROLE.get(block.style, "body")
-        content = self.writer.inline(block.runs, role, block_id=block.id, footnotes=block.footnotes)
+        base = "ltr" if block.direction == "ltr" else "rtl"
+        content = self.writer.inline(
+            block.runs, role, block_id=block.id, footnotes=block.footnotes, base=base
+        )
         if block.style in ("chapter-title", "section-title") and block.text().strip():
             content = self.bookmarks.wrap(self.bookmarks.heading(block), content)
         elif block is chapter.blocks[0] and chapter.kind != "chapter":
             content = self.bookmarks.wrap(self.bookmarks.new("_nk_ch_", chapter.id), content)
-        return Para(
+        para = Para(
             style, content, page_break=block.break_before and not opens_page, keep_next=block.keep_with_next
         )
+        text_format(para, block, self.table[style], self.setup, self.options.jc)
+        return para
 
     def body(self) -> None:
         """One section per chapter of kind `chapter` or `front`; `section` chapters run on (their own

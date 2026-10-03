@@ -180,15 +180,16 @@ class RunWriter:
         block_id: str = "",
         note_id: str | None = None,
         footnotes: list[Footnote] | None = None,
+        base: str = "rtl",
     ) -> list[etree._Element]:
         """The elements of a block's (or a note's) inlines, with the comment anchors of its uncertain
         words. `footnotes` are the block's notes, taken by id through a queue (a repeated id never swaps
-        two notes)."""
+        two notes). `base` is the paragraph's direction (D99: `ltr` for a left-to-right paragraph)."""
         queues: dict[str, deque[Footnote]] = {}
         for note in footnotes or []:
             queues.setdefault(note.id, deque()).append(note)
         pieces, words = _pieces(runs)
-        directions = self._directions(pieces, footnotes)
+        directions = self._directions(pieces, footnotes, base)
         matched = self._match_words([text for _indexes, text in words], block_id, note_id)
         starts = {
             indexes[0]: index for index, (indexes, _t) in enumerate(words) if matched.get(index) is not None
@@ -215,7 +216,7 @@ class RunWriter:
         return out
 
     def _directions(
-        self, pieces: list[tuple[str, object]], footnotes: list[Footnote] | None
+        self, pieces: list[tuple[str, object]], footnotes: list[Footnote] | None, base: str = "rtl"
     ) -> dict[int, str]:
         """The direction flags of each text piece (by index), decided over the paragraph's whole text: a
         call that will be written counts as one right-to-left character (its «(» and «)» are `w:rtl`
@@ -238,7 +239,7 @@ class RunWriter:
             elif isinstance(item, LineBreak):
                 codes.append("|")
                 position += 1
-        flags = direction_flags("".join(codes))
+        flags = direction_flags("".join(codes), base)
         return {index: flags[start:end] for index, (start, end) in spans.items()}
 
     def reference_run(self, comment_id: int) -> etree._Element:

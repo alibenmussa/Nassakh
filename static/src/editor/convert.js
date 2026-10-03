@@ -31,6 +31,15 @@
 //   pageMarks / noteIds / nodeHtml
 //                              scan page marks and notes of a block, a block's static markup (a block edited
 //                              and not laid out again yet is drawn by the browser, in the page's faces)
+// D99 (the owner's review, 2026-10-03):
+//   TEXT_ATTRS / textAttr / textAttrsOf / setTextAttrs / textAttrsHtml
+//                              a paragraph's or a heading's text options (alignment, direction, indent steps, no
+//                              first-line indent, space before / after, size; = editor.document.TEXT_ATTRS)
+//   isEmptyBlock / emptyRunAt  an empty paragraph (a blank line when printed) and the run it stands in (at most
+//                              MAX_EMPTY_RUN print)
+//   pageBreakAt / blankPage / isBlankPage
+//                              ⌘↩ (Word's page break) and «صفحة فارغة» (an empty paragraph with `breakBefore` and
+//                              `breakAfter`)
 
 export const STYLES = [
   { key: 'title', label: 'عنوان الكتاب', keys: '' },
@@ -47,6 +56,33 @@ export const STYLE_LABELS = Object.fromEntries(STYLES.map((s) => [s.key, s.label
 export const MARKS = ['bold', 'italic', 'uncertain'];
 export const PARAGRAPH_STYLES = ['quote', 'verse', 'center'];
 const BLOCKS = new Set(['title', 'heading', 'paragraph', 'separator', 'horizontalRule', 'blockquote']);
+
+// D99: a paragraph's or a heading's text options (= editor.document.TEXT_ATTRS); absent: the style's own
+export const ALIGNS = ['start', 'center', 'end', 'justify'];
+export const INDENT_MAX = 4;
+export const SPACES = [0.5, 1, 2];
+export const SIZES = { small: 0.85, large: 1.15, xlarge: 1.3 };
+export const TEXT_ATTRS = ['align', 'dir', 'indent', 'firstLine', 'spaceBefore', 'spaceAfter', 'size'];
+export const MAX_EMPTY_RUN = 3; // = editor.document.MAX_EMPTY_RUN: empty paragraphs in a row that print
+// A text option's value as kept (null: absent, or not one of its values).
+export function textAttr(name, value) {
+  if (value === null || value === undefined) return null;
+  switch (name) {
+    case 'align': return ALIGNS.includes(value) ? value : null;
+    case 'dir': return value === 'ltr' || value === 'rtl' ? value : null;
+    case 'indent': return Number.isInteger(value) && value >= 0 && value <= INDENT_MAX ? value : null;
+    case 'firstLine': return typeof value === 'boolean' ? value : null;
+    case 'spaceBefore':
+    case 'spaceAfter': return typeof value === 'number' && (value === 0 || SPACES.includes(value)) ? value : null;
+    case 'size': return Object.prototype.hasOwnProperty.call(SIZES, value) ? value : null;
+    default: return null;
+  }
+}
+// The text options of a block's attrs (every name, null when absent).
+export function textAttrsOf(attrs) {
+  const a = attrs && typeof attrs === 'object' ? attrs : {};
+  return Object.fromEntries(TEXT_ATTRS.map((name) => [name, textAttr(name, a[name])]));
+}
 
 // ---------------------------------------------------------------- small helpers
 const isObj = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -88,6 +124,10 @@ function sourceAttrs(attrs) {
     // D47 page-break flags: kept as they are (true / false), absent stays absent (null is dropped on save)
     breakBefore: typeof attrs.breakBefore === 'boolean' ? attrs.breakBefore : null,
     keepWithNext: typeof attrs.keepWithNext === 'boolean' ? attrs.keepWithNext : null,
+    // D99: the page ends after the block (a blank page: an empty paragraph with both breaks)
+    breakAfter: typeof attrs.breakAfter === 'boolean' ? attrs.breakAfter : null,
+    // D99: the text options, kept as they are when valid
+    ...textAttrsOf(attrs),
   };
 }
 
@@ -430,38 +470,94 @@ export function sliceContent(content, start, end) {
   return normalizeContent(out);
 }
 
-const FLAGS = ['breakBefore', 'keepWithNext'];
+const FLAGS = ['breakBefore', 'keepWithNext', 'breakAfter'];
 // A copy of a block's attrs for the block that follows it (a split, a new paragraph): the source attrs stay,
-// the id is new, the page break stays with the first half and «مع التالية» moves to the second.
+// the id is new, the page break stays with the first half and «مع التالية» moves to the second. D99: the text
+// options go with it (as Word carries a paragraph's format to the next), but a heading's own alignment, size
+// and spacing do not follow it into the paragraph after it (its direction does).
 function followingAttrs(node, type) {
   const a = { ...attrsOf(node) };
   delete a.breakBefore;
+  delete a.breakAfter; // (a split or a paste moves it to its last block)
   delete a.level;
   delete a.text;
   delete a.author;
   delete a.noteFor; // D74: the second half does not start with the marker
   a.id = newId('e');
-  if (type === 'paragraph' && node.type !== 'paragraph') delete a.style;
+  if (type === 'paragraph' && node.type !== 'paragraph') {
+    delete a.style;
+    TEXT_ATTRS.forEach((name) => { if (name !== 'dir') delete a[name]; });
+  }
   return a;
 }
 
 // Enter at `offset`: `[before, after]`. A heading (or the book title) split at its end is followed by a plain
-// paragraph; split inside, both halves keep the block's kind.
+// paragraph; split inside, both halves keep the block's kind. «مع التالية» and the page's end after the block
+// (D99 `breakAfter`) move to the second half.
 export function splitNode(node, offset) {
   const text = plainText(node);
   const at = Math.max(0, Math.min(Number(offset) || 0, text.length));
   const content = isObj(node) && Array.isArray(node.content) ? node.content : [];
   const beforeAttrs = { ...attrsOf(node) };
   const keep = beforeAttrs.keepWithNext;
+  const ends = beforeAttrs.breakAfter;
   delete beforeAttrs.keepWithNext;
+  delete beforeAttrs.breakAfter;
   const before = { ...node, attrs: beforeAttrs, content: sliceContent(content, 0, at) };
   const heading = node.type === 'heading' || node.type === 'title';
   const type = heading && at >= text.length ? 'paragraph' : node.type === 'title' ? 'paragraph' : node.type;
   const afterAttrs = followingAttrs(node, type);
   if (type === 'heading') afterAttrs.level = attrsOf(node).level;
   if (typeof keep === 'boolean') afterAttrs.keepWithNext = keep;
+  if (typeof ends === 'boolean') afterAttrs.breakAfter = ends;
   const after = { type, attrs: afterAttrs, content: sliceContent(content, at, text.length) };
   return [before, after];
+}
+
+// ---------------------------------------------------------------- D99: empty lines, page breaks, blank pages
+// A paragraph with nothing to print (= editor.document.is_empty_block): no text but white space, no note call.
+export function isEmptyBlock(node) {
+  if (!isObj(node) || node.type !== 'paragraph') return false;
+  return !(Array.isArray(node.content) ? node.content : []).some((item) => isObj(item) && (item.type === 'footnote' || (item.type === 'text' && str(item.text).trim())));
+}
+// A blank page (D99 «صفحة فارغة»): an empty paragraph alone on its page, the page broken before and after it.
+export const isBlankPage = (node) => isEmptyBlock(node) && attrsOf(node).breakAfter === true;
+export function blankPage() {
+  return { type: 'paragraph', attrs: { id: newId('e'), breakBefore: true, breakAfter: true }, content: [] };
+}
+// How many empty paragraphs `nodes` would hold in a row around `id` with `extra` more empty ones there (Enter
+// on an empty line); a block that starts a page starts a new run, as the model counts them.
+export function emptyRunAt(nodes, id, extra = 0) {
+  const flat = flatBlocks(nodes);
+  const i = flat.findIndex((b) => b.id === id);
+  if (i < 0) return 0;
+  const breaks = (b) => attrsOf(b.node).breakBefore === true;
+  let run = isEmptyBlock(flat[i].node) ? 1 : 0;
+  if (!run) return extra;
+  for (let j = i - 1; j >= 0 && isEmptyBlock(flat[j].node) && !breaks(flat[j + 1]); j -= 1) run += 1;
+  for (let j = i + 1; j < flat.length && isEmptyBlock(flat[j].node) && !breaks(flat[j]); j += 1) run += 1;
+  return run + extra;
+}
+// ⌘↩ (D99, as Word's page break) at `offset` of `node`: `{blocks, caret: {index, offset}}` — at the start of
+// the block (or in an empty one) the block itself starts a page; elsewhere it is split there and its second
+// half starts the page (at the end: a new empty paragraph on the next page).
+export function pageBreakAt(node, offset) {
+  const text = plainText(node);
+  const at = Math.max(0, Math.min(Number(offset) || 0, text.length));
+  if (at === 0) return { blocks: [{ ...node, attrs: { ...attrsOf(node), breakBefore: true } }], caret: { index: 0, offset: 0 } };
+  const [a, b] = splitNode(node, at);
+  return { blocks: [a, { ...b, attrs: { ...b.attrs, breakBefore: true } }], caret: { index: 1, offset: 0 } };
+}
+// The block's text options set (`patch`: name → value, null clears one); the defaults are not spelled out.
+export function setTextAttrs(nodes, id, patch) {
+  const clean = {};
+  Object.entries(patch || {}).forEach(([k, v]) => {
+    if (!TEXT_ATTRS.includes(k)) return;
+    const value = textAttr(k, v);
+    const plain = value === null || (k === 'indent' && value === 0) || ((k === 'spaceBefore' || k === 'spaceAfter') && value === 0) || (k === 'firstLine' && value === true) || (k === 'dir' && value === 'rtl');
+    clean[k] = plain ? null : value;
+  });
+  return setBlockAttrs(nodes, id, clean);
 }
 
 // The union of two blocks' source marks (numbers, sorted, each once); an attribute neither block has stays absent.
@@ -484,6 +580,8 @@ export function mergeNodes(a, b) {
   const attrs = { ...attrsOf(a) };
   const other = attrsOf(b);
   if (other.keepWithNext === true) attrs.keepWithNext = true;
+  if (other.breakAfter === true) attrs.breakAfter = true; // D99: the page still ends after the joined text
+  else delete attrs.breakAfter; // (the first block's own end of page now sits inside the text: it goes)
   ['sourcePages', 'sourceLineIds'].forEach((key) => {
     const marks = unionMarks(attrs[key], other[key]);
     if (marks !== undefined) attrs[key] = marks;
@@ -505,8 +603,13 @@ export function insertBlocks(node, from, to, pasted) {
   const tail = sliceContent(content, b, text.length);
   const items = (Array.isArray(pasted) ? pasted : []).filter(isObj);
   if (!items.length) return { blocks: [{ ...node, content: normalizeContent([...head, ...tail]) }], caret: { index: 0, offset: a } };
+  const ends = attrsOf(node).breakAfter; // D99: the page's end after the block goes after the last pasted one
   const blocks = items.map((p, i) => {
-    if (i === 0) return { ...node, content: normalizeContent([...head, ...(p.content || [])]) };
+    if (i === 0) {
+      const attrs = { ...attrsOf(node) };
+      delete attrs.breakAfter;
+      return { ...node, attrs, content: normalizeContent([...head, ...(p.content || [])]) };
+    }
     const type = p.type === 'heading' ? 'heading' : 'paragraph';
     const attrs = followingAttrs(node, type);
     if (type === 'heading') attrs.level = attrsOf(p).level === 2 ? 2 : 1;
@@ -517,6 +620,7 @@ export function insertBlocks(node, from, to, pasted) {
   const last = blocks.length - 1;
   const offset = plainText(blocks[last]).length;
   blocks[last] = { ...blocks[last], content: normalizeContent([...(blocks[last].content || []), ...tail]) };
+  if (typeof ends === 'boolean') blocks[last] = { ...blocks[last], attrs: { ...blocks[last].attrs, breakAfter: ends } };
   return { blocks, caret: { index: last, offset } };
 }
 
@@ -721,8 +825,24 @@ export function nodeHtml(node, opts = {}) {
     return '';
   }).join('');
   const style = attrsOf(node).style;
-  if (node.type === 'heading') return `<h2 class="ed-h${attrsOf(node).level === 2 ? 2 : 1}">${inline(node.content)}</h2>`;
+  const look = textAttrsHtml(attrsOf(node));
+  if (node.type === 'heading') return `<h2 class="ed-h${attrsOf(node).level === 2 ? 2 : 1}"${look}>${inline(node.content)}</h2>`;
   if (node.type === 'separator') return '<div class="ed-sep"></div>';
   if (node.type === 'title') return `<p class="ed-book-title">${inline(node.content)}</p>`;
-  return `<p class="ed-p${PARAGRAPH_STYLES.includes(style) ? ` is-${style}` : ''}">${inline(node.content)}</p>`;
+  // D99: an empty paragraph keeps its line (the browser collapses an empty <p>)
+  const body = inline(node.content) + (isEmptyBlock(node) ? '<br>' : '');
+  return `<p class="ed-p${PARAGRAPH_STYLES.includes(style) ? ` is-${style}` : ''}"${look}>${body}</p>`;
+}
+
+// D99: a block's text options as the attributes its markup carries in the editor (the one-block editor's
+// own rendering, schema.js, writes the same): `dir`, `data-align`, `data-indent`, `data-first`, `data-size`.
+export function textAttrsHtml(attrs) {
+  const t = textAttrsOf(attrs);
+  let out = '';
+  if (t.dir === 'ltr') out += ' dir="ltr"';
+  if (t.align) out += ` data-align="${t.align}"`;
+  if (t.indent) out += ` data-indent="${t.indent}"`;
+  if (t.firstLine === false) out += ' data-first="none"';
+  if (t.size) out += ` data-size="${t.size}"`;
+  return out;
 }

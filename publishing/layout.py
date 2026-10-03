@@ -10,6 +10,9 @@ per page, in points from the page's top-left corner:
      lines: [line…], header: {…}|null, number: {…}|null, footnote_rule: {x, y, w}|null}
 
     line = {block, kind, style, x, y, w, h, baseline, dir, justify, start, end, first, runs: [run…]}
+           (+ D99: `align` left | right | center for a line that is not justified, `brk` on the first line
+           of a block with a page break before it, `empty` / `blank` for an empty paragraph's line, which
+           has no runs and spans its measure)
     run  = {text, font, size_pt, weight, italic, sup, note, start, end}  (+ `leader: true, w` for a dot
            leader: its one dot, to repeat across `w`)
 
@@ -149,12 +152,14 @@ def _run(box, text: str, start: int, end: int, *, sup: bool = False, note: str |
 
 
 class _Context:
-    """The tagged element a box belongs to (`publishing.html` layout tags)."""
+    """The tagged element a box belongs to (`publishing.html` layout tags; D99: `brk` a page break before
+    it, `empty` an empty paragraph, `blank` a blank page's)."""
 
-    __slots__ = ("key", "block", "kind", "style", "target")
+    __slots__ = ("key", "block", "kind", "style", "target", "brk", "empty", "blank")
 
-    def __init__(self, key: str, block: str, kind: str, style: str, target: str | None):
+    def __init__(self, key: str, block: str, kind: str, style: str, target: str | None, flags=(False,) * 3):
         self.key, self.block, self.kind, self.style, self.target = key, block, kind, style, target
+        self.brk, self.empty, self.blank = flags
 
 
 def _context_of(box) -> _Context | None:
@@ -170,7 +175,25 @@ def _context_of(box) -> _Context | None:
         element.get("data-kind") or "body",
         element.get("data-style") or "",
         element.get("data-target"),
+        (bool(element.get("data-brk")), bool(element.get("data-empty")), bool(element.get("data-blank"))),
     )
+
+
+def _line_align(line_box, justified: bool) -> str | None:
+    """The side a line's text keeps (D99): `left`, `right` or `center` (None for a justified line). The
+    live page aligns the line's text in its box the same way when the browser's measure differs a little."""
+    if justified:
+        return None
+    style = line_box.style
+    align = str(style["text_align_all"])
+    if align == "justify":
+        align = str(style["text_align_last"])
+    if align in ("auto", "justify"):
+        align = "start"
+    if align in ("start", "end"):
+        rtl = style["direction"] == "rtl"
+        align = "right" if (align == "start") == rtl else "left"
+    return align if align in ("left", "right", "center") else None
 
 
 class _Extractor:
@@ -178,6 +201,7 @@ class _Extractor:
         self.texts = texts
         self.aligners: dict[str, Aligner] = {}
         self.seen: set[str] = set()
+        self.blocks: dict[str, object] = {}  # an empty paragraph's block box, by its element id (D99)
 
     def aligner(self, ctx: _Context | None) -> Aligner:
         if ctx is None:
@@ -239,6 +263,8 @@ class _Extractor:
         own = _context_of(box)
         if own is not None:
             ctx = own
+            if own.empty and isinstance(box, boxes.BlockBox):
+                self.blocks[own.key] = box  # an empty paragraph's line spans its measure (D99)
         if isinstance(box, boxes.LineBox):
             self.line(box, ctx, out)
             return
@@ -253,22 +279,28 @@ class _Extractor:
         state = {"runs": [], "x0": inf, "x1": -inf, "justify": False}
         self.inline(line_box, ctx, aligner, state, out, note=None)
         runs = _trim_edges(state["runs"])
-        if not runs:
+        empty = not runs and ctx is not None and ctx.empty
+        if not runs and not empty:
             return
         ranged = [run for run in runs if run["end"] > run["start"]]
-        start = ranged[0]["start"] if ranged else runs[0]["start"]
-        end = ranged[-1]["end"] if ranged else runs[-1]["end"]
+        start = ranged[0]["start"] if ranged else runs[0]["start"] if runs else 0
+        end = ranged[-1]["end"] if ranged else runs[-1]["end"] if runs else 0
         first = False
         if ctx is not None and ctx.key not in self.seen:
             self.seen.add(ctx.key)
             first = True
+        x0, x1 = state["x0"], state["x1"]
+        if empty:  # D99: an empty paragraph's line, as wide as its measure (a click anywhere opens it)
+            holder = self.blocks.get(ctx.key)
+            x0 = holder.content_box_x() if holder is not None else line_box.position_x
+            x1 = x0 + (holder.width if holder is not None else line_box.width)
         line = {
             "block": ctx.block if ctx is not None else None,
             "kind": ctx.kind if ctx is not None else "other",
             "style": ctx.style if ctx is not None else "",
-            "x": _pt(state["x0"]),
+            "x": _pt(x0),
             "y": _pt(line_box.position_y),
-            "w": _pt(state["x1"] - state["x0"]),
+            "w": _pt(x1 - x0),
             "h": _pt(line_box.height),
             "baseline": _pt(line_box.position_y + (line_box.baseline or 0)),
             "dir": line_box.style["direction"],
@@ -278,8 +310,17 @@ class _Extractor:
             "first": first,
             "runs": runs,
         }
+        align = _line_align(line_box, state["justify"])
+        if align is not None:
+            line["align"] = align
         if ctx is not None and ctx.target:
             line["target"] = ctx.target
+        if first and ctx is not None and ctx.brk:
+            line["brk"] = True  # D99: a page break before the block (the editor marks it)
+        if empty:
+            line["empty"] = True
+            if ctx.blank:
+                line["blank"] = True
         out.append(line)
 
     def inline(self, box, ctx, aligner: Aligner, state: dict, out: list[dict], note: str | None) -> None:
@@ -574,9 +615,9 @@ def page_checks(
             page = by_number.get(page["n"] - 1)  # the blank page before a recto opening
         if page is None or page["n"] == item.get("first"):
             continue
-        count = len(body_lines(page))
+        lines = [line for line in body_lines(page) if not line.get("empty")]  # D99: blank lines say nothing
+        count = len(lines)
         if 0 < count <= ALMOST_EMPTY_LINES:
-            lines = body_lines(page)
             out.append(
                 {
                     "code": "almost_empty_page",

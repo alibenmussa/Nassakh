@@ -112,7 +112,7 @@ def style_table(setup: PageSetup) -> dict[str, ParaStyle]:
             1.4,
             5,
             3,
-            "center",
+            "start",  # D99: a subtitle starts on the start side, as `.nk-section-title` (the title: centre)
             bold=True,
             outline=1,
             keep_next=setup.keep_headings,

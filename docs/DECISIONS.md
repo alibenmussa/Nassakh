@@ -796,3 +796,45 @@ are scoped. Its page is «المؤسسة» in the sidebar (`/accounts/organizati
   book after seeing what changes field by field; applying goes through the stylesheet's own validation and save, so
   the book page lays out again as after any change. A face the organisation removed since is left out and said.
   Admins rename, update from a book and delete.
+
+## D99 — The book page's text options, empty lines, page breaks and blank pages; subtitles start on the right; the review changes' list; the pages' scrubber (2026-10-03, extends D47, D78)
+Owner review items 11, 23, 24, 25, 26 and 27. (11) Before, a paragraph had its style (فقرة، عنوان فصل، عنوان فرعي،
+اقتباس، شعر، ملاحظة وسط، فاصل), B / I and the two page flags, everything else book-wide in the stylesheet. A block
+(a paragraph or a heading) now carries its own text options, each optional and absent by default
+(`editor.document.TEXT_ATTRS`, validated on save): `align` (`start` | `center` | `end` | `justify`, shown by side:
+right, centre, left, justified), `dir` (`ltr` for a Latin paragraph), `indent` (1–4 steps of twice the body size on
+the start side), `firstLine: false` (no first-line indent; a centred or end-aligned body paragraph has none either),
+`spaceBefore` / `spaceAfter` (½, 1 or 2 lines of the body's pitch added to the style's own space) and `size` (`small`
+0.85, `large` 1.15, `xlarge` 1.3 of the style's size). Every renderer maps them as it maps the styles: the preview
+and both PDFs by classes (`publishing.html.text_classes`, `publishing.css.text_option_rules`, after the style rules),
+Word by direct formatting (`w:jc`, `w:bidi w:val=0` with the runs' direction decided left to right, `w:ind`, the
+spacing through the collapse rule, every run's `w:sz` with the exact pitch), EPUB by classes and `dir`. Left out:
+per-paragraph faces, line spacing and colours (book-wide by design), underline (no Arabic book convention; a new mark
+would touch the merge and the find). The editor: an alignment menu in the edit toolbar (⇧⌘R / E / L / J, the same
+choice again is the style's own), «النص» in «الفقرة» for all of them, «كما في النمط» clears them; a 1:1 take of
+review's change keeps them with the page flags (`editor.merge.FLAGS`). (23) `.nk-section-title`, Word's Heading 2
+and the EPUB's subtitle start on the start side (right); the chapter title stays centred; a block's own alignment
+wins. (26) Cause: the book model left every empty paragraph out ("spacing comes from the styles"), so the line made
+with Enter had no line on the page; the re-layout then showed nothing and the block could no longer be clicked —
+it looked deleted though it was still saved. An empty paragraph is now a block of its own (`Block.empty`): one blank
+line in every renderer (`<p class="nk-empty"><br>`, an empty `w:p`, `<p class="empty"><br/>`), a layout line
+(`empty: true`, no runs, the measure's width so a click opens it) with a faint ¶ in edit mode. At most
+`MAX_EMPTY_RUN` (3) in a row print; Enter refuses a fourth and says what to use instead; a page break starts a new
+run; a chapter of empty lines only prints nothing; empty headings still print nothing. (25) As Word: ⌘↩ (or «فاصل
+صفحة» in the toolbar's page menu and in «الفقرة») cuts the page at the caret — the block is split and its second half
+gets `breakBefore` (at the block's start the block itself), the caret goes on; «صفحة فارغة» adds after the block an
+empty paragraph with `breakBefore` and the new `breakAfter` (the model sets the next block's break from it, across
+chapters), opened so that what is typed prints alone on it. Edit mode marks a page that starts by a break («فاصل
+صفحة», a dashed rule in the top margin, the layout's `brk`) and a blank page («صفحة فارغة», `blank`), each with a ×;
+Backspace at the start of a block that starts a page takes its break off (no merge), Delete before such a block
+too, Backspace or Delete in a blank page (or next to it) removes it whole; the chapter's undo brings them back. The
+windowed re-layout needs nothing new (the flags are in the blocks' digests); a window that opens at a page break
+still marks it (`data-brk` on its first block). ⇧↩ stays the line break (⌘↩ was a second line-break key).
+`ENGINE_VERSION` is `nk-print-6` and the layout's lines carry `align` (left | right | center, unless justified), so
+the live page keeps each line's text on the engine's side. (24) «تغييرات المراجعة» in the review screen's look: the
+chapter once as a group label, a page as one quiet row (its checkbox, «ص N» to review, the reason as a dot and a
+word, «⋯» on hover), each change in the book's face at the review's reading size with its kind above it, a conflict's
+two texts in rows inside a quiet box with «نصّي | المراجعة» under them, the apply pinned at the panel's foot. (27)
+The pages' scrubber: a range from the first page to the last pinned at the foot of «الصفحات» (the screen's bottom
+left; the first page on the right), the page under the thumb shown while dragging, the filmstrip following, the
+page turned after a 140 ms rest and at once on release or a key.
