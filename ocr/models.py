@@ -16,7 +16,10 @@ class OcrRun(models.Model):
         OK = "ok", "ناجح"
         ERROR = "error", "خطأ"
 
-    page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="ocr_runs")
+    # Indexed by `ocr_run_page_engine` (page first), which serves every page lookup too.
+    page = models.ForeignKey(
+        Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="ocr_runs", db_index=False
+    )
     region = models.ForeignKey(
         Region,
         verbose_name="المنطقة",
@@ -46,6 +49,13 @@ class OcrRun(models.Model):
         verbose_name = "تشغيل OCR"
         verbose_name_plural = "تشغيلات OCR"
         ordering = ["-created_at"]
+        indexes = [
+            # a book's or a range of pages' runs of some engines: the model time of a book re-run
+            # (`books.services.qari_seconds`), the sheets' Tesseract runs (`_fast_runs_by_target`)
+            models.Index(fields=["page", "engine_name"], name="ocr_run_page_engine"),
+            # the admin list: newest first, by date (`OcrRunAdmin.date_hierarchy`)
+            models.Index(fields=["created_at"], name="ocr_run_created"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.engine_name} on page {self.page_id}"
@@ -67,7 +77,10 @@ class Line(models.Model):
         FOOTNOTE = "footnote", "حاشية"
         MAIN = "main", "محتوى"
 
-    page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="lines")
+    # Indexed by `ocr_line_page_order` (page first), which serves every page lookup too.
+    page = models.ForeignKey(
+        Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="lines", db_index=False
+    )
     order = models.PositiveIntegerField("الترتيب")
     region = models.ForeignKey(
         Region, verbose_name="المنطقة", null=True, blank=True, on_delete=models.SET_NULL, related_name="lines"
@@ -96,6 +109,8 @@ class Line(models.Model):
         verbose_name = "سطر"
         verbose_name_plural = "الأسطر"
         ordering = ["page", "order"]
+        # a page's lines in reading order (the default ordering): no sort per page
+        indexes = [models.Index(fields=["page", "order"], name="ocr_line_page_order")]
 
     def __str__(self) -> str:
         return f"line {self.order} of page {self.page_id}"

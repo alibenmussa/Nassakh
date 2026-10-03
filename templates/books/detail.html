@@ -108,10 +108,12 @@ today's.{% endcomment %}
           {% if guides_mode and layout_stage %}
           {# «التخطيط» (§3.12 states): re-prepare the pages once they exist, delete, all books #}
           {% if role == 'admin' or role == 'editor' %}
+          {% if user.is_superuser %}{# re-processing is the super admin's (item 29, books.services.may_rerun) #}
           <button type="button" class="menu-item" role="menuitem" x-show="d.status === 'needs_guides' || (d.status === 'error' && d.nPages > 0)" @click="open = false; d.openRerun('preprocess', '{{ 'preprocess'|stage_label|escapejs }}')" data-guides-reprepare>
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
             <span>إعادة تجهيز الصفحات…</span>
           </button>
+          {% endif %}
           <button type="button" class="menu-item is-danger" role="menuitem" @click="open = false; d.openDelete()" data-delete-menu-item>
             <span>حذف الكتاب…</span>
           </button>
@@ -154,7 +156,7 @@ today's.{% endcomment %}
           </a>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
-          {% if tiles %}
+          {% if tiles and user.is_superuser %}{# re-processing is the super admin's (item 29) #}
           <div class="menu-label">إعادة التشغيل من مرحلة</div>
           {% for stage in rerun_stages %}
           <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openRerun('{{ stage.value|escapejs }}', '{{ stage.label|escapejs }}')" data-rerun-stage="{{ stage.value }}">{{ stage.label }}…</button>

@@ -32,6 +32,7 @@ from django.db import transaction
 
 import numpy as np
 
+from books import runs
 from books.models import Book, Page
 from core.images import fit_width, load_gray
 from core.serializers import flag_items, region_items  # noqa: F401 - re-exported for the API
@@ -1552,8 +1553,11 @@ def _commit(book: Book, plan: _GuidesPlan, awaits: bool, loaded, user=None) -> d
     In «التخطيط» only values are saved: `changed` lists the pages whose computed bands move, and
     `undo` restores the book row and every rewritten override exactly. In «المعالجة» the plan skips
     locked pages; every other prepared page is re-derived and those whose regions changed are
-    re-read (`books.services.run_stage(page, "ocr")`); there is no undo.
+    re-read (`books.services.run_stage(page, "ocr")`); there is no undo. In «المعالجة» nothing is written
+    while a run holds a page of the book (`_refuse_running_book`).
     """
+    if not awaits:
+        _refuse_running_book(book)
     pages, regions_of, review_pages, guides = loaded
     by_id = {page.pk: page for page in pages}
     if not awaits:  # locked pages keep their override (their regions stay as reviewed)
@@ -1696,7 +1700,8 @@ def apply_guides(book: Book, data: Mapping, user=None) -> LayoutGuides:
 
 def _refuse_locked(page: Page, awaits: bool) -> None:
     """ProcessingError (Arabic) for a page whose regions must not change: excluded, or — once
-    «المعالجة» started — approved or carrying review work."""
+    «المعالجة» started — approved, carrying review work, or held by a run (`books.runs`, item 29: a change
+    there would re-read the page while it is still being read)."""
     if page.is_excluded:
         raise ProcessingError(EXCLUDED_PAGE_ERROR)
     lock = page_lock(page, awaits, review_work_pages(page.book_id, [page.pk]) if not awaits else set())
@@ -1704,6 +1709,16 @@ def _refuse_locked(page: Page, awaits: bool) -> None:
         raise ProcessingError(APPROVED_GUIDES_ERROR)
     if lock == LOCK_REVIEW:
         raise ProcessingError(REVIEW_WORK_ERROR)
+    if not awaits and runs.is_active(page.pk):
+        raise ProcessingError(runs.PAGE_RUN_ACTIVE_ERROR)
+
+
+def _refuse_running_book(book: Book) -> None:
+    """ProcessingError (Arabic) while a run holds any page of a started book: the book guides re-read the
+    pages they change, which must wait until no page is being read (`books.runs`, item 29)."""
+    busy = runs.active_count(book.pages.all())
+    if busy:
+        raise ProcessingError(runs.book_run_active_message(busy))
 
 
 def _save_override(page: Page, override: dict | None, awaits: bool) -> tuple[list[Region], bool]:

@@ -243,10 +243,10 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
             "</template>", body.index('class="menu menu-popover bk-menu"')
         )
     ]
-    assert (
-        menu.count("data-rerun-stage=") == 5
+    assert (  # book re-runs are the super admin's (owner review item 29; books.tests checks their menu)
+        menu.count("data-rerun-stage=") == 0
         and 'name="stage"' not in menu
-        and "إعادة التشغيل من مرحلة" in menu
+        and "إعادة التشغيل من مرحلة" not in menu
         and "<span>التخطيط</span>" in menu
         and "data-guides-menu-item" in menu
         and "حذف الكتاب…" in menu
@@ -254,7 +254,7 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "اختصارات لوحة المفاتيح" in menu
         and "d.openSheet()" in menu
     )
-    assert "d.openRerun('ocr'," in menu and "d.openDelete()" in menu
+    assert "d.openRerun(" not in menu and "d.openDelete()" in menu
     # the re-run dialog posts the stage it names; the delete dialog names what is lost (§3.13)
     rerun = body[body.index("data-rerun-dialog") : body.index("data-delete-dialog")]
     assert (
@@ -1506,7 +1506,8 @@ def test_guides_mode_for_a_book_awaiting_the_start(editor_client):
     )
     # «⋯»: «إعادة تجهيز الصفحات…» (asks first), «حذف الكتاب…», «كل الكتب» — nothing of «المعالجة»
     menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
-    assert "إعادة تجهيز الصفحات…" in menu and "d.openRerun('preprocess', 'تجهيز الصفحات')" in menu
+    # «إعادة تجهيز الصفحات…» is the super admin's (owner review item 29; books.tests checks it there)
+    assert "إعادة تجهيز الصفحات…" not in menu and "d.openRerun(" not in menu
     assert "حذف الكتاب…" in menu and "كل الكتب" in menu
     for gone in ("تحويل إلى كتاب", "الإخراج", "نسخ نص الكتاب", "إعادة التشغيل من مرحلة", "data-rerun-stage"):
         assert gone not in menu, gone
@@ -1639,8 +1640,8 @@ def test_guides_view_on_a_started_book_and_the_plain_dashboard(editor_client):
         in body
     )
     menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
-    assert (
-        menu.count("data-rerun-stage=") == 5 and "حذف الكتاب…" in menu and "data-guides-menu-item" not in menu
+    assert (  # book re-runs are the super admin's (owner review item 29)
+        menu.count("data-rerun-stage=") == 0 and "حذف الكتاب…" in menu and "data-guides-menu-item" not in menu
     )
     assert "تجميع المخطوطة…" in menu and "bk-convert-host" in body
     assert "جُهّزت الصفحات واكتُشفت مناطقها" not in body

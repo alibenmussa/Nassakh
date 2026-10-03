@@ -953,6 +953,9 @@ def schedule(page) -> None:
 
     if not KrakenEngine().is_prepared():
         return
+    from books import runs
+
     from . import tasks
 
-    transaction.on_commit(lambda: tasks.read_numbers.delay(page.pk))
+    run = runs.active_token(page.pk)  # the run finalising the page: a newer run makes the pass skip
+    transaction.on_commit(lambda: tasks.read_numbers.delay(page.pk, run=run))

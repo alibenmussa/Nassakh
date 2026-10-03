@@ -539,7 +539,7 @@ def test_scheduling_follows_the_setting_and_needs_kraken(
 
     page = numbers_page[0]
     queued = []
-    monkeypatch.setattr(tasks.read_numbers, "delay", lambda page_id: queued.append(page_id))
+    monkeypatch.setattr(tasks.read_numbers, "delay", lambda page_id, run="": queued.append(page_id))
     with django_capture_on_commit_callbacks(execute=True):
         nb.schedule(page)  # tests: the pass is off
     assert queued == []

@@ -147,6 +147,13 @@ NASSAKH = {
     "OCR_SECONDARY": env("OCR_SECONDARY", default="qari_v02"),
     "OCR_FAST": "tesseract",
     "TESSERACT_LANGS": env("TESSERACT_LANGS", default="ara+eng"),
+    # The PDF's own text layer as a book's text (born-digital books): off (owner review 2026-10-03, item 20),
+    # the embedded Arabic text is often garbled. Off: the option is hidden at book creation and no book uses
+    # it, whatever its `use_text_layer`; the text always comes from OCR. The code stays for a later return.
+    "TEXT_LAYER": env.bool("TEXT_LAYER", default=False),
+    # One pipeline run per page at a time (`books.runs`): hours after which a claim no longer blocks a new
+    # run (a run whose queue messages were lost).
+    "RUN_CLAIM_HOURS": env.int("RUN_CLAIM_HOURS", default=12),
     "RENDER_DPI": 300,
     "FOOTNOTE_UPSCALE": 2,
     "MAX_PIXELS": 2048 * 28 * 28,

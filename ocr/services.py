@@ -204,9 +204,11 @@ def engine_names() -> tuple[str, str, str]:
 
 
 def uses_text_layer(page: Page) -> bool:
-    """True for pages of born-digital books whose owner kept `use_text_layer` on."""
-    book = page.book
-    return bool(book.has_text_layer) and bool(book.use_text_layer)
+    """True for pages of born-digital books whose owner kept `use_text_layer` on, while the text layer is
+    enabled (`NASSAKH["TEXT_LAYER"]`, off by default: item 20); off, every page is read by OCR."""
+    from books.services import book_uses_text_layer  # the books app owns the rule (lazy: no import cycle)
+
+    return book_uses_text_layer(page.book)
 
 
 def _preprocess_of(page: Page) -> Preprocess:

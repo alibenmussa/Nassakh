@@ -57,7 +57,9 @@ class Book(models.Model):
         "صفحات في كل ورقة", default=PagesPerSheet.ONE, choices=PagesPerSheet.choices
     )
     split_ratio = models.FloatField("موضع القص", default=0.5)
-    use_text_layer = models.BooleanField("استخدام الطبقة النصية", default=True)
+    # Off by default (owner review 2026-10-03, item 20): the embedded text of Arabic PDFs is often garbled,
+    # so the text comes from OCR. Honoured only while `NASSAKH["TEXT_LAYER"]` is on (`uses_text_layer`).
+    use_text_layer = models.BooleanField("استخدام الطبقة النصية", default=False)
     digit_style = models.CharField(
         "نمط الأرقام", max_length=20, default=DigitStyle.WESTERN, choices=DigitStyle.choices
     )
@@ -223,6 +225,9 @@ class Page(models.Model):
     error_from = models.CharField("مرحلة الخطأ", max_length=40, blank=True)
     error_message = models.TextField("رسالة الخطأ", blank=True)
     task_id = models.CharField("معرّف المهمة", max_length=64, blank=True)
+    # The pipeline run that holds the page (`books.runs`): one run per page at a time; '' when none.
+    run_token = models.CharField("تشغيل المعالجة الجاري", max_length=32, blank=True, default="")
+    run_claimed_at = models.DateTimeField("بدأ تشغيل المعالجة في", null=True, blank=True)
     attention_flags = models.JSONField("إشارات الانتباه", default=list, blank=True)
     is_excluded = models.BooleanField("مستثناة", default=False)
 

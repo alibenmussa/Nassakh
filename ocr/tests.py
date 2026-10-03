@@ -584,6 +584,34 @@ def test_run_fast_ocr_fails_when_every_tesseract_call_fails(page):
     assert page.ocr_runs.filter(status="error").count() == 4
 
 
+@pytest.fixture
+def text_layer_on(settings):
+    """`NASSAKH["TEXT_LAYER"]` on: the PDF's text layer may stand for OCR (off by default, item 20)."""
+    settings.NASSAKH = {**settings.NASSAKH, "TEXT_LAYER": True}
+
+
+def test_the_text_layer_is_off_by_default_and_every_page_is_read_by_ocr(page):
+    # item 20: the embedded Arabic text is often garbled; a born-digital book that kept the option is read
+    add_regions(page)
+    book = page.book
+    book.has_text_layer = True
+    book.use_text_layer = True
+    book.save()
+    page.text_layer_text = "نص الطبقة"
+    page.save()
+    assert not services.uses_text_layer(page)
+    fakes = engines()
+    with registry.override(fakes):
+        services.run_fast_ocr(page)
+        page.refresh_from_db()
+        assert page.text_state == Page.TextState.PROVISIONAL and fakes["pdf_text"].calls == []
+        services.run_full_ocr(page)
+    assert not page.ocr_runs.filter(engine_name="pdf_text").exists()
+    assert fakes["qari_v03"].calls and fakes["qari_v02"].calls
+    assert Book._meta.get_field("use_text_layer").default is False
+
+
+@pytest.mark.usefixtures("text_layer_on")
 def test_run_fast_ocr_on_a_born_digital_page_finalises_from_the_text_layer(page):
     add_regions(page)
     book = page.book
@@ -612,6 +640,7 @@ def test_run_fast_ocr_on_a_born_digital_page_finalises_from_the_text_layer(page)
     assert page.ocr_runs.filter(engine_name__in=["qari_v03", "qari_v02"]).count() == 0
 
 
+@pytest.mark.usefixtures("text_layer_on")
 def test_run_fast_ocr_born_digital_falls_back_to_the_ingest_text_layer(page):
     book = page.book
     book.has_text_layer = True

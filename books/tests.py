@@ -27,6 +27,7 @@ import pytest
 from PIL import Image
 
 from books import services, tasks
+from books.forms import BookForm
 from books.models import ALL_PAGES_FAILED, ALL_PAGES_FAILED_LAYOUT, Book, Page
 from processing.models import LayoutGuides, Preprocess, Region
 
@@ -339,6 +340,11 @@ def _book_with_pages(n: int = 3, **page_kwargs) -> tuple[Book, list[Page]]:
     return book, pages
 
 
+def _end_runs(book: Book) -> None:
+    """What the last task of each chain does when the chains are mocked away: give the run's claim back."""
+    Page.objects.filter(book=book).update(run_token="", run_claimed_at=None)
+
+
 def test_start_processing_sets_status_and_enqueues_ingest():
     book, _ = _book_with_pages(0)
     book.source_pdf.save("source.pdf", io.BytesIO(make_scan_pdf(1)), save=True)
@@ -392,12 +398,20 @@ def test_run_stage_enqueues_the_chain_from_that_stage(stage, expected):
 
         services.run_stage(page, stage)
 
+        page.refresh_from_db()
+        token = page.run_token  # the run's claim (item 29): every task carries it, the last one gives it back
+        assert len(token) == 32 and page.run_claimed_at is not None
         chain.assert_called_once_with(*[f"sig:{name}" for name in expected])
-        chain.return_value.apply_async.assert_called_once_with()
-        mocks[expected[0]].s.assert_called_once_with(page.pk)  # first task gets the page id
+        chain.return_value.apply_async.assert_called_once()
+        errback = chain.return_value.apply_async.call_args.kwargs["link_error"]
+        assert errback.task == "books.tasks.page_run_failed"
+        assert errback.kwargs == {"page_id": page.pk, "run": token}
+        last = {"run": token, "last": True}
+        first = last if len(expected) == 1 else {"run": token}
+        mocks[expected[0]].s.assert_called_once_with(page.pk, **first)  # first task gets the page id
         for name in expected[1:]:
-            mocks[name].s.assert_called_once_with()  # the rest receive it from the chain
-    page.refresh_from_db()
+            want = last if name == expected[-1] else {"run": token}
+            mocks[name].s.assert_called_once_with(**want)  # the rest receive it from the chain
     assert page.task_id == "task-123"
 
 
@@ -426,8 +440,11 @@ def test_rerun_book_requeues_every_included_page_and_sets_the_book_status():
     with patch("books.services.run_stage") as run_stage:
         assert tasks.rerun_book_from(book.pk, "ocr") == book.pk
     assert [call.args for call in run_stage.call_args_list] == [(pages[0], "ocr"), (pages[1], "ocr")]
+    token = Page.objects.get(pk=pages[0].pk).run_token  # claimed by the re-run itself (no token given)
+    assert token and {call.kwargs["run"] for call in run_stage.call_args_list} == {token}
     book.refresh_from_db()
     assert book.status == Book.Status.OCR
+    _end_runs(book)
     with patch("books.services.run_stage"):
         services.rerun_book(book, "preprocess")
     book.refresh_from_db()
@@ -693,6 +710,7 @@ def test_rerun_book_resets_pages_so_the_book_waits_for_its_last_page():
     assert book.refresh_status() == Book.Status.OCR  # page 2 is still queued
 
     Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    _end_runs(book)  # both chains are through
     pages[1].refresh_from_db()
     with patch("books.services.chain"):
         services.run_stage(pages[1], "ocr_full")
@@ -782,6 +800,7 @@ def test_run_stage_runs_the_real_chain_on_a_page_with_a_rule_and_a_strip():
         services.run_stage(page, "preprocess")
         page.refresh_from_db()
         assert page.status == Page.Status.OCR_DONE and page.text_state == Page.TextState.FINAL
+        assert page.run_token == "" and page.run_claimed_at is None  # the chain's last task gave the claim back
         pre = page.preprocess
         assert pre.edge_strips_removed and pre.footnote_rule_y is not None
         proc.apply_guides(book, {"footnote_line": pre.footnote_rule_y / pre.output_height})
@@ -907,9 +926,30 @@ def test_create_view_creates_the_book_and_redirects_to_the_dashboard(editor_clie
     delay.assert_called_once_with(book.pk)
     assert response.status_code == 302 and response["Location"] == reverse("books:detail", args=[book.pk])
     assert book.created_by == editor
-    assert (book.pages_per_sheet, book.split_ratio, book.use_text_layer) == (2, 0.55, True)
+    # item 20: the text layer is off, so the posted option is ignored and the book's text comes from OCR
+    assert (book.pages_per_sheet, book.split_ratio, book.use_text_layer) == (2, 0.55, False)
     assert book.source_page_count == 3 and book.has_text_layer is True
     assert book.source_pdf.name == f"books/{book.pk}/source.pdf"
+
+
+def test_the_text_layer_option_is_offered_only_while_the_setting_is_on(editor_client, settings):
+    # item 20: hidden at book creation (OCR only); `NASSAKH["TEXT_LAYER"]` brings it back as it was
+    body = editor_client.get(reverse("books:create")).content.decode()
+    assert 'name="use_text_layer"' not in body and "الطبقة النصية" not in body
+    assert "use_text_layer" not in BookForm().fields
+    make_book(make_text_pdf(1), use_text_layer=True)  # a script passing it still gets OCR
+    assert not services.book_uses_text_layer(Book.objects.get())
+
+    settings.NASSAKH = {**settings.NASSAKH, "TEXT_LAYER": True}
+    body = editor_client.get(reverse("books:create")).content.decode()
+    assert 'name="use_text_layer"' in body
+    assert services.book_uses_text_layer(Book.objects.get())
+    form = BookForm(
+        {"title": "ك", "skip_first": 0, "skip_last": 0, "pages_per_sheet": 1, "use_text_layer": "on"},
+        {"source_pdf": SimpleUploadedFile("b.pdf", make_text_pdf(1), content_type="application/pdf")},
+    )
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["use_text_layer"] is True
 
 
 def test_create_view_rejects_a_non_pdf_and_bad_skip_values(editor_client):
@@ -1041,40 +1081,263 @@ def test_start_view_enqueues_and_reports(editor_client):
     assert "المعالجة جارية بالفعل" in response.content.decode()
 
 
-def test_rerun_view_for_the_book_and_for_one_page(editor_client):
+@pytest.fixture
+def superuser_client(client):
+    client.force_login(User.objects.create_superuser("owner", password="pass-1234"))
+    return client
+
+
+def test_rerun_view_for_the_book_and_for_one_page(superuser_client):
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "layout"})
-    delay.assert_called_once_with(book.pk, "layout")
+        response = superuser_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "layout"})
+    token = Page.objects.get(pk=pages[0].pk).run_token  # both pages claimed in the request (item 29)
+    assert token and set(book.pages.values_list("run_token", flat=True)) == {token}
+    delay.assert_called_once_with(book.pk, "layout", run=token)
     assert response["Location"] == reverse("books:detail", args=[book.pk])
+    _end_runs(book)
 
     with patch("books.services.run_stage") as run_stage:
-        response = editor_client.post(reverse("books:rerun", args=[book.pk, 2]) + "?stage=ocr_full")
+        response = superuser_client.post(reverse("books:rerun", args=[book.pk, 2]) + "?stage=ocr_full")
     assert run_stage.call_args.args[0].pk == pages[1].pk and run_stage.call_args.args[1] == "ocr_full"
     assert response["Location"] == services.sheet_url(book.pk, 2)
 
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "nope"}, follow=True)
+        url = reverse("books:rerun", args=[book.pk])
+        response = superuser_client.post(url, {"stage": "nope"}, follow=True)
     delay.assert_not_called()
     assert "اختر مرحلة صحيحة" in response.content.decode()
 
 
-def test_rerun_view_reports_approved_pages_and_refuses_a_fully_approved_book(editor_client):
+def test_rerun_view_reports_approved_pages_and_refuses_a_fully_approved_book(superuser_client):
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
     _approve(pages[0])
     url = reverse("books:rerun", args=[book.pk])
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
-    delay.assert_called_once_with(book.pk, "ocr")
+        response = superuser_client.post(url, {"stage": "ocr"}, follow=True)
+    delay.assert_called_once()
+    assert Page.objects.get(pk=pages[0].pk).run_token == ""  # the approved page is not claimed
     assert "تُركت 1 صفحة معتمدة كما هي." in response.content.decode()
+    _end_runs(book)
 
     _approve(pages[1])
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
+        response = superuser_client.post(url, {"stage": "ocr"}, follow=True)
     delay.assert_not_called()
     assert "كل صفحات الكتاب معتمدة" in response.content.decode()
-    response = editor_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"}, follow=True)
+    response = superuser_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"}, follow=True)
     assert "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة" in response.content.decode()
+
+
+# ====================================================================== one run per page (item 29)
+
+
+def test_a_second_book_rerun_queues_nothing_while_the_first_holds_the_pages(superuser_client):
+    # the owner's double «إعادة التعرّف»: the second submit is refused in the request, nothing is queued twice
+    book, pages = _book_with_pages(3, status=Page.Status.OCR_DONE)
+    url = reverse("books:rerun", args=[book.pk])
+    with patch("books.tasks.rerun_book_from.delay") as delay:
+        superuser_client.post(url, {"stage": "ocr"})
+        again = superuser_client.post(url, {"stage": "ocr_full"}, follow=True)
+    delay.assert_called_once()
+    assert "تجري معالجة 3 صفحات من هذا الكتاب الآن" in again.content.decode()
+    # a page re-run of a held page is refused as well, and so is the re-run task itself
+    with patch("books.services.chain") as chain:
+        page_url = reverse("books:rerun", args=[book.pk, 2])
+        page_again = superuser_client.post(page_url, {"stage": "ocr"}, follow=True)
+        with pytest.raises(ValueError, match="تجري معالجة"):
+            services.rerun_book(book, "ocr")
+    chain.assert_not_called()
+    assert "تجري معالجة هذه الصفحة الآن" in page_again.content.decode()
+
+
+def test_the_rerun_task_runs_only_the_pages_its_claim_holds():
+    book, pages = _book_with_pages(3, status=Page.Status.OCR_DONE)
+    with patch("books.tasks.rerun_book_from.delay") as delay:
+        assert services.queue_book_rerun(book, "ocr") == 3
+    token = delay.call_args.kwargs["run"]
+    # meanwhile page 3 was excluded and page 2 approved: their claims are given back, they are not re-run
+    Page.objects.filter(pk=pages[2].pk).update(is_excluded=True, status=Page.Status.EXCLUDED)
+    _approve(pages[1])
+    with patch("books.services.chain") as chain:
+        assert tasks.rerun_book_from(book.pk, "ocr", run=token) == book.pk
+    assert chain.call_count == 1
+    assert [p.run_token for p in book.pages.order_by("number")] == [token, "", ""]
+    # the broker refusing the task gives every claim back
+    _end_runs(book)
+    Page.objects.filter(pk=pages[1].pk).update(status=Page.Status.OCR_DONE, reviewed_at=None)
+    with patch("books.tasks.rerun_book_from.delay", side_effect=ConnectionError("down")):
+        with pytest.raises(ValueError, match="تعذّر إرسال العمل"):
+            services.queue_book_rerun(book, "ocr")
+    assert set(book.pages.values_list("run_token", flat=True)) == {""}
+
+
+def test_run_stage_claims_the_page_and_gives_the_claim_back_when_it_refuses():
+    _, pages = _book_with_pages(2)
+    page, approved = pages
+    with patch("books.services.chain") as chain:
+        services.run_stage(page, "ocr")
+        with pytest.raises(ValueError, match="تجري معالجة هذه الصفحة الآن"):
+            services.run_stage(page, "ocr_full")  # a second click
+    assert chain.call_count == 1 and Page.objects.get(pk=page.pk).run_token
+    _approve(approved)
+    with patch("books.services.chain"), pytest.raises(ValueError, match="أعد فتحها"):
+        services.run_stage(approved, "ocr")  # refused after the claim: the claim is given back
+    fresh = Page.objects.create(book=page.book, number=3, source_index=2)
+    with patch("books.services.chain") as chain:
+        chain.return_value.apply_async.side_effect = ConnectionError("down")  # the broker refused
+        with pytest.raises(ConnectionError):
+            services.run_stage(fresh, "ocr")
+    assert list(page.book.pages.exclude(pk=page.pk).values_list("run_token", flat=True)) == ["", ""]
+
+
+def test_a_claim_past_the_claim_hours_no_longer_blocks(settings):
+    from datetime import timedelta
+
+    from books import runs
+
+    _, pages = _book_with_pages(1)
+    page = pages[0]
+    assert runs.claim_page(page.pk)
+    assert runs.claim_page(page.pk) == "" and runs.is_active(page.pk)
+    Page.objects.filter(pk=page.pk).update(run_claimed_at=timezone.now() - timedelta(hours=13))
+    assert not runs.is_active(page.pk)  # 12 hours by default: a run whose messages were lost
+    newer = runs.claim_page(page.pk)
+    assert newer and runs.is_current(page.pk, newer) and runs.is_current(page.pk, "")
+    settings.NASSAKH = {**settings.NASSAKH, "RUN_CLAIM_HOURS": 1}
+    Page.objects.filter(pk=page.pk).update(run_claimed_at=timezone.now() - timedelta(hours=2))
+    assert runs.claim_page(page.pk)
+
+
+def test_tasks_of_a_superseded_run_skip_the_page_and_the_last_task_releases():
+    from ocr import tasks as ocr_tasks
+    from processing import tasks as processing_tasks
+
+    _, pages = _book_with_pages(1, status=Page.Status.LAYOUT_DONE)
+    page = pages[0]
+    Page.objects.filter(pk=page.pk).update(run_token="b" * 32, run_claimed_at=timezone.now())
+    with (
+        patch("processing.services.preprocess_page") as preprocess,
+        patch("processing.services.derive_regions") as derive,
+        patch("ocr.services.run_fast_ocr") as fast,
+        patch("ocr.services.run_full_ocr") as full,
+    ):
+        old = "a" * 32  # an earlier run's messages, still in the queue
+        processing_tasks.preprocess_page(page.pk, run=old)
+        processing_tasks.layout_page(page.pk, run=old)
+        ocr_tasks.ocr_page_fast(page.pk, run=old)
+        ocr_tasks.ocr_page_full(page.pk, run=old, last=True)
+        for mock in (preprocess, derive, fast, full):
+            mock.assert_not_called()
+        assert Page.objects.get(pk=page.pk).run_token == "b" * 32  # an old run never releases the new one
+        ocr_tasks.ocr_page_fast(page.pk, run="b" * 32)
+        assert Page.objects.get(pk=page.pk).run_token == "b" * 32
+        ocr_tasks.ocr_page_full(page.pk, run="b" * 32, last=True)
+        fast.assert_called_once()
+        full.assert_called_once()
+    assert Page.objects.get(pk=page.pk).run_token == ""
+    with patch("ocr.services.run_fast_ocr") as fast:  # a task queued without a run (ingest, older messages)
+        ocr_tasks.ocr_page_fast(page.pk)
+    fast.assert_called_once()
+
+
+def test_the_numbers_pass_of_an_earlier_run_skips_a_page_a_newer_run_holds(settings):
+    from ocr import tasks as ocr_tasks
+
+    settings.NASSAKH = {**settings.NASSAKH, "CALLS_PASS": False}
+    _, pages = _book_with_pages(1, status=Page.Status.OCR_DONE)
+    page = pages[0]
+    Page.objects.filter(pk=page.pk).update(run_token="n" * 32, run_claimed_at=timezone.now())
+    with patch("ocr.numbers.read_page_numbers") as read:
+        ocr_tasks.read_numbers(page.pk, run="o" * 32)  # queued by the run before: the newer one reads again
+        read.assert_not_called()
+        ocr_tasks.read_numbers(page.pk, run="n" * 32)  # queued by the run that holds the page
+        assert read.call_count == 1
+        _end_runs(page.book)
+        ocr_tasks.read_numbers(page.pk, run="o" * 32)  # no run holds the page: the pass runs
+        ocr_tasks.read_numbers(page.pk)
+        assert read.call_count == 3
+
+
+def test_release_page_runs_frees_the_claims_of_a_book_or_a_page():
+    from django.core.management import CommandError, call_command
+
+    book, pages = _book_with_pages(3)
+    other, _ = _book_with_pages(1)
+    Page.objects.update(run_token="f" * 32, run_claimed_at=timezone.now())
+    out = io.StringIO()
+    call_command("release_page_runs", "--book", str(book.pk), "--page", "2", stdout=out)
+    assert "1 page run claim(s) released." in out.getvalue()
+    assert [p.run_token for p in book.pages.order_by("number")] == ["f" * 32, "", "f" * 32]
+    call_command("release_page_runs", "--book", str(book.pk), stdout=io.StringIO())
+    assert set(book.pages.values_list("run_token", flat=True)) == {""}
+    assert other.pages.get().run_token == "f" * 32
+    call_command("release_page_runs", "--all", stdout=io.StringIO())
+    assert not Page.objects.exclude(run_token="").exists()
+    with pytest.raises(CommandError):
+        call_command("release_page_runs")
+
+
+def test_a_chain_that_dies_releases_its_claim_and_marks_the_waiting_page():
+    book, pages = _book_with_pages(2, status=Page.Status.LAYOUT_DONE)
+    book.status = Book.Status.OCR
+    book.save()
+    page, other = pages
+    Page.objects.filter(pk=page.pk).update(run_token="c" * 32, run_claimed_at=timezone.now())
+    Page.objects.filter(pk=other.pk).update(status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
+    request = MagicMock(task="ocr.tasks.ocr_page_full")
+    tasks.page_run_failed(request, TimeoutError("hard time limit"), None, page_id=page.pk, run="d" * 32)
+    assert Page.objects.get(pk=page.pk).run_token == "c" * 32  # not this run's claim: nothing happens
+    tasks.page_run_failed(request, TimeoutError("hard time limit"), None, page_id=page.pk, run="c" * 32)
+    page.refresh_from_db()
+    assert (page.run_token, page.status, page.error_from) == ("", Page.Status.ERROR, "ocr_full")
+    assert page.error_message.startswith(tasks.RUN_DIED_ERROR)
+    book.refresh_from_db()
+    assert book.status == Book.Status.READY_FOR_REVIEW  # nothing left to wait for
+
+
+def test_book_reruns_are_the_super_admins_and_editors_may_only_retry_failed_pages(editor_client):
+    book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
+    with patch("books.tasks.rerun_book_from.delay") as delay, patch("books.services.chain") as chain:
+        assert editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "ocr"}).status_code == 403
+        page_url = reverse("books:rerun", args=[book.pk, 1])
+        assert editor_client.post(page_url, {"stage": "ocr"}).status_code == 403
+        pages[1].set_error("ocr_full", "تعذّر التعرّف على النص.")
+        response = editor_client.post(reverse("books:rerun", args=[book.pk, 2]), {"stage": "ocr_full"})
+    delay.assert_not_called()
+    assert response.status_code == 302 and chain.call_count == 1  # the retry of a failed page
+    assert services.may_rerun(User(is_superuser=True)) and not services.may_rerun(User())
+
+
+def test_the_dashboard_offers_book_reruns_to_the_super_admin_only(editor_client, client):
+    book, _ = _book_with_pages(2, status=Page.Status.OCR_DONE)
+    book.status = Book.Status.READY_FOR_REVIEW
+    book.save()
+    url = reverse("books:detail", args=[book.pk])
+    paused = Book.objects.create(title="ك", status=Book.Status.NEEDS_GUIDES, awaits_ocr_start=True)
+    Page.objects.create(book=paused, number=1, source_index=0, status=Page.Status.PREPROCESSED)
+    paused_url = reverse("books:detail", args=[paused.pk])
+    assert "data-rerun-stage" not in editor_client.get(url).content.decode()
+    assert "data-guides-reprepare" not in editor_client.get(paused_url).content.decode()
+    client.force_login(User.objects.create_superuser("owner", password="pass-1234"))
+    body = client.get(url).content.decode()
+    assert body.count("data-rerun-stage=") == 5 and "إعادة التشغيل من مرحلة" in body
+    body = client.get(paused_url).content.decode()
+    assert "data-guides-reprepare" in body and "إعادة تجهيز الصفحات…" in body
+
+
+def test_guide_changes_wait_for_the_runs_of_a_started_book():
+    from processing import services as processing
+
+    book, pages = _done_book(2)
+    Page.objects.filter(pk=pages[0].pk).update(run_token="e" * 32, run_claimed_at=timezone.now())
+    with pytest.raises(processing.ProcessingError, match="تجري معالجة هذه الصفحة الآن"):
+        processing.set_page_guides(pages[0], {"footnote_line": 0.8}, stage="ocr")
+    with patch("books.services.chain") as chain, pytest.raises(processing.ProcessingError, match="واحدة"):
+        processing.apply_book_guides(book, {"footnote_line": 0.8}, stage="ocr")
+    chain.assert_not_called()
+    assert Page.objects.get(pk=pages[0].pk).guides_override is None
+    assert not processing.LayoutGuides.objects.filter(book=book, source="manual").exists()
 
 
 def test_dashboard_attention_list_offers_a_retry_for_a_failed_page(editor_client):
@@ -2048,6 +2311,12 @@ def test_the_gate_refuses_every_stage_but_preprocess_while_the_book_waits():
     with patch("books.services.chain") as chain:
         services.run_stage(page, "preprocess")
     assert [sig.task for sig in chain.call_args.args] == ["processing.tasks.preprocess_page"]
+    assert chain.call_args.args[0].kwargs == {"run": Page.objects.get(pk=page.pk).run_token, "last": True}
+    with pytest.raises(ValueError, match="لم يكتمل التخطيط"):  # page 1 is being prepared again
+        services.validate_rerun(book, "preprocess")
+    _end_runs(book)  # page 1 prepared
+    Page.objects.filter(pk=page.pk).update(status=ps.PREPROCESSED)
+    book.refresh_status()
     with patch("books.services.chain") as chain:
         assert services.rerun_book(book, "preprocess") == 2
     assert all(len(call.args) == 1 for call in chain.call_args_list)
@@ -2065,14 +2334,14 @@ def test_toggle_exclude_in_the_layout_stage_queues_nothing_for_ocr(editor_client
     prepared, unprepared = book.pages.get(number=2), book.pages.get(number=3)
     Page.objects.filter(pk__in=[prepared.pk, unprepared.pk]).update(is_excluded=True)
     Preprocess.objects.create(page=prepared, output_width=10, output_height=10)
-    with (
-        patch("books.services.run_stage") as run_stage,
-        patch("processing.tasks.preprocess_page.delay") as preprocess,
-    ):
+    with patch("books.services.chain") as chain:
         response = editor_client.post(reverse("books:toggle_exclude", args=[book.pk, 2]))
         editor_client.post(reverse("books:toggle_exclude", args=[book.pk, 3]))
-    run_stage.assert_not_called()
-    preprocess.assert_called_once_with(unprepared.pk)
+    # only the unprepared page is queued, preprocessing alone, under a run claim (item 29)
+    queued = [[sig.task for sig in call.args] for call in chain.call_args_list]
+    assert queued == [["processing.tasks.preprocess_page"]]
+    assert chain.call_args.args[0].args == (unprepared.pk,)
+    assert Page.objects.get(pk=unprepared.pk).run_token and not Page.objects.get(pk=prepared.pk).run_token
     assert Page.objects.get(pk=prepared.pk).status == ps.PREPROCESSED
     message = list(response.wsgi_request._messages)[0]
     assert str(message) == "أُعيدت الصفحة 2 إلى الكتاب."

@@ -9,6 +9,9 @@ broken page never blocks the rest of the book. A page already in `error` (an ear
 chain failed) is skipped so the original error is kept, and so is every page of a book that awaits
 «بدء المعالجة» (D64: the gate; books with OCR history all have the flag False). Engines stay loaded
 between tasks through the registry cache; the gpu worker runs with `--pool=solo`.
+
+One run per page at a time (`books.runs`, item 29): the chain's tasks carry the run's token (`run`) and
+skip a page another run holds now; the last one (`last`) gives the claim back.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from collections.abc import Callable
 from celery import shared_task
 from django.conf import settings
 
+from books import runs
 from books.models import Page
 
 from . import services
@@ -32,8 +36,29 @@ HEADLINE_FAST = "تعذّر التعرّف السريع على النص (Tessera
 HEADLINE_FULL = "تعذّر التعرّف على النص بنماذج OCR."
 
 
-def _run_stage(task, page_id: int, stage: str, action: Callable[[Page], None], headline: str) -> int:
-    """Shared task body: load the page, remember the task id, run `action`, record failures."""
+def _run_stage(
+    task,
+    page_id: int,
+    stage: str,
+    action: Callable[[Page], None],
+    headline: str,
+    run: str = "",
+    last: bool = False,
+) -> int:
+    """Shared task body of a page run's task (`books.runs`): nothing when the run `run` no longer holds the
+    page; else `_stage_body`, then the chain's last task (`last`) gives the claim back. A retry (an I/O
+    error) raises before the release, so the retried task still holds the page."""
+    if not runs.is_current(page_id, run):
+        log.info("%s: page %s skipped, run %s no longer holds it", stage, page_id, run)
+        return page_id
+    _stage_body(task, page_id, stage, action, headline)
+    if last:
+        runs.release(page_id, run)
+    return page_id
+
+
+def _stage_body(task, page_id: int, stage: str, action: Callable[[Page], None], headline: str) -> int:
+    """Load the page, remember the task id, run `action`, record failures."""
     try:
         page = Page.objects.select_related("book").get(pk=page_id)
     except Page.DoesNotExist:
@@ -75,23 +100,31 @@ def _run_stage(task, page_id: int, stage: str, action: Callable[[Page], None], h
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,), retry_backoff=True)
-def ocr_page_fast(self, page_id: int) -> int:
+def ocr_page_fast(self, page_id: int, run: str = "", last: bool = False) -> int:
     """Tesseract provisional text for one page (default queue, about half a second per page)."""
-    return _run_stage(self, page_id, STAGE_FAST, services.run_fast_ocr, HEADLINE_FAST)
+    return _run_stage(self, page_id, STAGE_FAST, services.run_fast_ocr, HEADLINE_FAST, run, last)
 
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,), retry_backoff=True)
-def ocr_page_full(self, page_id: int) -> int:
+def ocr_page_full(self, page_id: int, run: str = "", last: bool = False) -> int:
     """Dual-model OCR and finalisation for one page (gpu queue; models stay resident)."""
-    return _run_stage(self, page_id, STAGE_FULL, services.run_full_ocr, HEADLINE_FULL)
+    return _run_stage(self, page_id, STAGE_FULL, services.run_full_ocr, HEADLINE_FULL, run, last)
 
 
 @shared_task(bind=True, max_retries=1, autoretry_for=(OSError,), retry_backoff=True)
-def read_numbers(self, page_id: int) -> int:
+def read_numbers(self, page_id: int, run: str = "") -> int:
     """The numbers pass of one finalised page (D50). A failure is logged and the page keeps Qari's
-    numbers: the pass only ever improves a page, it never blocks it."""
+    numbers: the pass only ever improves a page, it never blocks it.
+
+    `run` is the token of the page run that finalised the page (`numbers.schedule`). When another run holds
+    the page by the time this pass is reached (a re-run started meanwhile), the pass is skipped: that run
+    finalises the page again and queues its own pass, so a page is never read twice for one text."""
     from . import numbers
 
+    holder = runs.active_token(page_id)
+    if holder and holder != run:
+        log.info("read_numbers: page %s skipped, a newer run (%s) holds it", page_id, holder)
+        return page_id
     page = Page.objects.select_related("book", "preprocess").filter(pk=page_id).first()
     if page is None or page.is_excluded:
         return page_id

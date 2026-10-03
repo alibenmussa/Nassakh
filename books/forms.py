@@ -7,6 +7,7 @@ from django import forms
 import pymupdf
 
 from books.models import Book
+from books.services import text_layer_enabled
 
 MAX_PDF_MB = 500
 INPUT = {"class": "input"}
@@ -99,7 +100,12 @@ class BookForm(forms.ModelForm):
         self.fields["source_pdf"].required = True
         self.fields["pages_per_sheet"].required = True
         self.fields["split_ratio"].required = False
-        self.fields["use_text_layer"].required = False
+        if text_layer_enabled():
+            self.fields["use_text_layer"].required = False
+        else:
+            # Off (item 20): the option is not offered and a posted value is ignored; the book keeps the
+            # model default (False) and its text comes from OCR.
+            del self.fields["use_text_layer"]
         self._pdf_page_count: int | None = None
 
     # ------------------------------------------------------------------ field validation

@@ -34,6 +34,7 @@ from django.utils import timezone
 import numpy as np
 import pymupdf
 
+from books import runs
 from books.models import ALL_PAGES_FAILED_MESSAGES, Book, Page
 from core.arabic import arabic_ratio, normalize_ws, to_western_digits
 from core.images import fit_width
@@ -194,6 +195,16 @@ def _spread(items: Sequence[int], limit: int) -> list[int]:
         return list(items)
     step = len(items) / limit
     return [items[int(i * step)] for i in range(limit)]
+
+
+def text_layer_enabled() -> bool:
+    """Whether a PDF's text layer may stand for OCR at all (`NASSAKH["TEXT_LAYER"]`, off: item 20)."""
+    return bool(settings.NASSAKH.get("TEXT_LAYER", False))
+
+
+def book_uses_text_layer(book: Book) -> bool:
+    """The book's text comes from its PDF's text layer (= `ocr.services.uses_text_layer` for its pages)."""
+    return text_layer_enabled() and bool(book.has_text_layer) and bool(book.use_text_layer)
 
 
 def inspect_pdf(book: Book) -> dict:
@@ -534,24 +545,30 @@ def start_ocr(book: Book) -> None:
         raise ValueError(BROKER_ERROR) from exc
 
 
-def _stage_signatures(page_id: int, stage: str, layout_stage: bool = False) -> list:
+def _stage_signatures(page_id: int, stage: str, layout_stage: bool = False, run: str = "") -> list:
     """Celery signatures for the pipeline from `stage` onwards; each task returns the page id.
 
-    With `layout_stage` (the book awaits «بدء المعالجة») the only chain is `preprocess_page`.
+    With `layout_stage` (the book awaits «بدء المعالجة») the only chain is `preprocess_page`. Every task
+    carries the run's token (`run=`, `books.runs`) and the last one `last=True`: it gives the claim back.
     """
     from ocr.tasks import ocr_page_fast, ocr_page_full
     from processing.tasks import layout_page, preprocess_page  # other apps: lazy imports
 
     if layout_stage:
-        return [preprocess_page.s(page_id)]
-    steps = {
-        "preprocess": [preprocess_page, layout_page, ocr_page_fast, ocr_page_full],
-        "layout": [layout_page, ocr_page_fast, ocr_page_full],
-        "ocr": [ocr_page_fast, ocr_page_full],
-        "ocr_fast": [ocr_page_fast],
-        "ocr_full": [ocr_page_full],
-    }[stage]
-    return [steps[0].s(page_id)] + [task.s() for task in steps[1:]]
+        steps = [preprocess_page]
+    else:
+        steps = {
+            "preprocess": [preprocess_page, layout_page, ocr_page_fast, ocr_page_full],
+            "layout": [layout_page, ocr_page_fast, ocr_page_full],
+            "ocr": [ocr_page_fast, ocr_page_full],
+            "ocr_fast": [ocr_page_fast],
+            "ocr_full": [ocr_page_full],
+        }[stage]
+    signatures = []
+    for i, task in enumerate(steps):
+        options = {"run": run, "last": True} if run and i == len(steps) - 1 else {"run": run} if run else {}
+        signatures.append(task.s(page_id, **options) if i == 0 else task.s(**options))
+    return signatures
 
 
 # Status a page is put back to before a stage re-runs (the stage's input) and its text state.
@@ -603,16 +620,21 @@ def _reset_to_stage_input(page: Page, stage: str) -> None:
     page.save(update_fields=["status", "text_state", "attention_flags"])
 
 
-def run_stage(page: Page, stage: str, refresh_book: bool = True):
+def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = ""):
     """Enqueue the pipeline for one page from `stage` (preprocess | layout | ocr | ocr_fast | ocr_full).
 
-    A page in `error` is cleared first (it falls back to its last completed status), then put back
-    to the stage's input state (`_reset_to_stage_input`) and the book status is re-derived so the
-    dashboard polls until the page is through. Excluded pages are refused, and so are approved
-    pages (`APPROVED_PAGE_ERROR`: reopen them first). While the book awaits «بدء المعالجة» only
-    `preprocess` runs, and alone (`NOT_STARTED_ERROR` for the other stages; the flag is read fresh).
+    One run per page at a time (`books.runs`, item 29): the page is claimed first, and while another run
+    holds it nothing is queued (`runs.PAGE_RUN_ACTIVE_ERROR`); `run` is the token of a claim the caller
+    already holds (a book re-run claims all its pages at once). A page in `error` is cleared first (it
+    falls back to its last completed status), then put back to the stage's input state
+    (`_reset_to_stage_input`) and the book status is re-derived so the dashboard polls until the page is
+    through. Excluded pages are refused, and so are approved pages (`APPROVED_PAGE_ERROR`: reopen them
+    first). While the book awaits «بدء المعالجة» only `preprocess` runs, and alone (`NOT_STARTED_ERROR`
+    for the other stages; the flag is read fresh). A refusal or a failure to queue gives the claim back.
     Stores the chain's task id on the page and returns the AsyncResult.
     """
+    from books import tasks  # the errback task (lazy: books.tasks imports this module)
+
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
     layout_stage = awaits_start(page.book_id)
@@ -620,15 +642,23 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True):
         raise ValueError(NOT_STARTED_ERROR)
     if page.is_excluded:
         raise ValueError("الصفحة مستثناة؛ أعد ضمّها إلى الكتاب أولًا.")
-    if page.status == Page.Status.ERROR:
-        page.clear_error()
-    if page.status in APPROVED_PAGE_STATUSES:
-        raise ValueError(APPROVED_PAGE_ERROR)
-    _reset_to_stage_input(page, stage)
-    if refresh_book:
-        _refresh_started_book(page.book)
-
-    result = chain(*_stage_signatures(page.pk, stage, layout_stage=layout_stage)).apply_async()
+    token = run or runs.claim_page(page.pk)
+    if not token:
+        raise ValueError(runs.PAGE_RUN_ACTIVE_ERROR)
+    try:
+        if page.status == Page.Status.ERROR:
+            page.clear_error()
+        if page.status in APPROVED_PAGE_STATUSES:
+            raise ValueError(APPROVED_PAGE_ERROR)
+        _reset_to_stage_input(page, stage)
+        if refresh_book:
+            _refresh_started_book(page.book)
+        signatures = _stage_signatures(page.pk, stage, layout_stage=layout_stage, run=token)
+        errback = tasks.page_run_failed.s(page_id=page.pk, run=token)  # a task that died: release, mark
+        result = chain(*signatures).apply_async(link_error=errback)
+    except BaseException:
+        runs.release(page.pk, token)
+        raise
     page.task_id = str(getattr(result, "id", "") or "")[:64]
     page.save(update_fields=["task_id"])
     return result
@@ -646,21 +676,43 @@ def _refresh_started_book(book: Book) -> None:
         book.refresh_status()
 
 
-def validate_rerun(book: Book, stage: str) -> None:
-    """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage`.
+def validate_rerun(book: Book, stage: str, run: str = "") -> None:
+    """Raise ValueError (Arabic) when the whole book cannot be re-run from `stage` (`run`: the token of the
+    re-run's own claims, which do not count as another run).
 
     Every stage can be re-run, including on a book that an earlier version parked in
     `needs_guides` (regions are now derived per page, so nothing waits for the guides). While the
     book awaits «بدء المعالجة» only `preprocess` can («إعادة تجهيز الصفحات»). Refused when every
-    non-excluded page is approved (`rerun_book` would have nothing to run).
+    non-excluded page is approved (`rerun_book` would have nothing to run), while the pages of a book in
+    «التخطيط» are still being extracted and prepared (`STILL_PREPARING_ERROR`), and while a run holds any
+    page of the book (`runs.book_run_active_message`: one run per page at a time, item 29).
     """
     if stage not in STAGES:
         raise ValueError(f"مرحلة غير معروفة: {stage}")
-    if stage not in LAYOUT_STAGES and awaits_start(book.pk):
+    current = Book.objects.filter(pk=book.pk).values("awaits_ocr_start", "status").first() or {}
+    if stage not in LAYOUT_STAGES and current.get("awaits_ocr_start"):
         raise ValueError(NOT_STARTED_ERROR)
+    if current.get("awaits_ocr_start") and current.get("status") == Book.Status.PROCESSING:
+        raise ValueError(STILL_PREPARING_ERROR)  # the ingest chord is still preparing the pages
     pages = book.pages.filter(is_excluded=False)
     if pages.exists() and not pages.exclude(status__in=APPROVED_PAGE_STATUSES).exists():
         raise ValueError(ALL_APPROVED_ERROR)
+    busy = runs.active_count(book.pages.exclude(run_token=run) if run else book.pages.all())
+    if busy:
+        raise ValueError(runs.book_run_active_message(busy))
+
+
+RERUN_SUPERUSER_ERROR = "إعادة المعالجة وإعادة التعرّف متاحتان للمدير العام فقط."
+
+
+def may_rerun(user, page: Page | None = None) -> bool:
+    """Whether `user` may re-run processing (owner review 2026-10-03, item 29): re-processing and full
+    re-recognition are the super admin's (`is_superuser`). Without `page` it is a book re-run (the «⋯»
+    menu); an editor may still re-run a page that is in error (the retry buttons, «تجهيز الصفحة» of a
+    failed page), which finishes work that never completed instead of redoing it."""
+    if getattr(user, "is_superuser", False):
+        return True
+    return page is not None and page.status == Page.Status.ERROR
 
 
 def approved_page_count(book: Book) -> int:
@@ -668,20 +720,65 @@ def approved_page_count(book: Book) -> int:
     return book.pages.filter(is_excluded=False, status__in=APPROVED_PAGE_STATUSES).count()
 
 
-def rerun_book(book: Book, stage: str) -> int:
+def _claim_book_rerun(book: Book, stage: str) -> tuple[str, int]:
+    """Validate a book re-run and claim every page it runs with one token (`books.runs`), atomically.
+
+    The book row is locked first, so two submits of the same re-run are serialised: the second one finds
+    the pages claimed and is refused (`validate_rerun`). Returns `(token, pages claimed)`.
+    """
+    with transaction.atomic():
+        Book.objects.select_for_update().filter(pk=book.pk).first()
+        validate_rerun(book, stage)
+        pages = book.pages.filter(is_excluded=False).exclude(status__in=APPROVED_PAGE_STATUSES)
+        return runs.claim_pages(pages)
+
+
+def queue_book_rerun(book: Book, stage: str) -> int:
+    """The «⋯» menu's book re-run: validate it, claim its pages and queue `rerun_book_from`.
+
+    The claim is taken here, in the request, so a second click (or tab) is refused at once with a clear
+    message instead of queueing a second run of every page (item 29). Raises ValueError (Arabic): see
+    `validate_rerun`, and `BROKER_ERROR` when the task cannot be queued (the claims are given back).
+    Returns the number of pages claimed.
+    """
+    from books.tasks import rerun_book_from
+
+    token, count = _claim_book_rerun(book, stage)
+    try:
+        rerun_book_from.delay(book.pk, stage, run=token)
+    except Exception as exc:  # noqa: BLE001 - the broker refused (Redis down): nothing will run
+        log.warning("queue_book_rerun: book %s not queued: %s", book.pk, exc)
+        runs.release_book(book.pk, token)
+        raise ValueError(BROKER_ERROR) from exc
+    return count
+
+
+def rerun_book(book: Book, stage: str, run: str | None = None) -> int:
     """Re-run every non-excluded, unapproved page of the book from `stage`; returns how many were enqueued.
 
-    Approved pages are skipped (frozen until reopened, see `APPROVED_PAGE_STATUSES`). Every other
-    page is first put back to the stage's input state, then the chains are enqueued and the book
-    status is re-derived (`processing` or `ocr` while work is pending), so the book cannot settle
-    before its last page is through. Raises ValueError (see `validate_rerun`).
+    `run` is the token of the claims `queue_book_rerun` took; without it (a shell, a script) the pages are
+    claimed here. Only the pages that run holds are re-run. Approved pages are skipped (frozen until
+    reopened, see `APPROVED_PAGE_STATUSES`). Every other page is first put back to the stage's input
+    state, then the chains are enqueued and the book status is re-derived (`processing` or `ocr` while
+    work is pending), so the book cannot settle before its last page is through. Raises ValueError (see
+    `validate_rerun`); the claims are then given back.
     """
-    validate_rerun(book, stage)
-    pages = list(book.pages.filter(is_excluded=False).order_by("number"))
+    if run is None:
+        run, _count = _claim_book_rerun(book, stage)
+    else:
+        try:
+            validate_rerun(book, stage, run=run)
+        except ValueError:
+            runs.release_book(book.pk, run)
+            raise
+    pages = list(book.pages.filter(run_token=run).order_by("number"))
     for page in pages:
         if page.status == Page.Status.ERROR:
             page.clear_error()  # an approved page that failed a stale task falls back to `reviewed`
-    pages = [page for page in pages if page.status not in APPROVED_PAGE_STATUSES]
+    for page in pages:
+        if page.status in APPROVED_PAGE_STATUSES or page.is_excluded:
+            runs.release(page.pk, run)
+    pages = [page for page in pages if page.status not in APPROVED_PAGE_STATUSES and not page.is_excluded]
     if not pages:
         return 0
     book.status = Book.Status.PROCESSING if stage == "preprocess" else Book.Status.OCR
@@ -689,10 +786,19 @@ def rerun_book(book: Book, stage: str) -> int:
     book.save(update_fields=["status", "error_message", "updated_at"])
     for page in pages:
         _reset_to_stage_input(page, stage)
-    for page in pages:
-        run_stage(page, stage, refresh_book=False)
+    queued = 0
+    for i, page in enumerate(pages):
+        try:
+            run_stage(page, stage, refresh_book=False, run=run)
+            queued += 1
+        except ValueError as exc:  # changed meanwhile (approved, excluded): its claim was given back
+            log.info("rerun_book: book %s page %s not re-run: %s", book.pk, page.number, exc)
+        except BaseException:  # nothing more can be queued: the pages not reached give their claims back
+            for rest in pages[i + 1 :]:
+                runs.release(rest.pk, run)
+            raise
     book.refresh_status()
-    return len(pages)
+    return queued
 
 
 def toggle_exclude(page: Page) -> Page:
@@ -721,16 +827,15 @@ def toggle_exclude(page: Page) -> Page:
     ):
         return page
     next_stage = None if page.is_excluded else _NEXT_STAGE.get(page.status)
-    if next_stage is not None and book.awaits_ocr_start:
-        if next_stage == "preprocess":
-            from processing.tasks import preprocess_page  # other app: lazy import
-
-            preprocess_page.delay(page.pk)
-        next_stage = None
+    if next_stage is not None and book.awaits_ocr_start and next_stage != "preprocess":
+        next_stage = None  # a prepared page joins the waiting pages; an unprepared one is only prepared
     if next_stage is not None:
-        run_stage(page, next_stage)
-    else:
-        book.refresh_status()
+        try:
+            run_stage(page, next_stage)  # in «التخطيط» a preprocess-only run (`run_stage`'s layout stage)
+            return page
+        except ValueError as exc:  # its earlier run still holds it (excluded and brought back meanwhile)
+            log.info("toggle_exclude: page %s not queued: %s", page.pk, exc)
+    book.refresh_status()
     return page
 
 
@@ -1374,7 +1479,7 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
                 "guides": processing.book_guides_view(guides),
                 "guidesStats": stats,
                 "keptRange": kept,
-                "textLayer": bool(book.has_text_layer) and bool(book.use_text_layer),
+                "textLayer": book_uses_text_layer(book),
                 "guidesUrls": guides_urls(book),
             }
         )

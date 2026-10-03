@@ -12,7 +12,7 @@ Phase 2 integration (2026-09-24); run them from the repository root.
 | **PostgreSQL** | **17** (≥ 15 required) | **Django 6.1 refuses PostgreSQL 14** (`NotSupportedError: PostgreSQL 15 or later is required (found 14.18)`). `postgresql@17` runs on **port 5433** next to the existing `postgresql@14` on 5432, which stays untouched for other projects. |
 | Redis | 7 | `brew services start redis` |
 | Node | 22 | build time only: Tailwind CSS, vendoring Alpine.js and the IBM Plex Sans Arabic fonts |
-| Tesseract | 5.5 with `ara` + `eng` | `brew install tesseract tesseract-lang` |
+| Tesseract | 5.5 with `ara` + `eng` | `brew install tesseract tesseract-lang`; the models are `tessdata_fast` (`tesseract-lang` 4.1.0, `ara` of 2017). Checked 2026-10-03: 5.5.0 installed, 5.5.3 is a bug-fix release (`brew upgrade tesseract`, no recognition or layout change); `tessdata_best` `ara`+`eng` read 49 pages 1.4 points better (CER 16.8 → 15.4 %) at 2.3× the time, not adopted |
 | OCR models | Qari v0.3, Qari v0.2 (merged) | under `OCR_MODELS_DIR` (default `playground/poc/models`): `qari-v0.3/`, `qari-v0.2-merged/`, MLX conversions under `mlx/qari-v0.3`, `mlx/qari-v0.2`; prepared by `playground/poc/prepare_models.py` |
 | PyTorch | 2.14 with MPS | installed by `make install`; `mlx-vlm` is the optional `mlx` extra |
 
@@ -67,6 +67,8 @@ change preprocessing parameters;
 | `OCR_MODELS_DIR` | `playground/poc/models` | model directories, relative to the repo or absolute |
 | `OCR_PRIMARY` / `OCR_SECONDARY` | `qari_v03` / `qari_v02` | engine names from `ocr.engines.registry` |
 | `TESSERACT_LANGS` | `ara+eng` | D17 |
+| `TEXT_LAYER` | `false` | the PDF's own text layer as a born-digital book's text. Off (owner review 2026-10-03): the option «استخدام الطبقة النصية» is not offered at book creation and no book uses it, whatever its `use_text_layer`; every page is read by OCR. `true` brings the option and the code path back |
+| `RUN_CLAIM_HOURS` | `12` | one pipeline run per page at a time (§5): hours after which a run's claim no longer blocks a new run |
 | `NUMBERS_PASS` | `true` | the numbers pass after Qari (D50): Kraken reads the Arabic-Indic numbers of each finalised page |
 | `KRAKEN_PYTHON` / `KRAKEN_MODEL` | `.venv-kraken/bin/python` / `models/kraken/all_arabic_scripts.mlmodel` | Kraken's own environment and model (`make kraken`) |
 | `KRAKEN_BOXES` | `true` | the models' words take their boxes from Kraken's reading of each region's printed lines (D92); `false`: Tesseract's boxes |
@@ -152,6 +154,21 @@ If a task of the chain fails, the later tasks skip the page and keep that error,
 the stage that really failed. A book whose remaining pages all failed settles (`ready_for_review` when some pages
 are done, `error` when none is) instead of staying active. A page re-included with «استثناء الصفحة» continues
 from its last completed stage.
+
+**One run per page, re-runs for the super admin (owner review 2026-10-03).** Every chain queued for a page first
+claims it (`books.runs`: `Page.run_token` / `run_claimed_at`, one conditional UPDATE). While a run holds a page,
+nothing else is queued for it: a second click on a re-run, a second tab, a second book re-run, a guides change in
+the «التخطيط» mode of a started book (page or book) or a re-included page are refused with «تجري معالجة …؛ انتظر
+حتى تنتهي ثم أعد المحاولة.». A book re-run claims all its pages inside the request (under the book's row lock)
+before `rerun_book_from` is queued. The token travels with each task (`run=`): a task of a run that no longer holds
+the page skips it, the chain's last task (`last=True`) gives the claim back, and a chain that dies outside its
+tasks (the hard time limit, a lost worker) is released by its errback `books.tasks.page_run_failed`, which also
+marks a waiting page failed so its retry button appears. The numbers pass (`ocr.tasks.read_numbers`) of an earlier
+run is skipped once a newer run holds the page (the newer run queues its own). A claim older than
+`RUN_CLAIM_HOURS` (12) no longer blocks; `manage.py release_page_runs --book ID [--page N] | --all` frees claims
+at once (only when no worker is still on those pages). Book re-runs («⋯» → «إعادة التشغيل من مرحلة», «إعادة تجهيز
+الصفحات…») are offered to and accepted from superusers only (403 otherwise); editors keep the retry of a page in
+error.
 
 | Where | What it does |
 |---|---|
@@ -283,7 +300,8 @@ best-effort metadata. A template-matching digit reader is the planned improvemen
 - The «الأصل» tab shows the grayscale render of the page (the pipeline consumes grayscale); there is no colour original.
 - The crop box in the preprocessing panel is numeric (x0, y0, x1, y1 in the rotated frame), not drag handles.
 - A manual preprocessing re-run does not re-run OCR by itself (see §5).
-- Born-digital books with `use_text_layer` are finalised from the repaired text layer during fast OCR; the Qari
+- (Only with `TEXT_LAYER=true`; off by default since 2026-10-03, every page is read by OCR.)
+  Born-digital books with `use_text_layer` are finalised from the repaired text layer during fast OCR; the Qari
   models are not run on them.
 
 ## 10. Phase 3 — processing theatre and review screen

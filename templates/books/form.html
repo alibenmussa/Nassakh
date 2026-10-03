@@ -91,6 +91,8 @@
       {% for error in form.split_ratio.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
     </div>
 
+    {# the PDF's own text layer: offered only while NASSAKH["TEXT_LAYER"] is on (off: OCR only, item 20) #}
+    {% if "use_text_layer" in form.fields %}
     <div class="field">
       <label class="check">
         <input type="checkbox" name="use_text_layer" id="id_use_text_layer"{% if form.use_text_layer.value %} checked{% endif %}>
@@ -98,6 +100,7 @@
       </label>
       <p class="help">{{ form.use_text_layer.help_text }}</p>
     </div>
+    {% endif %}
   </section>
 
   <div class="form-actions">

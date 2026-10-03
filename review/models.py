@@ -35,7 +35,10 @@ class LineRevision(models.Model):
         GAP = "gap", "نص مقترح"
         FIX = "fix", "تصحيح في الكتاب"
 
-    page = models.ForeignKey(Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="revisions")
+    # Indexed by `revision_page_latest` (page first), which serves every page lookup too.
+    page = models.ForeignKey(
+        Page, verbose_name="الصفحة", on_delete=models.CASCADE, related_name="revisions", db_index=False
+    )
     line = models.ForeignKey(
         Line,
         verbose_name="السطر",
@@ -65,6 +68,8 @@ class LineRevision(models.Model):
         verbose_name = "تعديل مراجعة"
         verbose_name_plural = "سجل المراجعة"
         ordering = ["-created_at", "-id"]
+        # a page's newest revision (undo, `review.services.undo_last`): read backwards from the index, no sort
+        indexes = [models.Index(fields=["page", "created_at", "id"], name="revision_page_latest")]
 
     def __str__(self) -> str:
         return f"{self.action} on page {self.page_id}"
