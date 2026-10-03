@@ -1,6 +1,6 @@
-"""The connection cover (static/src/js/offline.js, templates/base.html), app-wide: offline, or the server silent,
-the page is covered, inert and its keys held back until the connection is back; the book page saves what
-waited on `nassakh-online`.
+"""The connection cover (static/src/js/offline.js, templates/base.html), app-wide: offline, or the server
+silent, the page is covered, inert and its keys held back until the connection is back; the book page saves
+what waited on `nassakh-online`.
 
 - the templates: the cover and its script on every screen built on base.html, the book page listening
 - offline.js under Node with a tiny DOM: a blip shorter than the grace never covers; offline covers (the page
@@ -41,7 +41,8 @@ def test_every_screen_carries_the_connection_cover():
     assert "data-net-cover" in body and 'x-data="offlineCover"' in body
     assert 'data-probe="/static/vendor/alpine.min.js"' in body
     assert "src/js/offline.js" in body and 'href="#i-wifi-off"' in body and 'id="i-wifi-off"' in body
-    assert body.index("src/js/ui.js") < body.index("src/js/offline.js") < body.index("src/js/book/page.js")
+    # after the screens' scripts (their order is fixed: core/test_keymap.py), before Alpine starts (deferred)
+    assert body.index("src/js/book/page.js") < body.index("src/js/offline.js")
     assert "لا اتصال بالإنترنت" in body and "إعادة المحاولة الآن" in body
 
 
@@ -119,7 +120,7 @@ const out = {};
   out.serverBack = { lost: net().lost, events: events.slice(-1) };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
-"""
+"""  # noqa: E501
 
 
 @pytest.mark.skipif(NODE is None, reason="node is not installed")

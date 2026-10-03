@@ -458,6 +458,25 @@ lines), «غير المؤكَّدة» (remaining OCR-uncertain words with their 
 sheet (?). After the first save the manuscript is the source of truth (D41); a full «إعادة التجميع» from the manuscript view
 replaces the edited text but keeps it as a snapshot that is never pruned.
 
+**Saving, the pages, the connection (D97, the owner's review of 2026-10-03).** Upgrading: restart `make worker` (the
+`layout` queue runs the new re-layout) and `npm run build:css` (the save state, the connection cover, the cover's draft).
+- The edit toolbar says where the text is, as Google Docs: «يتم الحفظ…» from the first key, «تم الحفظ · تُحدَّث الصفحات…»
+  while the saved text is laid out, «تم الحفظ» (its time on hover). A failed save stays on screen: a network failure, a
+  timeout (30 s) or a server error is tried again by itself (2 s … 30 s), a click on the state tries at once, and leaving
+  the page asks first. Making a paragraph a chapter title splits its chapter and the page reloads it in the same save
+  (it used to wait for itself: every later save, chapter switch and «حفظ نسخة الآن» then hung).
+- A long chapter is laid out again only around the edit (book 41's 120-page chapter: 0.2–0.5 s an edit instead of
+  3–4 s); a heading added, removed or renamed lays out its chapter and the front matter alone (0.3–2.3 s instead of the
+  whole book). The live layout records the text its pages show (`blocks`); a layout written before this has none, so
+  the first edit of a chapter after the upgrade lays the chapter out whole, as before.
+- Offline (or the server silent), every screen is covered and its work waits; back online the cover goes and the book
+  page saves what waited.
+- «نسخة محفوظة…»: one «قبل إعادة التجميع» per burst of re-assemblies (the manuscript screen's role marks re-assemble at
+  each click: ten copies in 22 s before), «النص قبل أول تحرير» once at a book's first edit, and «حفظ نسخة الآن» twice
+  for the same version and name gives the first copy back.
+- The cover sheet paints at once from its cached render; a change shows at once (the sheet draws the cover from its
+  values) and the render comes with the stylesheet save's answer.
+
 ### The numbers pass (D50)
 Every OCR model misreads Arabic-Indic digits; Kraken with the OpenITI printed Arabic-script model reads them far better
 (92 % of 116 real numbers against Qari's 43 %, `playground/digits/REPORT.md`). After Qari finalises a page, `read_numbers`

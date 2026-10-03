@@ -746,3 +746,25 @@ dark head; the line just read keeps half the band and fades back to gray (§5.2'
 band). The review's pending page writes Tesseract's lines (`provisional_lines` in the payload,
 `review.services.pending_lines`; noise before Tesseract has read the page) under the same cursor, inked word by word,
 and the scan's band follows the line (`NassakhDecode.attach(el, {cursor, onLine})`).
+
+## D97 — Editor core after the owner's review: one save in flight, the save state, re-layout around an edit, the front matter alone, the connection cover, checkpoints (2026-10-03, amends D47, D80)
+Owner review items 5, 6, 7, 8 and 21. (6) Cause of "after a chapter title nothing else can be edited, not even a
+version saved": a new level-1 heading splits the chapter, the save's answer asks for a reload, and the reload ran
+inside the save's own promise and loaded the new chapter through `loadChapter`, which awaits `saveNow`, which
+returned that same promise — it never settled, so every later save, chapter switch and snapshot waited on it, and
+the re-layout the server had already finished was never followed. Saves are one flight now (PUT after PUT while the
+nodes differ from the saved ones); a split reloads through `fetchChapter` (no save), carries the text typed
+meanwhile onto the reloaded chapter (`rebase`) and follows the save's own re-layout. Re-layout cost (also item 6): a
+long chapter is laid out from a page before the edit a few pages at a time until a page opens with the same line as
+before (`relayout._window`, `stop_block`), using the record of the text each layout shows (`blocks`, block digests
+per chapter); a heading's edit lays out the chapter and the front matter alone (`_with_front`, scope `front`, the
+contents' numbers written in), moving every later page when the front grows (an odd move with recto openings: the
+whole book). Every path is checked against the book laid out from scratch (copies of books 41 and 29). (7) The
+save state lives in the edit toolbar («يتم الحفظ…» → «تم الحفظ · تُحدَّث الصفحات…» → «تم الحفظ»); a failed save is
+said and retried (network, timeout, 5xx: by itself), every API call gives up after 60 s (a save after 30 s). (8)
+`static/src/js/offline.js` in base.html: offline or the server silent twice, the page is covered and inert, keys
+held back; `nassakh-online` resumes. (21) The duplicates were re-assembly snapshots, one per run of a burst: one
+per burst now (`CHECKPOINT_WINDOW_S`, 10 min), the main version kept once at a book's first edit (`manual`), and a
+twin «حفظ نسخة الآن» answered with the first copy. (5) The cover's sheet paints from the cached render embedded in
+the page (`cover_payload(render=False)`), each stylesheet save answers with the render (`cover_render`), and between
+a change and its render the sheet draws the cover from its values; the hint is kept for no picture or a failure.

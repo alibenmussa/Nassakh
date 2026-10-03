@@ -260,8 +260,14 @@
       get coverFresh() { return Boolean(this.coverImageUrl) && !this.coverStale; },
       // something to draw: texts, or an image cover with its image
       get coverDrawable() { return this.hasCover && !(this.coverMode === 'image' && !this.coverImageInfo); },
-      // a render on its way (a change saved, then drawn; or the first one): a thin bar along the sheet's foot
-      get coverBusy() { return this.coverDrawable && this.coverState !== 'error' && (this.coverState === 'loading' || this.coverStale || !this.coverImageUrl); },
+      // a render on its way (a change waiting for its save, then drawn; or the first one): a thin bar along the
+      // sheet's foot (never for a change the save refused, nor while a colour well is dragged)
+      get coverBusy() {
+        if (!this.coverDrawable || this.coverState === 'error') return false;
+        if (this.coverState === 'loading') return true;
+        const waiting = Boolean(this.sheetSaving) || Object.keys(this.dirty || {}).some((path) => path.startsWith(PREFIX));
+        return waiting && (this.coverStale || !this.coverImageUrl);
+      },
       // why the sheet shows no picture: no image chosen, or the render failed (a click on the sheet retries)
       get coverHint() {
         if (this.coverMode === 'image' && !this.coverImageInfo) return 'لم تُرفع صورة الغلاف بعد';
