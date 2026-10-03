@@ -50,10 +50,10 @@ CALL_MAX = 99
 # D87: a call's two brackets, sized by the body's line pitch (the core band's height does not travel between
 # prints: book 29's calls are 1.3× it, book 31's 2.1×; in pitches both are 0.24–0.30). A bracket is tall and
 # thin, raised above the line's core bottom; the pair faces each other at one height, a digit or two apart.
-BRACKET_MIN_H, BRACKET_MAX_H = 0.14, 0.40  # a bracket's height, in line pitches
+BRACKET_MIN_H, BRACKET_MAX_H = 0.14, 0.46  # a bracket's height, in line pitches
 BRACKET_MAX_WH = 0.6  # its width / height
 PAIR_TOP = 0.35  # the two tops within this share of the height
-PAIR_HEIGHTS = 0.7  # the shorter at least this share of the taller
+PAIR_HEIGHTS = 0.6  # the shorter at least this share of the taller
 PAIR_GAP = (0.1, 3.2)  # the gap between the two, in bracket heights («()» … «(١٢)»)
 JOIN_HEIGHTS = 0.6  # a part joins a group when at least this share of its tallest (a damma beside it: 0.58)
 OLD_CLUSTERS = True  # D83's clusters as a second source: nothing more on books 29, 32–35 once `bracket_calls`
