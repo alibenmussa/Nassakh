@@ -262,7 +262,10 @@ def test_review_js_and_css_are_built():
     js = (JS / "review.js").read_text(encoding="utf-8")
     assert "Alpine.data('reviewScreen'" in js and "Alpine.data('reviewBar'" in js
     assert "history.replaceState" in js and "X-CSRFToken" in js and "prefers-reduced-motion" in js
-    assert "NassakhDecode.attach(el, { mode: 'noise'" in js
+    # a pending page writes Tesseract's lines out (noise before it has read the page) under a reading cursor
+    assert "NassakhDecode.attach(el, this.decodeOptions())" in js
+    assert "{ mode: 'noise', lines: this.noiseRows, cursor: true, onLine }" in js
+    assert "{ mode: 'provisional', lines: this.provisional, cursor: true, onLine }" in js
     css = (ROOT / "static" / "dist" / "app.css").read_text(encoding="utf-8")
     assert ".rv-tok.is-open{border-bottom-color:var(--color-warning)}" in css
     assert re.search(r"\.rv-tok\.is-flash\{animation:\.4s [^}]*rv-tok-land", css)  # resolve morph ≤ 400 ms
@@ -721,10 +724,11 @@ def test_review_component_navigation_optimistic_saves_undo_approve_and_keys(tmp_
         ["1", "primary", "Kraken", "(٥)"],
         ["2", "secondary", "Qari v0.3", "(ه)"],  # Qari's own letter, under the primary model's label
     ]
-    # after a secondary choice the primary reading survives in `orig`: all three rows, secondary current
+    # after a secondary choice the primary reading survives in `orig`: all three rows, the secondary (now in
+    # the text) first, so «1» confirms it (owner review 2026-10-03)
     assert out["resolvedOptions"] == [
-        ["primary", True, False],
         ["secondary", True, True],
+        ["primary", True, False],
         ["tess", True, False],
     ]
     # choosing: the word changes at once, the counter moves, focus jumps to the next unresolved word
@@ -1147,6 +1151,19 @@ const R = window.NassakhReview;
   out.enterVote = { post: posts().pop(), t: at(c, 101).tokens[1].t, res: at(c, 101).tokens[1].res, orig: at(c, 101).tokens[1].orig, next: refOf(c.focus), counts: clone(c.counts) };
   press(c, { key: 'Enter', code: 'Enter' }); await flush();
   out.enterPlain = { post: posts().pop(), res: at(c, 101).tokens[2].res, t: at(c, 101).tokens[2].t };
+  // «1» is the reading in the text (owner review 2026-10-03): on the vote's word it confirms v0.2, as Enter does
+  const one = make();
+  one.focusWord({ lineId: 101, index: 1 }, { open: true });
+  press(one, { key: '1', code: 'Digit1' }); await flush();
+  out.oneVote = { post: posts().pop(), res: at(one, 101).tokens[1].res, t: at(one, 101).tokens[1].t };
+  // a correction typed earlier is no model's reading: its own first row; «1» on it moves on and saves nothing
+  const ty = make(); const typedTok = at(ty, 101).tokens[1];
+  Object.assign(typedTok, { t: 'يحيا', res: 'typed' });
+  ty.focusWord({ lineId: 101, index: 1 }, { open: true });
+  out.typedRows = ty.options().map((o) => [o.key, o.choice, o.value, o.current]);
+  const before = posts().length;
+  press(ty, { key: '1', code: 'Digit1' }); await flush();
+  out.typedOne = { posts: posts().length - before, t: typedTok.t, focus: refOf(ty.focus) };
 
   // ---- D72: Tab visits the words, one stop per group and the open gaps, in reading order; ⇧Tab goes back
   const tb = make();
@@ -1351,10 +1368,11 @@ def test_review_trust_under_node(tmp_path):
         == "كلمات أضافتها القراءة الثانية: قرأها Qari v0.2 وTesseract ولم يقرأها Qari v0.3."
     )
     assert out["reasonOldNumber"] == "رقم: قابِله بالصورة." and out["reasonOldWord"] == ""
-    # the keys stay 1 = v0.3, 2 = v0.2, 3 = Tesseract; the vote's reading is the one in the text («● في النص»)
+    # the reading in the text («● في النص», the vote's v0.2) is key 1, so «1» accepts it as Enter does; the
+    # others follow in the models' order (owner review 2026-10-03; the keys were 1 = v0.3, 2 = v0.2 before)
     assert out["voteOptions"] == [
-        ["1", "primary", "يجي", "Qari v0.3", False],
-        ["2", "secondary", "يحيى", "Qari v0.2", True],
+        ["1", "secondary", "يحيى", "Qari v0.2", True],
+        ["2", "primary", "يجي", "Qari v0.3", False],
         ["3", "tess", "يحبى", "Tesseract", False],
     ]
     assert out["yearOptions"] == [["1", "primary", "٢٤٢", "Kraken"], ["2", "sug", "٢٤٣", "من الحروف"]]
@@ -1378,6 +1396,20 @@ def test_review_trust_under_node(tmp_path):
         "res": "primary",
         "t": "الأمين",
     }
+    # «1» is the reading in the text: the vote's v0.2 is confirmed, never swapped for v0.3's by the first digit
+    assert out["oneVote"] == {
+        "post": ["/api/lines/101/resolve/", {"index": 1, "choice": "secondary", "t": "يحيى"}],
+        "res": "secondary",
+        "t": "يحيى",
+    }
+    # a typed correction leads as its own row; «1» on it keeps it and moves on without a request
+    assert out["typedRows"] == [
+        ["1", "typed", "يحيا", True],
+        ["2", "primary", "يجي", False],
+        ["3", "secondary", "يحيى", False],
+        ["4", "tess", "يحبى", False],
+    ]
+    assert out["typedOne"] == {"posts": 0, "t": "يحيا", "focus": [101, 2]}
 
     # D72: Tab visits words, one stop per group (its first word) and the open gaps, in reading order, wrapping
     assert out["tabOrder"] == [
@@ -1851,8 +1883,8 @@ def test_review_trust_on_the_contract_fixtures(tmp_path):
         "kept": "كلمات أضافتها القراءة الثانية: قرأها Qari v0.2 وTesseract ولم يقرأها Qari v0.3.",
         "typed": "",
     }
-    # «● في النص» marks the reading in the text: Qari v0.2's after the vote, else the primary's
-    assert out["current"]["vote"] == [["1", "primary", "يجي", False], ["2", "secondary", "يحيى", True]]
+    # «● في النص» marks the reading in the text, first: Qari v0.2's after the vote, else the primary's
+    assert out["current"]["vote"] == [["1", "secondary", "يحيى", True], ["2", "primary", "يجي", False]]
     assert out["current"]["disagree_v03"][0] == ["1", "primary", "فاضلا", True]
     assert out["current"]["year"] == [["1", "primary", "٢٤٢", True], ["2", "sug", "٢٤٣", False]]
     assert out["current"]["single"] == [["1", "primary", "يجي", True], ["2", "tess", "يحيى", False]]
@@ -2356,27 +2388,47 @@ _SCAN_BODY = r"""
   const u = make(); const zoom = JSON.stringify(u.zoom);
   press(u, 51, 1); release(u); const stopped = click(u);
   out.uncertain = { focus: clone(u.focus), open: u.pop.open, stopped, still: JSON.stringify(u.zoom) === zoom };
-  // a confident word: focused (scrolled to) in the text, no menu
+  // a confident word: its correction menu with the word in the field, as a click in the text opens it
   const s = make(); press(s, 52, 1); release(s); click(s);
-  out.sure = { focus: clone(s.focus), open: s.pop.open };
-  // a drag's release is no tap, and the click goes on to the popover's click-outside
-  const d = make(); press(d, 51, 1); d.onPointerMove({ pointerId: 1, clientX: 40, clientY: 10 }); release(d);
-  out.drag = { stopped: click(d), focus: d.focus };
+  out.sure = { focus: clone(s.focus), open: s.pop.open, typing: s.pop.typing, typed: s.pop.typed };
+  // a drag that moves the page is no tap, and its click goes on to the popover's click-outside, which lets it pass
+  const pannable = (c) => { c.pane = { w: 400, h: 300 }; c.zoom = { scale: 3, x: -100, y: -100 }; return c; };
+  const d = pannable(make()); press(d, 51, 1); d.onPointerMove({ pointerId: 1, clientX: 40, clientY: 10 }); release(d);
+  out.drag = { stopped: click(d), focus: d.focus, moved: d.zoom.x !== -100 };
+  const k = pannable(make()); k.onTokClick(k.lineById(51), 1);
+  press(k, null); k.onPointerMove({ pointerId: 1, clientX: 60, clientY: 10 }); release(k); click(k); k.onPopOutside();
+  out.dragKeeps = k.pop.open;
+  // the flag outlives that click by no more than its own task: a drag with no menu open left it set, and the
+  // next click outside a menu opened later was swallowed
+  const timers = []; const realTimeout = globalThis.setTimeout; globalThis.setTimeout = (fn) => { timers.push(fn); return 1; };
+  const g = pannable(make());
+  press(g, null); g.onPointerMove({ pointerId: 1, clientX: 60, clientY: 10 }); release(g); click(g); g.onPopOutside();
+  timers.forEach((fn) => fn()); globalThis.setTimeout = realTimeout;
+  g.onTokClick(g.lineById(51), 1); const opened = g.pop.open; g.onPopOutside();
+  out.stale = { timers: timers.length, opened, closed: !g.pop.open };
+  // a click that wobbles a few pixels is still a tap, and so is any press on a page that cannot move
+  const w = pannable(make()); press(w, 51, 1); w.onPointerMove({ pointerId: 1, clientX: 13, clientY: 12 }); release(w); click(w);
+  const f = make(); press(f, 51, 1); f.onPointerMove({ pointerId: 1, clientX: 40, clientY: 30 }); release(f); click(f);
+  out.wobble = { open: w.pop.open, focus: clone(w.focus), fitted: f.pop.open };
   // the image outside every box does nothing
   const n = make(); press(n, null); release(n);
   out.none = { stopped: click(n), focus: n.focus };
   // ⇧ on a box extends the range of lines, as in the text
   const r = make(); r.onLineClick(r.lineById(51), {}); press(r, 53, 0); release(r); click(r, { shiftKey: true });
   out.range = r.range.ids;
-  // a second tap on the open word closes its menu; a tap on a confident word closes it too
+  // a second tap on the open word closes its menu; a tap on another word moves the menu to it
   const t = make(); press(t, 51, 1); release(t); click(t); press(t, 51, 1); release(t); click(t);
   const again = { open: t.pop.open, focus: clone(t.focus) };
   press(t, 51, 1); release(t); click(t); press(t, 52, 1); release(t); click(t);
-  out.dismiss = { again, bySure: t.pop.open };
-  // a resolved word, and any word of an approved page, opens no menu from the image
-  const v = make(); v.lineById(51).tokens[1].res = 'secondary'; press(v, 51, 1); release(v); click(v);
+  out.dismiss = { again, moved: { open: t.pop.open, focus: clone(t.focus), typed: t.pop.typed } };
+  // a resolved word opens its readings (the one in the text first) as in the text; on an approved page an
+  // uncertain word shows its readings read-only and a confident one is only found in the text
+  const v = make(); v.lineById(51).tokens[1].t = 'الامير'; v.lineById(51).tokens[1].orig = 'الأمير'; v.lineById(51).tokens[1].res = 'secondary';
+  press(v, 51, 1); release(v); click(v);
   const ap = make(); ap.page.status = 'reviewed'; ap.page.is_reviewed = true; press(ap, 51, 1); release(ap); click(ap);
-  out.decided = { resolved: v.pop.open, approved: ap.pop.open, focus: clone(ap.focus) };
+  const apLow = { open: ap.pop.open, editable: ap.editable };
+  press(ap, 52, 1); release(ap); click(ap);
+  out.decided = { resolved: v.pop.open, first: v.options()[0].choice, approved: apLow, sure: { open: ap.pop.open, focus: clone(ap.focus) } };
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -2384,10 +2436,13 @@ SCAN_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + _SCAN_BODY
 
 
 def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
-    """A tap on a box of the processed image goes to the word in the text: a word still to decide opens its
-    menu there (as a click in the text does); a confident or resolved word, or any word of an approved page,
-    is focused without a menu; a second tap, or a tap on another word, closes the menu; the image stays put;
-    a drag is no tap. The boxes carry their word's address, and «الأصل» hides them."""
+    """A tap on a box of the processed image opens the word's menu in the text exactly as a click on the word
+    there does (owner review 2026-10-03): every word of an editable page, a confident one with its text in the
+    correction field; on an approved page the uncertain words read-only, a confident word only focused. A
+    second tap closes the menu, a tap on another word moves it; the image stays put. A drag that moves the page
+    is no tap, a wobble of a few pixels (or any press on a page that cannot move) is one, and the drag's flag
+    does not outlive its own click (it swallowed the next click outside a menu). The boxes carry their word's
+    address, and «الأصل» hides them."""
     harness = tmp_path / "harness.js"
     harness.write_text(SCAN_HARNESS, encoding="utf-8")
     fixture = tmp_path / "config.json"
@@ -2406,18 +2461,96 @@ def test_a_box_on_the_image_opens_its_word_in_the_text(tmp_path):
         "stopped": True,
         "still": True,
     }
-    assert out["sure"] == {"focus": {"lineId": 52, "index": 1}, "open": False}
-    assert out["drag"] == {"stopped": False, "focus": None}
+    assert out["sure"] == {"focus": {"lineId": 52, "index": 1}, "open": True, "typing": True, "typed": "الكتاب"}
+    assert out["drag"] == {"stopped": False, "focus": None, "moved": True}
+    assert out["dragKeeps"] is True  # the release of a drag is no click outside
+    assert out["stale"] == {"timers": 1, "opened": True, "closed": True}
+    assert out["wobble"] == {"open": True, "focus": {"lineId": 51, "index": 1}, "fitted": True}
     assert out["none"] == {"stopped": False, "focus": None}
     assert out["range"] == [51, 52, 53]
-    assert out["dismiss"] == {"again": {"open": False, "focus": {"lineId": 51, "index": 1}}, "bySure": False}
-    assert out["decided"] == {"resolved": False, "approved": False, "focus": {"lineId": 51, "index": 1}}
+    assert out["dismiss"] == {
+        "again": {"open": False, "focus": {"lineId": 51, "index": 1}},
+        "moved": {"open": True, "focus": {"lineId": 52, "index": 1}, "typed": "الكتاب"},
+    }
+    assert out["decided"] == {
+        "resolved": True,
+        "first": "secondary",  # the reading in the text leads the menu
+        "approved": {"open": True, "editable": False},
+        "sure": {"open": False, "focus": {"lineId": 52, "index": 1}},
+    }
 
     body = _render()
     assert '@click="onScanClick($event)"' in body and ':data-line="line.id" :data-i="i"' in body
     assert "onBoxClick(" not in body  # one path for every tap on the image: the scan's click
     src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
     assert ".rv-sheet.show-scan .rv-overlay { visibility: hidden; }" in src
+
+
+_PENDING_BODY = r"""
+(async () => {
+  const out = {};
+  const cfg = clone(config);
+  Object.assign(cfg.page, { text_state: 'provisional', status: 'layout_done' });
+  cfg.lines = [];
+  cfg.provisional_lines = [{ region_kind: 'body', bbox: [0.1, 0.1, 0.9, 0.15], words: ['قال', 'الشيخ'] }, { region_kind: 'body', bbox: null, words: ['رحمه'] }];
+  const c = make(cfg);
+  const opts = c.decodeOptions();
+  out.opts = { mode: opts.mode, cursor: opts.cursor, lines: opts.lines.length, pending: c.isPending };
+  out.idle = c.bandStyle;
+  opts.onLine(0); out.first = c.bandStyle;
+  opts.onLine(1); out.noBox = c.bandStyle;
+  opts.onLine(0); opts.onLine(-1); out.rest = c.bandStyle;
+  // nothing read yet: rows of noise, the band steps down the page's text regions one row at a time
+  const n = make(Object.assign(clone(cfg), { provisional_lines: [] }));
+  const nopts = n.decodeOptions();
+  out.noise = { mode: nopts.mode, lines: nopts.lines, cursor: nopts.cursor };
+  nopts.onLine(0); out.noise0 = n.bandStyle; nopts.onLine(13); out.noise13 = n.bandStyle;
+  // a poll brings Tesseract's lines: the text is Tesseract's from then on
+  n.takeProvisional(cfg.provisional_lines);
+  out.taken = { lines: n.provisional.length, mode: n.decodeOptions().mode };
+  // the final page's band is its current line's again
+  out.finalBand = make().bandStyle;
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
+"""  # noqa: E501
+PENDING_HARNESS = TRUST_HARNESS.split("const at = (c, id)")[0] + _PENDING_BODY
+
+
+def test_a_pending_page_writes_tesseracts_lines_under_a_band_the_scan_follows(tmp_path):
+    """While the models read the page (owner review 2026-10-03), the lines pane writes Tesseract's lines out under
+    a reading cursor (noise before Tesseract has read the page), and the scan's band stands on the line the cursor
+    is on: at Tesseract's box, or one row of the text regions at a time over noise; between two passes it fades
+    out where it was. A poll that brings Tesseract's lines switches the text to them."""
+    harness = tmp_path / "harness.js"
+    harness.write_text(PENDING_HARNESS, encoding="utf-8")
+    fixture = tmp_path / "config.json"
+    fixture.write_text(json.dumps(_config(), ensure_ascii=False), encoding="utf-8")
+    run = subprocess.run(
+        ["node", str(harness), str(JS / "review.js"), str(fixture), str(JS / "keys.js")],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert run.returncode == 0, run.stderr
+    out = json.loads(run.stdout.strip().splitlines()[-1])
+    assert out["opts"] == {"mode": "provisional", "cursor": True, "lines": 2, "pending": True}
+    assert out["idle"] == "opacity:0;"
+    assert out["first"] == "top:8.500%; height:8.000%; opacity:1;"  # the box, a little taller
+    assert out["noBox"] == "opacity:0;"  # a line Tesseract gave no box
+    assert out["rest"] == "top:8.500%; height:8.000%; opacity:0;"
+    assert out["noise"] == {"mode": "noise", "lines": 14, "cursor": True}
+    pitch = 100 * (1270 / 1634) / 14  # the fixture's body region over 14 rows
+    first = re.match(r"top:([\d.]+)%; height:([\d.]+)%; opacity:1;", out["noise0"])
+    last = re.match(r"top:([\d.]+)%; height:([\d.]+)%; opacity:1;", out["noise13"])
+    assert first and last
+    assert abs(float(first.group(1)) - 0.1 * pitch) < 0.01 and abs(float(first.group(2)) - 0.8 * pitch) < 0.01
+    assert abs(float(last.group(1)) - 13.1 * pitch) < 0.01
+    assert out["taken"] == {"lines": 2, "mode": "provisional"}
+    assert out["finalBand"] == "opacity:0;"
+    body = _render()
+    assert '<span class="badge" x-show="provisional.length" x-cloak>نص مبدئي</span>' in body
+    src = (ROOT / "static" / "src" / "components" / "review.css").read_text(encoding="utf-8")
+    assert ".rv-noise.is-noise .decode-line:is(.is-lit, .is-lit-2) { opacity: 1; }" in src
 
 
 FIX_OPTIONS_RUN = r"""

@@ -695,12 +695,26 @@ def next_step(book: Book, current: Page | None = None, facts=None) -> dict | Non
     }
 
 
+def pending_lines(page: Page, regions: list[Region], width: int, height: int) -> list[dict]:
+    """Tesseract's lines while the page's text is provisional, as the dashboard's sheet has them
+    (`books.services.provisional_lines`: `region_kind`, `words`, `bbox` as ratios of the prepared image, or
+    None): the review screen's pending state writes them out under a reading band that moves over the scan
+    line by line (owner review 2026-10-03). `[]` before Tesseract has read the page and once the text is
+    final. One query (the page's fast runs)."""
+    if page.text_state != Page.TextState.PROVISIONAL:
+        return []
+    from books.services import _fast_runs_by_target, provisional_lines  # other app: lazy import
+
+    return provisional_lines(page, regions, _fast_runs_by_target([page.pk]), width, height)
+
+
 def review_payload(page: Page, user, origin: dict | None = None, facts=None) -> dict:
     """Everything the review screen needs for one page (PHASE3_SPEC §4 shape; 7b's additions:
     `review/fixtures/trust/index.json`; 7c's: `nav.back`, `nav.origin`, `nav.detour` for the origin
     (`parse_origin`) and `next_step`, editor/fixtures/contract/; `facts`, the stage bar's
     `books.services.StageFacts` when the caller has them); `book.edited`: the book's text is edited on the
-    book page, so a page's changes reach it through «تغييرات المراجعة» (D78)."""
+    book page, so a page's changes reach it through «تغييرات المراجعة» (D78); `provisional_lines`:
+    Tesseract's lines while the page waits for the models (`pending_lines`)."""
     from books.services import StageFacts  # other app: lazy import
 
     book = page.book
@@ -715,6 +729,7 @@ def review_payload(page: Page, user, origin: dict | None = None, facts=None) -> 
     display = None
     if pre is not None:
         display = _file_url(pre.display_image) or _file_url(pre.gray_image)
+    regions = list(page.regions.order_by("order", "id"))
     return {
         "page": page_item(page),
         "book": {
@@ -733,8 +748,9 @@ def review_payload(page: Page, user, origin: dict | None = None, facts=None) -> 
         },
         "regions": [
             {"id": region.pk, "kind": region.kind, "label": region.get_kind_display(), "bbox": region.bbox}
-            for region in page.regions.order_by("order", "id")
+            for region in regions
         ],
+        "provisional_lines": pending_lines(page, regions, width, height),
         "lines": [line_item(line) for line in lines],
         "counts": page_counts(page),
         "labels": {

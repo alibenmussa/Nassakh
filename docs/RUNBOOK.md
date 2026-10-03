@@ -626,8 +626,9 @@ Punctuation is split off both readings and compared only with marks, so it is ne
 disagree and Tesseract reads what v0.2 reads, v0.2's reading goes into the text (`t = alt`, `orig` keeps v0.3's,
 `pick = "vote"`) and the word stays open (`res` null). Review marks the reading in the text «● في النص», and Enter
 confirms it. The vote never touches numbers, Kraken's tokens or D51's lone «ا/ه/ع». `WORD_CHOOSER=none` turns it off
-(restart the workers). The reading keys are numbered in order (1 = v0.3, then v0.2 when it has a reading, then
-Tesseract).
+(restart the workers). Key 1 is always the reading in the text (as Enter: on the vote's word it confirms v0.2's,
+a typed correction stands first as its own row); the other readings follow in the models' order (v0.3, v0.2,
+Tesseract) (owner review 2026-10-03; until then 1 = v0.3 always).
 
 **Words only the second model read (D72).** Runs of v0.2 words with no v0.3 counterpart are kept, except runs of
 numbers, duplicates of words within ±12 words, one-word splits («هير» of «هيرودوت») and a running head at the start

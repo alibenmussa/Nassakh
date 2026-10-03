@@ -393,7 +393,10 @@
   .rv-state-pending { display: flex; flex-direction: column; gap: 12px; padding: 4px 0; }
   .rv-pending-head .dot { animation: rv-pulse 1200ms ease-in-out infinite; }
   .rv-noise { min-height: 240px; color: var(--color-text-3); font-size: 16px; line-height: 1.9; padding-inline-start: var(--rv-gutter); }
-  .rv-noise .decode-line { opacity: 0.55; }
+  .rv-noise.is-noise .decode-line { opacity: 0.55; }
+  /* the reading cursor (theatre.css `.decode-line.is-lit`): the lit row and the one just read stand clear of
+     the noise; Tesseract's lines keep the gray of provisional text (owner review 2026-10-03) */
+  .rv-noise.is-noise .decode-line:is(.is-lit, .is-lit-2) { opacity: 1; }
 
   .rv-skeleton { display: flex; flex-direction: column; gap: 16px; padding: 10px 0 10px var(--rv-gutter); }
   .rv-skeleton span, .rv-film-skeleton span, .rv-boot-scan {

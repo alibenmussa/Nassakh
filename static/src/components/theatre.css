@@ -7,11 +7,33 @@
 @layer components {
   /* ------------------------------------------------------------ decode effect (text panel, review pending) */
   .decode { font-size: 15px; line-height: 1.85; text-align: start; overflow-wrap: anywhere; }
-  .decode-line { min-height: 1.85em; }
+  .decode-line { position: relative; min-height: 1.85em; }
   .decode-line[data-region="footnote"] { font-size: 0.92em; color: var(--color-text-2); }
   .decode-line.is-first-footnote { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--color-border); }
-  .decode-w { display: inline; opacity: 0.85; transition: opacity 400ms ease; }
+  .decode-w { position: relative; display: inline; opacity: 0.85; transition: opacity 400ms ease, color 900ms ease; }
   .decode-w.is-veiled { opacity: 0.45; transition-duration: 500ms; }
+  /* the reading cursor (review's pending page, owner review 2026-10-03; = .fac-line.is-lit): the lit row carries
+     the scan's band with a glow crossing it right to left and is written in ink word by word from its start;
+     the row just read keeps half the band, and its ink fades back to the provisional gray */
+  .decode-line::before {
+    content: "";
+    position: absolute;
+    inset: 0 -6px;
+    border-radius: 3px;
+    background: linear-gradient(to left, transparent 0 38%, rgba(37, 99, 235, 0.13) 50%, transparent 62% 100%) 0 0 / 250% 100% no-repeat, var(--color-accent-soft);
+    box-shadow: inset 0 1px 0 rgba(37, 99, 235, 0.16), inset 0 -1px 0 rgba(37, 99, 235, 0.16);
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+  .decode-line.is-lit::before { opacity: 1; animation: bk-glow 640ms cubic-bezier(0.3, 0.6, 0.3, 1) 1 both; }
+  .decode-line.is-lit-2::before { opacity: 0.5; }
+  .decode-line.is-lit .decode-w {
+    color: var(--color-text-2);
+    opacity: 1;
+    transition: color 160ms ease calc(var(--k, 0) * 26ms), opacity 160ms ease calc(var(--k, 0) * 26ms);
+  }
+  .decode-line.is-lit-2 .decode-w { color: var(--color-text-2); opacity: 1; }
   /* Tesseract's words dwelling and drifting: quiet colour so it never reads as the result */
   .decode.is-decoding, .decode.is-resolving .decode-w:not(.is-landed) { color: var(--color-text-3); }
   .decode.is-noise { opacity: 0.55; }
@@ -576,12 +598,14 @@
   .fac-line.is-hot { background: var(--color-hover); }
   .fac-line:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
   .fac-text {
+    position: relative; /* above the line's reading band (::before) */
     display: block;
     width: 100%;
     direction: rtl;
     white-space: nowrap;
     overflow: hidden;
     line-height: 1.2;
+    transition: color 900ms ease; /* a line just written fades back to the provisional gray */
     word-spacing: calc(var(--ws, 0) * 100cqw); /* D30: lines fit by word spacing, never by a smaller size */
     text-align: justify;
     text-align-last: start;
@@ -610,18 +634,41 @@
     border: 0;
     border-top: 1px solid var(--color-border-strong);
   }
-  /* provisional: gray, breathing; the lit line carries the reading sheen (gray ink, right to left) */
+  /* provisional: gray, breathing. Owner review 2026-10-03: the generation must read at a glance. The lit line
+     carries the scan's band (= .sheet-line.is-lit) with a glow crossing it right to left, and is written in ink
+     behind a dark head (the sheen); the line just read keeps half the band and its ink, which fades back to the
+     provisional gray as the cursor moves on. Skeleton bars get the same band. */
   .fac-layer[data-phase="provisional"] { color: var(--color-text-3); }
   .fac-layer[data-phase="provisional"] [data-region="footnote"] { color: var(--color-text-3); }
   .fac-layer.is-static .tok { opacity: 0.7; }
+  .fac-layer:not([data-phase="final"]) .fac-line::before {
+    content: "";
+    position: absolute;
+    inset: 0 -4px;
+    border-radius: 3px;
+    background: linear-gradient(to left, transparent 0 38%, rgba(37, 99, 235, 0.13) 50%, transparent 62% 100%) 0 0 / 250% 100% no-repeat, var(--color-accent-soft);
+    box-shadow: inset 0 1px 0 rgba(37, 99, 235, 0.16), inset 0 -1px 0 rgba(37, 99, 235, 0.16);
+    opacity: 0;
+    transition: opacity 150ms ease;
+    pointer-events: none;
+  }
+  .fac-layer:not([data-phase="final"]) .fac-line.is-lit::before { opacity: 1; animation: bk-glow 640ms cubic-bezier(0.3, 0.6, 0.3, 1) 1 both; }
+  .fac-layer:not([data-phase="final"]) .fac-line.is-lit-2::before { opacity: 0.5; }
   .fac-line.is-lit .fac-text {
     color: transparent;
-    background: linear-gradient(to left, var(--color-text-3) 0 40%, var(--ink-shine) 50%, var(--color-text-3) 60% 100%) 0 0 / 250% 100% no-repeat;
+    background: linear-gradient(to left, var(--color-text-2) 0 42%, var(--color-text) 50%, var(--color-text-3) 58% 100%) 0 0 / 250% 100% no-repeat;
     -webkit-background-clip: text;
     background-clip: text;
-    animation: bk-sheen 700ms cubic-bezier(0.2, 0.7, 0.2, 1) 1 both;
+    transition: none;
+    animation: bk-sheen 420ms cubic-bezier(0.3, 0.6, 0.3, 1) 1 both;
   }
-  .fac-line.is-lit .tok { opacity: 1; }
+  .fac-layer:not([data-phase="final"]) .fac-line.is-lit-2 .fac-text { color: var(--color-text-2); transition: none; }
+  .fac-line.is-lit .tok, .fac-layer:not([data-phase="final"]) .fac-line.is-lit-2 .tok { opacity: 1; }
+  @keyframes bk-glow { from { background-position: 0% 0, 0 0; } to { background-position: 100% 0, 0 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .fac-layer:not([data-phase="final"]) .fac-line.is-lit::before { animation: none; }
+    .fac-text { transition: none; }
+  }
   /* skeleton: one shimmering bar per detected line, running only while the book is active and the sheet is
      near the viewport (a book that stopped shows still bars, §6 / D24) */
   .fac-bar {

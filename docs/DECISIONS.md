@@ -729,3 +729,20 @@ unstyled one across a page (seam reason `style`). Once the text is edited the ch
 page's «تحويل إلى حاشية»). Item 22: the option «حذف الحواشي» (`strip_footnotes`, off, remembered per book): the
 notes are still read and linked, then the notes and the calls taken for them leave the text; a bracketed number no
 note claimed stays as printed with its `marker_unmatched` warning, and `stats.footnotes_removed` counts what went.
+
+## D95 — Review: key 1 is the reading in the text; a tap on the image opens the text's word menu; the generation is drawn as a reading band (2026-10-03, amends D32, D71 and D28 §5.2)
+Owner review items 1, 15 and 2. (1) The word menu lists the reading in the text first, so «1» accepts it as Enter
+does (v0.2's after the vote, the reading chosen earlier, or a typed correction as its own row «تصحيح مكتوب»); the
+other readings follow in the models' order. Before, 1 was always v0.3, and a digit could swap the vote's reading by
+mistake. (15) Cause: a press on the scan became a drag once the pointer moved 3 px, which a trackpad click does, so
+the click neither opened its word nor closed the open menu; and a drag's flag outlived its click and swallowed the
+next click outside any menu. Now a press is a drag only past 6 px and when the page really moved (a page that fits
+the pane is always tapped), the flag ends with its own click, and a box opens exactly the menu a click on the word in
+the text opens: every word of an editable page, a confident one with its text selected in the correction field
+(only uncertain words opened from the image before, without it); read-only, the uncertain words' readings. A second
+tap on the same word still closes it. (2) The provisional text's reading cursor shows on the text as on the scan:
+the lit line carries the scan's accent band with a glow crossing it right to left and is written in ink behind a
+dark head; the line just read keeps half the band and fades back to gray (§5.2's «gray only» is lifted for the
+band). The review's pending page writes Tesseract's lines (`provisional_lines` in the payload,
+`review.services.pending_lines`; noise before Tesseract has read the page) under the same cursor, inked word by word,
+and the scan's band follows the line (`NassakhDecode.attach(el, {cursor, onLine})`).

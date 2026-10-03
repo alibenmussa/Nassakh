@@ -213,15 +213,17 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
           </a>
         </div>
 
-        {# not yet OCR'd: the decode effect stands in for the text #}
+        {# not yet OCR'd: the decode effect stands in for the text. Tesseract's lines once it has read the page #}
+        {# (noise before), written out under a reading band that the scan's band follows (owner review 2026-10-03) #}
         <div class="rv-state rv-state-pending" x-show="isPending && !loading" x-cloak>
           <div class="rv-pending-head status" role="status" aria-live="polite">
             <span class="dot dot-accent" aria-hidden="true"></span>
             <span>النص قيد التعرّف</span>
             <span class="meta" x-text="page.status_label"></span>
+            <span class="badge" x-show="provisional.length" x-cloak>نص مبدئي</span>
           </div>
           <div class="rv-noise text-body" x-ref="noise" dir="rtl" aria-hidden="true"></div>
-          <p class="meta">تظهر الأسطر هنا تلقائيًا حين تنتهي النماذج من هذه الصفحة.</p>
+          <p class="meta" x-text="provisional.length ? 'نص Tesseract المبدئي؛ تحلّ محلّه قراءة النماذج حين تنتهي من هذه الصفحة.' : 'تظهر الأسطر هنا تلقائيًا حين تنتهي النماذج من هذه الصفحة.'">تظهر الأسطر هنا تلقائيًا حين تنتهي النماذج من هذه الصفحة.</p>
         </div>
 
         {# loading another page #}
@@ -233,8 +235,8 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
         <div class="rv-lines-stage" x-ref="stage" x-show="ready && !loading && !after" x-cloak>
 
           {% comment %}The word popover (D31/D32, D71/D72): one of three kinds (popKind). A word: why it is marked (the reason
-          line), its readings with the one in the text marked «● في النص» (Enter confirms it), the correction (the main
-          action), then a second-level menu with merge and delete. A group of added words: keep them (Enter) or drop
+          line), its readings with the one in the text first and marked «● في النص» (1 or Enter confirms it), the
+          correction (the main action), then a second-level menu with merge and delete. A group of added words: keep them (Enter) or drop
           them in one step. A gap ▏: its words, editable, to insert (Enter), or dismiss (⌫).{% endcomment %}
           <div class="rv-pop" x-ref="pop" x-show="pop.open && (focused || focusedGap)" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-group': popKind === 'group', 'is-gap': popKind === 'gap' }"
                role="dialog" aria-label="قائمة الكلمة" :aria-label="popKind === 'word' ? 'قائمة الكلمة' : popTitle" @mousedown.stop @click.outside="onPopOutside()" @keydown.escape.stop.prevent="closeTop()">
@@ -243,7 +245,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
             <template x-if="popKind === 'word'">
               <div class="rv-opts">
                 <template x-for="opt in options()" :key="opt.choice">
-                  <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="choose(opt.choice)" :title="opt.label">
+                  <button type="button" class="rv-opt" :class="{ 'is-current': opt.current }" :disabled="!editable" @click="pickOption(opt)" :title="opt.label">
                     <kbd class="kbd" x-text="opt.key" x-show="editable"></kbd>
                     <bdi class="rv-opt-value" x-text="opt.value"></bdi>
                     <span class="rv-opt-now" x-show="opt.current && focused && focused.conf === 'low'">● في النص</span>
@@ -547,7 +549,7 @@ the `reviewScreen` component in static/src/js/review.js; styles in static/src/co
       are commands); letters are shown as Latin capitals and work by their place on the Arabic layout too.{% endcomment %}
       <dl class="rv-keys">
         <dt><span class="group-label">في قائمة الكلمة</span></dt><dd></dd>
-        <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة</dd>
+        <dt><kbd class="kbd">1</kbd> <kbd class="kbd">2</kbd> <kbd class="kbd">3</kbd></dt><dd>اختيار قراءة من القائمة؛ <kbd class="kbd">1</kbd> هي التي في النص</dd>
         <dt><kbd class="kbd">Enter</kbd></dt><dd>قبول القراءة التي في النص («● في النص»)؛ على كلمات مضافة: إبقاؤها؛ على <span class="rv-legend-gap" aria-hidden="true"></span><span class="sr-only">موضع كلمات ناقصة</span>: إدراج الكلمات المقترحة</dd>
         <dt><span class="meta">أيّ حرف، عربيًا كان أو لاتينيًا</span></dt><dd>بدء تصحيح مكتوب للكلمة، ثم <kbd class="kbd">Enter</kbd> أو <kbd class="kbd">Tab</kbd> لحفظه والانتقال</dd>
         <dt><kbd class="kbd">Tab</kbd> / <kbd class="kbd">⇧Tab</kbd></dt><dd>العلامة التالية / السابقة: كلمة غير محسومة، أو كلمات مضافة، أو موضع كلمات ناقصة</dd>

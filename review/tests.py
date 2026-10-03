@@ -512,6 +512,7 @@ def test_review_payload_shape(page, reviewer, book):
         "book",
         "image",
         "regions",
+        "provisional_lines",
         "lines",
         "counts",
         "labels",
@@ -553,6 +554,41 @@ def test_review_payload_shape(page, reviewer, book):
     assert payload["urls"]["filmstrip"] == f"/api/books/{book.pk}/filmstrip/"
     assert payload["can_edit"] is True
     assert services.review_payload(page, role_user("guest", None))["can_edit"] is False
+    assert payload["provisional_lines"] == []  # the text is final
+
+
+def test_review_payload_of_a_pending_page_carries_tesseracts_lines(book, reviewer):
+    """While the models read the page, the review screen writes Tesseract's lines out under a reading band that
+    moves over the scan (owner review 2026-10-03): the payload carries them as the dashboard's sheet does,
+    boxes as ratios of the prepared image; none before Tesseract has read the page."""
+    from ocr.models import OcrRun
+    from ocr.services import engine_names
+
+    pending = make_page(book, 3, status=Page.Status.LAYOUT_DONE, with_lines=False)
+    Preprocess.objects.create(page=pending, output_width=W, output_height=H)
+    body = Region.objects.create(page=pending, kind="body", bbox=[0, 0, W, 150], order=0)
+    assert services.review_payload(pending, reviewer)["provisional_lines"] == []  # nothing read yet
+    OcrRun.objects.create(
+        page=pending,
+        region=body,
+        engine_name=engine_names()[2],
+        params={
+            "scope": "region",
+            "kind": "body",
+            "lines": [
+                {"bbox": [10, 20, 90, 40], "words": [{"text": "قال"}, {"text": "الشيخ"}]},
+                {"bbox": [10, 50, 60, 70], "words": [{"text": "رحمه"}, {"text": "الله"}]},
+            ],
+        },
+    )
+    Page.objects.filter(pk=pending.pk).update(text_state=Page.TextState.PROVISIONAL, provisional_text="قال الشيخ")
+    pending.refresh_from_db()
+    payload = services.review_payload(pending, reviewer)
+    assert payload["provisional_lines"] == [
+        {"region_kind": "body", "bbox": [0.1, 0.1, 0.9, 0.2], "words": ["قال", "الشيخ"]},
+        {"region_kind": "body", "bbox": [0.1, 0.25, 0.6, 0.35], "words": ["رحمه", "الله"]},
+    ]
+    assert payload["lines"] == [] and payload["can_edit"] is False
 
 
 # ---------------------------------------------------------------- API
@@ -1417,11 +1453,11 @@ def test_trust_payloads_equal_the_fixtures(reviewer_client):
 
 def without_7c(value):
     """A 7b answer without what 7c added (`next_step`, `elsewhere`, the tile's `primary_url`, `nav.back` /
-    `origin` / `detour`; their contract is editor/fixtures/contract/), so the 7b contract keeps its shape."""
+    `origin` / `detour`; their contract is editor/fixtures/contract/), so the 7b contract keeps its shape. The
+    pending page's `provisional_lines` (owner review 2026-10-03) is left out too: its own test covers it."""
     if isinstance(value, dict):
-        out = {
-            k: without_7c(v) for k, v in value.items() if k not in ("next_step", "elsewhere", "primary_url")
-        }
+        later = ("next_step", "elsewhere", "primary_url", "provisional_lines")
+        out = {k: without_7c(v) for k, v in value.items() if k not in later}
         if isinstance(out.get("nav"), dict):
             out["nav"] = {k: v for k, v in out["nav"].items() if k not in ("back", "origin", "detour")}
         if isinstance(out.get("book"), dict) and "unresolved_total" in out["book"]:

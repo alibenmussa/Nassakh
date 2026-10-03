@@ -393,6 +393,14 @@ def test_compiled_css_has_the_mirror_pane_effects_and_their_static_fallbacks():
     assert re.search(r"\.fac-text \.tok\.is-veiled\{opacity:\.45", css)
     assert re.search(r"\.fac-line\.is-lit \.fac-text\{[^}]*background-clip:text[^}]*bk-sheen", css)
     assert "@keyframes bk-sheen{0%{background-position-x:0%}to{background-position-x:100%}}" in css
+    # owner review 2026-10-03: the lit line carries the scan's band in the text too, a glow crossing it, and is
+    # written in ink; the line just read keeps half the band; the review's pending rows the same, word by word
+    assert re.search(r"\.fac-layer:not\(\[data-phase=final\]\) \.fac-line\.is-lit:before\{opacity:1;[^}]*bk-glow", css)
+    assert re.search(r"\.fac-layer:not\(\[data-phase=final\]\) \.fac-line\.is-lit-2:before\{opacity:\.5", css)
+    assert re.search(r"\.fac-layer:not\(\[data-phase=final\]\) \.fac-line:before\{[^}]*var\(--color-accent-soft\)", css)
+    assert "@keyframes bk-glow{" in css
+    assert re.search(r"\.decode-line\.is-lit:before\{opacity:1;[^}]*bk-glow", css)
+    assert re.search(r"\.decode-line\.is-lit \.decode-w\{[^}]*transition:color \.16s ease calc\(var\(--k,0\) \* 26ms\)", css)
     assert (
         "@keyframes bk-shimmer{" in css
         and "@keyframes bk-line-in{" in css
@@ -528,6 +536,34 @@ run(noise, 300);
 out.noiseLines = noise.children.length;
 out.noiseClass = noise.classList.contains('is-noise');
 out.noiseArabic = D.inspect(noise).every((w) => /^[ء-ي]+$/.test(w.shown) && w.nReal === 0);
+
+// --- the reading cursor of an attached element (review's pending page, owner review 2026-10-03): Tesseract's lines
+// as given, a band walking them row by row (the row just read half lit), `onLine` hearing each step, the words under
+// the band exact, each word carrying its place in the row (`--k`); new lines keep the cursor; the wave stops it
+const rows = new Element('div');
+const heard = [];
+const tessLines = [{ region_kind: 'body', words: ['قال', 'الأمير', 'الكبير'] }, { words: ['وفي', 'الشهر'] }, { region_kind: 'footnote', words: ['حاشية'] }];
+D.attach(rows, { mode: 'provisional', lines: tessLines, cursor: true, onLine: (k) => heard.push(k) });
+const litOf = () => rows.children.map((r) => (r.classList.contains('is-lit') ? 'L' : r.classList.contains('is-lit-2') ? 'h' : '.')).join('');
+const seen = []; let rowsExact = true;
+for (let i = 0; i < 50; i += 1) {
+  NOW += 41; D.step(NOW);
+  const s = litOf(); if (seen[seen.length - 1] !== s) seen.push(s);
+  const k = s.indexOf('L');
+  if (k >= 0 && D.inspect(rows).some((w) => w.line === k && w.shown !== w.real)) rowsExact = false;
+}
+const realLines = (el) => el.children.map((_, k) => D.inspect(el).filter((w) => w.line === k).map((w) => w.real).join(' '));
+out.rows = { text: realLines(rows), region: rows.children[2].getAttribute('data-region'), seen, heard: heard.slice(), exact: rowsExact,
+  k: rows.children[0].children.map((w) => w.style['--k']), decoding: rows.classList.contains('is-decoding') };
+D.update(rows, { lines: [{ words: ['سطر', 'جديد'] }, { words: ['وآخر'] }] });
+heard.length = 0; run(rows, 1000);
+out.rowsUpdated = { text: realLines(rows), heard: heard.slice() };
+D.resolve(rows, { lines: [{ tokens: [{ t: 'سطر', conf: 'high' }] }], onDone: () => {} });
+out.rowsResolved = { last: heard[heard.length - 1], lit: litOf() };
+const quiet = new Element('div');
+D.attach(quiet, { mode: 'noise', lines: 3 }); run(quiet, 1000);
+out.noCursor = quiet.children.every((r) => !r.classList.contains('is-lit'));
+D.detach(rows); D.detach(quiet); // the registry count below is the other elements'
 
 // --- resolve wave: reading order, final tokens, tok-low only on unresolved low-confidence words
 let done = 0;
@@ -669,10 +705,13 @@ out.hSkelCursor = { cursor: h.cursor, scanLit: scan.children[0].classList.contai
 const provWords = Array.from({ length: 12 }, (_, k) => `س${k}طر كلمة أخرى ثالثة رابعة خامسة`.replace(/\d/g, ''));
 const prov = { ...skel, status: 'layout_done', text_state: 'provisional', line_boxes: [], provisional_lines: provWords.map((t, k) => ({ region_kind: 'body', bbox: [0.15, 0.1 + 0.05 * k, 0.85, 0.13 + 0.05 * k], words: t.split(' ') })) };
 out.hProv = { mode: h.update({ page: prov, active: true }), phase: host.children[0].getAttribute('data-phase'), layers: host.children.length, lines: h.lines, boxes: scan.children.length, toks: host.children[0].children[0].children[0].children[0].children.length };
-let litOk = true, visited = new Set(), maxSheetVeiled = 0, sheetBad = null; const sheetExact = new Set(), sheetVeiled = new Set();
+let litOk = true, trailOk = true, visited = new Set(), maxSheetVeiled = 0, sheetBad = null; const sheetExact = new Set(), sheetVeiled = new Set();
 for (let i = 0; i < 20000 / 41; i += 1) {
   NOW += 41; D.step(NOW);
   const k = h.cursor; if (k >= 0) visited.add(k);
+  // the line just read keeps half the band on both sides (owner review 2026-10-03); nothing else is lit
+  if (k > 0 && !(h.lineEl(k - 1).classList.contains('is-lit-2') && scan.children[k - 1].classList.contains('is-lit-2'))) trailOk = false;
+  if (Array.from({ length: h.lines }, (_, j) => h.lineEl(j)).filter((l) => l.classList.contains('is-lit') || l.classList.contains('is-lit-2')).length > 2) trailOk = false;
   const snap = D.inspect(host);
   let nv = 0;
   snap.forEach((w, j) => {
@@ -685,7 +724,7 @@ for (let i = 0; i < 20000 / 41; i += 1) {
   maxSheetVeiled = Math.max(maxSheetVeiled, nv);
 }
 const nWords = D.inspect(host).length;
-out.hCycle = { litOk, visited: visited.size, words: nWords, maxVeiled: maxSheetVeiled, bad: sheetBad, allExact: sheetExact.size === nWords, allVeiled: sheetVeiled.size === nWords };
+out.hCycle = { litOk, trailOk, visited: visited.size, words: nWords, maxVeiled: maxSheetVeiled, bad: sheetBad, allExact: sheetExact.size === nWords, allVeiled: sheetVeiled.size === nWords };
 h.hot(2);
 out.hHot = [h.hotIndex, scan.children[2].classList.contains('is-hot'), h.lineEl(2).classList.contains('is-hot')];
 h.hot(-1);
@@ -1114,6 +1153,16 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert out["decodingClass"] is True
     # noise mode: Arabic letters only
     assert out["noiseLines"] == 7 and out["noiseClass"] is True and out["noiseArabic"] is True
+    # the reading cursor of the review's pending page (owner review 2026-10-03): Tesseract's lines as given, the
+    # band walks them (the row just read half lit), rests, starts again; the host hears every step; the words under
+    # the band are exact; new lines keep the cursor; the wave stops it and says so; no cursor unless asked
+    rows = out["rows"]
+    assert rows["text"] == ["قال الأمير الكبير", "وفي الشهر", "حاشية"] and rows["region"] == "footnote"
+    assert rows["seen"][:4] == ["L..", "hL.", ".hL", "..."] and rows["heard"][:4] == [0, 1, 2, -1]
+    assert rows["exact"] is True and rows["k"] == ["0", "1", "2"] and rows["decoding"] is True
+    assert out["rowsUpdated"]["text"] == ["سطر جديد", "وآخر"] and out["rowsUpdated"]["heard"][:2] == [0, 1]
+    assert out["rowsResolved"] == {"last": -1, "lit": "."}
+    assert out["noCursor"] is True
     # resolve: right-to-left / line-by-line landing, exactly the final tokens, amber underline on unresolved
     assert out["resolvingClass"] is True and out["landedPrefix"] is True and out["doneEarly"] == 0
     assert out["done"] == 1 and out["resolvedClass"] is True
@@ -1260,6 +1309,7 @@ def test_decode_engine_layout_sheet_handle_and_dashboard_logic_under_node(tmp_pa
     assert cyc["bad"] is None, cyc["bad"]
     assert cyc["litOk"] is True and cyc["visited"] == 12 and cyc["words"] == 72 and cyc["maxVeiled"] <= 40
     assert cyc["allExact"] is True and cyc["allVeiled"] is True
+    assert cyc["trailOk"] is True  # the line just read keeps half the band, on the scan and in the text
     assert out["hHot"] == [2, True, True] and out["hHotOff"] == [-1, False]
     # final arrives: the final layer beneath the leaving provisional one, a right-to-left wave with the band
     # following

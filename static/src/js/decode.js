@@ -3,8 +3,10 @@
 // mirrors a page's printed lines, the sheet handle of the dashboard, plus a tiny registry for other
 // continuous effects.
 //
-//   window.NassakhDecode.attach(el, { text, mode, lines, static })  mode 'provisional' | 'noise'
-//   window.NassakhDecode.update(el, { text, static })               new provisional text
+//   window.NassakhDecode.attach(el, { text, mode, lines, static, cursor, onLine })
+//                                     mode 'provisional' (text, or lines [{words | tokens, region_kind}]) | 'noise'
+//                                     (lines: a count); cursor: a reading band walks the lines, onLine(k) hears it
+//   window.NassakhDecode.update(el, { text, lines, static })        new provisional text
 //   window.NassakhDecode.resolve(el, { lines, onDone })             right-to-left wave onto the final lines
 //   window.NassakhDecode.render(el, { lines })                      final lines at once (no wave)
 //   window.NassakhDecode.effect(el, fn)                             fn(t, el) on every tick while near the viewport
@@ -164,6 +166,7 @@
         return;
       }
       if (!state.visible) return;
+      if (state.cursorOn) tickRows(state, t);
       state.words.forEach((w) => tickWord(w, t, state.budget));
     });
   }
@@ -323,10 +326,13 @@
   }
 
   // Lines of words → one `.decode-line` per line, one `.tok` span (one text node) per word, real spaces
-  // between words so selection copies words. Returns the word states in reading order.
+  // between words so selection copies words. Returns the word states in reading order; the rows are kept on
+  // the state for the reading cursor, and each word carries its place in the line (`--k`), which staggers
+  // the ink of a line being written from its first word (right) to its last.
   function buildLines(state, lines) {
     clear(state.el);
     const words = [];
+    state.rows = [];
     lines.forEach((line, li) => {
       const row = el('div', 'decode-line');
       if (line.region_kind) row.setAttribute('data-region', line.region_kind);
@@ -338,6 +344,7 @@
         const span = el('span', 'tok decode-w');
         const node = textNode(tok.t);
         span.appendChild(node);
+        span.style.setProperty('--k', String(Math.min(ti, STAGGER_CAP)));
         row.appendChild(span);
         const w = makeWord(node, tok.t, state.mode);
         w.final = tok;
@@ -345,6 +352,7 @@
         words.push(w);
       });
       state.el.appendChild(row);
+      state.rows.push(row);
     });
     return words;
   }
@@ -403,18 +411,83 @@
     return state;
   }
 
+  // ---------------------------------------------------------------- the reading cursor of an attached element
+  // The review screen's pending page walks its lines as a sheet does (§5.2, owner review 2026-10-03): the lit row
+  // carries the band and is written in ink word by word, the row just read keeps half the band, the words under
+  // the band are Tesseract's exact ones. `onLine(k)` tells the host where the band is (−1: resting between two
+  // passes, or stopped), so it can move its own band over the scan.
+  function startRows(state, t) {
+    state.cursorOn = true;
+    state.cursor = -1;
+    state.resting = false;
+    state.cursorAt = t;
+    state.litRows = [];
+  }
+
+  function stopRows(state) {
+    const was = Boolean(state.cursorOn);
+    state.cursorOn = false;
+    litRow(state, -1, 0, !was);
+  }
+
+  function litRow(state, k, t, quiet) {
+    const rows = state.rows || [];
+    const prev = state.cursor;
+    (state.litRows || []).forEach((i) => { if (rows[i]) { rows[i].classList.remove('is-lit'); rows[i].classList.remove('is-lit-2'); } });
+    state.litRows = [];
+    state.cursor = k;
+    if (k >= 0 && rows[k]) {
+      rows[k].classList.add('is-lit');
+      state.litRows.push(k);
+      if (prev >= 0 && prev !== k && rows[prev]) { rows[prev].classList.add('is-lit-2'); state.litRows.push(prev); }
+      const until = t + LOCK_MS;
+      state.words.forEach((w) => { if (w.line === k) lockExact(w, until, state.budget); });
+    }
+    if (!quiet && state.onLine) {
+      try { state.onLine(k); } catch (e) { /* the host's own business */ }
+    }
+  }
+
+  function tickRows(state, t) {
+    if (t < state.cursorAt) return;
+    const n = state.rows ? state.rows.length : 0;
+    if (!n) return;
+    if (state.resting) {
+      state.resting = false;
+      litRow(state, 0, t);
+      state.cursorAt = t + LINE_MS;
+      return;
+    }
+    const next = state.cursor + 1;
+    if (next >= n) {
+      litRow(state, -1, t);
+      state.resting = true;
+      state.cursorAt = t + CYCLE_REST_MS;
+    } else {
+      litRow(state, next, t);
+      state.cursorAt = t + LINE_MS;
+    }
+  }
+
   // ---------------------------------------------------------------- public API: attached elements
+  const linesText = (lines) => lines.map((line) => line.tokens.map((tok) => tok.t).join(' ')).join('\n');
+
   function attach(target, options) {
     const opts = options || {};
     const state = getOrCreate(target);
     state.mode = opts.mode === 'noise' ? 'noise' : 'provisional';
     state.effect = null;
     state.resolving = false;
-    state.text = opts.text || '';
+    // provisional text comes as a string, or as Tesseract's lines (`provisional_lines`: words per line)
+    const given = state.mode === 'provisional' && Array.isArray(opts.lines) ? normaliseLines(opts.lines) : null;
+    state.text = given ? linesText(given) : opts.text || '';
     state.nLines = opts.lines;
     state.isStatic = Boolean(opts.static);
     state.budget = { n: 0 };
-    const lines = state.mode === 'noise' ? noiseLines(opts.lines) : textToLines(opts.text);
+    stopRows(state);
+    state.wantCursor = Boolean(opts.cursor);
+    state.onLine = typeof opts.onLine === 'function' ? opts.onLine : null;
+    const lines = state.mode === 'noise' ? noiseLines(opts.lines) : given || textToLines(opts.text);
     if (api.reducedMotion || opts.static) {
       // static state: Tesseract's text plainly (faded by the host's CSS), or nothing for pure noise
       state.words = state.mode === 'noise' ? (clear(target), []) : renderStatic(state, lines);
@@ -425,24 +498,32 @@
     const t0 = clock();
     state.words = buildLines(state, lines);
     state.words.forEach((w) => phaseWord(w, t0));
+    if (state.wantCursor) startRows(state, t0);
     state.active = true;
     setClasses(state, 'decoding');
     wake();
   }
 
+  // New provisional text (a string or lines); the cursor and its listener stay as attached unless given.
   function update(target, options) {
+    const opts = options || {};
     const state = registry.get(target);
-    const text = (options && options.text) || '';
-    if (!state) { attach(target, { text, mode: 'provisional' }); return; }
-    if (state.mode === 'provisional' && state.text === text && Boolean(options && options.static) === state.isStatic) return;
-    attach(target, { text, mode: 'provisional', static: Boolean(options && options.static) });
+    const lines = Array.isArray(opts.lines) ? normaliseLines(opts.lines) : null;
+    const text = lines ? linesText(lines) : opts.text || '';
+    const next = { mode: 'provisional', static: Boolean(opts.static) };
+    if (lines) next.lines = opts.lines; else next.text = text;
+    next.cursor = opts.cursor !== undefined ? opts.cursor : Boolean(state && state.wantCursor);
+    next.onLine = opts.onLine !== undefined ? opts.onLine : state && state.onLine;
+    if (!state) { attach(target, next); return; }
+    if (state.mode === 'provisional' && state.text === text && next.static === state.isStatic) return;
+    attach(target, next);
   }
 
   function normaliseLines(lines) {
     return (Array.isArray(lines) ? lines : [])
       .map((line) => ({
         region_kind: line.region_kind || line.kind || '',
-        tokens: (line.tokens || []).map((tok) => (typeof tok === 'string' ? { t: tok } : tok)).filter((tok) => tok && tok.t),
+        tokens: (line.tokens || line.words || []).map((tok) => (typeof tok === 'string' ? { t: tok } : tok)).filter((tok) => tok && tok.t),
       }))
       .filter((line) => line.tokens.length);
   }
@@ -450,6 +531,7 @@
   function render(target, options) {
     const state = getOrCreate(target);
     const lines = (options && options.lines) || [];
+    stopRows(state);
     state.mode = 'provisional';
     state.effect = null;
     state.resolving = false;
@@ -469,6 +551,7 @@
     const lines = normaliseLines(opts.lines);
     state.onDone = typeof opts.onDone === 'function' ? opts.onDone : null;
     state.effect = null;
+    stopRows(state); // the wave takes over: the reading band leaves the text and the host's scan
     if (api.reducedMotion || !lines.length) {
       render(target, { lines });
       const done = state.onDone; state.onDone = null;
@@ -519,6 +602,7 @@
   function detach(target) {
     const state = registry.get(target);
     if (!state) return;
+    state.cursorOn = false;
     registry.delete(target);
     unwatch(target);
     if (target.classList) target.classList.remove('is-decoding', 'is-resolving');
@@ -980,11 +1064,16 @@
   }
 
   function clearLit(s) {
-    s.lit.forEach((i) => { toggleAt(s.scanBoxes, i, 'is-lit', false); toggleAt(s.scanBoxes, i, 'is-lit-2', false); toggleAt(s.lineEls, i, 'is-lit', false); });
+    s.lit.forEach((i) => {
+      toggleAt(s.scanBoxes, i, 'is-lit', false); toggleAt(s.scanBoxes, i, 'is-lit-2', false);
+      toggleAt(s.lineEls, i, 'is-lit', false); toggleAt(s.lineEls, i, 'is-lit-2', false);
+    });
     s.lit = [];
   }
 
-  // The reading cursor lands on line k: band on the scan, sheen on the text, exact words underneath it.
+  // The reading cursor lands on line k: the band on the scan and the same band on the text, where the line is
+  // written in ink behind a glow crossing it right to left, exact words underneath; the line just read keeps
+  // half the band on both sides and its ink fades back to the provisional gray (owner review 2026-10-03).
   function setCursor(s, k, t) {
     const prev = s.cursor;
     clearLit(s);
@@ -993,7 +1082,7 @@
     toggleAt(s.scanBoxes, k, 'is-lit', true);
     toggleAt(s.lineEls, k, 'is-lit', true);
     s.lit.push(k);
-    if (prev >= 0 && prev !== k) { toggleAt(s.scanBoxes, prev, 'is-lit-2', true); s.lit.push(prev); }
+    if (prev >= 0 && prev !== k) { toggleAt(s.scanBoxes, prev, 'is-lit-2', true); toggleAt(s.lineEls, prev, 'is-lit-2', true); s.lit.push(prev); }
     if (s.mode === 'provisional') {
       const until = t + LOCK_MS;
       s.words.forEach((w) => { if (w.line === k) lockExact(w, until, s.budget); });

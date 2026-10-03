@@ -38,6 +38,7 @@
   const POP_H_GUESS = 220;
   const MORE_W = 248; // the «إجراءات أخرى» submenu
   const MORE_CLOSE_MS = 180; // hover intent: the submenu survives the gap between the two panels
+  const TAP_SLOP = 6; // px a press may travel on the scan and still be a tap (a trackpad click wobbles)
   // «نوع السطر» (D32, D74): the effective choice; `set_line_role` maps it onto the stored role (on a footnote-
   // region line «حاشية» stores `body` and «محتوى» stores `main`), so the menu never shows a stored value.
   const ROLES = [
@@ -333,6 +334,10 @@
       pointers: null,
       reduced: false,
       decodeEl: null,
+      provisional: [],    // a pending page's Tesseract lines (`provisional_lines`: words, box as ratios)
+      readingLine: -1,    // the pending text's reading cursor (NassakhDecode onLine), mirrored on the scan
+      readingLast: -1,    // the line it last stood on (the band fades out there between two passes)
+      noiseRows: 10,      // rows of noise shown before Tesseract has read the page
 
       init() {
         this.reduced = reducedMotion();
@@ -370,6 +375,7 @@
         if (data.book) this.book = data.book;
         if (data.image) this.image = data.image;
         if (data.regions) this.regions = data.regions;
+        if (Array.isArray(data.provisional_lines)) this.provisional = data.provisional_lines;
         if (data.lines) this.lines = data.lines.slice().sort((a, b) => a.order - b.order);
         if (Array.isArray(data.gaps)) this.adoptGaps(data.gaps);
         if (data.labels) this.labels = data.labels;
@@ -777,10 +783,11 @@
         return n > 1 ? `نوع الأسطر المحدَّدة (${n})` : 'نوع السطر';
       },
 
-      // A box on the image finds its word in the text: a word still to decide (unresolved, on a page open for
-      // review) opens its menu there, exactly as a click in the text does; any other word (a confident one, a
-      // resolved one, every word of an approved page) is focused and scrolled into view with no menu, and closes
-      // an open one. A second tap on the word whose menu is open closes it. The image stays where it is.
+      // A box on the image opens its word's menu in the text exactly as a click on the word there does (owner
+      // review 2026-10-03: one menu, one behaviour): on an editable page every word, a confident one with its
+      // text in the correction field, selected; on a read-only page the uncertain words' readings. A word that
+      // opens no menu is still focused and scrolled into view. A second tap on the word whose menu is open
+      // closes it. The image stays where it is.
       onBoxClick(line, i, ev) {
         if (this.dragMoved) return;
         if (ev && ev.shiftKey) { this.extendRange(line); return; }
@@ -789,7 +796,7 @@
         if (!tok) return;
         const ref = { lineId: line.id, index: i };
         if (this.pop.open && this.same(this.focus, ref)) { this.closePop(); return; }
-        const open = this.editable && this.isUnresolved(tok);
+        const open = tok.conf === 'low' || this.editable; // = onTokClick
         this.focusWord(ref, { open, fromClick: true, pan: false });
       },
 
@@ -944,8 +951,24 @@
         // §4.8: a year read again from the number in words, offered as one more reading («من الحروف»)
         const sug = tok.sug && tok.sug.t ? tok.sug : null;
         if (sug && !rows.some((row) => row.value === sug.t)) rows.push({ choice: 'sug', value: sug.t, label: sug.label || 'من الحروف', current: sug.t === tok.t });
+        // Owner review 2026-10-03: the word in the text comes first, so «1» (like Enter) accepts it and a digit
+        // never picks another reading by mistake; the other readings follow in the models' order. A correction
+        // typed earlier is no model's reading: it stands first as its own row.
+        const at = rows.findIndex((row) => row.current);
+        if (at > 0) rows.unshift(rows.splice(at, 1)[0]);
+        else if (at < 0 && tok.t) rows.unshift({ choice: 'typed', value: tok.t, label: 'تصحيح مكتوب', current: true });
         rows.forEach((row, i) => { row.key = String(i + 1); });
         return rows;
+      },
+
+      // A reading picked from the menu, by its digit or a click. The row of a typed correction confirms the word
+      // as it stands: an open word saves it, a decided one needs nothing and the menu moves on, as Enter does.
+      pickOption(row) {
+        if (!row) return Promise.resolve(false);
+        if (row.choice !== 'typed') return this.choose(row.choice);
+        if (this.isUnresolved(this.focused)) return this.choose('typed', row.value);
+        this.advance(this.focus);
+        return Promise.resolve(false);
       },
 
       get primaryLabel() { return this.labels.primary || 'Qari v0.3'; },
@@ -1009,11 +1032,7 @@
         return tess === primary && tess !== lenient(tok.alt);
       },
 
-      chooseNth(n) {
-        const row = this.options()[n - 1];
-        if (row) return this.choose(row.choice);
-        return Promise.resolve(false);
-      },
+      chooseNth(n) { return this.pickOption(this.options()[n - 1]); },
 
       // Close the popover and move on to the next unresolved word; false when none is left (focus cleared).
       advance(ref) {
@@ -1035,7 +1054,7 @@
         if (this.inOpenGroup(tok)) return this.keepGroup();
         if (this.isUnresolved(tok) || tok.res === 'chooser') {
           const cur = this.options().find((o) => o.current);
-          return this.choose(cur ? cur.choice : 'primary');
+          return cur ? this.pickOption(cur) : this.choose('primary');
         }
         this.advance(this.focus);
         return Promise.resolve(false);
@@ -2067,8 +2086,57 @@
           const p = res.data.page;
           if (p.text_state === 'final' || p.status === 'error') { this.landFinal(res.data); return; }
           this.page = p;
+          this.takeProvisional(res.data.provisional_lines);
         }
         this.schedulePoll();
+      },
+
+      // A poll of a pending page: Tesseract's lines when they arrive (the noise gives way to them) or change.
+      takeProvisional(lines) {
+        if (!Array.isArray(lines)) return;
+        const sig = (list) => list.map((line) => (line.words || []).join(' ')).join('\n');
+        if (sig(lines) === sig(this.provisional)) return;
+        this.provisional = lines;
+        if (!this.decodeEl || !hasDOM || !window.NassakhDecode) return;
+        try { window.NassakhDecode.attach(this.decodeEl, this.decodeOptions()); } catch (_) { /* the old text stays */ }
+      },
+
+      // The pending text (owner review 2026-10-03): Tesseract's lines once it has read the page, else lines of
+      // noise; a reading cursor walks them, and `readingLine` mirrors it as the band over the scan.
+      decodeOptions() {
+        const onLine = (k) => { this.readingLine = k; if (k >= 0) this.readingLast = k; };
+        if (this.provisional.length) return { mode: 'provisional', lines: this.provisional, cursor: true, onLine };
+        this.noiseRows = this.regions.length ? 14 : 10;
+        return { mode: 'noise', lines: this.noiseRows, cursor: true, onLine };
+      },
+
+      // The band over the scan while the page is pending: on the line the text's cursor is on, at Tesseract's box;
+      // over noise (nothing read yet) it steps down the page's text regions, one row of the noise at a time. Between
+      // two passes it fades out where it was.
+      get readingStyle() {
+        const k = this.readingLast;
+        if (!this.isPending || !(k >= 0)) return 'opacity:0;';
+        const shown = this.readingLine >= 0 ? 1 : 0;
+        let top;
+        let height;
+        if (this.provisional.length) {
+          const box = this.provisional[k] && this.provisional[k].bbox;
+          if (!isBox(box)) return 'opacity:0;';
+          const h = box[3] - box[1];
+          top = box[1] - 0.3 * h;
+          height = 1.6 * h;
+        } else {
+          const W = this.image.width || 0;
+          const H = this.image.height || 0;
+          const text = this.regions.filter((r) => isBox(r.bbox) && r.kind !== 'running_header' && r.kind !== 'page_number');
+          const area = W && H && text.length ? text.map((r) => r.bbox).reduce((a, b) => unionBox(a, b)) : null;
+          const y0 = area ? area[1] / H : 0.08;
+          const y1 = area ? area[3] / H : 0.92;
+          const pitch = (y1 - y0) / Math.max(1, this.noiseRows || 10);
+          top = y0 + k * pitch + 0.1 * pitch;
+          height = 0.8 * pitch;
+        }
+        return `top:${(100 * top).toFixed(3)}%; height:${(100 * height).toFixed(3)}%; opacity:${shown};`;
       },
 
       // The models finished while we watched: the noise resolves in a right-to-left wave, then the
@@ -2101,13 +2169,14 @@
         const el = this.$refs && this.$refs.noise;
         if (!el || !this.isPending || this.decodeEl === el) return;
         this.decodeEl = el;
-        const count = this.regions.length ? 14 : 10;
-        try { window.NassakhDecode.attach(el, { mode: 'noise', lines: count }); } catch (_) { this.decodeEl = null; }
+        try { window.NassakhDecode.attach(el, this.decodeOptions()); } catch (_) { this.decodeEl = null; }
       },
 
       unmountDecode() {
         if (this.decodeEl && hasDOM && window.NassakhDecode) { try { window.NassakhDecode.detach(this.decodeEl); } catch (_) { /* fine */ } }
         this.decodeEl = null;
+        this.readingLine = -1;
+        this.readingLast = -1;
       },
 
       // ------------------------------------------------------------ scan viewer
@@ -2232,16 +2301,23 @@
         if (!this.drag) return;
         const dx = ev.clientX - this.drag.x;
         const dy = ev.clientY - this.drag.y;
-        if (Math.abs(dx) + Math.abs(dy) > 3) { this.drag.moved = true; this.dragMoved = true; }
         this.zoom.x = this.drag.ox + dx;
         this.zoom.y = this.drag.oy + dy;
         this.clampPan();
+        // A drag is a press that travelled past the slop and moved the page. A click on a trackpad wobbles a few
+        // pixels, and a page that fits the pane cannot move at all: both stay taps (owner review 2026-10-03: a
+        // wobbly click on the image neither opened its word nor closed the open menu).
+        const panned = Math.abs(this.zoom.x - this.drag.ox) + Math.abs(this.zoom.y - this.drag.oy) >= 1;
+        if (!this.drag.moved && panned && Math.hypot(dx, dy) > TAP_SLOP) { this.drag.moved = true; this.dragMoved = true; }
       },
 
       onPointerUp(ev) {
         if (this.pointers) this.pointers.delete(ev.pointerId);
         if (!this.pointers || this.pointers.size < 2) this.pinch = null;
         this.drag = null;
+        // The drag's own click (dispatched right after this release) reads `dragMoved`; nothing later may. A flag
+        // left set swallowed the next click outside an open word menu, wherever it was.
+        if (this.dragMoved) setTimeout(() => { this.dragMoved = false; }, 0);
       },
 
       // Keep the focused word in view: glide the sheet so the word sits mid-pane when it is near an edge.
@@ -2279,6 +2355,7 @@
       },
 
       get bandStyle() {
+        if (this.isPending) return this.readingStyle;
         const line = this.currentLine;
         if (!line || !line.bbox) return 'opacity:0;';
         const H = this.image.height || 1;
