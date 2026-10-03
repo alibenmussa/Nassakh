@@ -704,7 +704,7 @@ the stored reading.
 ## D93 — The call pass looks above a tight line box (REACH_UP)
 
 Kraken's bands (D92) are tighter at the top than Tesseract's line boxes, so a raised call «(١)» lay above the
-box and the ink search missed it: calls found fell on books 29–38 after D92 (book 35 17→… 3 of 21 with the
+box and the ink search missed it: calls found fell on books 29–38 after D92 (book 35: 3 of 21 right with the
 stored boxes). `search_box` now also reaches `REACH_UP` = 0.45 line pitches above the box. Measured on the
 ten books (hand-marked calls right): 29 24/25, 31 25/27, 32 11/11, 33 12/13, 34 25/29, 35 17/21, 36 12/16,
 37 6/8, 38 3/4, 39 2/12; 137 of 166. The reach is not finely tuned: 0.3 gave the same total (36 better,
