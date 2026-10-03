@@ -140,7 +140,7 @@ CELERY_RESULT_EXPIRES = 24 * 3600
 # ---------------------------------------------------------------- nassakh
 
 NASSAKH = {
-    "OCR_BACKEND": env("OCR_BACKEND", default="torch"),  # torch | mlx
+    "OCR_BACKEND": env("OCR_BACKEND", default="torch"),  # torch | mlx | runpod
     "OCR_DEVICE": env("OCR_DEVICE", default="auto"),  # auto | mps | cpu
     "OCR_MODELS_DIR": Path(BASE_DIR, env("OCR_MODELS_DIR", default="playground/poc/models")).resolve(),
     "OCR_PRIMARY": env("OCR_PRIMARY", default="qari_v03"),
@@ -152,6 +152,20 @@ NASSAKH = {
     "MAX_PIXELS": 2048 * 28 * 28,
     "MIN_PIXELS": 256 * 28 * 28,
     "MAX_NEW_TOKENS": {"page": 3000, "body": 2500, "footnote": 1000, "other": 600},
+    # Qari on Runpod Serverless (OCR_BACKEND=runpod, docs/RUNPOD_SPEC.md): the API key and the endpoint of
+    # nassakh-qari-worker (or RUNPOD_ENDPOINT_URL for another address: the worker's local server); seconds one
+    # request may take with a cold start, seconds /runsync waits before the job is polled, attempts for a
+    # transient failure, seconds a job may run on the GPU, and the price of a GPU second for the cost
+    # estimate of the API log in Django admin (0: not shown).
+    "RUNPOD_API_KEY": env("RUNPOD_API_KEY", default=""),
+    "RUNPOD_ENDPOINT_ID": env("RUNPOD_ENDPOINT_ID", default=""),
+    "RUNPOD_ENDPOINT_URL": env("RUNPOD_ENDPOINT_URL", default=""),
+    "RUNPOD_BASE_URL": env("RUNPOD_BASE_URL", default="https://api.runpod.ai/v2"),
+    "RUNPOD_TIMEOUT_S": env.int("RUNPOD_TIMEOUT_S", default=600),
+    "RUNPOD_SYNC_WAIT_S": env.int("RUNPOD_SYNC_WAIT_S", default=90),
+    "RUNPOD_RETRIES": env.int("RUNPOD_RETRIES", default=4),
+    "RUNPOD_EXECUTION_TIMEOUT_S": env.int("RUNPOD_EXECUTION_TIMEOUT_S", default=300),
+    "RUNPOD_PRICE_PER_S": env.float("RUNPOD_PRICE_PER_S", default=0.0),
     # Word chooser for uncertain words during finalisation (D26): "vote" (D71) puts the reading Tesseract
     # backs into the text and leaves the word open; "none" disables the hook.
     "WORD_CHOOSER": env("WORD_CHOOSER", default="vote"),
