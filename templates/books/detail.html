@@ -106,14 +106,12 @@ today's.{% endcomment %}
         </button>
         <div class="menu menu-popover bk-menu" role="menu" x-show="open" x-cloak @click.outside="open = false" x-transition.opacity.duration.120ms>
           {% if guides_mode and layout_stage %}
-          {# «التخطيط» (§3.12 states): re-prepare the pages once they exist, delete, all books #}
+          {# «التخطيط» (§3.12 states): «إعادة التخطيط…» once the pages exist (D101), delete, all books #}
           {% if role == 'admin' or role == 'editor' %}
-          {% if user.is_superuser %}{# re-processing is the super admin's (item 29, books.services.may_rerun) #}
-          <button type="button" class="menu-item" role="menuitem" x-show="d.status === 'needs_guides' || (d.status === 'error' && d.nPages > 0)" @click="open = false; d.openRerun('preprocess', '{{ 'preprocess'|stage_label|escapejs }}')" data-guides-reprepare>
+          <button type="button" class="menu-item" role="menuitem" x-show="d.status === 'needs_guides' || (d.status === 'error' && d.nPages > 0)" @click="open = false; d.openRerun('{{ rerun_action.stage|escapejs }}', '{{ rerun_action.label|escapejs }}')" data-rerun-action="{{ rerun_action.stage }}">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
-            <span>إعادة تجهيز الصفحات…</span>
+            <span>{{ rerun_action.label }}…</span>
           </button>
-          {% endif %}
           <button type="button" class="menu-item is-danger" role="menuitem" @click="open = false; d.openDelete()" data-delete-menu-item>
             <span>حذف الكتاب…</span>
           </button>
@@ -156,11 +154,12 @@ today's.{% endcomment %}
           </a>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
-          {% if tiles and user.is_superuser %}{# re-processing is the super admin's (item 29) #}
-          <div class="menu-label">إعادة التشغيل من مرحلة</div>
-          {% for stage in rerun_stages %}
-          <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openRerun('{{ stage.value|escapejs }}', '{{ stage.label|escapejs }}')" data-rerun-stage="{{ stage.value }}">{{ stage.label }}…</button>
-          {% endfor %}
+          {% if tiles %}
+          {# one book re-run named by the view (D101): «إعادة التخطيط…» in «التخطيط», «إعادة المعالجة…» here; it asks first #}
+          <button type="button" class="menu-item" role="menuitem" @click="open = false; d.openRerun('{{ rerun_action.stage|escapejs }}', '{{ rerun_action.label|escapejs }}')" data-rerun-action="{{ rerun_action.stage }}">
+            <svg class="icon icon-sm" aria-hidden="true"><use href="#i-refresh"/></svg>
+            <span>{{ rerun_action.label }}…</span>
+          </button>
           <div class="menu-sep" role="separator"></div>
           {% endif %}
           <button type="button" class="menu-item is-danger" role="menuitem" @click="open = false; d.openDelete()" data-delete-menu-item>
@@ -495,7 +494,7 @@ today's.{% endcomment %}
         {% csrf_token %}
         <input type="hidden" name="stage" :value="dialog.stage">
         <button type="button" class="btn" x-ref="rerunSafe" @click="closeDialog()">إلغاء</button>
-        <button type="submit" class="btn btn-primary">إعادة التشغيل</button>
+        <button type="submit" class="btn btn-primary" x-text="rerunButton">إعادة التشغيل</button>
       </form>
     </div>
     {% if delete_action %}

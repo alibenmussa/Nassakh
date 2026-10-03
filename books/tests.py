@@ -1001,7 +1001,7 @@ def test_detail_shows_the_empty_state_before_ingest_and_the_dashboard_after(edit
     body = editor_client.get(url).content.decode()
     assert "لم تُستخرج الصفحات بعد" in body
     assert reverse("books:start", args=[book.pk]) in body
-    assert services.book_dashboard(book)["rerun_stages"] == []  # «⋯» offers no re-run before extraction
+    assert services.book_dashboard(book)["rerun"] == {}  # «⋯» offers no re-run before extraction
 
     pages = services.ingest_book(book)
     Page.objects.filter(pk=pages[0].pk).update(status=Page.Status.ERROR, error_message="فشل\nTraceback")
@@ -1082,16 +1082,10 @@ def test_start_view_enqueues_and_reports(editor_client):
     assert "المعالجة جارية بالفعل" in response.content.decode()
 
 
-@pytest.fixture
-def superuser_client(client):
-    client.force_login(User.objects.create_superuser("owner", password="pass-1234"))
-    return client
-
-
-def test_rerun_view_for_the_book_and_for_one_page(superuser_client):
+def test_rerun_view_for_the_book_and_for_one_page(editor_client):
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = superuser_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "layout"})
+        response = editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "layout"})
     token = Page.objects.get(pk=pages[0].pk).run_token  # both pages claimed in the request (item 29)
     assert token and set(book.pages.values_list("run_token", flat=True)) == {token}
     delay.assert_called_once_with(book.pk, "layout", run=token)
@@ -1099,53 +1093,53 @@ def test_rerun_view_for_the_book_and_for_one_page(superuser_client):
     _end_runs(book)
 
     with patch("books.services.run_stage") as run_stage:
-        response = superuser_client.post(reverse("books:rerun", args=[book.pk, 2]) + "?stage=ocr_full")
+        response = editor_client.post(reverse("books:rerun", args=[book.pk, 2]) + "?stage=ocr_full")
     assert run_stage.call_args.args[0].pk == pages[1].pk and run_stage.call_args.args[1] == "ocr_full"
     assert response["Location"] == services.sheet_url(book.pk, 2)
 
     with patch("books.tasks.rerun_book_from.delay") as delay:
         url = reverse("books:rerun", args=[book.pk])
-        response = superuser_client.post(url, {"stage": "nope"}, follow=True)
+        response = editor_client.post(url, {"stage": "nope"}, follow=True)
     delay.assert_not_called()
     assert "اختر مرحلة صحيحة" in response.content.decode()
 
 
-def test_rerun_view_reports_approved_pages_and_refuses_a_fully_approved_book(superuser_client):
+def test_rerun_view_reports_approved_pages_and_refuses_a_fully_approved_book(editor_client):
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE, text_state=Page.TextState.FINAL)
     _approve(pages[0])
     url = reverse("books:rerun", args=[book.pk])
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = superuser_client.post(url, {"stage": "ocr"}, follow=True)
+        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
     delay.assert_called_once()
     assert Page.objects.get(pk=pages[0].pk).run_token == ""  # the approved page is not claimed
-    assert "تُركت 1 صفحة معتمدة كما هي." in response.content.decode()
+    assert "بدأت إعادة المعالجة. تُركت 1 صفحة معتمدة كما هي." in response.content.decode()
     _end_runs(book)
 
     _approve(pages[1])
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        response = superuser_client.post(url, {"stage": "ocr"}, follow=True)
+        response = editor_client.post(url, {"stage": "ocr"}, follow=True)
     delay.assert_not_called()
     assert "كل صفحات الكتاب معتمدة" in response.content.decode()
-    response = superuser_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"}, follow=True)
+    response = editor_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"}, follow=True)
     assert "الصفحة معتمدة؛ أعد فتحها من شاشة المراجعة" in response.content.decode()
 
 
 # ====================================================================== one run per page (item 29)
 
 
-def test_a_second_book_rerun_queues_nothing_while_the_first_holds_the_pages(superuser_client):
+def test_a_second_book_rerun_queues_nothing_while_the_first_holds_the_pages(editor_client):
     # the owner's double «إعادة التعرّف»: the second submit is refused in the request, nothing is queued twice
     book, pages = _book_with_pages(3, status=Page.Status.OCR_DONE)
     url = reverse("books:rerun", args=[book.pk])
     with patch("books.tasks.rerun_book_from.delay") as delay:
-        superuser_client.post(url, {"stage": "ocr"})
-        again = superuser_client.post(url, {"stage": "ocr_full"}, follow=True)
+        editor_client.post(url, {"stage": "ocr"})
+        again = editor_client.post(url, {"stage": "ocr_full"}, follow=True)
     delay.assert_called_once()
     assert "تجري معالجة 3 صفحات من هذا الكتاب الآن" in again.content.decode()
     # a page re-run of a held page is refused as well, and so is the re-run task itself
     with patch("books.services.chain") as chain:
         page_url = reverse("books:rerun", args=[book.pk, 2])
-        page_again = superuser_client.post(page_url, {"stage": "ocr"}, follow=True)
+        page_again = editor_client.post(page_url, {"stage": "ocr"}, follow=True)
         with pytest.raises(ValueError, match="تجري معالجة"):
             services.rerun_book(book, "ocr")
     chain.assert_not_called()
@@ -1297,34 +1291,64 @@ def test_a_chain_that_dies_releases_its_claim_and_marks_the_waiting_page():
     assert book.status == Book.Status.READY_FOR_REVIEW  # nothing left to wait for
 
 
-def test_book_reruns_are_the_super_admins_and_editors_may_only_retry_failed_pages(editor_client):
+def test_every_editor_may_rerun_a_book_or_any_page_and_a_proofreader_may_not(editor_client, proofreader):
+    # D101 (supersedes item 29's super-admin rule): a re-run will cost credit points, so the editor's role
+    # is enough
     book, pages = _book_with_pages(2, status=Page.Status.OCR_DONE)
+    url = reverse("books:rerun", args=[book.pk])
+    with patch("books.tasks.rerun_book_from.delay") as delay:
+        response = editor_client.post(url, {"stage": services.REPROCESS_STAGE}, follow=True)
+    token = Page.objects.get(pk=pages[0].pk).run_token
+    delay.assert_called_once_with(book.pk, "ocr", run=token)
+    assert "بدأت إعادة المعالجة." in response.content.decode()
+    _end_runs(book)
+    with patch("books.services.chain") as chain:
+        response = editor_client.post(reverse("books:rerun", args=[book.pk, 1]), {"stage": "ocr"})
+    assert response.status_code == 302 and chain.call_count == 1  # a page that never failed
+    _end_runs(book)
+    editor_client.force_login(proofreader)
+    page_url = reverse("books:rerun", args=[book.pk, 1])
     with patch("books.tasks.rerun_book_from.delay") as delay, patch("books.services.chain") as chain:
-        assert editor_client.post(reverse("books:rerun", args=[book.pk]), {"stage": "ocr"}).status_code == 403
-        page_url = reverse("books:rerun", args=[book.pk, 1])
+        assert editor_client.post(url, {"stage": "ocr"}).status_code == 403
         assert editor_client.post(page_url, {"stage": "ocr"}).status_code == 403
-        pages[1].set_error("ocr_full", "تعذّر التعرّف على النص.")
-        response = editor_client.post(reverse("books:rerun", args=[book.pk, 2]), {"stage": "ocr_full"})
     delay.assert_not_called()
-    assert response.status_code == 302 and chain.call_count == 1  # the retry of a failed page
-    assert services.may_rerun(User(is_superuser=True)) and not services.may_rerun(User())
+    chain.assert_not_called()
 
 
-def test_the_dashboard_offers_book_reruns_to_the_super_admin_only(editor_client, client):
+def test_the_two_book_reruns_are_the_relayout_and_the_reprocessing_pass():
+    # «إعادة التخطيط» prepares and lays out again (then reads, once started); «إعادة المعالجة» is one
+    # OCR pass: Tesseract, then both models with the finalisation that queues the numbers pass (D101)
+    assert services.RERUN_ACTION_LABELS == {"preprocess": "إعادة التخطيط", "ocr": "إعادة المعالجة"}
+    assert services.rerun_action(True) == {"stage": "preprocess", "label": "إعادة التخطيط"}
+    assert services.rerun_action(False) == {"stage": "ocr", "label": "إعادة المعالجة"}
+    book, pages = _book_with_pages(1, status=Page.Status.OCR_DONE)
+    steps = services._stage_signatures(pages[0].pk, services.REPROCESS_STAGE, run="r" * 32)
+    assert [s.task for s in steps] == ["ocr.tasks.ocr_page_fast", "ocr.tasks.ocr_page_full"]
+    assert steps[-1].kwargs == {"run": "r" * 32, "last": True}
+    steps = services._stage_signatures(pages[0].pk, services.RELAYOUT_STAGE, run="r" * 32)
+    names = [s.task.rsplit(".", 1)[1] for s in steps]
+    assert names == ["preprocess_page", "layout_page", "ocr_page_fast", "ocr_page_full"]
+
+
+def test_the_dashboard_offers_one_rerun_named_by_the_view(editor_client):
+    # D101: «إعادة المعالجة…» on the dashboard, «إعادة التخطيط…» in «التخطيط» (a started book's, a
+    # waiting one's)
     book, _ = _book_with_pages(2, status=Page.Status.OCR_DONE)
     book.status = Book.Status.READY_FOR_REVIEW
     book.save()
-    url = reverse("books:detail", args=[book.pk])
     paused = Book.objects.create(title="ك", status=Book.Status.NEEDS_GUIDES, awaits_ocr_start=True)
     Page.objects.create(book=paused, number=1, source_index=0, status=Page.Status.PREPROCESSED)
-    paused_url = reverse("books:detail", args=[paused.pk])
-    assert "data-rerun-stage" not in editor_client.get(url).content.decode()
-    assert "data-guides-reprepare" not in editor_client.get(paused_url).content.decode()
-    client.force_login(User.objects.create_superuser("owner", password="pass-1234"))
-    body = client.get(url).content.decode()
-    assert body.count("data-rerun-stage=") == 5 and "إعادة التشغيل من مرحلة" in body
-    body = client.get(paused_url).content.decode()
-    assert "data-guides-reprepare" in body and "إعادة تجهيز الصفحات…" in body
+    for url, stage, label in (
+        (reverse("books:detail", args=[book.pk]), "ocr", "إعادة المعالجة"),
+        (reverse("books:guides", args=[book.pk]), "preprocess", "إعادة التخطيط"),
+        (reverse("books:detail", args=[paused.pk]), "preprocess", "إعادة التخطيط"),
+    ):
+        body = editor_client.get(url).content.decode()
+        start = body.index('class="menu menu-popover bk-menu"')
+        menu = body[start : body.index("</template>", start)]
+        assert menu.count("data-rerun-action=") == 1 and f'data-rerun-action="{stage}"' in menu, url
+        assert f"d.openRerun('{stage}', '{label}')" in menu and f"<span>{label}…</span>" in menu, url
+        assert "data-rerun-stage" not in body and "إعادة التشغيل من مرحلة" not in body, url
 
 
 def test_guide_changes_wait_for_the_runs_of_a_started_book():
@@ -2372,7 +2396,7 @@ def test_start_processing_extracts_refuses_after_layout_and_reverts_on_a_broker_
     book.refresh_from_db()
     with pytest.raises(ValueError) as exc:
         services.start_processing(book)
-    assert str(exc.value) == "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو أعد تجهيز الصفحات من القائمة «⋯»."
+    assert str(exc.value) == "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو اختر «إعادة التخطيط» من القائمة «⋯»."
 
 
 @pytest.mark.parametrize(
@@ -2504,14 +2528,19 @@ def test_delete_book_keeps_the_folder_when_the_transaction_rolls_back(settings):
 def test_dashboard_offers_only_the_preprocess_rerun_while_the_book_waits():
     book, _ = guides_book("layout")
     context = services.book_dashboard(book)
-    assert context["rerun_stages"] == [{"value": "preprocess", "label": "تجهيز الصفحات"}]
+    assert context["rerun_action"] == {"stage": "preprocess", "label": "إعادة التخطيط"}
+    assert list(context["rerun"]) == ["preprocess"]
     assert context["guides_mode"] and context["start_action"] == "startOcr"
     assert context["kept_range"]["text"] == "الصفحات 187–193 من 555"
     started, _ = guides_book_replace("started")
     context = services.book_dashboard(started)
-    assert [s["value"] for s in context["rerun_stages"]] == list(services.STAGES)
+    # D101: one re-run per view, «إعادة المعالجة» outside the mode and «إعادة التخطيط» in it
+    assert context["rerun_action"] == {"stage": "ocr", "label": "إعادة المعالجة"}
+    assert list(context["rerun"]) == ["ocr"]
     assert not context["guides_mode"] and context["start_action"] == ""
-    assert services.book_dashboard(started, "guides")["guides_mode"] is True
+    in_mode = services.book_dashboard(started, "guides")
+    assert in_mode["guides_mode"] is True and in_mode["rerun_action"]["stage"] == "preprocess"
+    assert list(in_mode["rerun"]) == ["preprocess"]
     assert context["guides_url"] == f"/books/{started.pk}/guides/"
 
 

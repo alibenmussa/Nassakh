@@ -849,3 +849,22 @@ reads well; the rule line above the notes and padding are not the cause. When bo
 without error but fail the sanity check at an upscale above 1, `run_full_ocr` reads the region again at 1× (the
 newer runs are the ones `select_reading` sees); pieces (D90) still follow if that fails too. A region of
 three or more lines at 2× was not affected on the test books. A tall region's 2× read stays the first try.
+
+## D101 — Re-runs for every editor; two named re-runs, «إعادة التخطيط» and «إعادة المعالجة» (2026-10-03, supersedes item 29's super-admin rule, amends D64, D67)
+
+Owner decisions after review item 29. (a) A re-run is no longer the super admin's: in the SaaS phase it will cost
+the user credit points, so every user who may edit the book (role `editor` or `admin`, as for the other book
+actions) may re-run a book or any page; `books.services.may_rerun`, `RERUN_SUPERUSER_ERROR` and the view's 403s are
+gone (proofreaders still get the `role_required` 403). The one-run-per-page guard of item 29 (`books.runs`) stays: no
+second run is queued while one holds a page, with «تجري معالجة …؛ انتظر حتى تنتهي ثم أعد المحاولة.». (b) The split
+re-run list «إعادة التشغيل من مرحلة» (five stages: preparation, regions, text fast-then-full, Tesseract, Qari) is
+replaced in «⋯» by one action named by where the user is (`services.rerun_action`, `RERUN_ACTION_LABELS`):
+«إعادة التخطيط…» in «التخطيط» (a book awaiting «بدء المعالجة», or a started book's `/guides/`) is the `preprocess`
+re-run — the pages prepared and laid out again (manual rotation and crop kept), stopping at «تم التخطيط» before
+«بدء المعالجة» and read again on a started book; «إعادة المعالجة…» on the dashboard is the `ocr` re-run — one chain
+of Tesseract (`ocr_page_fast`) then both models (`ocr_page_full`), whose finalisation queues the numbers / call pass,
+over the kept layout. Both keep the confirmation (pages run, approved pages kept, the model time; «إعادة التخطيط» of a
+started book now names the model time too), its title and button name the action («إعادة معالجة الكتاب؟» ·
+«إعادة المعالجة»), and the message after it is «بدأت إعادة المعالجة.». The config's `rerun` carries the estimate of
+the offered action only. The other stages (`layout`, `ocr_fast`, `ocr_full`) stay for the retry of a failed page
+(unchanged, for every editor), the `books:rerun` view, the tasks and the shell.

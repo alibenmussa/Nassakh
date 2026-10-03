@@ -141,11 +141,7 @@
       "text": "اكتُشف خط حاشية في 4 من 6 صفحات، وحاشية بخط أصغر في 1، ورقم صفحة في 6."
     },
     "rerun": {
-      "preprocess": {"pages": 5, "kept": 1, "minutes": 2},
-      "layout": {"pages": 5, "kept": 1, "minutes": 2},
-      "ocr": {"pages": 5, "kept": 1, "minutes": 2},
-      "ocr_fast": {"pages": 5, "kept": 1, "minutes": null},
-      "ocr_full": {"pages": 5, "kept": 1, "minutes": 2}
+      "preprocess": {"pages": 5, "kept": 1, "minutes": 2}
     },
     "guidesUrls": {
       "state": "/api/books/25/guides/",
@@ -164,11 +160,7 @@
     "guidesMode": false,
     "layoutStage": false,
     "rerun": {
-      "preprocess": {"pages": 5, "kept": 1, "minutes": 2},
-      "layout": {"pages": 5, "kept": 1, "minutes": 2},
-      "ocr": {"pages": 5, "kept": 1, "minutes": 2},
-      "ocr_fast": {"pages": 5, "kept": 1, "minutes": null},
-      "ocr_full": {"pages": 5, "kept": 1, "minutes": 2}
+      "ocr": {"pages": 5, "kept": 1, "minutes": 2}
     }
   }
 }

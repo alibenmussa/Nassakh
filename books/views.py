@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -140,9 +139,9 @@ def delete(request: HttpRequest, book_id: int) -> HttpResponse:
 def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> HttpResponse:
     """Re-run the pipeline from `?stage=` for the whole book, or for one page when `number` is given.
 
-    Re-processing is the super admin's (item 29, `services.may_rerun`): a book re-run always, a page
-    re-run unless the page is in error (a retry). A run already holding a page refuses the re-run with a
-    message (`books.runs`): a second click never queues a second run.
+    Every editor of the book may re-run it (D101, superseding item 29's super-admin rule): the «⋯» menu's
+    «إعادة التخطيط» (`preprocess`) and «إعادة المعالجة» (`ocr`), the retry of a failed page. A run already
+    holding a page refuses the re-run with a message (`books.runs`): a second click never queues a second run.
     """
     book = get_object_or_404(Book, pk=book_id)
     stage = request.POST.get("stage") or request.GET.get("stage") or ""
@@ -152,8 +151,6 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
 
     label = services.STAGE_LABELS[stage]
     if number is None:
-        if not services.may_rerun(request.user):
-            raise PermissionDenied(services.RERUN_SUPERUSER_ERROR)
         try:
             services.queue_book_rerun(book, stage)
         except ValueError as exc:
@@ -161,12 +158,12 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
             return redirect("books:detail", book.pk)
         kept = services.approved_page_count(book)
         note = f" تُركت {kept} صفحة معتمدة كما هي." if kept else ""
-        messages.success(request, f"أُعيد تشغيل الكتاب من مرحلة «{label}».{note}")
+        action = services.RERUN_ACTION_LABELS.get(stage)
+        started = f"بدأت {action}." if action else f"أُعيد تشغيل الكتاب من مرحلة «{label}»."
+        messages.success(request, f"{started}{note}")
         return redirect("books:detail", book.pk)
 
     page = get_object_or_404(Page, book=book, number=number)
-    if not services.may_rerun(request.user, page):
-        raise PermissionDenied(services.RERUN_SUPERUSER_ERROR)
     try:
         services.run_stage(page, stage)
     except ValueError as exc:

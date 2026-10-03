@@ -90,11 +90,20 @@ ALL_APPROVED_ERROR = "كل صفحات الكتاب معتمدة؛ أعد فتح 
 # «التخطيط» and «المعالجة» (D64, D65): the messages of the split.
 LAYOUT_STAGES: tuple[str, ...] = ("preprocess",)  # the only re-run while a book awaits «بدء المعالجة»
 NOT_STARTED_ERROR = "لم تبدأ المعالجة بعد؛ اضغط «بدء المعالجة» أولًا."
-LAYOUT_DONE_ERROR = "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو أعد تجهيز الصفحات من القائمة «⋯»."
+LAYOUT_DONE_ERROR = "اكتمل التخطيط؛ اضغط «بدء المعالجة»، أو اختر «إعادة التخطيط» من القائمة «⋯»."
 BROKER_ERROR = "تعذّر إرسال العمل إلى العامل الخلفي. تأكّد من تشغيل Redis والعامل ثم أعد المحاولة."
 ALREADY_STARTED_ERROR = "بدأت المعالجة بالفعل."
 STILL_PREPARING_ERROR = "لم يكتمل التخطيط بعد؛ انتظر حتى تُجهَّز كل الصفحات."
-NOTHING_READY_ERROR = "لا صفحات جاهزة للمعالجة؛ أعد صفحةً إلى الكتاب أو أعد تجهيز الصفحات."
+NOTHING_READY_ERROR = "لا صفحات جاهزة للمعالجة؛ أعد صفحةً إلى الكتاب أو اختر «إعادة التخطيط»."
+
+# The book re-runs the «⋯» menu offers (D101), one per view and named by it: «إعادة التخطيط» in
+# «التخطيط» (the pages prepared and laid out again, then read again once «المعالجة» has started) and
+# «إعادة المعالجة» outside it (Tesseract, both models, finalisation and the numbers pass, as one chain
+# over the kept layout). The other stages stay for the retry of a failed page, the views, the tasks and
+# the shell.
+RELAYOUT_STAGE = "preprocess"
+REPROCESS_STAGE = "ocr"
+RERUN_ACTION_LABELS: dict[str, str] = {RELAYOUT_STAGE: "إعادة التخطيط", REPROCESS_STAGE: "إعادة المعالجة"}
 
 # The model time a book re-run costs (§3.6): stages whose chain ends with the models, and the
 # per-page Qari time used when the book has no Qari run yet.
@@ -486,7 +495,7 @@ def start_processing(book: Book) -> None:
     if book.status == Book.Status.NEEDS_GUIDES:
         raise ValueError(LAYOUT_DONE_ERROR)
     if book.status not in (Book.Status.UPLOADED, Book.Status.ERROR):
-        raise ValueError("انتهت معالجة هذا الكتاب. استخدم «إعادة التشغيل» لإعادة مرحلة معيّنة.")
+        raise ValueError("انتهت معالجة هذا الكتاب. استخدم «إعادة المعالجة» من القائمة «⋯».")
     if not book.source_pdf:
         raise ValueError("لا يوجد ملف PDF مرفق بهذا الكتاب.")
 
@@ -684,7 +693,7 @@ def validate_rerun(book: Book, stage: str, run: str = "") -> None:
 
     Every stage can be re-run, including on a book that an earlier version parked in
     `needs_guides` (regions are now derived per page, so nothing waits for the guides). While the
-    book awaits «بدء المعالجة» only `preprocess` can («إعادة تجهيز الصفحات»). Refused when every
+    book awaits «بدء المعالجة» only `preprocess` can («إعادة التخطيط»). Refused when every
     non-excluded page is approved (`rerun_book` would have nothing to run), while the pages of a book in
     «التخطيط» are still being extracted and prepared (`STILL_PREPARING_ERROR`), and while a run holds any
     page of the book (`runs.book_run_active_message`: one run per page at a time, item 29).
@@ -702,19 +711,6 @@ def validate_rerun(book: Book, stage: str, run: str = "") -> None:
     busy = runs.active_count(book.pages.exclude(run_token=run) if run else book.pages.all())
     if busy:
         raise ValueError(runs.book_run_active_message(busy))
-
-
-RERUN_SUPERUSER_ERROR = "إعادة المعالجة وإعادة التعرّف متاحتان للمدير العام فقط."
-
-
-def may_rerun(user, page: Page | None = None) -> bool:
-    """Whether `user` may re-run processing (owner review 2026-10-03, item 29): re-processing and full
-    re-recognition are the super admin's (`is_superuser`). Without `page` it is a book re-run (the «⋯»
-    menu); an editor may still re-run a page that is in error (the retry buttons, «تجهيز الصفحة» of a
-    failed page), which finishes work that never completed instead of redoing it."""
-    if getattr(user, "is_superuser", False):
-        return True
-    return page is not None and page.status == Page.Status.ERROR
 
 
 def approved_page_count(book: Book) -> int:
@@ -892,11 +888,19 @@ def rerun_estimate(
     return {"pages": pages, "kept": kept, "minutes": minutes}
 
 
-def offered_rerun_stages(book: Book, has_pages: bool | None = None) -> list[str]:
-    """The book-wide re-runs «⋯» offers: in «التخطيط» only «إعادة تجهيز الصفحات», and only once the book
-    is `needs_guides` or in `error` with pages; else today's five stages."""
+def rerun_action(guides_mode: bool) -> dict:
+    """The one book re-run «⋯» offers in a view (D101): `{stage, label}`, «إعادة التخطيط» (`preprocess`) in
+    «التخطيط», «إعادة المعالجة» (`ocr`) outside it."""
+    stage = RELAYOUT_STAGE if guides_mode else REPROCESS_STAGE
+    return {"stage": stage, "label": RERUN_ACTION_LABELS[stage]}
+
+
+def offered_rerun_stages(book: Book, has_pages: bool | None = None, guides_mode: bool = False) -> list[str]:
+    """The stage of the book re-run «⋯» offers (`rerun_action`, D101), as a list of none or one: a
+    started book always offers its view's; a book awaiting «بدء المعالجة» offers «إعادة التخطيط» only
+    once it is `needs_guides`, or in `error` with pages."""
     if not book.awaits_ocr_start:
-        return list(STAGES)
+        return [rerun_action(guides_mode)["stage"]]
     if book.status == Book.Status.NEEDS_GUIDES:
         return list(LAYOUT_STAGES)
     if book.status == Book.Status.ERROR:
@@ -1395,7 +1399,8 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
     The «التخطيط» mode (D67) is on while the book awaits «بدء المعالجة», or with `view == "guides"`;
     it adds `guidesMode`, `layoutStage`, `startAction`, the book guides, the detection line, the kept
     range, `textLayer` and `guidesUrls` to the config (§3.11). Every book carries `rerun`: the
-    estimate of each offered book re-run, so the confirmation opens without a request.
+    estimate of the offered book re-run (`rerun_action`, D101: «إعادة التخطيط» in the mode, «إعادة المعالجة»
+    outside it), so the confirmation opens without a request.
     """
     from assembly.services import manuscript_urls  # other app: lazy import
     from editor.services import editor_urls
@@ -1432,7 +1437,7 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
     tiles = page_tiles(book)
     layout_stage = bool(book.awaits_ocr_start)
     guides_mode = layout_stage or view == GUIDES_VIEW
-    offered = offered_rerun_stages(book, has_pages=bool(tiles))
+    offered = offered_rerun_stages(book, has_pages=bool(tiles), guides_mode=guides_mode)
     rerun = rerun_estimates(book, offered)
     config = {
         "progressUrl": reverse("api:book_progress", args=[book.pk]),
@@ -1495,7 +1500,7 @@ def book_dashboard(book: Book, view: str | None = None) -> dict:
         "has_guides": has_guides(book),
         "guides_url": guides_url(book),
         "can_start": book.status in (Book.Status.UPLOADED, Book.Status.ERROR),
-        "rerun_stages": [{"value": value, "label": STAGE_LABELS[value]} for value in offered],
+        "rerun_action": rerun_action(guides_mode),  # the «⋯» item (D101); `rerun` is {} while none is offered
         "rerun": rerun,
         "start_ocr_url": reverse("books:start_ocr", args=[book.pk]),
         "delete_url": reverse("books:delete", args=[book.pk]),

@@ -243,8 +243,11 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
             "</template>", body.index('class="menu menu-popover bk-menu"')
         )
     ]
-    assert (  # book re-runs are the super admin's (owner review item 29; books.tests checks their menu)
-        menu.count("data-rerun-stage=") == 0
+    assert (  # one book re-run, named by the view (D101): «إعادة المعالجة…» here, for every editor
+        menu.count("data-rerun-action=") == 1
+        and 'data-rerun-action="ocr"' in menu
+        and "<span>إعادة المعالجة…</span>" in menu
+        and "data-rerun-stage" not in menu
         and 'name="stage"' not in menu
         and "إعادة التشغيل من مرحلة" not in menu
         and "<span>التخطيط</span>" in menu
@@ -254,13 +257,14 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
         and "اختصارات لوحة المفاتيح" in menu
         and "d.openSheet()" in menu
     )
-    assert "d.openRerun(" not in menu and "d.openDelete()" in menu
-    # the re-run dialog posts the stage it names; the delete dialog names what is lost (§3.13)
+    assert "d.openRerun('ocr', 'إعادة المعالجة')" in menu and "d.openDelete()" in menu
+    # the re-run dialog posts the stage it names, its button says the action; the delete dialog names what
+    # is lost (§3.13)
     rerun = body[body.index("data-rerun-dialog") : body.index("data-delete-dialog")]
     assert (
         'name="stage" :value="dialog.stage"' in rerun
         and 'x-ref="rerunSafe"' in rerun
-        and "إعادة التشغيل</button>" in rerun
+        and 'x-text="rerunButton">إعادة التشغيل</button>' in rerun
     )
     delete = body[body.index("data-delete-dialog") :]
     assert f"حذف الكتاب «{book.title}»؟" in delete and "ولا يمكن التراجع عن ذلك." in delete
@@ -315,7 +319,7 @@ def test_dashboard_top_bar_primary_candidates_menu_and_banners(editor_client):
     client.force_login(_user("reader", "proofreader"))
     body = client.get(reverse("books:detail", args=[book.pk])).content.decode()
     assert "d.primary === 'start'" not in body and 'name="stage"' not in body and "fac-restore" not in body
-    assert "data-rerun-dialog" not in body and "حذف الكتاب" not in body
+    assert "data-rerun-dialog" not in body and "data-rerun-action" not in body and "حذف الكتاب" not in body
     assert "d.primary === 'book'" not in body  # the manuscript stays a proofreader's primary
     assert (
         "data-book-menu-item" in body and "data-book-link" in body
@@ -1504,12 +1508,21 @@ def test_guides_mode_for_a_book_awaiting_the_start(editor_client):
     assert (
         "d.primary === 'start'\"" not in bar and "d.primary === 'back'" in bar and "العودة إلى الصفحات" in bar
     )
-    # «⋯»: «إعادة تجهيز الصفحات…» (asks first), «حذف الكتاب…», «كل الكتب» — nothing of «المعالجة»
+    # «⋯»: «إعادة التخطيط…» (asks first, D101), «حذف الكتاب…», «كل الكتب» — nothing of «المعالجة»
     menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
-    # «إعادة تجهيز الصفحات…» is the super admin's (owner review item 29; books.tests checks it there)
-    assert "إعادة تجهيز الصفحات…" not in menu and "d.openRerun(" not in menu
-    assert "حذف الكتاب…" in menu and "كل الكتب" in menu
-    for gone in ("تحويل إلى كتاب", "الإخراج", "نسخ نص الكتاب", "إعادة التشغيل من مرحلة", "data-rerun-stage"):
+    item = _between(menu, "<button", "</button>")
+    assert "x-show=\"d.status === 'needs_guides' || (d.status === 'error' && d.nPages > 0)\"" in item
+    assert "d.openRerun('preprocess', 'إعادة التخطيط')" in item and "<span>إعادة التخطيط…</span>" in item
+    assert menu.count("data-rerun-action=") == 1 and "حذف الكتاب…" in menu and "كل الكتب" in menu
+    for gone in (
+        "تحويل إلى كتاب",
+        "الإخراج",
+        "نسخ نص الكتاب",
+        "إعادة التشغيل من مرحلة",
+        "data-rerun-stage",
+        "إعادة المعالجة",
+        "إعادة تجهيز الصفحات",
+    ):
         assert gone not in menu, gone
     # the toolbar: V toggles the view (D69); the mode's chips; no follow toggle
     chips = _between(body, "data-filter-chips>", "</div>")
@@ -1640,8 +1653,14 @@ def test_guides_view_on_a_started_book_and_the_plain_dashboard(editor_client):
         in body
     )
     menu = _between(body, 'class="menu menu-popover bk-menu"', "</template>")
-    assert (  # book re-runs are the super admin's (owner review item 29)
-        menu.count("data-rerun-stage=") == 0 and "حذف الكتاب…" in menu and "data-guides-menu-item" not in menu
+    assert (  # in «التخطيط» of a started book the one re-run is «إعادة التخطيط…» (D101)
+        menu.count("data-rerun-action=") == 1
+        and 'data-rerun-action="preprocess"' in menu
+        and "d.openRerun('preprocess', 'إعادة التخطيط')" in menu
+        and "إعادة المعالجة" not in menu
+        and "data-rerun-stage" not in menu
+        and "حذف الكتاب…" in menu
+        and "data-guides-menu-item" not in menu
     )
     assert "تجميع المخطوطة…" in menu and "bk-convert-host" in body
     assert "جُهّزت الصفحات واكتُشفت مناطقها" not in body
@@ -2020,9 +2039,9 @@ const lineOf = (fig, kind) => { const l = fig.querySelector(`.guide-line.is-${ki
   d.active = true;
   d.apply({ total: 7, percent: 100, flags: 0, status: 'needs_guides', status_label: 'تم التخطيط', dot: 'dot-warning', by_status: { preprocessed: 7 }, active: false, layout_stage: true, waiting: true, pages: [] });
   out.doneToast = [d.doneToast.visible, d.doneText, d.doneToast.url];
-  // dialogs: the re-run estimate of «تجهيز الصفحات», the delete line
-  d.openRerun('preprocess', 'تجهيز الصفحات');
-  out.rerunDialog = [d.rerunTitle, d.rerunText, d.rerunNote];
+  // dialogs: the re-run estimate of «إعادة التخطيط» (D101), the delete line
+  d.openRerun('preprocess', 'إعادة التخطيط');
+  out.rerunDialog = [d.rerunTitle, d.rerunText, d.rerunNote, d.rerunButton];
   d.onKey({ key: 'Escape', target: {}, preventDefault: () => {} }); out.dialogEsc = d.dialog.kind;
   d.openDelete(); out.deleteWork = d.deleteWork; d.closeDialog();
 
@@ -2064,8 +2083,13 @@ const lineOf = (fig, kind) => { const l = fig.querySelector(`.guide-line.is-${ki
   out.ocrPreview = [calls.map((c) => c.body)[0], M.g.previewChanged, M.g.previewReocr, M.g.previewLocked, M.g.keptText, M.g.keptApply];
   await M.g.applyDraft(); await settle();
   out.ocrApply = [M.g.toast.message, M.g.toast.hasAction];
-  M.d.openRerun('ocr', 'التعرّف على النص');
-  out.ocrRerun = [M.d.rerunText, M.d.rerunNote];
+  // «إعادة التخطيط» of a started book reads the pages again too: the note names the models' time (D101)
+  M.d.openRerun('preprocess', 'إعادة التخطيط');
+  out.relayout = [M.d.rerunTitle, M.d.rerunText, M.d.rerunNote, M.d.rerunButton];
+  // outside the mode: «إعادة المعالجة» with the dashboard's estimate (dashboard_config.json `started`)
+  M.d.rerun = clone(FX['dashboard_config.json'].started.rerun);
+  M.d.openRerun('ocr', 'إعادة المعالجة');
+  out.reprocess = [M.d.rerunTitle, M.d.rerunText, M.d.rerunNote, M.d.rerunButton];
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -2256,9 +2280,10 @@ def test_guides_mode_logic_under_node_on_the_contract_fixtures(editor_client, tm
     assert out["conflict"] is True  # a 409 `started` shows «بدأت المعالجة في نافذة أخرى»
     assert out["doneToast"] == [True, "اكتمل التخطيط · 7 صفحات", ""]
     assert out["rerunDialog"] == [
-        "إعادة تشغيل الكتاب من «تجهيز الصفحات»؟",
-        "تُعاد 7 صفحات من هذه المرحلة.",
+        "إعادة تخطيط الكتاب؟",
+        "يُعاد تخطيط 7 صفحات.",
         "يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ.",
+        "إعادة التخطيط",
     ]
     assert out["dialogEsc"] == "" and out["deleteWork"] == ""
 
@@ -2294,9 +2319,19 @@ def test_guides_mode_logic_under_node_on_the_contract_fixtures(editor_client, tm
         "تطبيقه عليها أيضًا",
     ]
     assert out["ocrApply"] == ["طُبّق على 3 صفحات؛ يُعاد التعرّف على نصّها.", False]  # no undo in «المعالجة»
-    assert out["ocrRerun"] == [
-        "تُعاد 5 صفحات من هذه المرحلة، وتبقى صفحة واحدة معتمدة كما هي.",
+    # the two book re-runs (D101): «إعادة التخطيط» in the mode, «إعادة المعالجة» outside it
+    assert out["relayout"] == [
+        "إعادة تخطيط الكتاب؟",
+        "يُعاد تخطيط 5 صفحات، وتبقى صفحة واحدة معتمدة كما هي.",
+        "يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ، ثم يُعاد التعرّف عليها بالنماذج: "
+        "نحو دقيقتين على هذا الجهاز.",
+        "إعادة التخطيط",
+    ]
+    assert out["reprocess"] == [
+        "إعادة معالجة الكتاب؟",
+        "تُعاد معالجة 5 صفحات، وتبقى صفحة واحدة معتمدة كما هي.",
         "يُعاد التعرّف عليها بالنماذج: نحو دقيقتين على هذا الجهاز.",
+        "إعادة المعالجة",
     ]
 
 

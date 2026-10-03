@@ -76,8 +76,8 @@
     "start_action": "one of startAction, '' outside the mode",
     "kept_range": "as config.keptRange",
     "guides_stats": "as config.guidesStats",
-    "rerun_stages": "[{value, label}] filtered: in «التخطيط» only preprocess, and only when needs_guides or error with pages; else today's five",
-    "rerun": "as config.rerun",
+    "rerun_action": "{stage, label} (D101): in the mode «إعادة التخطيط» (preprocess), outside it «إعادة المعالجة» (ocr); a book awaiting «بدء المعالجة» shows it only when needs_guides or error with pages",
+    "rerun": "as config.rerun: the estimate of the offered re-run only ({} while none is offered)",
     "guides_url": "the «⋯» «التخطيط» link: /books/<id>/guides/",
     "start_ocr_url / delete_url / extract_url": "the POST targets"
   }

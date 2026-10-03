@@ -232,6 +232,11 @@ document.addEventListener('alpine:init', () => {
   const BAND_ORDER = { running_header: 0, body: 1, footnote: 2, page_number: 3 };
   const LINE_KINDS = { header: 'running_header', footnote: 'footnote' };
   const MINUTE_FORMS = ['دقيقة واحدة', 'دقيقتين', 'دقائق', 'دقيقة']; // after «نحو»: «نحو دقيقتين»
+  // The two book re-runs of «⋯» (D101, books.services.RERUN_ACTION_LABELS): the dialog's title and its verb
+  const RERUN_WORDS = {
+    preprocess: { title: 'إعادة تخطيط الكتاب؟', verb: 'يُعاد تخطيط' },
+    ocr: { title: 'إعادة معالجة الكتاب؟', verb: 'تُعاد معالجة' },
+  };
   const pct1 = (y) => (Math.round(Number(y) * 1000) / 10).toFixed(1);
   // Letters by physical key (D69) through static/src/js/keys.js, with a fallback of its own rule.
   const keyLetter = (e) => {
@@ -826,7 +831,7 @@ document.addEventListener('alpine:init', () => {
       const span = k.first && k.last ? (k.first === k.last ? `الصفحة ${k.first}` : `الصفحات ${k.first}–${k.last}`) : 'صفحات الملف';
       return `اضغط «${action}»؛ تُستخرج ${span} من الملف وتُجهَّز وتُرسم مناطقها.`;
     },
-    // ---- dialogs (§3.13, rv-modal look): re-run the book from a stage, delete the book
+    // ---- dialogs (§3.13, rv-modal look): re-run the book («إعادة التخطيط» / «إعادة المعالجة», D101), delete the book
     openRerun(stage, label) {
       this.dialog = { kind: 'rerun', stage: String(stage || ''), label: String(label || stage || '') };
       this.focusDialog();
@@ -866,24 +871,38 @@ document.addEventListener('alpine:init', () => {
       const run = () => { const safe = this.$refs && this.$refs[this.dialog.kind === 'delete' ? 'deleteSafe' : 'rerunSafe']; if (safe && safe.focus) safe.focus(); };
       if (this.$nextTick) this.$nextTick(run);
     },
+    // «إعادة معالجة الكتاب؟» / «إعادة تخطيط الكتاب؟» (D101); another stage keeps the old words
     get rerunTitle() {
-      return `إعادة تشغيل الكتاب من «${this.dialog.label}»؟`;
+      const words = RERUN_WORDS[this.dialog.stage];
+      return words ? words.title : `إعادة تشغيل الكتاب من «${this.dialog.label}»؟`;
     },
-    // «تُعاد 81 صفحة من هذه المرحلة، وتبقى 12 صفحة معتمدة كما هي.» (the second part only when pages are kept)
+    get rerunButton() {
+      return RERUN_WORDS[this.dialog.stage] ? this.dialog.label : 'إعادة التشغيل';
+    },
+    // «تُعاد معالجة 81 صفحة، وتبقى 12 صفحة معتمدة كما هي.» (the second part only when pages are kept)
     get rerunText() {
       const est = this.rerun[this.dialog.stage] || {};
       const n = Number(est.pages);
       const kept = Number(est.kept) || 0;
-      const head = Number.isFinite(n) && est.pages !== undefined && est.pages !== null ? `تُعاد ${arCount(n, PAGE_FORMS)} من هذه المرحلة` : 'تُعاد صفحات الكتاب غير المعتمدة من هذه المرحلة';
+      const known = Number.isFinite(n) && est.pages !== undefined && est.pages !== null;
+      const words = RERUN_WORDS[this.dialog.stage];
+      let head;
+      if (words) head = known ? `${words.verb} ${arCount(n, PAGE_FORMS_GEN)}` : `${words.verb} صفحات الكتاب غير المعتمدة`;
+      else head = known ? `تُعاد ${arCount(n, PAGE_FORMS)} من هذه المرحلة` : 'تُعاد صفحات الكتاب غير المعتمدة من هذه المرحلة';
       if (!kept) return `${head}.`;
       const keptText = kept === 1 ? 'صفحة واحدة معتمدة كما هي' : kept === 2 ? 'صفحتان معتمدتان كما هما' : `${arCount(kept, PAGE_FORMS)} معتمدة كما هي`;
       return `${head}، وتبقى ${keptText}.`;
     },
-    // the cost before a costly action (not a progress estimate, D22): the models' time, or what preprocessing keeps
+    // the cost before a costly action (not a progress estimate, D22): the models' time, and what preprocessing keeps
+    // (a started book's «إعادة التخطيط» reads the pages again too: both)
     get rerunNote() {
       const est = this.rerun[this.dialog.stage] || {};
-      if (this.dialog.stage === 'preprocess') return 'يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ.';
-      if (Number(est.minutes) > 0) return `يُعاد التعرّف عليها بالنماذج: نحو ${arCount(Math.ceil(Number(est.minutes)), MINUTE_FORMS)} على هذا الجهاز.`;
+      const minutes = Number(est.minutes) > 0 ? `نحو ${arCount(Math.ceil(Number(est.minutes)), MINUTE_FORMS)} على هذا الجهاز` : '';
+      if (this.dialog.stage === 'preprocess') {
+        const keeps = 'يُحتفظ بما ضُبط يدويًا لكل صفحة من تدوير وقصّ';
+        return minutes ? `${keeps}، ثم يُعاد التعرّف عليها بالنماذج: ${minutes}.` : `${keeps}.`;
+      }
+      if (minutes) return `يُعاد التعرّف عليها بالنماذج: ${minutes}.`;
       return '';
     },
     // «فيه 12 صفحة مُراجَعة ومخطوطة محرَّرة.» ('' for a book with no work in it)

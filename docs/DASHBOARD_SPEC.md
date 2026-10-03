@@ -70,8 +70,10 @@ Top to bottom, inside the normal page shell (`base.html` topbar 52 px + `.main` 
    All candidates are rendered server-side (role-gated) and toggled with `x-show`, so no reload is needed.
 6. **«⋯» menu** (`btn-icon`, `aria-haspopup="menu"`, popover 240 px, `--shadow-pop`): «نسخ نص الكتاب»
    (with the existing `title` hints, disabled while copying), separator, «ضبط الأدلة» (admin/editor),
-   separator, label «إعادة التشغيل من مرحلة» with the five rerun forms (admin/editor), separator,
-   «كل الكتب». An item that is currently the primary is hidden from the menu.
+   separator, one book re-run named by the view (admin/editor, D101; was the label «إعادة التشغيل من مرحلة»
+   with five stage forms): «إعادة المعالجة…» (stage `ocr`) here, «إعادة التخطيط…» (stage `preprocess`) in the
+   «التخطيط» mode; each opens the confirmation dialog (pages, approved pages kept, model time) whose button names
+   the action; separator, «كل الكتب». An item that is currently the primary is hidden from the menu.
 
 ### 2.2 Sticky toolbar `.bk-toolbar`
 

@@ -155,7 +155,7 @@ the stage that really failed. A book whose remaining pages all failed settles (`
 are done, `error` when none is) instead of staying active. A page re-included with «استثناء الصفحة» continues
 from its last completed stage.
 
-**One run per page, re-runs for the super admin (owner review 2026-10-03).** Every chain queued for a page first
+**One run per page (owner review 2026-10-03); re-runs for every editor (D101).** Every chain queued for a page first
 claims it (`books.runs`: `Page.run_token` / `run_claimed_at`, one conditional UPDATE). While a run holds a page,
 nothing else is queued for it: a second click on a re-run, a second tab, a second book re-run, a guides change in
 the «التخطيط» mode of a started book (page or book) or a re-included page are refused with «تجري معالجة …؛ انتظر
@@ -166,17 +166,22 @@ tasks (the hard time limit, a lost worker) is released by its errback `books.tas
 marks a waiting page failed so its retry button appears. The numbers pass (`ocr.tasks.read_numbers`) of an earlier
 run is skipped once a newer run holds the page (the newer run queues its own). A claim older than
 `RUN_CLAIM_HOURS` (12) no longer blocks; `manage.py release_page_runs --book ID [--page N] | --all` frees claims
-at once (only when no worker is still on those pages). Book re-runs («⋯» → «إعادة التشغيل من مرحلة», «إعادة تجهيز
-الصفحات…») are offered to and accepted from superusers only (403 otherwise); editors keep the retry of a page in
-error.
+at once (only when no worker is still on those pages). Re-runs are open to every user who may edit the book (role
+`editor` or `admin`, as the other book actions; D101 replaced the earlier super-admin-only rule, since in the SaaS a
+re-run will cost the user credit points); proofreaders get 403.
+
+Where a re-run starts. The «⋯» menu offers one book re-run, named by where the user is (D101; the list «إعادة التشغيل
+من مرحلة» with its five stages is gone); the retry of a failed page is unchanged:
 
 | Where | What it does |
 |---|---|
-| Dashboard `/books/<id>/` → «⋯» → a stage «…» | a dialog first names the pages that run, the approved pages kept and the model time (`books.services.rerun_estimate`); then all non-excluded, unapproved pages from that stage (`books.tasks.rerun_book_from`). In «التخطيط» only «إعادة تجهيز الصفحات…» is offered, and it stops again at «تم التخطيط» |
+| Dashboard `/books/<id>/` → «⋯» → «إعادة المعالجة…» | a dialog first names the pages that run, the approved pages kept and the model time (`books.services.rerun_estimate`); then all non-excluded, unapproved pages from `ocr` (`books.tasks.rerun_book_from`): Tesseract, then both models with the finalisation, which queues the numbers / call pass; the layout is kept |
+| «التخطيط» (`/books/<id>/guides/`, or a book awaiting «بدء المعالجة») → «⋯» → «إعادة التخطيط…» | the same dialog (pages, approved pages kept, manual rotation / crop kept, and the model time on a started book); then all non-excluded, unapproved pages from `preprocess`: prepared and laid out again, and on a started book read again too. Before «بدء المعالجة» it stops again at «تم التخطيط» |
+| `manage.py shell` → `books.services.rerun_book(book, stage)` | any stage of `books.services.STAGES` (`layout`, `ocr_fast`, `ocr_full` too); the `books:rerun` view still accepts them, the menu no longer offers them |
 | Sheet in «التخطيط» `/books/<id>/guides/#sheet-<n>` and the attention list → «إعادة …» | this page from its failed stage (`books.services.run_stage(page, stage)`; the page screen that offered any stage is gone, D84) |
 | Page detail error banner → «إعادة المحاولة من هذه المرحلة» | the failed stage again |
 | Dashboard → «تحتاج انتباهًا» → «إعادة <stage>» on a failed page | the failed stage again, then back to the dashboard (same `books:rerun` with `next`) |
-| Page detail → panel «تجهيز الصفحة» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use the re-run menu → «التعرّف على النص» afterwards |
+| Page detail → panel «تجهيز الصفحة» → «إعادة المعالجة» / «استعادة القيم التلقائية» | preprocessing only, with manual angle / crop / Sauvola / denoise values (`POST /api/pages/<id>/preprocess/`); regions are re-derived (for very large originals the worker runs preprocess → layout, answer 202), OCR is **not** re-run: use «⋯» → «إعادة المعالجة…» afterwards |
 | Dashboard → «⋯» → «التخطيط» (`?view=guides`) → «تطبيق على كل الصفحات» | a preview first (pages that change, lines cut, pages with their own override, pages re-read); on a started book only the changed pages that are unapproved and have no review work are re-derived and re-read. The old address `/books/<id>/guides/` redirects there |
 | Dashboard sheet → «استثناء» | excludes a page from every stage and from the book's progress; the toast's «تراجع» brings it back (so does toggling again) |
 
@@ -628,9 +633,10 @@ the flag False and keeps the old path. Rolling the code back leaves an unused co
 «حفظ وإعادة التعرّف على الصفحة» · «إلغاء»; approved pages («معتمدة: لا تتغيّر») and pages with review corrections are
 locked. «العودة إلى الصفحات» leaves the mode.
 
-**Re-runs and exclusions.** Every book-wide re-run in «⋯» asks first (pages, approved pages kept, model time). In
-«التخطيط» only «إعادة تجهيز الصفحات…» is offered; layout and OCR are refused with «لم تبدأ المعالجة بعد؛ اضغط «بدء
-المعالجة» أولًا.». Excluding a page shows a toast with «تراجع» (it never runs by itself).
+**Re-runs and exclusions.** «⋯» offers one book-wide re-run and it asks first (pages, approved pages kept, model time):
+«إعادة التخطيط…» in «التخطيط», «إعادة المعالجة…» outside it (D101). Before «بدء المعالجة» layout and OCR are refused
+with «لم تبدأ المعالجة بعد؛ اضغط «بدء المعالجة» أولًا.». Excluding a page shows a toast with «تراجع» (it never runs by
+itself).
 
 **Deleting a book.** «⋯» → «حذف الكتاب…» (also in the «التخطيط» side panel) asks once, naming what is lost (reviewed
 pages, an edited manuscript), then removes the book and every row that hangs on it in one transaction, and its folder
