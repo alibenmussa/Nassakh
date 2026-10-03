@@ -39,3 +39,8 @@ Owner: "order is not important"; wants the work done overnight. Items grouped by
 
 ## Asked back
 - 31 clip a region of the original in the editor and insert it as an image (or a layout option): unclear if wanted.
+
+## Status (all done, tests green, committed): 1-30 except 31
+Decisions D94 (manuscript block types, strip footnotes), D95 (review dialog and animation), D96 (books home),
+D97 (editor save/layout), D98 (organisations: fonts, templates), D99 (editor text options, page break, empty paragraph).
+Workers must be restarted; `make migrate` and `npm run build` done on the local machine.
