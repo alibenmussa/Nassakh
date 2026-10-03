@@ -1,6 +1,6 @@
-"""Snapshots without twins (the owner's review, 2026-10-03, item 21: "autosave saves several versions at almost the
-same time"). What did: every re-assembly took a «قبل إعادة التجميع» copy, and the manuscript screen's role marks
-re-assemble the book at each click (book 29: ten copies within 22 seconds). Now:
+"""Snapshots without twins (the owner's review, 2026-10-03, item 21: "autosave saves several versions at
+almost the same time"). What did: every re-assembly took a «قبل إعادة التجميع» copy, and the manuscript
+screen's role marks re-assemble the book at each click (book 29: ten copies within 22 seconds). Now:
 
 - one checkpoint per burst of re-assemblies of an unedited text (the first stands for the burst), the next one
   after `CHECKPOINT_WINDOW_S` of quiet; an edited text is still kept at every run, for good
@@ -19,9 +19,14 @@ import pytest
 from assembly import services as assembly_services
 from editor import services
 from editor.models import Manuscript, ManuscriptSnapshot
-from editor.tests import assembled_book, editor_user, logged  # noqa: F401 - editor_user is a fixture
+from editor.tests import assembled_book, logged, role_user
 
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture
+def editor_user(db):
+    return role_user("editor", "editor")
 
 
 def _rows(book) -> list[tuple[str, int, str]]:
@@ -63,7 +68,9 @@ def test_an_edited_text_is_kept_at_every_reassembly(editor_user):
     services.save_chapter(book, first, chapter["content"], chapter["version"], editor_user)
     assembly_services.start_assembly(book, editor_user, replace_edited=True)
     reasons = [row[0] for row in _rows(book)]
-    kept = ManuscriptSnapshot.objects.get(manuscript__book=book, label__startswith="النص المحرَّر قبل إعادة التجميع")
+    kept = ManuscriptSnapshot.objects.get(
+        manuscript__book=book, label__startswith="النص المحرَّر قبل إعادة التجميع"
+    )
     assert reasons.count("manual") == 2 and "نص محرَّر." in json.dumps(kept.document, ensure_ascii=False)
 
 

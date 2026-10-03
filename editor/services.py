@@ -68,9 +68,9 @@ from .models import (
 log = logging.getLogger(__name__)
 
 EDIT_SNAPSHOTS_KEPT = 20  # automatic `edit` snapshots kept per manuscript (manual ones are never pruned)
-# automatic checkpoints (the owner's review, 2026-10-03): one «قبل إعادة التجميع» per burst of re-assemblies of
-# an unedited text (the first stands for the burst; the next one after this quiet), the main version once at
-# the first edit, a twin of a manual snapshot (same version, same name) answered instead of made
+# automatic checkpoints (the owner's review, 2026-10-03): one «قبل إعادة التجميع» per burst of re-assemblies
+# of an unedited text (the first stands for the burst; the next one after this quiet), the main version once
+# at the first edit, a twin of a manual snapshot (same version, same name) answered instead of made
 CHECKPOINT_WINDOW_S = 600
 TWIN_WINDOW_S = 120
 MAIN_VERSION_LABEL = "النص قبل أول تحرير · الإصدار {version}"

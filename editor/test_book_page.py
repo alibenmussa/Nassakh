@@ -7,8 +7,9 @@
 - the save state between an edit and its pages (as in Google Docs): «يتم الحفظ…» → «تم الحفظ · تُحدَّث
   الصفحات…» → «تم الحفظ»; a failed save says so and is tried again; offline it waits for the connection; a
   save that never answers is given up after a while instead of holding every later one
-- «تحضير الغلاف»: the cached render embedded (painted at once), a change drawn at once by the sheet itself (the
-  draft) while its render comes with the save's answer (no second request), a failed render said and retried
+- «تحضير الغلاف»: the cached render embedded (painted at once), a change drawn at once by the sheet itself
+  (the draft) while its render comes with the save's answer (no second request), a failed render said and
+  retried
 """
 
 from __future__ import annotations
@@ -109,7 +110,7 @@ const hung = (p) => Promise.race([p, settle().then(() => 'hung')]);
   globalThis.fetch = realFetch;
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
-"""
+"""  # noqa: E501
 
 
 SAVE_STATE_SCENARIO = r"""
@@ -181,7 +182,7 @@ const out = {};
   globalThis.fetch = realFetch;
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
-"""
+"""  # noqa: E501
 
 
 def test_the_save_state_between_an_edit_and_its_pages_and_no_silent_loss(tmp_path):
@@ -195,7 +196,12 @@ def test_the_save_state_between_an_edit_and_its_pages_and_no_silent_loss(tmp_pat
         "render": "",
     }
     # a server error: said, tried again by itself after 2 s; leaving the page meanwhile asks first
-    assert out["failed"] == {"state": "error", "pill": "تعذّر الحفظ · تُعاد المحاولة…", "retry": 1, "unload": True}
+    assert out["failed"] == {
+        "state": "error",
+        "pill": "تعذّر الحفظ · تُعاد المحاولة…",
+        "retry": 1,
+        "unload": True,
+    }
     assert out["retried"] == {"puts": 2, "state": "saved", "pill": "تم الحفظ", "unload": False}
     # offline: no retry timer; the connection back saves what waited
     assert out["offline"] == {"state": "error", "pill": "لا اتصال · يُحفظ عند عودته", "retry": 0}
@@ -262,7 +268,7 @@ const out = {};
   globalThis.fetch = realFetch;
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
-"""
+"""  # noqa: E501
 
 
 def test_the_cover_shows_at_once_and_its_render_follows_without_a_second_request(tmp_path):
@@ -277,7 +283,12 @@ def test_the_cover_shows_at_once_and_its_render_follows_without_a_second_request
     }
     # a change: the stage on the cover, the draft with the new text at once (lines kept), the thin bar
     typed = out["saved"]["typed"]
-    assert typed["fresh"] is False and typed["busy"] is True and typed["turning"] == "out-prev" and typed["hint"] == ""
+    assert (
+        typed["fresh"] is False
+        and typed["busy"] is True
+        and typed["turning"] == "out-prev"
+        and typed["hint"] == ""
+    )
     assert typed["draft"] == {
         "center": [{"kind": "title", "text": "كتاب النوادر\nلأبي علي"}],
         "bottom": [{"kind": "foot", "text": "طرابلس"}],
@@ -294,7 +305,12 @@ def test_the_cover_shows_at_once_and_its_render_follows_without_a_second_request
         "gets": 1,
     }
     retried = out["failed"]["retried"]
-    assert retried["gets"] == 2 and retried["hash"] == "h3" and retried["fresh"] is True and retried["hint"] == ""
+    assert (
+        retried["gets"] == 2
+        and retried["hash"] == "h3"
+        and retried["fresh"] is True
+        and retried["hint"] == ""
+    )
     assert out["pending"] == {"gets": 1, "hash": "h3", "fresh": True}
 
 

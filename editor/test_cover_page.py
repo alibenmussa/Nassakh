@@ -14,9 +14,14 @@ import pytest
 from core.test_layout_ui import _book, _page
 from editor import services
 from editor.models import StyleSheet
-from editor.tests import editor_user, logged, put_json  # noqa: F401 - editor_user is a fixture
+from editor.tests import logged, put_json, role_user
 
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture
+def editor_user(db):
+    return role_user("editor", "editor")
 
 
 def test_the_page_embeds_the_cached_cover_and_never_draws_it_itself(editor_user, settings):

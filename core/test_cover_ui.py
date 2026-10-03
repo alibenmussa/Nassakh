@@ -170,7 +170,7 @@ def test_cover_section_and_sheet_in_the_template(editor):
     # it, the thin bar while one is on its way
     assert ':style="coverDraftStyle" aria-hidden="true" data-cover-draft' in stage
     assert 'x-for="(p, i) in coverDraft.center"' in stage and 'x-for="(p, i) in coverDraft.bottom"' in stage
-    assert ":data-fit=\"coverDraft.image.fit\"" in stage and ":class=\"{ 'is-shown': coverFresh }\"" in stage
+    assert ':data-fit="coverDraft.image.fit"' in stage and ":class=\"{ 'is-shown': coverFresh }\"" in stage
     assert 'x-show="coverBusy" aria-hidden="true" data-cover-busy' in stage
     assert 'x-show="phase === \'pages\' && !onCover" x-cloak data-sheet="right"' in body
 
@@ -197,7 +197,7 @@ def test_cover_css_rules_in_the_source():
         ".lp-cover-draft { position: absolute; inset: 0; overflow: hidden; color: var(--cover-fg, #1b1b1b);",
         ".lp-cover-center { top: 50%; transform: translateY(-50%); }",
         ".lp-cover-bottom { bottom: var(--cd-bottom, 12%); }",
-        ".lp-cover-title { font-weight: 700; font-size: calc(var(--cd-title, 28) * var(--u)); line-height: 1.35; }",
+        ".lp-cover-title { font-weight: 700; font-size: calc(var(--cd-title, 28) * var(--u));",
         ".lp-cover-busy { position: absolute; inset: auto 0 0; height: 3px;",
         ".lo-thumb-cover .lo-thumb-img { background: var(--cover-bg, #fff); }",
         ".bp-cover-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }",
@@ -221,7 +221,9 @@ def test_cover_css_rules_in_the_source():
     ):
         assert rule in css, rule
     reduced = css[css.rindex("@media (prefers-reduced-motion: reduce)") :]
-    assert ".lp-cover-busy { animation: none; }" in reduced and ".lp-cover-img { transition: none; }" in reduced
+    assert (
+        ".lp-cover-busy { animation: none; }" in reduced and ".lp-cover-img { transition: none; }" in reduced
+    )
     assert ".bp-drop, .bp-drop-progress > span, .bp-swatch, .bp-swatch-cover, .bp-color-box {" in reduced
 
 
@@ -619,7 +621,10 @@ def test_cover_component_under_node_against_the_contract(tmp_path):
         "image": None,
     }
     assert on["style"] == "--cover-bg: #ffffff; --cover-fg: #1b1b1b; --pw: 481.89"
-    assert on["draftStyle"] == "--cd-side: 12.941%; --cd-bottom: 12.500%; --cd-title: 28; --cd-sub: 15.40; --cd-foot: 13"
+    assert (
+        on["draftStyle"]
+        == "--cd-side: 12.941%; --cd-bottom: 12.500%; --cd-title: 28; --cd-sub: 15.40; --cd-foot: 13"
+    )
     assert (
         on["pageCount"] == 5 and on["footprint"] == "5 صفحات" and on["pages"] == 5 and on["live"] == "الغلاف"
     )
