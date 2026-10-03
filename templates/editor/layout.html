@@ -178,9 +178,11 @@ book's preview, the first live pages). Western digits everywhere; numbers in Ara
               {# sheet keeps its place, empty). The render (embedded when cached, then each save's); between a change and #}
               {# its render the draft, drawn here from the values (cover.js coverDraft), with a thin bar along the foot; a #}
               {# hint only for no picture or a failure. A click (Enter, Space) opens the cover section of «التنسيق» (a failed #}
-              {# render: tries again) #}
-              <figure class="lo-sheet lo-sheet-cover" x-show="phase === 'pages' && onCover" x-cloak data-sheet="cover" aria-label="الغلاف" :style="coverSheetStyle">
-                <div class="lp-page lp-cover" :class="{ 'is-blank': !coverFresh, 'is-loading': coverBusy }" role="button" tabindex="0" title="الغلاف · فتح إعداداته" aria-label="الغلاف: فتح إعداداته في «التنسيق»"
+              {# render: tries again). The colours and the width (coverSheetStyle) sit on the page inside, never on the #}
+              {# figure: a string :style sets the whole style attribute and so wiped x-show's display: none at every #}
+              {# stylesheet change (a margin, a size), and the cover stood beside the pages until a reload #}
+              <figure class="lo-sheet lo-sheet-cover" x-show="phase === 'pages' && onCover" x-cloak data-sheet="cover" aria-label="الغلاف">
+                <div class="lp-page lp-cover" :style="coverSheetStyle" :class="{ 'is-blank': !coverFresh, 'is-loading': coverBusy }" role="button" tabindex="0" title="الغلاف · فتح إعداداته" aria-label="الغلاف: فتح إعداداته في «التنسيق»"
                      @click="onCoverSheet()" @keydown.enter.prevent="onCoverSheet()" @keydown.space.prevent="onCoverSheet()">
                   <div class="lp-cover-draft" :style="coverDraftStyle" aria-hidden="true" data-cover-draft>
                     <template x-if="coverDraft.image"><img class="lp-cover-draft-img" :src="coverDraft.image.src" :data-fit="coverDraft.image.fit" alt="" decoding="async"></template>

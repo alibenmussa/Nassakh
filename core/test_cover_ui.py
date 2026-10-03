@@ -2,7 +2,8 @@
 page 1 and the filmstrip's first thumb.
 
 - the template: the section first, with the spec's copy (the modes, the drop zone, «اختيار صورة…», the size
-  note, the fits, the texts, the colours, the sizes), the cover sheet in the stage, the script tag
+  note, the fits, the texts, the colours, the sizes), the cover sheet in the stage (no sheet x-show hides binds
+  its style: a stylesheet change showed the cover beside the pages), the script tag
 - the source CSS: the sheet, the thumb, the drop zone, the palette, the pickers, reduced motion
 - `static/src/js/book/cover.js` under Node: the pure helpers (a colour normalised, the print pixels, the dpi
   of an image as fitted, what is refused before any request)
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from html.parser import HTMLParser
 
 import pytest
 
@@ -173,6 +175,38 @@ def test_cover_section_and_sheet_in_the_template(editor):
     assert ':data-fit="coverDraft.image.fit"' in stage and ":class=\"{ 'is-shown': coverFresh }\"" in stage
     assert 'x-show="coverBusy" aria-hidden="true" data-cover-busy' in stage
     assert 'x-show="phase === \'pages\' && !onCover" x-cloak data-sheet="right"' in body
+
+
+class _Tags(HTMLParser):
+    """Every start tag of a piece of HTML: `[(tag, {attr: value})]`."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tags = []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, dict(attrs)))
+
+
+def test_no_sheet_of_the_stage_binds_its_style_where_x_show_hides_it(editor):
+    """The owner's report (2026-10-03): in a spread, a margin or the body size changed in «التنسيق» left the
+    cover sheet beside the pages (page 3) until a reload. Cause: the cover figure carried both
+    `x-show="… && onCover"` and `:style="coverSheetStyle"`; Alpine binds a string style by setting the whole
+    `style` attribute, so every stylesheet change (coverSheetStyle reads the sheet) wiped the `display: none`
+    x-show had set, and x-show, its value unchanged, never hid it again. The colours and the width sit on the
+    cover's page inside the figure now, and no element of the stage that x-show toggles binds its style."""
+    body, _config = _page(_logged(editor), _book())
+    stage = _between(body, '<div class="lo-stage"', "</section>")
+    parser = _Tags()
+    parser.feed(stage)
+    shown = [(tag, attrs) for tag, attrs in parser.tags if "x-show" in attrs]
+    assert len(shown) >= 4  # the cover, the right and the left sheets, the cover's parts, the error state
+    for tag, attrs in shown:
+        assert not {":style", "x-bind:style"} & set(attrs), (tag, attrs)
+    cover = next(attrs for tag, attrs in parser.tags if attrs.get("data-sheet") == "cover")
+    assert cover["x-show"] == "phase === 'pages' && onCover" and ":style" not in cover
+    page = next(attrs for tag, attrs in parser.tags if "lp-cover" in (attrs.get("class") or "").split())
+    assert page[":style"] == "coverSheetStyle" and "x-show" not in page
 
 
 def test_cover_section_reads_only_for_a_proofreader(proofreader):
