@@ -1052,7 +1052,10 @@ RUNPOD_PRICE_PER_S=0.00019   # optional: the API log's cost estimate (24 GB GPUs
 | Key | Default | Meaning |
 |---|---|---|
 | `RUNPOD_ENDPOINT_URL` | (none) | another address than Runpod's, e.g. the worker's local server `http://localhost:8010` |
-| `RUNPOD_TIMEOUT_S` | 600 | one request, cold start included; then the job is cancelled |
+| `RUNPOD_TIMEOUT_S` | 600 | one request, from the moment a GPU takes it; then the job is cancelled |
+| `RUNPOD_QUEUE_WAIT_S` | 1800 | how long a job waits for a free GPU (a cold start included); then it is cancelled and the page goes back to the queue (D104) |
+| `RUNPOD_REQUEUE_S` | 300 | when the page is tried again after no GPU came |
+| `RUNPOD_REQUEUE_TIMES` | 6 | how many times; then the page is an error «لم يتوفّر GPU في Runpod…» and its retry button reads it again |
 | `RUNPOD_SYNC_WAIT_S` | 90 | how long `/runsync` waits before the job is polled |
 | `RUNPOD_RETRIES` | 4 | attempts for a network error, 429 or 5xx |
 | `RUNPOD_EXECUTION_TIMEOUT_S` | 300 | a job's time on the GPU |

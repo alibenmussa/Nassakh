@@ -956,3 +956,25 @@ are the call in its right place after a word the OCR misread (29 p. 104, 34 p. 1
 regions Tesseract stands for (37 p. 3, 38 p. 5: a re-read under D100), a line the models invented (35 p. 6), two
 notes printed on one line (36 p. 2), a repeated word that took the other line's box (34 p. 6) and a vowelled line
 (31 p. 86).
+
+## D104 — No free GPU on Runpod: the job waits longer, then the page goes back to the queue (2026-10-03, amends the Runpod spec)
+
+**Why.** In the benchmark of 2026-10-03 the endpoint's 16 GB tier had no free GPU for 6 minutes (jobs waited
+359–366 s in Runpod's queue), ran on one of three workers for 14 more, and was throttled again later. A job's one
+deadline, RUNPOD_TIMEOUT_S (600 s from the submit), counted that wait as a reading: an outage past 10 minutes would
+have recorded both models' runs as failed and put every page in `error`. The owner's rule: a longer wait, then back
+to the queue.
+
+**Decision.**
+- **Two limits in the client (`ocr/runpod.py`).** While the job is `IN_QUEUE` (no free GPU, or a worker starting)
+  it may wait up to RUNPOD_QUEUE_WAIT_S (1800 s); then it is cancelled and raises `RemoteNoCapacity` (a
+  `RemoteTimeout`, so the API log row reads «مهلة»). Once it is `IN_PROGRESS`, RUNPOD_TIMEOUT_S counts from then. The
+  job's `ttl` covers both.
+- **Not a model failure.** `prefetch` keeps the error's kind and `run_engine` lets `RemoteNoCapacity` through, so no
+  OcrRun records it as an error and the page is not finalised from Tesseract.
+- **Back to the queue.** `ocr_page_full` (and any page stage) retries its task RUNPOD_REQUEUE_S (300 s) later, at
+  most RUNPOD_REQUEUE_TIMES (6) times; the page's run claim stays (`books.runs`), so nothing else is queued for it
+  meanwhile. After the last one the page is an error «لم يتوفّر GPU في Runpod بعد عدة محاولات؛ أعد التعرّف على الصفحة
+  لاحقًا.», and its retry button reads it again. At most about 3.5 hours of no GPU before a page is an error.
+- Tests: `ocr/test_runpod.py` (a queued job waits past RUNPOD_TIMEOUT_S, then is cancelled as no capacity; a late
+  GPU gets its full reading time; no run records the error; the task retries, then errors).

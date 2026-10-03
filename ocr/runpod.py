@@ -8,8 +8,10 @@ takes its own answer (`take`); a call outside such a pair asks for one model alo
 
 A request is POST /runsync?wait=…, which brings the job back when it ends within RUNPOD_SYNC_WAIT_S. A job
 still queued or running then (a cold start: a worker starting and loading the models) is polled on /status
-until it ends, and cancelled once RUNPOD_TIMEOUT_S has passed. Transport errors, 429 and 5xx are retried with
-backoff (Retry-After honoured) up to RUNPOD_RETRIES attempts; 400, 401, 403, 404 and 413 are not. Each job
+until it ends: a job waiting for a GPU is cancelled after RUNPOD_QUEUE_WAIT_S (`RemoteNoCapacity`, the page
+goes back to the queue, D104), a running one RUNPOD_TIMEOUT_S after a GPU took it. Transport errors, 429 and
+5xx are retried with backoff (Retry-After honoured) up to RUNPOD_RETRIES attempts; 400, 401, 403, 404 and 413
+are not. Each job
 carries a policy: `executionTimeout` (RUNPOD_EXECUTION_TIMEOUT_S on the GPU) and a `ttl` just past the
 client's own deadline, so a job nobody waits for any more is not read later at a cost.
 
@@ -70,6 +72,11 @@ class RemoteTimeout(RemoteError):
     """No answer within RUNPOD_TIMEOUT_S; the job was cancelled."""
 
 
+class RemoteNoCapacity(RemoteTimeout):
+    """No GPU took the job within RUNPOD_QUEUE_WAIT_S (the endpoint had no free GPU); the job was cancelled.
+    The page is not failed for it: its task goes back to the queue (`ocr.tasks`, D104)."""
+
+
 # ---------------------------------------------------------------- settings
 
 
@@ -83,6 +90,7 @@ class Config:
     sync_wait_s: float
     retries: int
     execution_timeout_s: int
+    queue_wait_s: float = 1800.0
 
     @classmethod
     def from_settings(cls) -> Config:
@@ -98,6 +106,7 @@ class Config:
             sync_wait_s=min(300.0, max(1.0, float(cfg.get("RUNPOD_SYNC_WAIT_S") or 90))),
             retries=max(1, int(cfg.get("RUNPOD_RETRIES") or 4)),
             execution_timeout_s=max(5, int(cfg.get("RUNPOD_EXECUTION_TIMEOUT_S") or 300)),
+            queue_wait_s=max(10.0, float(cfg.get("RUNPOD_QUEUE_WAIT_S") or 1800)),
         )
 
     @property
@@ -410,28 +419,34 @@ class RunpodClient:
             raise
 
     def _run(self, payload: dict, call: CallLog) -> dict:
-        """The finished job (any terminal status): /runsync, then /status while it is queued or running."""
+        """The finished job (any terminal status): /runsync, then /status while it is queued or running.
+
+        Two limits (D104): a job still waiting for a GPU (`IN_QUEUE`: no free GPU, or a worker starting) may
+        wait up to RUNPOD_QUEUE_WAIT_S, then it is cancelled with `RemoteNoCapacity`; once a GPU runs it
+        (`IN_PROGRESS`), RUNPOD_TIMEOUT_S counts from then, and it is cancelled with `RemoteTimeout`."""
         cfg = self.config
-        deadline = self._clock() + cfg.timeout_s
+        queue_deadline = self._clock() + max(cfg.queue_wait_s, cfg.timeout_s)
+        run_deadline: float | None = None
         body = {
             "input": payload,
             "policy": {
                 "executionTimeout": cfg.execution_timeout_s * 1000,
-                "ttl": int((cfg.timeout_s + TTL_MARGIN_S) * 1000),
+                # Runpod drops a job not finished by then: past the longest this client waits for it
+                "ttl": int((max(cfg.queue_wait_s, cfg.timeout_s) + cfg.timeout_s + TTL_MARGIN_S) * 1000),
             },
         }
         content = json.dumps(body, ensure_ascii=False).encode("utf-8")
         if len(content) > MAX_PAYLOAD_BYTES:
             size_mb = len(content) // (1024 * 1024)
             raise RemoteError(f"الطلب أكبر مما يقبله Runpod ({size_mb} م.ب، والحد 20 م.ب)؛ صغّر المنطقة.")
-        wait_s = max(1.0, min(cfg.sync_wait_s, deadline - self._clock()))
+        wait_s = max(1.0, min(cfg.sync_wait_s, queue_deadline - self._clock()))
         job = self._request(
             "POST",
             "/runsync",
             content=content,
             params={"wait": int(wait_s * 1000)},
             read_timeout=wait_s + REQUEST_TIMEOUT_S,
-            deadline=deadline,
+            deadline=queue_deadline,
             call=call,
             submit=True,
         )
@@ -442,14 +457,25 @@ class RunpodClient:
         while str(job.get("status") or "") in PENDING:
             if not job_id:
                 raise RemoteError(f"ردّ Runpod بمهمة بلا رقم وهي {job.get('status')}.")
-            if self._clock() + interval >= deadline:
+            status = str(job.get("status") or "")
+            if status != "IN_QUEUE" and run_deadline is None:
+                run_deadline = self._clock() + cfg.timeout_s  # a GPU took it: the reading's own limit
+            if run_deadline is None and self._clock() + interval >= queue_deadline:
+                self._cancel(job_id)
+                raise RemoteNoCapacity(
+                    f"لم يتوفّر GPU في Runpod خلال {int(cfg.queue_wait_s)} ثانية (RUNPOD_QUEUE_WAIT_S)؛ "
+                    "أُلغيت المهمة.\n"
+                    f"job {job_id}: {status}"
+                )
+            if run_deadline is not None and self._clock() + interval >= run_deadline:
                 self._cancel(job_id)
                 raise RemoteTimeout(
                     f"لم يردّ Runpod خلال {int(cfg.timeout_s)} ثانية (RUNPOD_TIMEOUT_S)؛ أُلغيت المهمة.\n"
-                    f"job {job_id}: {job.get('status')}"
+                    f"job {job_id}: {status}"
                 )
             self._sleep(interval)
             interval = min(interval * POLL_GROWTH, POLL_MAX_S)
+            deadline = run_deadline if run_deadline is not None else queue_deadline
             job = self._request("GET", f"/status/{job_id}", deadline=deadline, call=call, poll=True)
         return job
 
@@ -666,9 +692,10 @@ def prefetch(
             trace=trace,
         )
     except Exception as exc:  # noqa: BLE001 - recorded on each engine's run by `run_engine`
-        message = str(exc) if isinstance(exc, RemoteError) else f"{type(exc).__name__}: {exc}"
+        # a RemoteError keeps its kind: `RemoteNoCapacity` sends the page back to the queue (D104)
+        error = exc if isinstance(exc, RemoteError) else RemoteError(f"{type(exc).__name__}: {exc}")
         for engine in engines:
-            store[_key(engine, source, max_new_tokens)] = RemoteError(message)
+            store[_key(engine, source, max_new_tokens)] = error
         return
     for engine in engines:
         store[_key(engine, source, max_new_tokens)] = answer.tasks[engine]

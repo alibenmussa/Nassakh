@@ -25,7 +25,7 @@ from django.conf import settings
 from books import runs
 from books.models import Page
 
-from . import services
+from . import runpod, services
 from .engines import registry
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ STAGE_FAST = "ocr_fast"
 STAGE_FULL = "ocr_full"
 HEADLINE_FAST = "تعذّر التعرّف السريع على النص (Tesseract)."
 HEADLINE_FULL = "تعذّر التعرّف على النص بنماذج OCR."
+HEADLINE_NO_GPU = "لم يتوفّر GPU في Runpod بعد عدة محاولات؛ أعد التعرّف على الصفحة لاحقًا."
 
 
 def _run_stage(
@@ -86,6 +87,19 @@ def _stage_body(task, page_id: int, stage: str, action: Callable[[Page], None], 
     except services.OcrError as exc:
         log.warning("%s: page %s: %s", stage, page_id, exc)
         page.set_error(stage, str(exc))
+    except runpod.RemoteNoCapacity as exc:
+        # D104: Runpod had no free GPU for RUNPOD_QUEUE_WAIT_S; the page waits in the queue again
+        # (RUNPOD_REQUEUE_S later, RUNPOD_REQUEUE_TIMES times) before it is an error
+        retries = int(getattr(task.request, "retries", 0) or 0)
+        times = int(settings.NASSAKH.get("RUNPOD_REQUEUE_TIMES", 6))
+        if retries < times:
+            countdown = int(settings.NASSAKH.get("RUNPOD_REQUEUE_S", 300))
+            log.warning(
+                "%s: page %s: no Runpod GPU, back to the queue in %s s (%s)", stage, page_id, countdown, exc
+            )
+            raise task.retry(exc=exc, countdown=countdown, max_retries=times) from exc
+        log.warning("%s: page %s: no Runpod GPU after %d requeues", stage, page_id, retries)
+        page.set_error(stage, f"{HEADLINE_NO_GPU}\n{exc}")
     except OSError as exc:
         retries = int(getattr(task.request, "retries", 0) or 0)
         if retries >= int(task.max_retries or 0):

@@ -97,9 +97,9 @@ The worker's `worker/contract.py` is the reference implementation.
 | Step | Behaviour |
 |---|---|
 | Submit | `POST {endpoint}/runsync?wait={RUNPOD_SYNC_WAIT_S × 1000}`, `Authorization: Bearer {RUNPOD_API_KEY}`; payload refused here above 19 MB (Runpod: 20 MB) |
-| Policy | `executionTimeout` = `RUNPOD_EXECUTION_TIMEOUT_S` × 1000; `ttl` = (`RUNPOD_TIMEOUT_S` + 60) × 1000, so a job nobody waits for any more is not run later at a cost |
+| Policy | `executionTimeout` = `RUNPOD_EXECUTION_TIMEOUT_S` × 1000; `ttl` = (`RUNPOD_QUEUE_WAIT_S` + `RUNPOD_TIMEOUT_S` + 60) × 1000, so a job nobody waits for any more is not run later at a cost (D104) |
 | Cold start | status `IN_QUEUE` / `IN_PROGRESS` → `GET /status/{id}` every 0.5 s, growing ×1.5 to 5 s |
-| Deadline | `RUNPOD_TIMEOUT_S` from the submit: `POST /cancel/{id}`, `RemoteTimeout` |
+| Deadline | D104: while `IN_QUEUE` (no free GPU, a worker starting) up to `RUNPOD_QUEUE_WAIT_S`, then `POST /cancel/{id}` and `RemoteNoCapacity`: the page task goes back to the queue (`RUNPOD_REQUEUE_S` later, `RUNPOD_REQUEUE_TIMES` times, then the page is an error); once `IN_PROGRESS`, `RUNPOD_TIMEOUT_S` from then: `POST /cancel/{id}`, `RemoteTimeout` |
 | Retried | transport errors, 429, 500, 502, 503, 504: backoff 1, 2, 4… s (≤ 30), `Retry-After` honoured, up to `RUNPOD_RETRIES` attempts |
 | Not retried | 400; 401 / 403 (names `RUNPOD_API_KEY`); 404 (names `RUNPOD_ENDPOINT_ID`, or an expired job on `/status`); 413 |
 | Job outcome | `COMPLETED` → per-task answers; `FAILED` / `CANCELLED` / `TIMED_OUT` → `RemoteJobFailed` with the worker's own message; an answer that is not schema 1 → `RemoteJobFailed` |
@@ -117,7 +117,10 @@ The worker's `worker/contract.py` is the reference implementation.
 | `RUNPOD_ENDPOINT_ID` | — | the endpoint's ID |
 | `RUNPOD_ENDPOINT_URL` | — | another address (`http://localhost:8010`, the worker's local server) |
 | `RUNPOD_BASE_URL` | `https://api.runpod.ai/v2` | |
-| `RUNPOD_TIMEOUT_S` | 600 | one request, cold start included |
+| `RUNPOD_TIMEOUT_S` | 600 | one request, from the moment a GPU takes it |
+| `RUNPOD_QUEUE_WAIT_S` | 1800 | a job waiting for a free GPU (cold start included), D104 |
+| `RUNPOD_REQUEUE_S` | 300 | the page task back in the queue after `RemoteNoCapacity` |
+| `RUNPOD_REQUEUE_TIMES` | 6 | how many times, then the page is an error |
 | `RUNPOD_SYNC_WAIT_S` | 90 | how long `/runsync` waits (1–300) |
 | `RUNPOD_RETRIES` | 4 | attempts per HTTP exchange |
 | `RUNPOD_EXECUTION_TIMEOUT_S` | 300 | a job's time on the GPU |

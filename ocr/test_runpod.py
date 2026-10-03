@@ -151,6 +151,7 @@ def make_client(endpoint: Endpoint, clock: Clock | None = None, **limits) -> run
         sync_wait_s=limits.get("sync_wait_s", 90.0),
         retries=limits.get("retries", 4),
         execution_timeout_s=limits.get("execution_timeout_s", 300),
+        queue_wait_s=limits.get("queue_wait_s", 1800.0),
     )
     clock = clock or Clock()
     return runpod.RunpodClient(
@@ -229,7 +230,8 @@ def test_a_read_sends_schema_1_and_logs_the_request(db, crop):
     assert request.url.params["wait"] == "90000"
     assert request.headers["authorization"] == "Bearer rp-test-key"
     body = endpoint.inputs[0]
-    assert body["policy"] == {"executionTimeout": 300_000, "ttl": 660_000}
+    # ttl: past the longest the client waits, a GPU's wait (1800 s) and the reading (600 s), plus a margin
+    assert body["policy"] == {"executionTimeout": 300_000, "ttl": 2_460_000}
     job = body["input"]
     assert job["schema"] == 1 and job["prompt"] == PROMPT_QARI
     assert job["tasks"] == [
@@ -274,14 +276,98 @@ def test_a_cold_start_is_polled_on_status_until_the_job_ends(db, crop):
 
 def test_a_job_that_outlives_the_timeout_is_cancelled(db, crop):
     clock = Clock()
-    queued = {"id": "sync-7", "status": "IN_QUEUE"}
-    endpoint = Endpoint(runsync=[queued], status=[queued] * 50)
-    with pytest.raises(runpod.RemoteTimeout, match="RUNPOD_TIMEOUT_S"):
+    running = {"id": "sync-7", "status": "IN_PROGRESS"}
+    endpoint = Endpoint(runsync=[running], status=[running] * 50)
+    with pytest.raises(runpod.RemoteTimeout, match="RUNPOD_TIMEOUT_S") as caught:
         read(make_client(endpoint, clock, timeout_s=10.0, sync_wait_s=5.0), crop)
+    assert not isinstance(caught.value, runpod.RemoteNoCapacity)
     assert endpoint.paths()[-1] == "/v2/ep123/cancel/sync-7"
     assert endpoint.requests[0].url.params["wait"] == "5000"
     row = RemoteCall.objects.get()
     assert row.status == RemoteCall.Status.TIMEOUT and row.job_id == "sync-7" and "أُلغيت" in row.error
+
+
+def test_a_job_no_gpu_takes_waits_longer_then_is_cancelled_as_no_capacity(db, crop):
+    """D104: the endpoint had no free GPU for 6 to 21 minutes on 2026-10-03; a queued job waits up to
+    RUNPOD_QUEUE_WAIT_S, past RUNPOD_TIMEOUT_S, then is cancelled as `RemoteNoCapacity`."""
+    clock = Clock()
+    queued = {"id": "sync-8", "status": "IN_QUEUE"}
+    endpoint = Endpoint(runsync=[queued], status=[queued] * 100)
+    client = make_client(endpoint, clock, timeout_s=10.0, sync_wait_s=5.0, queue_wait_s=60.0)
+    with pytest.raises(runpod.RemoteNoCapacity, match="RUNPOD_QUEUE_WAIT_S"):
+        read(client, crop)
+    assert clock.now - 1000.0 > 50.0  # waited past RUNPOD_TIMEOUT_S, up to RUNPOD_QUEUE_WAIT_S
+    assert endpoint.paths()[-1] == "/v2/ep123/cancel/sync-8"
+    assert RemoteCall.objects.get().status == RemoteCall.Status.TIMEOUT
+
+
+def test_a_job_a_gpu_takes_late_gets_the_reading_time_from_then(db, crop):
+    clock = Clock()
+    queued = {"id": "sync-6", "status": "IN_QUEUE"}
+    done = completed(worker_output([{"engine": "qari_v03"}]), job_id="sync-6")
+    endpoint = Endpoint(
+        runsync=[queued], status=[queued] * 12 + [{"id": "sync-6", "status": "IN_PROGRESS"}] * 2 + [done]
+    )
+    answer = read(
+        make_client(endpoint, clock, timeout_s=30.0, sync_wait_s=5.0, queue_wait_s=600.0), crop, ("qari_v03",)
+    )
+    assert (
+        answer.tasks["qari_v03"].ok and clock.now - 1000.0 > 30.0
+    )  # queued past RUNPOD_TIMEOUT_S, still read
+
+
+def test_no_capacity_reaches_the_task_through_both_engines_runs(page, runpod_settings):
+    """D104: `prefetch` keeps the error's kind and `run_engine` lets it through: no run is recorded as a model
+    failure, the page is not failed."""
+    add_regions(page)
+    queued = {"id": "sync-5", "status": "IN_QUEUE"}
+
+    class NoGpu(runpod.RunpodClient):
+        def read(self, *args, **kwargs):
+            raise runpod.RemoteNoCapacity("لم يتوفّر GPU")
+
+    with (
+        registry.override(_remote_engines()),
+        runpod.use_client(NoGpu(make_client(Endpoint(runsync=[queued])).config)),
+    ):
+        services.run_fast_ocr(page)
+        with pytest.raises(runpod.RemoteNoCapacity):
+            services.run_full_ocr(page)
+    assert not page.ocr_runs.filter(
+        engine_name__in=["qari_v03", "qari_v02"], status=OcrRun.Status.ERROR
+    ).exists()
+
+
+def test_the_page_goes_back_to_the_queue_then_errors_after_the_requeues(page, runpod_settings, monkeypatch):
+    from celery.exceptions import Retry
+
+    from ocr import tasks
+
+    runpod_settings.NASSAKH = {**runpod_settings.NASSAKH, "RUNPOD_REQUEUE_S": 120, "RUNPOD_REQUEUE_TIMES": 2}
+
+    def no_gpu(page):
+        raise runpod.RemoteNoCapacity("لم يتوفّر GPU في Runpod خلال 1800 ثانية (RUNPOD_QUEUE_WAIT_S)")
+
+    class Task:
+        def __init__(self, retries):
+            self.request = type("Request", (), {"retries": retries, "id": "t-1"})()
+            self.max_retries = 2
+            self.calls = []
+
+        def retry(self, **kwargs):
+            self.calls.append(kwargs)
+            return Retry("again", when=kwargs.get("countdown"))
+
+    first = Task(0)
+    with pytest.raises(Retry):
+        tasks._stage_body(first, page.pk, tasks.STAGE_FULL, no_gpu, tasks.HEADLINE_FULL)
+    assert first.calls[0]["countdown"] == 120 and first.calls[0]["max_retries"] == 2
+    page.refresh_from_db()
+    assert page.status != Page.Status.ERROR
+    last = Task(2)
+    tasks._stage_body(last, page.pk, tasks.STAGE_FULL, no_gpu, tasks.HEADLINE_FULL)
+    page.refresh_from_db()
+    assert page.status == Page.Status.ERROR and page.error_message.startswith(tasks.HEADLINE_NO_GPU)
 
 
 def test_transient_failures_are_retried_with_backoff_and_retry_after(db, crop):

@@ -41,7 +41,7 @@ from core.arabic import normalize, normalize_ws, parse_output, to_western_digits
 from core.images import crop, load_gray, to_png_bytes
 from processing.models import Preprocess, Region
 
-from . import boxes, chooser, flags, markers
+from . import boxes, chooser, flags, markers, runpod
 from .alignment import build_lines, merged_lines, word_f1
 from .engines import registry
 from .engines.base import OcrEngine, OcrResult
@@ -350,6 +350,8 @@ def run_engine(
     )
     try:
         result = engine.recognize(source, max_new_tokens, hints=hints)
+    except runpod.RemoteNoCapacity:
+        raise  # no GPU took the request: the page goes back to the queue, no run is a failure (D104)
     except Exception as exc:  # noqa: BLE001 - recorded on the run, the page decides what to do
         log.exception("%s failed on page %s (%s)", engine_name, page.pk, target.kind)
         run.status = OcrRun.Status.ERROR

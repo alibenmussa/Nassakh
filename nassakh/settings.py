@@ -169,6 +169,11 @@ NASSAKH = {
     "RUNPOD_ENDPOINT_URL": env("RUNPOD_ENDPOINT_URL", default=""),
     "RUNPOD_BASE_URL": env("RUNPOD_BASE_URL", default="https://api.runpod.ai/v2"),
     "RUNPOD_TIMEOUT_S": env.int("RUNPOD_TIMEOUT_S", default=600),
+    # D104: a job waiting for a GPU (none free) may wait this long; then the page goes back to the queue,
+    # RUNPOD_REQUEUE_S later, at most RUNPOD_REQUEUE_TIMES times, before it is an error
+    "RUNPOD_QUEUE_WAIT_S": env.int("RUNPOD_QUEUE_WAIT_S", default=1800),
+    "RUNPOD_REQUEUE_S": env.int("RUNPOD_REQUEUE_S", default=300),
+    "RUNPOD_REQUEUE_TIMES": env.int("RUNPOD_REQUEUE_TIMES", default=6),
     "RUNPOD_SYNC_WAIT_S": env.int("RUNPOD_SYNC_WAIT_S", default=90),
     "RUNPOD_RETRIES": env.int("RUNPOD_RETRIES", default=4),
     "RUNPOD_EXECUTION_TIMEOUT_S": env.int("RUNPOD_EXECUTION_TIMEOUT_S", default=300),
