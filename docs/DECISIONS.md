@@ -714,3 +714,18 @@ D93 addendum: a bracket that touches the word below is up to 0.46 pitch tall and
 0.6 of the taller (`BRACKET_MAX_H`, `PAIR_HEIGHTS`): book 39's calls 2/12 → 11/12, no other book changed. A
 page's first note without a marker whose text holds «(٢)» after a sentence's end is note 1 and is split
 there (`_number_lookalike_notes`): book 36 12 → 13/16. Ten books now 147 of 166.
+
+## D94 — The manuscript sets every kind of block, also on an edited text; «حذف الحواشي» (2026-10-03, amends D49)
+
+Owner review items 12 and 22. Cause of 12: the paragraph menu offered five kinds (محتوى، عنوان رئيسي، عنوان فرعي، شعر،
+حاشية) and hid them all once the text was saved from the book page (D49); the owner's test book 41 had been edited
+there (48 versions) before he came back, so he saw none. Now «نوع الفقرة» lists every kind the book page and
+the exports know, two to a row, a digit picking one while the menu is open (0 محتوى … 5 ملاحظة وسط, the book page's
+⌘⌥ digits): before the text is edited the kind is set at the source as before (line roles through review) and
+«اقتباس» / «ملاحظة وسط», which no line role holds, are body lines with a style the book keeps
+(`assembly_settings.line_styles`, line id → style, D38); styled lines form their own paragraph and never join an
+unstyled one across a page (seam reason `style`). Once the text is edited the choice changes the edited block itself
+(`api:manuscript_block_type`, editors, saved through `editor.services.save_chapter`, no run; «حاشية» is the book
+page's «تحويل إلى حاشية»). Item 22: the option «حذف الحواشي» (`strip_footnotes`, off, remembered per book): the
+notes are still read and linked, then the notes and the calls taken for them leave the text; a bracketed number no
+note claimed stays as printed with its `marker_unmatched` warning, and `stats.footnotes_removed` counts what went.

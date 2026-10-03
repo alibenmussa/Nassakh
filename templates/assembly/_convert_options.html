@@ -1,15 +1,20 @@
-{% comment %}The assembly options (PHASE4_SPEC §4.1): footnote numbering, unreviewed pages, tatweel, running heads (D49). Included by the
-convert popover (dashboard and manuscript view) and by the never-assembled empty state. The enclosing Alpine scope
-provides `ms` (the component holding `convert.options` and `convert.unreviewed`).{% endcomment %}
+{% comment %}The assembly options (PHASE4_SPEC §4.1): footnote numbering, removing the footnotes (D94), unreviewed pages, tatweel,
+running heads (D49). Included by the convert popover (dashboard and manuscript view) and by the never-assembled empty
+state. The enclosing Alpine scope provides `ms` (the component holding `convert.options` and `convert.unreviewed`).
+With «حذف الحواشي» checked the numbering has nothing to number and rests.{% endcomment %}
 <div class="ms-convert-fields">
-  <div class="ms-convert-group">
+  <div class="ms-convert-group" :class="{ 'is-resting': ms.convert.options.strip_footnotes }">
     <span class="ms-convert-label" id="ms-numbering-label">ترقيم الحواشي</span>
     <div class="segmented ms-convert-seg" role="radiogroup" aria-labelledby="ms-numbering-label">
-      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'page'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'page' }" @click="ms.convert.options.footnote_numbering = 'page'">حسب الصفحة</button>
-      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'chapter'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'chapter' }" @click="ms.convert.options.footnote_numbering = 'chapter'">حسب الفصل</button>
-      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'book'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'book' }" @click="ms.convert.options.footnote_numbering = 'book'">حسب الكتاب</button>
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'page'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'page' }" :disabled="ms.convert.options.strip_footnotes" @click="ms.convert.options.footnote_numbering = 'page'">حسب الصفحة</button>
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'chapter'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'chapter' }" :disabled="ms.convert.options.strip_footnotes" @click="ms.convert.options.footnote_numbering = 'chapter'">حسب الفصل</button>
+      <button type="button" role="radio" :aria-checked="ms.convert.options.footnote_numbering === 'book'" :class="{ 'is-selected': ms.convert.options.footnote_numbering === 'book' }" :disabled="ms.convert.options.strip_footnotes" @click="ms.convert.options.footnote_numbering = 'book'">حسب الكتاب</button>
     </div>
   </div>
+  <label class="check ms-convert-check" title="لا تدخل الحواشي المخطوطة، وتُحذف علاماتها من المتن">
+    <input type="checkbox" x-model="ms.convert.options.strip_footnotes" data-strip-footnotes>
+    <span>حذف الحواشي</span>
+  </label>
   <label class="check ms-convert-check">
     <input type="checkbox" x-model="ms.convert.options.include_unreviewed">
     <span>تضمين الصفحات غير المُراجَعة (<bdi class="num" x-text="ms.convert.unreviewed"></bdi>)</span>

@@ -6,12 +6,16 @@ input, 403 for roles, 404 for another book's line or page (or a book without man
 a run over a text edited on the book page without `replace_edited: true` (D49). Every endpoint that
 starts a run answers 202 `services.run_payload`.
 
-- POST /api/books/<id>/assemble/              `{footnote_numbering?, include_unreviewed?, strip_tatweel?}`
+- POST /api/books/<id>/assemble/              `{footnote_numbering?, include_unreviewed?, strip_tatweel?,
+  strip_running_heads?, strip_footnotes?}`
 - GET  /api/books/<id>/manuscript/state/      → `services.manuscript_state`
 - GET  /api/books/<id>/manuscript/            → `{document, warnings, stats, seams, version}`
 - POST /api/books/<id>/manuscript/seams/      `{page, mode: "join" | "split" | "auto"}`
 - POST /api/books/<id>/manuscript/roles/      `{line_ids: [...], role}` (`services.BLOCK_ROLES`: body,
-  heading, subheading, verse «شعر», footnote «حاشية»)
+  heading, subheading, quote «اقتباس», verse «شعر», center «ملاحظة وسط», footnote «حاشية»)
+- POST /api/books/<id>/manuscript/block-type/ `{block_id, type}` (a `BLOCK_ROLES` choice) on a text edited
+  on the book page (D94): the edited block changes, no run; editors only; 200
+  `{changed, version, block, type}`
 - POST /api/books/<id>/manuscript/suggestions/ `{block_id, action: "dismiss"}`
 """
 
@@ -106,8 +110,8 @@ def manuscript_seam(request: Request, book_id: int) -> Response:
 @api_view(["POST"])
 @permission_classes([CanReview])
 def manuscript_roles(request: Request, book_id: int) -> Response:
-    """Set the role of a block's lines (body / heading / subheading / verse / footnote) through review,
-    then re-run."""
+    """Set the kind of a block from its lines (body / heading / subheading / verse / footnote through
+    review, quote / center as the book's line styles), then re-run."""
     book = _book(book_id)
     data = _data(request)
     try:
@@ -116,6 +120,19 @@ def manuscript_roles(request: Request, book_id: int) -> Response:
     except services.AssemblyError as exc:
         return _refused(exc)
     return _started(run)
+
+
+@api_view(["POST"])
+@permission_classes([IsEditor])
+def manuscript_block_type(request: Request, book_id: int) -> Response:
+    """Change the kind of a block of the text edited on the book page (no run)."""
+    book = _book(book_id)
+    data = _data(request)
+    try:
+        out = services.set_edited_block_type(book, request.user, data.get("block_id"), data.get("type"))
+    except services.AssemblyError as exc:
+        return _refused(exc)
+    return Response(out)
 
 
 @api_view(["POST"])

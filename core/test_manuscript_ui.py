@@ -1172,6 +1172,7 @@ def test_manuscript_component_under_node(tmp_path):
                 "data": "/api/books/1/manuscript/",
                 "seams": "/api/books/1/manuscript/seams/",
                 "roles": "/api/books/1/manuscript/roles/",
+                "blockType": "/api/books/1/manuscript/block-type/",
                 "suggestions": "/api/books/1/manuscript/suggestions/",
                 "page": "/books/1/manuscript/",
                 "document": "/books/1/manuscript/document/",
@@ -1560,6 +1561,7 @@ def test_manuscript_component_under_node(tmp_path):
             "include_unreviewed": True,
             "strip_tatweel": True,
             "strip_running_heads": True,
+            "strip_footnotes": False,  # D94: «حذف الحواشي», off unless the book chose it
         },
         "unreviewed": 2,
         "label": "تجميع المخطوطة",
@@ -1574,6 +1576,7 @@ def test_manuscript_component_under_node(tmp_path):
                 "include_unreviewed": True,
                 "strip_tatweel": True,
                 "strip_running_heads": True,
+                "strip_footnotes": False,
             },
         ],
         "open": False,
@@ -1591,13 +1594,15 @@ def test_manuscript_component_under_node(tmp_path):
         "url": "/books/1/layout/?tab=changes",
         "none": "",
     }
-    assert edited["seam"] is False and edited["dismiss"] is False and edited["role"] is False
-    assert edited["posts"] == 0
+    # the seams and the suggestions rest; «نوع الفقرة» changes the edited block itself (D94: one post to the
+    # block-type endpoint, no run; its details are in test_manuscript_trust_roles_under_node)
+    assert edited["seam"] is False and edited["dismiss"] is False and edited["role"] is True
+    assert edited["posts"] == 1
     assert out["editedReassemble"] == {
         "open": True,
         "edited": True,
         "label": "استبدال النص المحرَّر",
-        "posts": 0,
+        "posts": 1,
     }
     assert (
         out["editedSubmit"][0] == "/api/books/1/assemble/"
@@ -1710,19 +1715,25 @@ MS_TRUST_RUN = r"""
 (async () => {
   const out = {};
   const { c, root } = make(fixture.state_ready, fixture.fragment_v1);
-  out.roles = c.roles.map((r) => [r.value, r.label]);
+  out.roles = c.roles.map((r) => [r.value, r.label, r.key]);
   // the menu reads what a block is (a verse line's paragraph by its style) and «حاشية للعلامة (n)» when its
   // leading marker's call is open on its page
   const menuOf = (id) => { c.openMenu(id); const m = { role: c.menu.role, noteFor: c.menu.noteFor, labels: c.roles.map((r) => c.roleLabel(r)), lines: c.menu.lines }; c.closePop(); return m; };
   out.menus = { note: menuOf('p4004'), verse: menuOf('p1005'), body: menuOf('p1002'), heading: menuOf('h1001') };
   out.blockRole = ['p1005', 'p1009', 'h1001'].map((id) => NassakhManuscript.blockRole(root.querySelector(`[data-block="${id}"]`)));
+  // D94: a paragraph's style names its kind (render.py writes `data-style` for every paragraph style)
+  out.styleRole = ['quote', 'center', 'verse', 'bogus'].map((s) => { const el = new Element('p'); el.setAttribute('data-style', s); return NassakhManuscript.blockRole(el); });
   // «حاشية للعلامة (1)» posts the footnote role on the block's lines (the roles endpoint's contract body)
   const run = async (fn) => { calls.length = 0; stateQueue = [fixture.state_ready_v2]; fragment = fixture.fragment_v1; const p = fn(); const live = c.liveMessage; await p; await flush(); await flush(); await flush(); return { post: posts().map((x) => x.slice(1, 3)), live }; };
   out.note = await run(() => c.setRole('p4004', 'footnote'));
   out.verse = await run(() => c.setRole('p1002', 'verse'));
   out.back = await run(() => c.setRole('p1005', 'body'));
   out.heading = await run(() => c.setRole('p1009', 'heading'));
+  out.quote = await run(() => c.setRole('p1002', 'quote'));
   calls.length = 0; out.same = [await c.setRole('p1006', 'verse'), await c.setRole('p1009', 'body'), posts().length];
+  // D94: a digit picks the kind while the block menu is open (by the key's place, in any script); «حاشية» has none
+  const digit = (k, code, open = true) => run(() => { if (open) c.openMenu('p1002'); else c.closePop(); return c.onPopKey({ key: k, code, preventDefault: () => {} }); });
+  out.digits = { center: await digit('٥', 'Digit5'), heading: await digit('1', 'Digit1'), none: await digit('6', 'Digit6'), letter: await digit('a', 'KeyA'), closed: await digit('3', 'Digit3', false) };
   // the stray_note warning's «جعلها حاشية» · «انتقال» in the side panel
   const host = root.querySelector('[data-ms-warnings-host]');
   const stray = host.querySelector('.ms-warn[data-block="p4004"]');
@@ -1732,11 +1743,18 @@ MS_TRUST_RUN = r"""
   out.act = await run(() => { c.onSideClick({ target: stray.querySelector('[data-warn-role]'), preventDefault: () => {} }); return flush(); });
   // «انتقال» goes to the paragraph
   c.onSideClick({ target: stray.querySelector('[data-goto]'), preventDefault: () => {} }); out.goto = c.focused;
-  // a reader has no structure tools; an edited book refuses them (the book page owns the structure, D49)
+  // a reader has no structure tools; an edited book refuses the source tools (the book page owns the structure,
+  // D49), and «نوع الفقرة» changes the edited block itself (D94: editors, no run, the document swapped at once)
   const rd = make(fixture.state_ready, fixture.fragment_v1); rd.c.canReview = false; calls.length = 0;
-  out.reader = [await rd.c.warnRole(rd.root.querySelector('[data-ms-warnings-host] [data-warn-role]')), await rd.c.setRole('p4004', 'footnote'), posts().length];
+  out.reader = [await rd.c.warnRole(rd.root.querySelector('[data-ms-warnings-host] [data-warn-role]')), await rd.c.setRole('p4004', 'footnote'), posts().length, rd.c.typeTitle];
   const ed = make(Object.assign({}, fixture.state_ready, { edited: true }), fixture.fragment_v1); await flush(); calls.length = 0;
-  out.edited = [await ed.c.warnRole(ed.root.querySelector('[data-ms-warnings-host] [data-warn-role]')), await ed.c.setRole('p1002', 'verse'), posts().length];
+  const warnEdited = await ed.c.warnRole(ed.root.querySelector('[data-ms-warnings-host] [data-warn-role]'));
+  const typed = await ed.c.setRole('p1002', 'quote'); await flush();
+  out.edited = { warn: warnEdited, typed, post: posts().map((x) => x.slice(1, 3)), reqs: reqs(), busy: ed.c.busy, pending: ed.c.pending, polling: ed.c.active, title: ed.c.typeTitle };
+  calls.length = 0; ed.c.openMenu('p1002');
+  out.editedDigit = [Boolean(await ed.c.onPopKey({ key: '5', code: 'Digit5', preventDefault: () => {} })), posts().map((x) => x.slice(1, 3))];
+  const edr = make(Object.assign({}, fixture.state_ready, { edited: true }), fixture.fragment_v1); edr.c.canEdit = false; await flush(); calls.length = 0;
+  out.editedReviewer = [edr.c.canSetType, edr.c.typeTitle, await edr.c.setRole('p1002', 'quote'), posts().length];
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
 """  # noqa: E501
@@ -1762,6 +1780,7 @@ def test_manuscript_trust_roles_under_node(tmp_path):
                 "data": "/api/books/1/manuscript/",
                 "seams": "/api/books/1/manuscript/seams/",
                 "roles": "/api/books/1/manuscript/roles/",
+                "blockType": "/api/books/1/manuscript/block-type/",
                 "suggestions": "/api/books/1/manuscript/suggestions/",
                 "page": "/books/1/manuscript/",
                 "document": "/books/1/manuscript/document/",
@@ -1797,11 +1816,11 @@ def test_manuscript_trust_roles_under_node(tmp_path):
     assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout.strip().splitlines()[-1])
 
-    # «نوع الفقرة»: the five choices of `BLOCK_ROLES`, in order
-    assert out["roles"] == [[r["value"], r["label"]] for r in roles["roles"]]
+    # «نوع الفقرة»: the seven choices of `BLOCK_ROLES`, in order, with the digit that picks each (D94)
+    assert out["roles"] == [[r["value"], r["label"], r["key"]] for r in roles["roles"]]
     labels = [r["label"] for r in roles["roles"]]
-    note_for = [*labels[:4], roles["footnoteFor"].format(n=1)]
-    assert note_for[4] == "حاشية للعلامة (1)"
+    note_for = [*labels[:6], roles["footnoteFor"].format(n=1)]
+    assert note_for[6] == "حاشية للعلامة (1)"
     # the current choice: a heading by its tag, a verse line's paragraph by its style, else body text
     assert out["menus"] == {
         "note": {"role": "body", "noteFor": "1", "labels": note_for, "lines": [4004]},
@@ -1810,6 +1829,7 @@ def test_manuscript_trust_roles_under_node(tmp_path):
         "heading": {"role": "heading", "noteFor": "", "labels": labels, "lines": [1001]},
     }
     assert out["blockRole"] == ["verse", "body", "heading"]
+    assert out["styleRole"] == ["quote", "center", "verse", "body"]
     # every choice posts the block's lines with the role (the contract's request), with its live message
     url = "/api/books/1/manuscript/roles/"
     request = roles["request"]["body"]
@@ -1820,7 +1840,21 @@ def test_manuscript_trust_roles_under_node(tmp_path):
     }
     assert out["back"] == {"post": [[url, {"line_ids": [1005], "role": "body"}]], "live": "تصير الفقرة محتوى"}
     assert out["heading"]["post"] == [[url, {"line_ids": [1009], "role": "heading"}]]
+    assert out["quote"] == {
+        "post": [[url, {"line_ids": [1002, 1003, 1004], "role": "quote"}]],
+        "live": roles["liveMessages"]["quote"],
+    }
     assert out["same"] == [False, False, 0]  # the block's own role again: nothing is sent
+    # a digit in the open menu: ٥ (any script) «ملاحظة وسط», 1 «عنوان رئيسي»; 6, a letter, no menu: nothing
+    lines = [1002, 1003, 1004]
+    assert {key: value["post"] for key, value in out["digits"].items()} == {
+        "center": [[url, {"line_ids": lines, "role": "center"}]],
+        "heading": [[url, {"line_ids": lines, "role": "heading"}]],
+        "none": [],
+        "letter": [],
+        "closed": [],
+    }
+    assert out["digits"]["center"]["live"] == roles["liveMessages"]["center"]
     # the stray_note warning: «جعلها حاشية» (the footnote role on its lines) · «انتقال» · «مراجعة»
     assert out["stray"] == {
         "msg": "فقرة في الصفحة 4 تبدأ بعلامة حاشية «(1)» ولم تُربط.",
@@ -1833,8 +1867,24 @@ def test_manuscript_trust_roles_under_node(tmp_path):
     assert out["markerMissing"] == {"msg": "حاشية بلا علامة رُبطت بالعلامة (1)؛ تحقّق منها.", "acts": 0}
     assert out["act"] == {"post": [[url, request]], "live": "تصير الفقرة حاشية"}
     assert out["goto"] == "p4004"
-    # a reader and an edited book: nothing is sent
-    assert out["reader"] == [False, False, 0] and out["edited"] == [False, False, 0]
+    # a reader: nothing is sent
+    assert out["reader"] == [False, False, 0, "تغيير نوع الفقرة متاح للمدقّقين والمحرّرين"]
+    # an edited book (D94): the warning's source action rests; «نوع الفقرة» posts the block-type endpoint (the
+    # contract's `editedRequest`), no run is polled, and the document is fetched and swapped at once
+    edited_url = "/api/books/1/manuscript/block-type/"
+    assert out["edited"] == {
+        "warn": False,
+        "typed": True,
+        "post": [[edited_url, roles["editedRequest"]["body"]]],
+        "reqs": ["/books/1/manuscript/document/"],
+        "busy": False,
+        "pending": None,
+        "polling": False,
+        "title": "",
+    }
+    assert out["editedDigit"] == [True, [[edited_url, {"block_id": "p1002", "type": "center"}]]]
+    # a reviewer sets kinds at the source only: on an edited text they rest
+    assert out["editedReviewer"] == [False, "تغيير نوع الفقرة في النص المحرَّر متاح للمحرّرين", False, 0]
 
 
 def test_manuscript_trust_markup_and_styles():
@@ -1842,10 +1892,25 @@ def test_manuscript_trust_markup_and_styles():
     warning's structure action rests there and on an edited book), and a verse line's paragraph is centred."""
     view = (ROOT / "templates" / "assembly" / "manuscript.html").read_text(encoding="utf-8")
     assert '<span x-text="roleLabel(r)"></span>' in view and "'is-reader': !canReview" in view
-    assert "نوع الفقرة (محتوى، عنوان، شعر، حاشية)" in view
+    assert "نوع الفقرة (محتوى، عنوان، اقتباس، شعر، ملاحظة وسط، حاشية)" in view
+    # D94: the kinds two to a row, a digit's hint on each, «حاشية» across the row; on an edited text the label
+    # says where the change goes, and the choices follow `canSetType`
+    assert '<div class="ms-role-grid" role="group" aria-label="نوع الفقرة">' in view
+    assert ":class=\"{ 'is-wide': !r.key }\"" in view and ':disabled="!canSetType || busy"' in view
+    assert '<kbd class="kbd ms-role-key" aria-hidden="true" x-show="r.key" x-text="r.key"></kbd>' in view
+    assert '<span class="ms-role-where" x-show="edited">في النص المحرَّر</span>' in view
+    assert '@keydown="onPopKey($event)"' in view
+    options = (ROOT / "templates" / "assembly" / "_convert_options.html").read_text(encoding="utf-8")
+    assert 'x-model="ms.convert.options.strip_footnotes"' in options and "<span>حذف الحواشي</span>" in options
+    assert options.count(':disabled="ms.convert.options.strip_footnotes"') == 3
     fragment = (ROOT / "templates" / "assembly" / "_document.html").read_text(encoding="utf-8")
     assert 'class="link ms-warn-link ms-warn-act" data-warn-role="{{ a.role }}"' in fragment
     assert fragment.index("data-warn-role") < fragment.index('data-goto="{{ w.blockId }}"')
     css = (ROOT / "static" / "src" / "components" / "manuscript.css").read_text(encoding="utf-8")
     assert '.ms-p[data-style="verse"] {' in css
     assert ".ms-screen:is(.is-reader, .is-edited) .ms-warn-act { display: none; }" in css
+    # D94: «اقتباس» set in, «ملاحظة وسط» centred, the kinds two to a row, the numbering resting without notes
+    assert '.ms-p[data-style="quote"] { margin-inline: 2em; text-indent: 0; }' in css
+    assert '.ms-p[data-style="center"] {' in css
+    assert ".ms-role-grid { display: grid; grid-template-columns: 1fr 1fr;" in css
+    assert ".ms-convert-group.is-resting { opacity: 0.45; }" in css

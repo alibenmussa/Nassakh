@@ -210,7 +210,7 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <div class="menu ms-pop" x-ref="pop" x-show="pop.kind" x-cloak :style="pop.style" :class="{ 'is-above': pop.above, 'is-note': pop.kind === 'note' }"
              :role="pop.kind === 'note' ? 'dialog' : 'menu'" :aria-label="pop.kind === 'menu' ? 'قائمة الفقرة' : pop.kind === 'seam' ? 'فاصل الصفحة' : 'الحاشية'"
              @click.outside="onPopOutside($event)" @keydown.escape.stop.prevent="closePop(true)"
-             @keydown.arrow-down.prevent="movePop(1)" @keydown.arrow-up.prevent="movePop(-1)">
+             @keydown.arrow-down.prevent="movePop(1)" @keydown.arrow-up.prevent="movePop(-1)" @keydown="onPopKey($event)">
           <template x-if="pop.kind === 'menu'">
             <div>
               <div class="menu-label">ص <bdi class="num" x-text="menu.src"></bdi><span x-show="!menu.reviewed"> · لم تُراجَع بعد</span></div>
@@ -220,15 +220,17 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
                 <kbd class="kbd ms-auto">O</kbd>
               </button>
               <div class="menu-sep" role="separator"></div>
-              {# D74: «شعر» keeps the line on its own; «حاشية» (للعلامة (n) when its call is open on the page) moves it to the notes #}
-              <div class="menu-label">نوع الفقرة</div>
-              <template x-for="r in roles" :key="r.value">
-                <button type="button" class="menu-item" role="menuitemradio" x-show="!edited" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canReview || busy" @click="setRole(menu.blockId, r.value)" :title="canReview ? '' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين'">
-                  <span class="ms-role-check" aria-hidden="true" x-text="menu.role === r.value ? '✓' : ''"></span>
-                  <span x-text="roleLabel(r)"></span>
-                </button>
-              </template>
-              <p class="ms-pop-hint" x-show="edited">حُرِّر النص؛ يُغيَّر نوع الفقرة في صفحة الكتاب (نمط الفقرة).</p>
+              {# D74, D94: every kind the book page and the exports know, two to a row; a digit picks one while the menu is open #}
+              {# before the text is edited the kind is set at the source and the book re-assembles; after, the edited block changes (editors) #}
+              <div class="menu-label ms-role-head"><span>نوع الفقرة</span><span class="ms-role-where" x-show="edited">في النص المحرَّر</span></div>
+              <div class="ms-role-grid" role="group" aria-label="نوع الفقرة">
+                <template x-for="r in roles" :key="r.value">
+                  <button type="button" class="menu-item ms-role" :class="{ 'is-wide': !r.key }" role="menuitemradio" :aria-checked="menu.role === r.value ? 'true' : 'false'" :disabled="!canSetType || busy" @click="setRole(menu.blockId, r.value)" :title="typeTitle">
+                    <span x-text="roleLabel(r)"></span>
+                    <kbd class="kbd ms-role-key" aria-hidden="true" x-show="r.key" x-text="r.key"></kbd>
+                  </button>
+                </template>
+              </div>
               <div class="menu-sep" role="separator"></div>
               <a class="menu-item" role="menuitem" :href="menu.reviewUrl">
                 <svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg>
@@ -360,7 +362,8 @@ One floating element (.ms-pop) serves the block menu, the seam menu and the foot
         <dt><kbd class="kbd">G</kbd></dt><dd>الانتقال إلى صفحة</dd>
         <dt><kbd class="kbd">S</kbd></dt><dd>إظهار فواصل الصفحات أو إخفاؤها</dd>
         <dt><kbd class="kbd">J</kbd> / <kbd class="kbd">K</kbd> أو <kbd class="kbd">↓</kbd> / <kbd class="kbd">↑</kbd></dt><dd>الفقرة التالية / السابقة</dd>
-        <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة (محتوى، عنوان، شعر، حاشية)، فتح في المراجعة</dd>
+        <dt><kbd class="kbd">Enter</kbd></dt><dd>قائمة الفقرة المحدَّدة: عرض الأصل، نوع الفقرة (محتوى، عنوان، اقتباس، شعر، ملاحظة وسط، حاشية)، فتح في المراجعة</dd>
+        <dt><kbd class="kbd">0</kbd>–<kbd class="kbd">5</kbd> <span class="meta">في قائمة الفقرة</span></dt><dd>نوع الفقرة: محتوى، عنوان رئيسي، عنوان فرعي، اقتباس، شعر، ملاحظة وسط</dd>
         <dt><kbd class="kbd">O</kbd></dt><dd>عرض أصل الفقرة المحدَّدة</dd>
         <dt><kbd class="kbd">]</kbd> / <kbd class="kbd">[</kbd></dt><dd>الملاحظة التالية / السابقة</dd>
         <dt><span class="meta">Enter على فاصل صفحة</span></dt><dd>قائمة الفاصل: فصل هنا، وصل بما قبلها، تلقائي</dd>

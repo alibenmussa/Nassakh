@@ -84,6 +84,9 @@
   .ms-convert-group { display: flex; flex-direction: column; gap: 6px; }
   .ms-convert-label { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
   .ms-convert-seg > button { flex: 1; padding: 0 6px; font-size: 12px; }
+  /* D94: with «حذف الحواشي» the numbering has nothing to number */
+  .ms-convert-group.is-resting { opacity: 0.45; }
+  .ms-convert-group.is-resting .ms-convert-seg > button { cursor: default; }
   .ms-convert-check { font-size: 12.5px; }
   .ms-convert-error { margin: 0; font-size: 12px; color: var(--color-danger); }
   /* over a text edited on the book page (D49): what the run replaces, above its button */
@@ -189,6 +192,9 @@
   /* D74: a verse line is a paragraph of its own (7b keeps each hemistich apart; 7d pairs them into bayts), centred
      as the EPUB sets it */
   .ms-p[data-style="verse"] { margin-bottom: 0.15em; text-indent: 0; text-align: center; text-align-last: center; }
+  /* D94: «اقتباس» set in from both sides and «ملاحظة وسط» centred, as the print stylesheet sets them (.nk-quote, .nk-center) */
+  .ms-p[data-style="quote"] { margin-inline: 2em; text-indent: 0; }
+  .ms-p[data-style="center"] { text-indent: 0; text-align: center; text-align-last: center; }
   /* the source badge in the start margin («ص 12–13»): shown on hover, focus and while the tools point at the block */
   .ms-block::before {
     content: "ص " attr(data-src);
@@ -357,6 +363,16 @@
   .ms-pop .menu-item .icon { color: var(--color-text-3); }
   .ms-pop .menu-item .kbd { margin-inline-start: auto; }
   .ms-role-check { display: inline-block; width: 14px; flex: none; color: var(--color-accent-text); } /* = rv-role-check */
+  /* «نوع الفقرة» (D94): the kinds two to a row, the current one tinted as the book page's style list (.bp-block-style) */
+  .ms-role-head { display: flex; align-items: baseline; gap: 6px; }
+  .ms-role-where { font-weight: 400; }
+  .ms-role-where::before { content: "·"; margin-inline-end: 6px; }
+  .ms-role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+  .ms-role-grid .menu-item { height: 28px; min-width: 0; gap: 6px; }
+  .ms-role-grid .menu-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ms-role-grid .menu-item.is-wide { grid-column: 1 / -1; }
+  .ms-role-grid .menu-item[aria-checked="true"] { background: var(--color-accent-soft); color: var(--color-accent-text); font-weight: 600; }
+  .ms-role-key { min-width: 16px; padding: 0 3px; font-size: 10.5px; line-height: 15px; text-align: center; }
   /* the seam menu's head: the decision in words, its state (automatic or manual) after a dot */
   .ms-pop-state { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; font-variant-numeric: tabular-nums; }
   .ms-pop-decision { color: var(--color-text-3); font-weight: 400; }

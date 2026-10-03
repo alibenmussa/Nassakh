@@ -151,8 +151,10 @@ def test_normalize_settings_defaults_and_bad_values():
         "include_unreviewed": False,
         "strip_tatweel": False,
         "strip_running_heads": True,
+        "strip_footnotes": False,
         "seams": {"12": "join", "14": "split"},
         "dismissed_suggestions": ["h9", "p12"],
+        "line_styles": {},
     }
 
 
@@ -1991,6 +1993,13 @@ def test_the_block_roles_fixture_is_the_menu_the_service_takes():
     assert roles["footnoteFor"].format(n="1") == "حاشية للعلامة (1)"
     stray = next(w for w in load_trust("manuscript.json")["warnings"] if w["code"] == "stray_note")
     assert roles["request"]["body"] == {"line_ids": stray["actions"][0]["lineIds"], "role": "footnote"}
+    # D94: the digits that pick a kind in the open menu (the book page's ⌘⌥ digits); the edited text's request
+    assert [item["key"] for item in roles["roles"]] == ["0", "1", "2", "3", "4", "5", ""]
+    assert set(roles["liveMessages"]) == set(roles["blockAfter"]) == set(dict(services.BLOCK_ROLES))
+    edited = roles["editedRequest"]
+    assert edited["url"] == "api:manuscript_block_type" and set(edited["body"]) == {"block_id", "type"}
+    assert edited["refused"]["400"]["detail"] == services.NOT_EDITED
+    assert edited["refused"]["404"]["detail"] == services.EDITED_BLOCK_GONE
 
 
 def test_the_stray_note_action_makes_the_paragraph_the_note_of_its_call(editor):
@@ -2326,6 +2335,7 @@ def test_manuscript_state_before_any_run_costs_one_query(db, django_assert_num_q
             "include_unreviewed": True,
             "strip_tatweel": True,
             "strip_running_heads": True,
+            "strip_footnotes": False,
         },
         "unreviewed_pages": 1,
         "edited": False,
@@ -3083,3 +3093,362 @@ def test_a_leftover_call_pairs_only_in_the_order_of_its_page():
     )
     assert {n["attrs"]["id"]: n["attrs"]["orphan"] for n in notes_of(after)} == {"n21": True, "n22": False}
     assert "marker_unmatched" in codes(after) and "note_call_repaired" not in codes(after)
+
+
+# ---------------------------------------------------------- D94: «حذف الحواشي»; «اقتباس» and «ملاحظة وسط»
+
+
+def _noted_pages() -> list[PageIn]:
+    """Page 1: a call linked to its note (an unresolved word in the note), and a bracketed number no note
+    claims; page 2: a note without a call (an orphan)."""
+    return [
+        pg(
+            1,
+            [
+                ln("نص الفقرة (١) يستمر (٣)", INDENT, id=1),
+                ln("حتى ينتهي هنا.", SHORT, id=2),
+                ln("(١) حاشية مهمة", kind="footnote", uncertain=[1], id=3),
+            ],
+        ),
+        pg(2, [ln("فقرة ثانية بلا علامة.", INDENT, id=4), ln("(٢) حاشية يتيمة", kind="footnote", id=5)]),
+    ]
+
+
+def test_strip_footnotes_leaves_the_notes_and_their_calls_out():
+    kept = run(_noted_pages())
+    assert [text_of(n) for n in blocks_of(kept)] == [
+        "نص الفقرة[1] يستمر (3) حتى ينتهي هنا.",
+        "فقرة ثانية بلا علامة.[1]",
+    ]
+    assert {"note_orphan", "marker_unmatched", "uncertain_words"} <= set(codes(kept))
+    assert kept.stats["footnotes"] == 2 and "footnotes_removed" not in kept.stats
+
+    result = run(_noted_pages(), strip_footnotes=True)
+    assert notes_of(result) == []
+    # the call goes with the space before it; a number no note claimed stays as printed, and says so
+    assert [text_of(n) for n in blocks_of(result)] == [
+        "نص الفقرة يستمر (3) حتى ينتهي هنا.",
+        "فقرة ثانية بلا علامة.",
+    ]
+    assert codes(result) == [
+        "no_headings",
+        "marker_unmatched",
+    ]  # no orphan, and the note's word does not count
+    assert result.stats["footnotes"] == 0 and result.stats["footnotes_removed"] == 2
+    assert render.counts_line(result.stats) == "صفحتان · فقرتان · حُذفت الحواشي"
+    assert render.counts_line({**result.stats, "footnotes_removed": 0}).endswith("بلا حواشٍ")
+    assert {"key": "footnotes_removed", "label": "حواشٍ حُذفت", "value": 2} in render.stats_rows(result.stats)
+    # a stored option, off by default
+    assert normalize_settings({}).strip_footnotes is False
+    assert normalize_settings({"strip_footnotes": "true"}).as_dict()["strip_footnotes"] is True
+
+
+def test_strip_footnotes_drops_a_positional_call_and_keeps_the_stray_note_warning():
+    # page 1: the note without a marker takes the open «(1)» by its place (D74), then both go
+    positional = run(
+        [
+            pg(
+                1,
+                [ln("متن الصفحة (1) انتهى هنا.", FULL, id=11), ln("حاشية بلا علامة", kind="footnote", id=12)],
+            )
+        ],
+        strip_footnotes=True,
+    )
+    assert [text_of(n) for n in blocks_of(positional)] == ["متن الصفحة انتهى هنا."]
+    assert "note_marker_missing" not in codes(positional)
+    # a note left at the end of the body still says so: «جعلها حاشية» takes it out of the text now
+    stray = run(
+        [
+            pg(
+                4,
+                [
+                    ln("وفي تلك السنة (1) وصل الأسطول الى", INDENT, id=21),
+                    ln("طرابلس وضرب المدينة حتى الصلح.", SHORT, id=22),
+                    ln("(1) الأسطول الفرنسي بقيادة دوكين.", ENDING, id=23),
+                ],
+            )
+        ],
+        strip_footnotes=True,
+    )
+    assert "stray_note" in codes(stray)
+
+
+def test_line_styles_set_a_quotation_apart_and_keep_it_across_a_page():
+    lines = [
+        ln("قال المؤلف في كتابه", INDENT, id=61),
+        ln("ما نصه وهو طويل", FULL, id=62),
+        ln("العلم صيد والكتابة قيده", FULL, id=63),
+        ln("قيد صيودك بالحبال الواثقة", FULL, id=64),
+        ln("ثم عاد الى حديثه", FULL, id=65),
+        ln("وختم الفصل.", SHORT, id=66),
+    ]
+    assert [n["attrs"]["sourceLineIds"] for n in blocks_of(run([pg(1, lines)]))] == [[61, 62, 63, 64, 65, 66]]
+    nodes = blocks_of(run([pg(1, lines)], line_styles={"63": "quote", "64": "quote"}))
+    assert [n["attrs"]["sourceLineIds"] for n in nodes] == [[61, 62], [63, 64], [65, 66]]
+    assert [n["attrs"].get("style") for n in nodes] == [None, "quote", None]
+    assert nodes[1]["attrs"]["id"] == "p63" and nodes[1]["type"] == "paragraph"
+    # a quotation runs on across a page; the text after it does not join it, even with an override
+    pages = [
+        pg(1, [ln("متن الصفحة", INDENT, id=81), ln("اقتباس يبدأ هنا", FULL, id=82)]),
+        pg(2, [ln("ويتم هنا", FULL, id=91), ln("ثم نثر بعده.", FULL, id=92)]),
+    ]
+    joined = run(pages, line_styles={"82": "quote", "91": "quote"})
+    assert [n["attrs"]["sourceLineIds"] for n in blocks_of(joined)] == [[81], [82, 91], [92]]
+    assert joined.seams[0]["mode"] == "join" and blocks_of(joined)[1]["attrs"]["style"] == "quote"
+    for overrides in ({}, {"2": "join"}):
+        apart = run(pages, line_styles={"82": "quote"}, seams=overrides)
+        assert apart.seams[0]["mode"] == "split" and apart.seams[0]["reason"] == "style"
+        assert [n["attrs"]["sourceLineIds"] for n in blocks_of(apart)] == [[81], [82], [91, 92]]
+
+
+def test_a_centred_note_is_never_a_heading_suggestion_and_a_role_wins_over_a_style():
+    lines = [
+        ln("الفصل الأول", CENTRED, role="heading", id=71),
+        ln("تنبيه مهم", CENTRED, id=72),
+        ln("نص الفصل يتبعه", INDENT, id=73),
+    ]
+    assert blocks_of(run([pg(1, lines)]))[1]["attrs"]["suggestedRole"] == "heading"
+    nodes = blocks_of(run([pg(1, lines)], line_styles={"71": "center", "72": "center"}))
+    assert [(n["type"], n["attrs"].get("style")) for n in nodes] == [
+        ("heading", None),
+        ("paragraph", "center"),
+        ("paragraph", None),
+    ]
+    assert nodes[1]["attrs"]["suggestedRole"] is None
+    # only `quote` and `center` on line ids are kept
+    settings = normalize_settings(
+        {
+            "line_styles": {
+                "12": "quote",
+                "013": "center",
+                "x": "quote",
+                "14": "verse",
+                "15": "heading",
+                "16": 1,
+            }
+        }
+    )
+    assert settings.line_styles == {"12": "quote", "13": "center"}
+    assert settings.as_dict()["line_styles"] == {"12": "quote", "13": "center"}
+
+
+def test_rendered_paragraph_styles_check_the_menus_kind():
+    doc = {
+        "type": "doc",
+        "attrs": {"seams": []},
+        "content": [
+            {"type": "paragraph", "attrs": {"id": "p1", "sourcePages": [1], "style": style}, "content": []}
+            for style in ("quote", "verse", "center", "bogus")
+        ],
+    }
+    html = render.render_document(doc)
+    assert [
+        re.search(r'data-style="([^"]*)"', p).group(1) if "data-style" in p else None
+        for p in html.split("<p ")[1:]
+    ] == [
+        "quote",
+        "verse",
+        "center",
+        None,
+    ]
+
+
+def styled_ids(book: Book, texts: list[str]) -> list[int]:
+    return [Line.objects.get(page__book=book, text=text).pk for text in texts]
+
+
+def block_of(document: dict, line_id: int) -> dict:
+    return next(n for n in document["content"][1:] if line_id in (n["attrs"].get("sourceLineIds") or []))
+
+
+def test_quote_and_center_keep_their_style_with_the_book_and_drop_a_heading_role(editor, proofreader):
+    f = trust_book()
+    services.start_assembly(f.book, editor)
+    ids = styled_ids(
+        f.book, ["قال الشاعر في وصف الحرب ما يرويه الناس", "في مجالسهم الى اليوم وهو من", "البسيط:"]
+    )
+    response = post(logged(proofreader), "manuscript_roles", f.book.pk, {"line_ids": ids, "role": "quote"})
+    assert response.status_code == 202
+    f.book.refresh_from_db()
+    assert f.book.assembly_settings["line_styles"] == {str(pk): "quote" for pk in ids}
+    node = block_of(Manuscript.objects.get(book=f.book).document, ids[0])
+    assert node["type"] == "paragraph" and node["attrs"]["style"] == "quote"
+    assert node["attrs"]["sourceLineIds"] == ids
+    assert not LineRevision.objects.filter(line_id__in=ids).exists()  # body lines: no revision
+    # the chapter title made «ملاحظة وسط»: its heading role goes through review, the style stays with the book
+    (heading,) = styled_ids(f.book, ["الفصل الأول"])
+    services.set_block_roles(f.book, proofreader, [heading], "center")
+    assert Line.objects.get(pk=heading).role == "body"
+    assert LineRevision.objects.filter(line_id=heading, action="role").count() == 1
+    node = block_of(Manuscript.objects.get(book=f.book).document, heading)
+    assert (node["type"], node["attrs"]["id"], node["attrs"]["style"]) == (
+        "paragraph",
+        f"p{heading}",
+        "center",
+    )
+    # any other kind drops the style: «محتوى» gives the text back, «عنوان رئيسي» the heading
+    services.set_block_roles(f.book, proofreader, ids, "body")
+    services.set_block_roles(f.book, proofreader, [heading], "heading")
+    f.book.refresh_from_db()
+    assert "line_styles" not in f.book.assembly_settings
+    document = Manuscript.objects.get(book=f.book).document
+    assert "style" not in block_of(document, ids[0])["attrs"]
+    assert block_of(document, heading)["type"] == "heading"
+
+
+def test_strip_footnotes_is_an_option_the_book_remembers(editor):
+    f, _pages = two_page_book()
+    client = logged(editor)
+    assert post(client, "book_assemble", f.book.pk, {"strip_footnotes": True}).status_code == 202
+    f.book.refresh_from_db()
+    assert f.book.assembly_settings["strip_footnotes"] is True
+    assert services.manuscript_state(f.book)["options"]["strip_footnotes"] is True
+    document = Manuscript.objects.get(book=f.book).document
+    assert '"type": "footnote"' not in json.dumps(document)
+    assert [text_of(n) for n in document["content"][1:]][
+        1
+    ] == "نص الفقرة يبدأ هنا ويستمر حتى آخر| الصفحة ويتم الكلام."
+    run_ = AssemblyRun.objects.filter(book=f.book).latest("id")
+    assert run_.settings["strip_footnotes"] is True and run_.stats["footnotes_removed"] == 1
+    # off again: the notes come back
+    assert post(client, "book_assemble", f.book.pk, {"strip_footnotes": False}).status_code == 202
+    assert '"type": "footnote"' in json.dumps(Manuscript.objects.get(book=f.book).document)
+    refused = post(client, "book_assemble", f.book.pk, {"strip_footnotes": "maybe"})
+    assert refused.status_code == 400 and refused.json()["detail"] == "قيمة غير صالحة لأحد خيارات التجميع."
+
+
+def edited_trust_book(editor) -> Factory:
+    """`trust_book` assembled, then one paragraph edited on the book page (D41: the text is the book now)."""
+    from editor import document as doc
+    from editor import services as editor_services
+
+    f = trust_book()
+    services.start_assembly(f.book, editor)
+    document = Manuscript.objects.get(book=f.book).document
+    (chapter,) = doc.chapters_of(document)
+    nodes = json.loads(json.dumps(chapter.nodes(document)))
+    (ending,) = styled_ids(f.book, ["ثم انصرف الى بلده."])
+    node = next(n for n in nodes if n["attrs"].get("id") == f"p{ending}")
+    node["content"] = [{"type": "text", "text": "ثم انصرف إلى بلده."}]
+    editor_services.save_chapter(
+        f.book, chapter.id, nodes, doc.chapter_version(chapter.nodes(document)), editor
+    )
+    assert Manuscript.objects.get(book=f.book).origin == Manuscript.Origin.EDITOR
+    return f
+
+
+def test_the_kind_of_a_block_of_an_edited_text_changes_in_the_text(editor, proofreader):
+    """D94: once the text is edited on the book page the menu's kinds change the edited block itself, as the
+    book page's paragraph styles do: no run, the id kept, the manuscript version moved."""
+    f = edited_trust_book(editor)
+    client = logged(editor)
+    runs = AssemblyRun.objects.filter(book=f.book).count()
+    first = styled_ids(f.book, ["قال الشاعر في وصف الحرب ما يرويه الناس"])[0]
+    block = f"p{first}"
+
+    def node():
+        return next(
+            n
+            for n in Manuscript.objects.get(book=f.book).document["content"]
+            if n["attrs"].get("id") == block
+        )
+
+    version = Manuscript.objects.get(book=f.book).version
+    for kind, expected in (
+        ("quote", ("paragraph", None, "quote")),
+        ("center", ("paragraph", None, "center")),
+        ("subheading", ("heading", 2, None)),
+        ("heading", ("heading", 1, None)),
+        ("verse", ("paragraph", None, "verse")),
+        ("body", ("paragraph", None, None)),
+    ):
+        response = post(client, "manuscript_block_type", f.book.pk, {"block_id": block, "type": kind})
+        assert response.status_code == 200, response.json()
+        version += 1
+        assert response.json() == {"changed": True, "version": version, "block": block, "type": kind}
+        got = node()
+        assert (got["type"], got["attrs"].get("level"), got["attrs"].get("style")) == expected
+        assert got["attrs"]["sourceLineIds"] == styled_ids(
+            f.book, ["قال الشاعر في وصف الحرب ما يرويه الناس", "في مجالسهم الى اليوم وهو من", "البسيط:"]
+        )
+    # the same kind again changes nothing
+    same = post(client, "manuscript_block_type", f.book.pk, {"block_id": block, "type": "body"})
+    assert same.json() == {"changed": False, "version": None, "block": block, "type": "body"}
+    # «حاشية»: the paragraph that starts with «(1)» becomes the note of its call on its page
+    (stray,) = styled_ids(f.book, ["(1) الأسطول الفرنسي بقيادة دوكين."])
+    noted = post(client, "manuscript_block_type", f.book.pk, {"block_id": f"p{stray}", "type": "footnote"})
+    assert noted.status_code == 200
+    document = Manuscript.objects.get(book=f.book).document
+    assert f"p{stray}" not in {n["attrs"].get("id") for n in document["content"]}
+    assert "الأسطول الفرنسي بقيادة دوكين." in json.dumps(block_of(document, stray - 3), ensure_ascii=False)
+    assert AssemblyRun.objects.filter(book=f.book).count() == runs  # nothing re-assembled
+    assert Manuscript.objects.get(book=f.book).origin == Manuscript.Origin.EDITOR
+    # refusals: a paragraph without a marker, an unknown block or kind, a reviewer
+    plain = post(client, "manuscript_block_type", f.book.pk, {"block_id": block, "type": "footnote"})
+    assert plain.status_code == 400 and plain.json()["detail"] == "لا تبدأ هذه الفقرة بعلامة حاشية مثل «(1)»."
+    gone = post(client, "manuscript_block_type", f.book.pk, {"block_id": "p999999", "type": "quote"})
+    assert gone.status_code == 404
+    assert gone.json()["detail"] == "لم تُعثر على الفقرة في النص المحرَّر؛ أعد تحميل الصفحة."
+    bad = post(client, "manuscript_block_type", f.book.pk, {"block_id": block, "type": "chapter"})
+    assert bad.status_code == 400 and bad.json()["detail"] == "نوع الفقرة غير معروف."
+    reader = post(
+        logged(proofreader), "manuscript_block_type", f.book.pk, {"block_id": block, "type": "quote"}
+    )
+    assert reader.status_code == 403
+
+
+def test_the_edited_path_refuses_a_text_not_edited(editor):
+    f = trust_book()
+    services.start_assembly(f.book, editor)
+    first = styled_ids(f.book, ["قال الشاعر في وصف الحرب ما يرويه الناس"])[0]
+    response = post(
+        logged(editor), "manuscript_block_type", f.book.pk, {"block_id": f"p{first}", "type": "quote"}
+    )
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "لم يُحرَّر نص هذا الكتاب بعد؛ يُغيَّر نوع الفقرة من أسطرها.",
+        "edited": False,
+    }
+    fresh = Factory("كتاب بلا مخطوطة").book
+    assert (
+        post(
+            logged(editor), "manuscript_block_type", fresh.pk, {"block_id": "p1", "type": "quote"}
+        ).status_code
+        == 404
+    )
+
+
+def test_retype_block_keeps_the_id_text_and_sources():
+    nodes = [
+        {
+            "type": "heading",
+            "attrs": {"id": "h1", "level": 1, "sourcePages": [1]},
+            "content": [{"type": "text", "text": "عنوان"}],
+        },
+        {
+            "type": "paragraph",
+            "attrs": {
+                "id": "p2",
+                "sourcePages": [1],
+                "suggestedRole": "heading",
+                "noteFor": "1",
+                "breakBefore": True,
+            },
+            "content": [{"type": "text", "text": "نص"}],
+        },
+    ]
+    out = services.retype_block(nodes, "p2", "subheading")
+    assert out[1] == {
+        "type": "heading",
+        "attrs": {"level": 2, "id": "p2", "sourcePages": [1], "breakBefore": True},
+        "content": [{"type": "text", "text": "نص"}],
+    }
+    assert nodes[1]["type"] == "paragraph"  # a copy
+    assert services.retype_block(nodes, "h1", "center")[0] == {
+        "type": "paragraph",
+        "attrs": {"id": "h1", "sourcePages": [1], "style": "center"},
+        "content": [{"type": "text", "text": "عنوان"}],
+    }
+    assert "style" not in services.retype_block(out, "p2", "body")[1]["attrs"]
+    with pytest.raises(services.AssemblyNotFound):
+        services.retype_block(nodes, "p9", "quote")

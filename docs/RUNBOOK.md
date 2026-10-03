@@ -403,10 +403,12 @@ It only touches `ocr_done` pages without review edits; reviewed or edited pages 
 them knowingly, it replaces their lines). New books get the fix automatically.
 
 **Assembling.** On the dashboard: «تحويل إلى كتاب» (primary once every page is reviewed, else in the «⋯» menu) opens the
-options (footnote numbering, include unreviewed pages, remove tatweel) and goes to `/books/<id>/manuscript/`, where the
+options (footnote numbering, «حذف الحواشي» to leave the notes and their calls out (D94), include unreviewed pages, remove
+tatweel) and goes to `/books/<id>/manuscript/`, where the
 steps tick and the manuscript appears. The worker (`make worker`) must run; the task is on the default queue.
 In the view: page seams show joins/splits (click to toggle, «تلقائي» to undo an override), `O` or «عرض الأصل» opens a
-block's scan with its lines highlighted, «⋯» on a block sets its role (heading/subheading/body), suggested headings
+block's scan with its lines highlighted, «⋯» on a block sets its kind (محتوى، عنوان رئيسي، عنوان فرعي، اقتباس، شعر،
+ملاحظة وسط، حاشية; digits 0–5 in the open menu; on a text edited on the book page it changes the edited block, D94), suggested headings
 have ✓ / ×, «ملاحظات» lists warnings with a jump and a review link. Keys: G jump, S seams, J/K blocks, ] / [ warnings,
 C copy, ? shortcuts, Esc closes. Editing a page in review afterwards marks the manuscript out of date; «إعادة التجميع»
 rebuilds it and keeps the previous one as a snapshot (the last 10).

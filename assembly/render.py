@@ -21,7 +21,9 @@ from dataclasses import dataclass, field
 from html import escape
 
 NOTE_MODES: tuple[str, ...] = ("chapter", "book", "none")
+PARAGRAPH_STYLES: tuple[str, ...] = ("quote", "verse", "center")  # = editor.document.PARAGRAPH_STYLES
 UNREVIEWED_TITLE = "من صفحة لم تُراجَع بعد"
+NOTES_REMOVED = "حُذفت الحواشي"
 
 # Arabic count forms: (one, two, few 3–10, many 11+ / 100 / 101 …), see `ar_count`.
 PAGES = ("صفحة واحدة", "صفحتان", "صفحات", "صفحة")
@@ -53,6 +55,7 @@ STAT_LABELS: tuple[tuple[str, str], ...] = (
     ("headings", "العناوين"),
     ("paragraphs", "الفقرات"),
     ("footnotes", "الحواشي"),
+    ("footnotes_removed", "حواشٍ حُذفت"),  # D94: only when the run left the notes out
     ("joins", "فقرات موصولة عبر الصفحات"),
     ("words", "الكلمات"),
 )
@@ -303,8 +306,9 @@ def _block_html(node: dict, ctx: _Ctx) -> str:
     suggested = attrs.get("suggestedRole") if node.get("type") == "paragraph" else None
     extra = f' data-suggested="{_attr(suggested)}"' if suggested else ""
     if node.get("type") == "paragraph":
-        if attrs.get("style") == "verse":
-            extra += ' data-style="verse"'  # D74: the paragraph menu's «شعر» is checked
+        if attrs.get("style") in PARAGRAPH_STYLES:
+            # D74, D94: the paragraph menu's «شعر» / «اقتباس» / «ملاحظة وسط» is checked, and the block set so
+            extra += f' data-style="{attrs["style"]}"'
         if attrs.get("noteFor"):
             extra += f' data-note-for="{_attr(attrs["noteFor"])}"'  # D74: «حاشية للعلامة (n)»
     if ctx.unmatched.get(block_id):
@@ -538,14 +542,18 @@ def stats_rows(stats: dict | None) -> list[dict]:
 
 def counts_line(stats: dict | None) -> str:
     """The toolbar's counts: «214 صفحة · 38 فصلًا · 612 حاشية» (paragraphs stand in for chapters
-    when the book has none yet)."""
+    when the book has none yet; «حُذفت الحواشي» when the run left them out, D94)."""
     stats = stats or {}
     pages = int(stats.get("pages_included") or 0)
     chapters = int(stats.get("chapters") or 0)
     paragraphs = int(stats.get("paragraphs") or 0)
     notes = int(stats.get("footnotes") or 0)
     middle = ar_count(chapters, CHAPTERS) if chapters else ar_count(paragraphs, PARAGRAPHS)
-    return " · ".join((ar_count(pages, PAGES), middle, ar_count(notes, FOOTNOTES) if notes else "بلا حواشٍ"))
+    if notes:
+        last = ar_count(notes, FOOTNOTES)
+    else:
+        last = NOTES_REMOVED if stats.get("footnotes_removed") else "بلا حواشٍ"
+    return " · ".join((ar_count(pages, PAGES), middle, last))
 
 
 def fragment_context(payload: dict | None) -> dict:

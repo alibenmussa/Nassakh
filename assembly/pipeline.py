@@ -5,10 +5,12 @@ inputs (`PageIn` / `LineIn`, boxes as ratios of the page) and `assemble` runs th
 
 1. `select_pages`        which pages are in, which are skipped (and break the join chain)   §2.1
    `drop_running_heads`  the book's running heads the layout left in the body (D49)
+   `apply_line_styles`   the «اقتباس» / «ملاحظة وسط» the book chose for body lines (D94)
 2. `split_paragraphs`    body lines of one page → paragraphs and headings (geometry first)   §2.3
 3. `join_pages`          seams: the last paragraph of a page joined with the next page's first §2.4
 4. `page_notes`, `link_footnotes`, `attach_orphans`, `number_footnotes`                     §2.5
    `stray_notes`         marker-initial paragraphs a page's open call may own (D74)
+   `drop_footnotes`      «حذف الحواشي»: the notes and their calls leave the text (D94)
 5. `suggest_headings`    heading suggestions, `no_headings`                                  §2.6
 6. `normalize_rich`, `move_leading_marks`   typography in the derived text (D37)            §2.2
 7. `build_document`, `compute_stats`                                                          §2.8–§2.10
@@ -42,6 +44,9 @@ HEADING_LEVELS: dict[str, int] = {"heading": 1, "subheading": 2}
 # whether it is a note, `ocr.services.line_kind`).
 LINE_ROLES: frozenset[str] = frozenset({ROLE_BODY, ROLE_VERSE, *HEADING_LEVELS})
 VERSE_STYLE = "verse"  # the paragraph style of a verse line (`editor.document.PARAGRAPH_STYLES`)
+# The paragraph styles the manuscript's paragraph menu sets on body lines (D94, `Settings.line_styles`):
+# «اقتباس» and «ملاحظة وسط», the editor's and the exports' `quote` and `center`. No line role holds them.
+LINE_STYLES: tuple[str, ...] = ("quote", "center")
 
 REVIEWED_STATUSES: frozenset[str] = frozenset({"reviewed", "assembled"})
 UNREVIEWED_STATUS = "ocr_done"
@@ -130,7 +135,8 @@ class LineIn:
     role as the pipeline reads it (`LINE_ROLES`: `body`, `heading`, `subheading`, `verse`; D32, D74);
     `box` `[x0, y0, x1, y1]` as ratios of the page (None when the line has no box, e.g. a line inserted
     by a reviewer); `uncertain` the indexes, in `text.split()`, of the words still unresolved
-    (`conf == "low"` and no `res`).
+    (`conf == "low"` and no `res`); `style` the paragraph style the book chose for the line (`LINE_STYLES`,
+    set by `apply_line_styles` from `Settings.line_styles`, D94; None for the text as printed).
     """
 
     id: int
@@ -140,6 +146,7 @@ class LineIn:
     text: str
     box: tuple[float, float, float, float] | None = None
     uncertain: list[int] = field(default_factory=list)
+    style: str | None = None
 
 
 @dataclass
@@ -162,8 +169,12 @@ class Settings:
     include_unreviewed: bool = True
     strip_tatweel: bool = True
     strip_running_heads: bool = True
+    # D94: «حذف الحواشي»: the notes stay out of the manuscript and their calls leave the text
+    strip_footnotes: bool = False
     seams: dict[str, str] = field(default_factory=dict)
     dismissed_suggestions: frozenset[str] = frozenset()
+    # D94: line id (a string) → `LINE_STYLES`, the «اقتباس» / «ملاحظة وسط» of the manuscript's paragraph menu
+    line_styles: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         """JSON form, as stored in `AssemblyRun.settings`."""
@@ -172,8 +183,10 @@ class Settings:
             "include_unreviewed": self.include_unreviewed,
             "strip_tatweel": self.strip_tatweel,
             "strip_running_heads": self.strip_running_heads,
+            "strip_footnotes": self.strip_footnotes,
             "seams": dict(sorted(self.seams.items(), key=lambda item: int(item[0]))),
             "dismissed_suggestions": sorted(self.dismissed_suggestions),
+            "line_styles": dict(sorted(self.line_styles.items(), key=lambda item: int(item[0]))),
         }
 
 
@@ -208,7 +221,7 @@ def normalize_settings(raw: dict | Settings | None) -> Settings:
     """`Settings` from `Book.assembly_settings`; unknown or invalid values fall back to the defaults.
 
     Seam overrides keep only `{"<page number>": "join" | "split"}`; dismissed suggestions only
-    paragraph ids (`p<line id>`).
+    paragraph ids (`p<line id>`); line styles only `{"<line id>": "quote" | "center"}`.
     """
     if isinstance(raw, Settings):
         return raw
@@ -220,6 +233,12 @@ def normalize_settings(raw: dict | Settings | None) -> Settings:
         for key, mode in raw_seams.items():
             if str(key).isascii() and str(key).isdigit() and mode in SEAM_MODES:
                 seams[str(int(str(key)))] = mode
+    line_styles: dict[str, str] = {}
+    raw_styles = data.get("line_styles")
+    if isinstance(raw_styles, dict):
+        for key, style in raw_styles.items():
+            if str(key).isascii() and str(key).isdigit() and style in LINE_STYLES:
+                line_styles[str(int(str(key)))] = style
     dismissed = data.get("dismissed_suggestions")
     ids = frozenset(
         str(value)
@@ -231,8 +250,10 @@ def normalize_settings(raw: dict | Settings | None) -> Settings:
         include_unreviewed=_as_bool(data.get("include_unreviewed"), True),
         strip_tatweel=_as_bool(data.get("strip_tatweel"), True),
         strip_running_heads=_as_bool(data.get("strip_running_heads"), True),
+        strip_footnotes=_as_bool(data.get("strip_footnotes"), False),
         seams=seams,
         dismissed_suggestions=ids,
+        line_styles=line_styles,
     )
 
 
@@ -928,7 +949,8 @@ def breaks_between(
 
     A verse line on either side → break (D74: each verse line is a paragraph of its own; pairing
     hemistichs into bayts is 7d). Roles differ → break; lines of one heading role never break (they
-    form one heading). With both boxes: `a` short, `b` indented, or either centred. Without a box on
+    form one heading). Paragraph styles differ (`LineIn.style`, D94: a quotation set apart from the text
+    around it) → break. With both boxes: `a` short, `b` indented, or either centred. Without a box on
     either line: `a` ends with terminal punctuation.
 
     With the page's `measure`, `b` only counts as indented when it also starts left of `a`
@@ -939,6 +961,8 @@ def breaks_between(
         return True
     if a.role in HEADING_LEVELS:
         return False
+    if a.style != b.style:
+        return True
     if shape_a is None or shape_b is None:
         return ends_terminal(a.text)
     indented = shape_b.indented
@@ -965,7 +989,8 @@ class Block:
     reviewed: bool = True
     suggested: str | None = None
     parts: list[Rich] | None = None  # pending joins, concatenated once by `join_pages`
-    style: str | None = None  # `verse` for a verse line's paragraph (D74)
+    # `verse` for a verse line's paragraph (D74); `quote` / `center` from the book's line styles (D94)
+    style: str | None = None
     note_for: str | None = None  # the open call a marker-initial paragraph may become the note of (D74)
 
     @property
@@ -995,16 +1020,38 @@ def _new_block(lines: list[LineIn], shapes: list[Shape | None], page: PageIn) ->
         shapes=list(shapes),
         rich=Rich.join([Rich.from_line(line) for line in lines]),
         reviewed=page.reviewed,
-        style=VERSE_STYLE if lines[0].role == ROLE_VERSE else None,
+        style=VERSE_STYLE if lines[0].role == ROLE_VERSE else None if level else lines[0].style,
     )
+
+
+def apply_line_styles(pages: Sequence[PageIn], styles: dict[str, str]) -> list[PageIn]:
+    """The pages with each body line the book styled (`Settings.line_styles`, D94: the manuscript's «اقتباس»
+    / «ملاحظة وسط») carrying its style. Only body lines of the `body` role take one: a heading or verse
+    role, or a note, wins over a style left on the line. Copies; the input is not changed."""
+    if not styles:
+        return list(pages)
+    out: list[PageIn] = []
+    for page in pages:
+        if not any(str(line.id) in styles for line in page.lines):
+            out.append(page)
+            continue
+        lines = [
+            dataclasses.replace(line, style=styles[str(line.id)])
+            if str(line.id) in styles and line.kind == BODY and line.role == ROLE_BODY
+            else line
+            for line in page.lines
+        ]
+        out.append(dataclasses.replace(page, lines=lines))
+    return out
 
 
 def split_paragraphs(page: PageIn) -> list[Block]:
     """The body lines of one page as paragraphs and headings, in reading order (§2.3).
 
     Consecutive `heading` lines form one level-1 heading, consecutive `subheading` lines one level-2
-    heading, and every `verse` line a paragraph of its own with the style `verse` (D74). Lines without
-    text are left out.
+    heading, and every `verse` line a paragraph of its own with the style `verse` (D74). Lines the book
+    styled (`LineIn.style`, D94) are kept apart from the lines around them and give their paragraph that
+    style. Lines without text are left out.
     """
     lines = [line for line in page.lines if line.kind != FOOTNOTE and (line.text or "").strip()]
     if not lines:
@@ -1040,14 +1087,18 @@ def decide_seam(
     of the second is not indented; without boxes, join when the first does not end with terminal
     punctuation. An override (`join` / `split`) wins when both sides are paragraphs. `reason` is the
     automatic rule that applied: `geometry`, `punctuation`, `heading` (a side is not a paragraph: a
-    heading, or a page without body text) or `verse` (a side is a verse line, never joined, D74: no
-    override joins it).
+    heading, or a page without body text), `verse` (a side is a verse line, never joined, D74: no
+    override joins it) or `style` (the two sides have different paragraph styles, D94: a quotation and the
+    text after it; no override joins them either).
     """
     record = {"page": page, "from_page": from_page, "mode": "split", "decision": "auto", "reason": "heading"}
     if prev is None or nxt is None or prev.kind != "paragraph" or nxt.kind != "paragraph":
         return record
     if prev.style == VERSE_STYLE or nxt.style == VERSE_STYLE:
         record["reason"] = "verse"
+        return record
+    if prev.style != nxt.style:
+        record["reason"] = "style"
         return record
     last, first = prev.shapes[-1], nxt.shapes[0]
     if last is None or first is None:
@@ -2130,6 +2181,19 @@ def stray_notes(blocks: Sequence[Block], line_page: dict[int, int]) -> list[Asse
     return warnings
 
 
+def drop_footnotes(blocks: Sequence[Block]) -> int:
+    """«حذف الحواشي» (D94): every footnote node leaves the text, and with it the call it replaced (the call
+    and the space before it, `Candidate.cut`); returns how many went. Run after linking, so only what was
+    taken for a call goes: a mark no note claimed stays as printed (`marker_unmatched`)."""
+    dropped = 0
+    for block in blocks:
+        spans = [(i, i + 1) for i, char in enumerate(block.rich.text) if char == FN]
+        if spans:
+            dropped += len(spans)
+            block.rich = _drop(block.rich, spans)
+    return dropped
+
+
 def number_footnotes(blocks: Sequence[Block], mode: str) -> None:
     """Number the footnote nodes in document order: per chapter (restart at each level-1 heading),
     through the book, or per source page (§2.5)."""
@@ -2226,15 +2290,22 @@ def typeset_blocks(
 # ====================================================================== 2.7 uncertain words
 
 
-def uncertain_warnings(pages: Iterable[PageIn], blocks: Sequence[Block]) -> list[AssemblyWarning]:
-    """One `uncertain_words` warning (info) per included page with unresolved words."""
+def uncertain_warnings(
+    pages: Iterable[PageIn], blocks: Sequence[Block], notes: bool = True
+) -> list[AssemblyWarning]:
+    """One `uncertain_words` warning (info) per included page with unresolved words; with `notes` False
+    (the notes were left out, D94) the words of note lines do not count."""
     first_block: dict[int, str] = {}
     for block in blocks:
         for line_id in block.line_ids:
             first_block.setdefault(line_id, block.id)
     out = []
     for page in pages:
-        lines = [line for line in page.lines if line.uncertain and (line.text or "").strip()]
+        lines = [
+            line
+            for line in page.lines
+            if line.uncertain and (line.text or "").strip() and (notes or line.kind != FOOTNOTE)
+        ]
         count = sum(len(line.uncertain) for line in lines)
         if not count:
             continue
@@ -2304,7 +2375,8 @@ def _inline_node(node) -> dict:
 
 def block_node(block: Block) -> dict:
     """The ProseMirror node of a paragraph or heading, with its source mapping. A verse line's paragraph
-    carries `style: "verse"` (the editor's paragraph style), and a marker-initial paragraph whose page
+    carries `style: "verse"` (the editor's paragraph style; `quote` / `center` the book's line styles, D94),
+    and a marker-initial paragraph whose page
     has an open call with its number `noteFor` (that number: the manuscript's «حاشية للعلامة (n)»)."""
     attrs: dict = {
         "id": block.id,
@@ -2402,7 +2474,10 @@ def assemble(
     """Run the whole pipeline on a book's pages (§2); `on_stage(key)` is told when each step starts.
 
     Steps: `paragraphs`, `seams`, `footnotes`, `headings`, `typography` (the caller reports
-    `collect` and `save` around it).
+    `collect` and `save` around it). With `strip_footnotes` (D94) the notes are read and linked as
+    always, so their calls are known, then both leave the text: no orphan is attached, the linking
+    warnings go (a mark no note claimed stays, `marker_unmatched`, as does `stray_note`), the note lines'
+    uncertain words do not count, and `stats.footnotes_removed` counts the notes left out.
     """
     stage = on_stage or (lambda key: None)
     options = normalize_settings(settings)
@@ -2416,6 +2491,7 @@ def assemble(
     heads = 0
     if options.strip_running_heads:
         selection.included, head_warnings, heads = drop_running_heads(selection.included)
+    selection.included = apply_line_styles(selection.included, options.line_styles)
     page_blocks = [(page, split_paragraphs(page)) for page in selection.included]
     empty = [
         AssemblyWarning("empty_page", "info", page.number, f"الصفحة {page.number} بلا نص في المتن.")
@@ -2438,8 +2514,16 @@ def assemble(
         if notes:
             notes_by_page[page.number] = notes
     orphans, footnote_warnings = link_footnotes(blocks, notes_by_page, line_page, by_page)
-    footnote_warnings += attach_orphans(blocks, orphans, line_page)
-    footnote_warnings += stray_notes(blocks, line_page)
+    removed = 0
+    if options.strip_footnotes:
+        removed = sum(len(notes) for notes in notes_by_page.values())
+        footnote_warnings = [w for w in footnote_warnings if w.code == "marker_unmatched"]
+        footnote_warnings += stray_notes(blocks, line_page)
+        drop_footnotes(blocks)
+        notes_by_page = {}
+    else:
+        footnote_warnings += attach_orphans(blocks, orphans, line_page)
+        footnote_warnings += stray_notes(blocks, line_page)
 
     stage("headings")
     suggest_headings(blocks, options.dismissed_suggestions)
@@ -2465,12 +2549,14 @@ def assemble(
             *empty,
             *head_warnings,
             *footnote_warnings,
-            *uncertain_warnings(selection.included, blocks),
+            *uncertain_warnings(selection.included, blocks, notes=not options.strip_footnotes),
         ]
     )
     document = build_document(blocks, meta, options, seams)
     stats = compute_stats(selection, blocks, seams)
     stats["running_heads"] = heads
+    if options.strip_footnotes:
+        stats["footnotes_removed"] = removed
     return Result(
         document, [w.as_dict() for w in warnings], stats, seams, [page.id for page in selection.included]
     )

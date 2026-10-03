@@ -22,6 +22,9 @@ api_urlpatterns = [
     path("books/<int:book_id>/manuscript/seams/", api.manuscript_seam, name="manuscript_seam"),
     path("books/<int:book_id>/manuscript/roles/", api.manuscript_roles, name="manuscript_roles"),
     path(
+        "books/<int:book_id>/manuscript/block-type/", api.manuscript_block_type, name="manuscript_block_type"
+    ),
+    path(
         "books/<int:book_id>/manuscript/suggestions/", api.manuscript_suggestion, name="manuscript_suggestion"
     ),
 ]

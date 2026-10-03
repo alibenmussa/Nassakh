@@ -67,21 +67,29 @@
     { key: 'save', label: () => 'حفظ المخطوطة' },
   ];
   const STAGE_KEYS = STAGES.map((s) => s.key);
-  // «نوع الفقرة» (D32, D74; = assembly.services.BLOCK_ROLES): the choice goes to every line of the block through
-  // the review service, which stores it per line (on a footnote-region line «حاشية» is `body`, «محتوى» `main`).
+  // «نوع الفقرة» (D32, D74, D94; = assembly.services.BLOCK_ROLES): every kind the book page and the exports know.
+  // Before the text is edited the choice goes to every line of the block (the roles endpoint: line roles through
+  // the review service, «اقتباس» / «ملاحظة وسط» as the book's line styles) and the book re-assembles; once it is
+  // edited on the book page it changes the edited block itself (the block-type endpoint, editors). `key` is the
+  // digit that picks it while the menu is open, as ⌘⌥ + the digit does on the book page.
   const ROLES = [
-    { value: 'body', label: 'محتوى' },
-    { value: 'heading', label: 'عنوان رئيسي' },
-    { value: 'subheading', label: 'عنوان فرعي' },
-    { value: 'verse', label: 'شعر' },
-    { value: 'footnote', label: 'حاشية' },
+    { value: 'body', label: 'محتوى', key: '0' },
+    { value: 'heading', label: 'عنوان رئيسي', key: '1' },
+    { value: 'subheading', label: 'عنوان فرعي', key: '2' },
+    { value: 'quote', label: 'اقتباس', key: '3' },
+    { value: 'verse', label: 'شعر', key: '4' },
+    { value: 'center', label: 'ملاحظة وسط', key: '5' },
+    { value: 'footnote', label: 'حاشية', key: '' },
   ];
   const ROLE_OF_TAG = { H2: 'heading', H3: 'subheading', P: 'body' };
+  const PARAGRAPH_STYLES = ['quote', 'verse', 'center'];
   const ROLE_MESSAGES = {
     body: 'تصير الفقرة محتوى',
     heading: 'تصير الفقرة عنوانًا رئيسيًا',
     subheading: 'تصير الفقرة عنوانًا فرعيًا',
+    quote: 'تصير الفقرة اقتباسًا',
     verse: 'تصير الفقرة شعرًا',
+    center: 'تصير الفقرة ملاحظة وسط',
     footnote: 'تصير الفقرة حاشية',
   };
   const PAGES = ['صفحة واحدة', 'صفحتان', 'صفحات', 'صفحة'];
@@ -134,9 +142,9 @@
   const toast = (message) => { if (window.Nassakh && window.Nassakh.toast) window.Nassakh.toast(message); };
   const pagesOf = (el) => attr(el, 'data-pages').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
   const linesOf = (el) => attr(el, 'data-lines').split(',').map((v) => parseInt(v, 10)).filter((n) => n > 0);
-  // What a block is now: a heading by its tag, a verse line's paragraph by its style (`data-style="verse"`,
-  // D74), else body text.
-  const blockRole = (el) => (el && el.tagName === 'P' && attr(el, 'data-style') === 'verse' ? 'verse' : ROLE_OF_TAG[el && el.tagName] || 'body');
+  // What a block is now: a heading by its tag, a styled paragraph by its style (`data-style` «verse», D74;
+  // «quote» / «center», D94), else body text.
+  const blockRole = (el) => (el && el.tagName === 'P' && PARAGRAPH_STYLES.includes(attr(el, 'data-style')) ? attr(el, 'data-style') : ROLE_OF_TAG[el && el.tagName] || 'body');
   const kids = (el) => Array.from(el && el.children ? el.children : []); // HTMLCollection has no forEach / find
   const later = (fn) => { if (typeof queueMicrotask === 'function') queueMicrotask(fn); else Promise.resolve().then(fn); };
 
@@ -300,7 +308,7 @@
         seam: { page: 0, from: 0, mode: '', decision: 'auto', text: '', state: '' },
         note: { id: '', number: '', html: '', orphan: false, found: false },
         drawer: { open: false, blockId: null, pages: [], index: 0, lines: [], sheet: null, loading: false, error: '' },
-        convert: { open: false, busy: false, error: '', label: 'تجميع المخطوطة', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, unreviewed: 0 },
+        convert: { open: false, busy: false, error: '', label: 'تجميع المخطوطة', edited: false, options: { footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true, strip_footnotes: false }, unreviewed: 0 },
         busy: false, // an override is on the wire or its run is on: no second post meanwhile
         bookUrl: urls.book || '',
         reveal: false,
@@ -357,7 +365,14 @@
         get edited() { return Boolean(this.state.edited) && this.hasDocument; },
         // D78 (PHASE7 §5.6): review's changes after the edit are taken on the book page («تغييرات المراجعة»)
         get editedText() {
-          return 'حُرِّر نص الكتاب في «الكتاب»، فهو النص المعتمد الآن: تُغيَّر العناوين ووصل الفقرات هناك.';
+          return 'حُرِّر نص الكتاب في «الكتاب»، فهو النص المعتمد الآن: يُغيَّر نوع الفقرة هنا في النص المحرَّر، ووصل الفقرات هناك.';
+        },
+        // «نوع الفقرة» (D94): at the source (reviewers and editors) before the text is edited, in the edited text
+        // (editors, as on the book page) after
+        get canSetType() { return this.edited ? this.canEdit : this.canReview; },
+        get typeTitle() {
+          if (this.canSetType) return '';
+          return this.edited ? 'تغيير نوع الفقرة في النص المحرَّر متاح للمحرّرين' : 'تغيير نوع الفقرة متاح للمدقّقين والمحرّرين';
         },
         get editedDriftText() {
           const n = this.state.stale ? this.stalePages.length : 0;
@@ -522,7 +537,7 @@
         // ------------------------------------------------------------ starting runs
         resetConvert() {
           const s = this.state || {};
-          this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true }, s.options || {});
+          this.convert.options = Object.assign({ footnote_numbering: 'page', include_unreviewed: true, strip_tatweel: true, strip_running_heads: true, strip_footnotes: false }, s.options || {});
           this.convert.unreviewed = Number(s.unreviewed_pages) || 0;
           this.convert.edited = Boolean(s.edited && s.exists);
           this.convert.label = this.convert.edited ? 'استبدال النص المحرَّر' : s.exists ? 'إعادة التجميع' : 'تجميع المخطوطة';
@@ -532,7 +547,7 @@
           this.closePop();
           this.resetConvert();
           this.convert.open = true;
-          if (this.$nextTick) this.$nextTick(() => focusEl(q(document, '.ms-convert [role="radio"][aria-checked="true"]') || q(document, '.ms-convert-actions button')));
+          if (this.$nextTick) this.$nextTick(() => focusEl(q(document, '.ms-convert [role="radio"][aria-checked="true"]:not([disabled])') || q(document, '.ms-convert-actions button')));
         },
         closeConvert() {
           this.convert.open = false;
@@ -587,6 +602,21 @@
           if (!r.ok) { this.busy = false; this.clearPending(); toast(r.message); return false; }
           this.beginRun(r.data, anchor);
           return true;
+        },
+        // A change to the text edited on the book page (D94): 200, nothing re-assembles; the document is fetched and
+        // swapped in place, anchored on `anchor`.
+        async postEdit(url, body, anchor, pendingId) {
+          if (this.busy) { toast('انتظر انتهاء التغيير الجاري'); return false; }
+          if (!url) return false;
+          this.busy = true;
+          this.markPending(pendingId || (anchor && anchor[0]) || null);
+          const r = await api(url, { method: 'POST', body });
+          if (!r.ok) { this.busy = false; this.clearPending(); toast(r.message); return false; }
+          pendingAnchor = anchor;
+          const swapped = await this.reload({ anchor });
+          this.busy = false;
+          if (!swapped) this.clearPending();
+          return swapped;
         },
         markPending(id) {
           this.clearPending();
@@ -885,6 +915,18 @@
           const i = items.indexOf(active);
           return this.focusPopItem(i === -1 ? (dir > 0 ? 0 : -1) : i + dir);
         },
+        // In the block menu a digit picks «نوع الفقرة» (D94): 0 محتوى … 5 ملاحظة وسط, the book page's ⌘⌥ digits;
+        // by the key's place or in any script (NassakhKeys.digit). Nothing while the choices rest.
+        onPopKey(e) {
+          if (this.pop.kind !== 'menu' || !this.menu.blockId) return false;
+          const K = window.NassakhKeys;
+          const d = K && K.digit ? K.digit(e) : null;
+          const role = d === null ? null : ROLES.find((r) => r.key === String(d));
+          if (!role) return false;
+          if (e.preventDefault) e.preventDefault();
+          if (!this.canSetType || this.busy) return false;
+          return this.setRole(this.menu.blockId, role.value);
+        },
         // Scrolling the anchor out of the visible column closes the overlay (it scrolls with the column
         // meanwhile, being positioned inside it).
         onScroll() {
@@ -1072,14 +1114,20 @@
           if (r && r.value === 'footnote' && this.menu.noteFor) return `حاشية للعلامة (${this.menu.noteFor})`;
           return r ? r.label : '';
         },
-        // The block's lines take the role (through the review service, D38), then the document re-runs.
+        // The block's lines take the role (through the review service, D38; «اقتباس» / «ملاحظة وسط» as the book's
+        // line styles), then the document re-runs. On a text edited on the book page the edited block changes
+        // instead (D94), and the document is swapped at once.
         setRole(id, role) {
           const block = this.blockById(id);
-          if (!block || !this.canReview) return Promise.resolve(false);
+          if (!block || !this.canSetType || !ROLE_MESSAGES[role]) return Promise.resolve(false);
           const current = blockRole(block);
           this.closeMenu(true);
           if (role === current) return Promise.resolve(false);
           this.liveMessage = ROLE_MESSAGES[role] || '';
+          if (this.edited) {
+            // the block keeps its id in the edited text (a paragraph made a note leaves it: its neighbours hold the place)
+            return this.postEdit(urls.blockType, { block_id: id, type: role }, this.neighbours(id), id);
+          }
           // the block comes back under its other id (a paragraph `p…` becomes a heading `h…`): anchored first; a
           // paragraph made a note leaves the text, and its neighbours hold the place
           const renamed = `${role === 'heading' || role === 'subheading' ? 'h' : 'p'}${String(id).slice(1)}`;

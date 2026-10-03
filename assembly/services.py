@@ -9,11 +9,13 @@ two queries whatever its page count.
 Options and overrides live in `Book.assembly_settings` (D38) and are re-applied by every run.
 After a successful run the included pages that were `reviewed` become `assembled` (D36) and the book
 render of the new text is asked for (D49). Once the text is edited on the book page (D41) a whole-book
-run replaces the edits, so it is refused unless the request confirms it (`replace_edited`, D49).
+run replaces the edits, so it is refused unless the request confirms it (`replace_edited`, D49); the
+paragraph menu's «نوع الفقرة» then changes the edited block itself (`set_edited_block_type`, D94).
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import time
@@ -42,19 +44,32 @@ ACTIVE_STATUSES: tuple[str, ...] = (AssemblyRun.Status.QUEUED, AssemblyRun.Statu
 ABANDONED_AFTER = timedelta(minutes=30)  # a queued/running run older than this is taken as lost
 SNAPSHOTS_KEPT = 10  # re-assembly snapshots kept per manuscript (manual ones are never pruned)
 MAX_ROLE_LINES = 500
-# The paragraph menu's «نوع الفقرة» (D74), in its order: the effective choices `set_block_roles` takes and
-# the review service stores per line (`review.services.set_line_role`: «حاشية» on a footnote-region line
-# stores `body`, «محتوى» there stores `main`). A paragraph that starts with a marker whose call is open on
-# its page (`noteFor`) reads the footnote choice as `FOOTNOTE_FOR_LABEL`.
+# The paragraph menu's «نوع الفقرة» (D74, D94), in its order: every kind the editor and the exports know
+# for a block of text. Before the text is edited `set_block_roles` takes them at the source: the line roles
+# go through the review service, stored per line (`review.services.set_line_role`: «حاشية» on a
+# footnote-region line stores `body`, «محتوى» there stores `main`); «اقتباس» and «ملاحظة وسط», which no line
+# role holds, are body lines with a style the book keeps (`Book.assembly_settings.line_styles`, D38). Once
+# the text is edited on the book page (D41) `set_edited_block_type` changes the edited block itself. A
+# paragraph that starts with a marker whose call is open on its page (`noteFor`) reads the footnote choice
+# as `FOOTNOTE_FOR_LABEL`.
 BLOCK_ROLES: tuple[tuple[str, str], ...] = (
     ("body", "محتوى"),
     ("heading", "عنوان رئيسي"),
     ("subheading", "عنوان فرعي"),
+    ("quote", "اقتباس"),
     ("verse", "شعر"),
+    ("center", "ملاحظة وسط"),
     ("footnote", "حاشية"),
 )
 FOOTNOTE_FOR_LABEL = "حاشية للعلامة ({n})"
-OPTION_KEYS: tuple[str, ...] = ("footnote_numbering", "include_unreviewed", "strip_tatweel")
+OPTION_KEYS: tuple[str, ...] = (
+    "footnote_numbering",
+    "include_unreviewed",
+    "strip_tatweel",
+    "strip_running_heads",
+    "strip_footnotes",
+)
+BOOLEAN_OPTIONS: tuple[str, ...] = OPTION_KEYS[1:]
 EMPTY_SIGNATURE = "0:"
 
 # Arabic step labels of the manuscript view (§4.2), in pipeline order.
@@ -309,8 +324,8 @@ def _parse_bool(value) -> bool | None:
 
 
 def clean_options(options) -> dict:
-    """The assembly options of a request (`footnote_numbering`, `include_unreviewed`, `strip_tatweel`,
-    `strip_running_heads`).
+    """The assembly options of a request (`OPTION_KEYS`: `footnote_numbering`, `include_unreviewed`,
+    `strip_tatweel`, `strip_running_heads`, `strip_footnotes`).
 
     Missing keys are left out; unknown keys are ignored; a bad value raises `AssemblyError`.
     """
@@ -321,7 +336,7 @@ def clean_options(options) -> dict:
         if numbering not in pipeline.NUMBERING_MODES:
             raise AssemblyError("طريقة ترقيم الحواشي غير معروفة.")
         out["footnote_numbering"] = numbering
-    for key in ("include_unreviewed", "strip_tatweel", "strip_running_heads"):
+    for key in BOOLEAN_OPTIONS:
         if data.get(key) is None:
             continue
         value = _parse_bool(data[key])
@@ -505,16 +520,19 @@ def _line_ids(values) -> list[int]:
 
 
 def set_block_roles(book: Book, user, line_ids, role: str, replace_edited: bool = False) -> AssemblyRun:
-    """Set the role of a block's lines through the review service (one revision per changed line), then
-    start a run (D38: a heading is a line fact, recorded and undoable like any review action).
+    """Set the kind of a block from its lines, at the source, then start a run (D38: a heading is a line
+    fact, recorded and undoable like any review action).
 
-    `role` is one of the paragraph menu's choices (`BLOCK_ROLES`, D74): «محتوى», the two headings,
+    `role` is one of the paragraph menu's choices (`BLOCK_ROLES`, D74, D94): «محتوى», the two headings,
     «شعر» (each line a verse paragraph of its own) and «حاشية» (the lines become a note; with a marker
-    whose call is open on the page, the next run links it there). It goes to the review service page by
-    page (`review.services.set_roles`: the effective choice, stored per line by its region, one batch per
-    page, so review's undo reverts a page's share in one step). The structure tools rest on an edited
-    book (D49): over a text edited on the book page the request must confirm the replacement
-    (`replace_edited`).
+    whose call is open on the page, the next run links it there) are line roles: they go to the review
+    service page by page (`review.services.set_roles`: the effective choice, stored per line by its region,
+    one batch per page, so review's undo reverts a page's share in one step). «اقتباس» and «ملاحظة وسط»
+    make the lines body text (a heading or verse role goes, through review too) and keep their style in
+    `assembly_settings.line_styles` (line id → style), which every run applies (`pipeline.apply_line_styles`:
+    the styled lines form their own paragraph). Any other choice drops the lines' style. The structure
+    tools rest on an edited book (D49): over a text edited on the book page the request must confirm the
+    replacement (`replace_edited`); `set_edited_block_type` changes the edited text instead.
 
     All or nothing: a line of another book → `AssemblyNotFound`; a line the review service refuses
     (a page not editable) → `AssemblyError` and no line changes.
@@ -528,16 +546,130 @@ def set_block_roles(book: Book, user, line_ids, role: str, replace_edited: bool 
     if len(lines) != len(ids) or any(line.page.book_id != book.pk for line in lines):
         raise AssemblyNotFound("السطر غير موجود في هذا الكتاب.")
     check_edited(book, replace_edited)  # before any line changes
+    styled = role in pipeline.LINE_STYLES
+    line_role = pipeline.ROLE_BODY if styled else role
     by_page: dict[int, tuple[Page, list[int]]] = {}
     for line in sorted(lines, key=lambda item: (item.page.number, item.order, item.pk)):
         by_page.setdefault(line.page_id, (line.page, []))[1].append(line.pk)
     try:
         with transaction.atomic():
             for page, page_line_ids in by_page.values():
-                review_services.set_roles(page, page_line_ids, role, user)
+                review_services.set_roles(page, page_line_ids, line_role, user)
     except review_services.ReviewError as exc:
         raise AssemblyError(str(exc)) from exc
-    return _start(book, user, changed=True)
+
+    def mutate(settings: dict) -> None:
+        stored = settings.get("line_styles")
+        styles = {str(k): v for k, v in stored.items()} if isinstance(stored, dict) else {}
+        for pk in ids:
+            if styled:
+                styles[str(pk)] = role
+            else:
+                styles.pop(str(pk), None)
+        if styles:
+            settings["line_styles"] = styles
+        else:
+            settings.pop("line_styles", None)
+
+    return _start(book, user, mutate, changed=True)
+
+
+HEADING_KINDS: dict[str, int] = {"heading": 1, "subheading": 2}
+EDITED_BLOCK_GONE = "لم تُعثر على الفقرة في النص المحرَّر؛ أعد تحميل الصفحة."
+EDITED_CONFLICT = "تغيّر هذا الفصل في صفحة الكتاب في أثناء ذلك؛ أعد المحاولة."
+NOT_EDITED = "لم يُحرَّر نص هذا الكتاب بعد؛ يُغيَّر نوع الفقرة من أسطرها."
+
+
+def retype_block(nodes: list, block_id: str, kind: str) -> list:
+    """A copy of a chapter's `nodes` with the top-level heading or paragraph `block_id` made `kind` (a
+    `BLOCK_ROLES` choice but «حاشية»): a heading of level 1 («عنوان رئيسي») or 2 («عنوان فرعي»), or a
+    paragraph with the editor's style (`quote`, `verse`, `center`; none for «محتوى»). The block keeps its id,
+    its text and its source mapping, as the book page's paragraph styles do; an answered heading suggestion
+    goes. Raises `AssemblyNotFound` when there is no such block."""
+    out = copy.deepcopy(nodes)
+    for index, node in enumerate(out):
+        if not isinstance(node, dict) or node.get("type") not in ("heading", "paragraph"):
+            continue
+        attrs = dict(node.get("attrs") or {}) if isinstance(node.get("attrs"), dict) else {}
+        if attrs.get("id") != block_id:
+            continue
+        attrs.pop("suggestedRole", None)
+        attrs.pop("level", None)
+        attrs.pop("style", None)
+        content = node.get("content") if isinstance(node.get("content"), list) else []
+        if kind in HEADING_KINDS:
+            attrs.pop("noteFor", None)
+            out[index] = {
+                "type": "heading",
+                "attrs": {"level": HEADING_KINDS[kind], **attrs},
+                "content": content,
+            }
+        else:
+            if kind != "body":
+                attrs["style"] = kind
+            out[index] = {"type": "paragraph", "attrs": attrs, "content": content}
+        return out
+    raise AssemblyNotFound(EDITED_BLOCK_GONE)
+
+
+def set_edited_block_type(book: Book, user, block_id, kind) -> dict:
+    """«نوع الفقرة» on a text edited on the book page (D94, amends D49): the block of the edited manuscript
+    changes, as the book page's paragraph styles change it (`retype_block`); «حاشية» makes the paragraph the
+    note of its call (`editor.document.paragraph_to_footnote`, the book page's «تحويل إلى حاشية»). Nothing is
+    re-assembled: the chapter is saved through the editor (`editor.services.save_chapter`: version checked,
+    the edit's base kept, the book's pages laid out again).
+
+    Returns `{changed, version, block, type}` (`version` the manuscript's). Raises `AssemblyError` for an
+    unknown kind or a text not edited (its kinds are set at the source, `set_block_roles`), a paragraph that
+    cannot become a note, or a chapter changed meanwhile; `AssemblyNotFound` when there is no manuscript or
+    no such block.
+    """
+    from editor import document as doc  # other app: lazy import
+    from editor import services as editor_services
+
+    kind = str(kind or "")
+    block_id = str(block_id or "")
+    if kind not in dict(BLOCK_ROLES):
+        raise AssemblyError("نوع الفقرة غير معروف.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", block_id):
+        raise AssemblyError("معرّف الفقرة غير صالح.")
+    manuscript = Manuscript.objects.filter(book_id=book.pk).only("id", "document", "origin").first()
+    if manuscript is None:
+        raise AssemblyNotFound("لم يُجمَّع هذا الكتاب بعد.")
+    if manuscript.origin != Manuscript.Origin.EDITOR:
+        raise AssemblyError(NOT_EDITED)
+    document = manuscript.document or {}
+    chapter = next(
+        (
+            c
+            for c in doc.chapters_of(document)
+            if any(isinstance(n, dict) and doc.node_id(n) == block_id for n in c.nodes(document))
+        ),
+        None,
+    )
+    if chapter is None:
+        raise AssemblyNotFound(EDITED_BLOCK_GONE)
+    nodes = chapter.nodes(document)
+    try:
+        if kind == "footnote":
+            new_nodes, _note = doc.paragraph_to_footnote(nodes, block_id)
+        else:
+            new_nodes = retype_block(nodes, block_id, kind)
+    except doc.DocumentError as exc:
+        raise AssemblyError(str(exc)) from exc
+    out = {"changed": False, "version": None, "block": block_id, "type": kind}
+    if new_nodes == nodes:
+        return out
+    try:
+        saved = editor_services.save_chapter(book, chapter.id, new_nodes, doc.chapter_version(nodes), user)
+    except editor_services.ChapterConflict as exc:
+        raise AssemblyError(EDITED_CONFLICT) from exc
+    except editor_services.EditorNotFound as exc:
+        raise AssemblyNotFound(str(exc)) from exc
+    except editor_services.EditorError as exc:
+        raise AssemblyError(str(exc)) from exc
+    out.update(changed=bool(saved.get("changed")), version=saved.get("manuscript_version"))
+    return out
 
 
 # ====================================================================== running
@@ -879,6 +1011,7 @@ def assembly_options(options: Settings) -> dict:
         "include_unreviewed": options.include_unreviewed,
         "strip_tatweel": options.strip_tatweel,
         "strip_running_heads": options.strip_running_heads,
+        "strip_footnotes": options.strip_footnotes,
     }
 
 
@@ -967,6 +1100,7 @@ def manuscript_urls(book: Book) -> dict:
         "data": reverse("api:manuscript", args=[book.pk]),
         "seams": reverse("api:manuscript_seam", args=[book.pk]),
         "roles": reverse("api:manuscript_roles", args=[book.pk]),
+        "blockType": reverse("api:manuscript_block_type", args=[book.pk]),
         "suggestions": reverse("api:manuscript_suggestion", args=[book.pk]),
         "page": reverse("assembly:manuscript", args=[book.pk]),
         "book": reverse("editor:layout", args=[book.pk]),

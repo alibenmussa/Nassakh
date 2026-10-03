@@ -1,11 +1,13 @@
 {
- "about": "The manuscript's paragraph menu «نوع الفقرة» (D74, PHASE7_SPEC §4.4): its choices in order, as `assembly.services.BLOCK_ROLES`. Each choice posts the roles endpoint with the block's lines; the review service stores the effective role per line. A paragraph whose attrs carry `noteFor` (its leading marker's call is open on its page) reads the footnote choice as `footnoteFor` with n = noteFor. The current choice of a block: h2 → heading, h3 → subheading, a paragraph with `style: \"verse\"` → verse, any other paragraph → body.",
+ "about": "The manuscript's paragraph menu «نوع الفقرة» (D74, D94, PHASE7_SPEC §4.4): its choices in order, as `assembly.services.BLOCK_ROLES` (every kind the book page and the exports know for a block of text), each with the digit that picks it while the menu is open (`key`, the book page's ⌘⌥ digits; «حاشية» has none). Before the text is edited each choice posts the roles endpoint with the block's lines: the review service stores the effective role per line; «اقتباس» and «ملاحظة وسط» store `body` and keep the style in `Book.assembly_settings.line_styles` (line id → style). Once the text is edited on the book page the choice posts `editedRequest` (editors) and the edited block changes, nothing re-assembles. A paragraph whose attrs carry `noteFor` (its leading marker's call is open on its page) reads the footnote choice as `footnoteFor` with n = noteFor. The current choice of a block: h2 → heading, h3 → subheading, a paragraph with `style` «verse» / «quote» / «center» → that style, any other paragraph → body.",
  "roles": [
-  {"value": "body", "label": "محتوى"},
-  {"value": "heading", "label": "عنوان رئيسي"},
-  {"value": "subheading", "label": "عنوان فرعي"},
-  {"value": "verse", "label": "شعر"},
-  {"value": "footnote", "label": "حاشية"}
+  {"value": "body", "label": "محتوى", "key": "0"},
+  {"value": "heading", "label": "عنوان رئيسي", "key": "1"},
+  {"value": "subheading", "label": "عنوان فرعي", "key": "2"},
+  {"value": "quote", "label": "اقتباس", "key": "3"},
+  {"value": "verse", "label": "شعر", "key": "4"},
+  {"value": "center", "label": "ملاحظة وسط", "key": "5"},
+  {"value": "footnote", "label": "حاشية", "key": ""}
  ],
  "footnoteFor": "حاشية للعلامة ({n})",
  "request": {
@@ -20,18 +22,35 @@
    "409": {"detail": "حُرِّر نص هذا الكتاب في صفحة الكتاب، وإعادة تجميعه تستبدل النص المحرَّر بنص الصفحات. أكّد الاستبدال أولًا.", "edited": true}
   }
  },
+ "editedRequest": {
+  "method": "POST",
+  "url": "api:manuscript_block_type",
+  "body": {"block_id": "p1002", "type": "quote"},
+  "status": 200,
+  "answer": {"changed": true, "version": "<the manuscript's version>", "block": "p1002", "type": "quote"},
+  "refused": {
+   "400": {"detail": "لم يُحرَّر نص هذا الكتاب بعد؛ يُغيَّر نوع الفقرة من أسطرها.", "edited": false},
+   "400 (a note without its call)": {"detail": "لا تبدأ هذه الفقرة بعلامة حاشية مثل «(1)».", "edited": false},
+   "403": {"detail": "هذا الإجراء يتطلب صلاحية محرّر."},
+   "404": {"detail": "لم تُعثر على الفقرة في النص المحرَّر؛ أعد تحميل الصفحة.", "edited": false}
+  }
+ },
  "liveMessages": {
   "body": "تصير الفقرة محتوى",
   "heading": "تصير الفقرة عنوانًا رئيسيًا",
   "subheading": "تصير الفقرة عنوانًا فرعيًا",
+  "quote": "تصير الفقرة اقتباسًا",
   "verse": "تصير الفقرة شعرًا",
+  "center": "تصير الفقرة ملاحظة وسط",
   "footnote": "تصير الفقرة حاشية"
  },
  "blockAfter": {
   "body": "p<first line id>",
   "heading": "h<first line id>",
   "subheading": "h<first line id>",
+  "quote": "p<first line id> with style quote: its lines form a paragraph of their own",
   "verse": "p<id of each line>: one verse paragraph per line",
+  "center": "p<first line id> with style center: its lines form a paragraph of their own",
   "footnote": "the block leaves the body: its lines become the note n<first line id>"
  }
 }
