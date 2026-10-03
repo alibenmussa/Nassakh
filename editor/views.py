@@ -73,6 +73,9 @@ def _layout_initial(book: Book, config: dict) -> dict:
         "preview": None,
         "chapterPreview": None,
         "layout": None,
+        # D80: the cover's cached render, so its sheet paints at once (never rendered here: `pending` asks the
+        # component to fetch api:cover, which renders it)
+        "cover": services.cached_cover(book),
     }
     if not config["exists"]:
         return out

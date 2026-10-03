@@ -26,7 +26,8 @@ manuscript / chapter / snapshot, 409 a chapter changed elsewhere (`{detail, id, 
 - POST /api/books/<id>/snapshots/<sid>/restore/       → `{version, snapshot, restored}`
 - GET  /api/books/<id>/stylesheet/                    → `services.stylesheet_payload`
 - PUT  /api/books/<id>/stylesheet/                    fields (any subset) [+ `chapter`] → the payload +
-                                                        `preview` (the book render is queued); PATCH alike
+                                                        `preview` (the book render is queued) + `cover_render`
+                                                        (the cover's render, or null); PATCH alike
 - POST /api/books/<id>/images/                        multipart `file`, `purpose` → 201 (200: the same image
                                                         again) `services.upload_payload`; 413 / 422 / 400
                                                         `{detail, code}` (D80, `services.ImageRefused`)
@@ -308,6 +309,9 @@ def stylesheet(request: Request, book_id: int) -> Response:
         payload["preview"] = engine.preview_payload(book, "book", enqueue=False)
     except PreviewNotFound:
         payload["preview"] = None
+    # D80: the cover's render after the change (`publishing.cover.cover_payload`), so the book page needs no
+    # second request; null for a book without a cover
+    payload["cover_render"] = services.cover_after_save(book, data)
     return Response(payload)
 
 

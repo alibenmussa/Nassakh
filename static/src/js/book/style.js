@@ -254,7 +254,7 @@
           // the cover alone changes no page of the interior
           if (!coverOnly(body) && this.focusChapter && typeof this.requestRelayout === 'function') this.requestRelayout(this.focusChapter);
           this.pollNow();
-          if (typeof this.afterSheetSaved === 'function') this.afterSheetSaved(body);
+          if (typeof this.afterSheetSaved === 'function') this.afterSheetSaved(body, r.data);
         } else if (r.status === 400) {
           this.errors = (r.data && r.data.errors) || {};
           this.sheetSave = { state: 'invalid', message: (r.data && r.data.detail) || 'لم يُحفظ · صحّح القيم' };

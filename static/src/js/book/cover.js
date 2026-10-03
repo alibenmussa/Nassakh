@@ -3,9 +3,11 @@
 // centre and bottom texts, the colours and their preset, the sizes) and save through style.js's setField like
 // every format field; this part adds what the cover alone needs: the image upload (`api:book_images`, multipart,
 // with progress), the colour presets as a small palette of covers, the print-size note for the trim, and the
-// render the stage shows (`api:cover`: {mode, hash, image_1x, image_2x, width, height}, fetched again after
-// every save, so the sheet and the filmstrip thumb follow about a second after a change). The sheet itself
-// (the turn to it, the thumb) is stage.js. Pure helpers are on `NassakhBook.cover` for the tests.
+// render the stage shows ({mode, hash, image_1x, image_2x, width, height}: embedded when cached, then the one
+// every stylesheet save answers with — `cover_render` — else `api:cover`). Between a change and its render the
+// sheet draws the cover itself from the values (the draft: texts, faces, sizes, the picture in its fit), so a
+// change shows at once and the render fades in over it; a thin bar along the sheet's foot says one is on its
+// way. The sheet itself (the turn to it, the thumb) is stage.js. Pure helpers are on `NassakhBook.cover`.
 (function () {
   'use strict';
 
@@ -43,6 +45,8 @@
   const PRINT_DPI = 300;
   const MM_PER_INCH = 25.4;
   const PRELOAD_MS = 4000; // never wait longer on a stalled render
+  const PT_PER_MM = 72 / 25.4;
+  const SUB_SCALE = 0.55; // the subtitle and the author of an `info` cover (= publishing.model.COVER_SUB_SCALE)
   const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
   // isolated left to right (U+2066 … U+2069): in an Arabic line «2008 × 2835» would read «2835 × 2008»
   const ltr = (s) => `⁦${s}⁩`;
@@ -147,6 +151,7 @@
     const U = NS.util;
     const urls = ctx.urls;
     let coverGen = 0; // the newest api:cover request wins
+    let dragging = false; // a colour well dragged, its change not made yet
     // page_config's `urls.cover` and `urls.bookImages`; the spec's addresses (§3) where they are not named yet
     const derived = (tail) => (urls.stylesheet ? String(urls.stylesheet).replace(/stylesheet\/?$/, tail) : '');
     const coverUrl = () => urls.cover || derived('cover/');
@@ -168,16 +173,20 @@
     return {
       cover: null, // api:cover's answer: the render the stage shows
       coverState: '', // '' | loading | error
+      coverStale: false, // the values changed since that render: the sheet draws them itself until the next one
       coverImage: null, // the image uploaded in this session: {id, url, width, height, format, name}
       coverUpload: { state: '', percent: 0, error: '' }, // state: '' | uploading
       coverDrag: false, // a file held over the drop zone
       coverChoices: {}, // the stylesheet payload's `cover` block (style.js applyStylesheet): modes, fits, presets, limits, upload, print sizes, the image
 
-      // a book with a cover fetches its render; one without («بلا غلاف», most books) asks nothing
+      // the page embeds the cached render (editor.services.cached_cover): the sheet paints at once; a cover not
+      // rendered yet is fetched (api:cover renders it); a book without one («بلا غلاف», most books) asks nothing
       _init_cover() {
+        const first = ctx.initial && ctx.initial.cover;
+        if (first && first.image_1x) this.cover = first;
         this.syncCoverThumb();
         this.resolvePendingCover();
-        if (this.hasCover) this.refreshCover();
+        if (this.hasCover && !this.cover) this.refreshCover();
       },
 
       // ------------------------------------------------------------ the values (front_matter.cover, with the defaults)
@@ -205,9 +214,11 @@
         const v = this.coverValues;
         return presetOf(this.coverPresets, v.background, v.color);
       },
+      // the sheet's colours, and its width in points (`--pw`: the draft's sizes are points, as on the pages)
       get coverSheetStyle() {
         const v = this.coverValues;
-        return `--cover-bg: ${normaliseHex(v.background) || DEFAULTS.background}; --cover-fg: ${normaliseHex(v.color) || DEFAULTS.color}`;
+        const width = (Number(this.sheet && this.sheet.width_mm) || 170) * PT_PER_MM;
+        return `--cover-bg: ${normaliseHex(v.background) || DEFAULTS.background}; --cover-fg: ${normaliseHex(v.color) || DEFAULTS.color}; --pw: ${width.toFixed(2)}`;
       },
       // «للطباعة: 300 نقطة في البوصة، أي 2008 × 2835 بكسل على هذا القطع»: the server's pixels for a trim preset
       // (`cover.print_sizes`), the formula for a custom trim
@@ -245,42 +256,100 @@
         const c = this.cover;
         return c && c.image_1x && c.image_2x ? `${c.image_1x} 1x, ${c.image_2x} 2x` : '';
       },
-      // the sheet without a render yet: why
+      // the render shown is of the values as they are now (else the draft stands in)
+      get coverFresh() { return Boolean(this.coverImageUrl) && !this.coverStale; },
+      // something to draw: texts, or an image cover with its image
+      get coverDrawable() { return this.hasCover && !(this.coverMode === 'image' && !this.coverImageInfo); },
+      // a render on its way (a change saved, then drawn; or the first one): a thin bar along the sheet's foot
+      get coverBusy() { return this.coverDrawable && this.coverState !== 'error' && (this.coverState === 'loading' || this.coverStale || !this.coverImageUrl); },
+      // why the sheet shows no picture: no image chosen, or the render failed (a click on the sheet retries)
       get coverHint() {
         if (this.coverMode === 'image' && !this.coverImageInfo) return 'لم تُرفع صورة الغلاف بعد';
-        if (this.coverState === 'error') return 'تعذّر تحضير الغلاف';
-        return 'يُحضَّر الغلاف…';
+        if (this.coverState === 'error') return 'تعذّر تحضير الغلاف · انقر لإعادة المحاولة';
+        return '';
       },
-      async refreshCover() {
-        const url = coverUrl();
-        if (!url) return false;
+      // The cover drawn here from its values, at once (the owner's review, 2026-10-03: never a blank «يُحضَّر»
+      // sheet): the texts in the render's places, faces and sizes (publishing/cover.py), the picture in its fit;
+      // the render fades in over it when ready, and it stands in again from the next change on.
+      get coverDraft() {
+        const v = this.coverValues;
+        const fields = (this.sheet && this.sheet.front_matter && this.sheet.front_matter.fields) || {};
+        const defaults = this.fieldDefaults || {};
+        const pick = (key) => String(fields[key] || defaults[key] || (key === 'title' ? this.title : '') || '').trim();
+        const center = [];
+        const bottom = [];
+        if (v.mode === 'info') {
+          [['title', 'title'], ['subtitle', 'sub'], ['author', 'author']].forEach(([key, kind]) => { if (pick(key)) center.push({ kind, text: pick(key) }); });
+          const place = ['publisher', 'city', 'year'].map(pick).filter(Boolean).join('، ');
+          if (place) bottom.push({ kind: 'foot', text: place });
+        } else if (v.mode === 'text') {
+          if (String(v.center || '').trim()) center.push({ kind: 'title', text: String(v.center) });
+          if (String(v.bottom || '').trim()) bottom.push({ kind: 'foot', text: String(v.bottom) });
+        }
+        const info = v.mode === 'image' ? this.coverImageInfo : null;
+        const src = info ? info.thumb_url || info.url || '' : '';
+        return { center, bottom, image: src ? { src, fit: FITS.some((f) => f.key === v.fit) ? v.fit : 'fill' } : null };
+      },
+      // the draft's places and sizes (points: `--u` is one point on the sheet): the side padding is the larger
+      // side margin, the bottom block `bottom_mm` from the edge, the subtitle and the author 0.55 of the title
+      get coverDraftStyle() {
+        const s = this.sheet || {};
+        const v = this.coverValues;
+        const w = Number(s.width_mm) || 170;
+        const h = Number(s.height_mm) || 240;
+        const side = Math.max(Number(s.inner_mm) || 0, Number(s.outer_mm) || 0);
+        const title = Number(v.center_pt) || DEFAULTS.center_pt;
+        return `--cd-side: ${((side / w) * 100).toFixed(3)}%; --cd-bottom: ${(((Number(v.bottom_mm) || 0) / h) * 100).toFixed(3)}%; --cd-title: ${title}; --cd-sub: ${(title * SUB_SCALE).toFixed(2)}; --cd-foot: ${Number(v.bottom_pt) || DEFAULTS.bottom_pt}`;
+      },
+      // `data`: an answer that carries the render (a stylesheet save's `cover_render`), else api:cover is asked
+      // (it renders a cover not drawn yet). The newest answer wins; the picture is decoded before it shows.
+      async refreshCover(data) {
         const gen = (coverGen += 1);
-        if (!this.cover) this.coverState = 'loading';
-        const r = await U.api(url);
+        let payload = data && typeof data === 'object' ? data : null;
+        if (!payload) {
+          const url = coverUrl();
+          if (!url) return false;
+          if (!this.cover || this.coverStale) this.coverState = 'loading';
+          const r = await U.api(url);
+          if (gen !== coverGen) return false;
+          if (!r.ok || !r.data) { this.coverState = 'error'; this.syncCoverThumb(); return false; }
+          payload = r.data;
+        }
+        if (payload.pending && !payload.image_1x && data) return this.refreshCover(); // not drawn yet: api:cover draws it
+        if (payload.image_1x && !(this.cover && this.cover.hash === payload.hash)) await preload(payload.image_1x);
         if (gen !== coverGen) return false;
-        if (!r.ok || !r.data) { this.coverState = 'error'; this.syncCoverThumb(); return false; }
-        if (r.data.image_1x && !(this.cover && this.cover.hash === r.data.hash)) await preload(r.data.image_1x);
-        if (gen !== coverGen) return false;
-        this.cover = r.data;
+        this.cover = payload;
         this.coverState = '';
+        // a change made after that save (waiting for the next one, or a colour well being dragged) keeps the draft
+        this.coverStale = dragging || Object.keys(this.dirty || {}).some((path) => path.startsWith(PREFIX));
         this.syncCoverThumb();
         return true;
       },
-      // the stylesheet was saved (style.js flushSheet): the render follows (the trim, the faces, the book details
-      // and every cover field change it)
-      afterSheetSaved(body) {
+      // the stylesheet was saved (style.js flushSheet): the render it answers with (`cover_render`), else asked
+      // for (the trim, the faces, the book details and every cover field change it)
+      afterSheetSaved(body, payload) {
         const touched = Boolean(body && body.front_matter && body.front_matter.cover);
-        if (touched || this.hasCover) this.refreshCover();
+        const render = payload && payload.cover_render;
+        if (render && typeof render === 'object') this.refreshCover(render);
+        else if (touched || this.hasCover) this.refreshCover();
         this.syncCoverThumb();
       },
-      // a cover field changed here (style.js setField): the stage turns to the cover; gone, it leaves it
+      // a cover field changed here (style.js setField): the draft shows it at once; the stage turns to the cover;
+      // gone, it leaves it
       onCoverField() {
+        this.coverStale = true;
+        if (this.coverState === 'error') this.coverState = '';
         this.syncCoverThumb();
         if (this.hasCover) {
           if (!this.onCover && typeof this.showCover === 'function') this.showCover();
         } else if (this.onCover && typeof this.showIndex === 'function') {
           this.showIndex(0, { instant: true });
         }
+      },
+      // a click on the sheet: a failed render is tried again; else the cover's section in «التنسيق»
+      onCoverSheet() {
+        if (this.coverState === 'error' && this.coverDrawable) { this.refreshCover(); return true; }
+        return this.openCoverSection();
       },
 
       // ------------------------------------------------------------ the section's controls
@@ -307,6 +376,7 @@
         const path = PREFIX + key;
         const hex = normaliseHex(raw);
         if (!hex) { this.errors = Object.assign({}, this.errors, { [path]: MESSAGES.hex }); return false; }
+        dragging = false;
         this.setField(path, hex);
         const v = this.coverValues;
         if (typeof this.setLocal === 'function') this.setLocal(`${PREFIX}preset`, presetOf(this.coverPresets, v.background, v.color) || CUSTOM);
@@ -316,6 +386,8 @@
       previewCoverColor(key, raw) {
         const hex = normaliseHex(raw);
         if (!hex || (key !== 'background' && key !== 'color') || typeof this.setLocal !== 'function') return false;
+        this.coverStale = true; // the draft follows the well while the render waits for the change event
+        dragging = true;
         return this.setLocal(PREFIX + key, hex);
       },
 

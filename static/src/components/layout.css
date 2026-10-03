@@ -276,14 +276,30 @@
   .lo-screen[data-fit="width"].is-spread .lo-sheet { width: calc((100cqw - 2 * var(--lo-gutter) - var(--lo-gap, 12px)) / 2); }
   .lo-screen[data-fit="actual"] .lo-sheet { width: calc(var(--lo-w, 170) * 1mm); } /* the trim at 96 dpi */
   .lo-sheet.is-empty { visibility: hidden; } /* keeps its place: page 1 sits on the left of its spread */
-  /* the cover (D80): a sheet of its own before page 1 — api:cover's render on the cover's own colours, else the
-     colours alone with a muted hint (a thin shimmer under it while the render is on its way); a click opens its
-     section, so the sheet is a button with the page's focus ring inside its edge */
+  /* the cover (D80): a sheet of its own before page 1 — the render on the cover's own colours; between a change
+     and its render the draft (the cover drawn here from its values: the texts in the render's places, faces and
+     sizes in points, the picture in its fit) with a thin shimmer along the foot; the render fades in over it. A
+     muted hint only for no picture or a failure. A click opens its section, so the sheet is a button with the
+     page's focus ring inside its edge */
   .lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff); color: var(--cover-fg, #1b1b1b); cursor: pointer; }
   .lp-cover:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
-  .lp-cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
-  .lp-cover-hint { position: relative; max-width: 76%; font: 500 max(11px, calc(6.5 * var(--u))) / 1.6 var(--font-sans); text-align: center; opacity: 0.5; }
-  .lp-cover.is-loading .lp-cover-hint::after { content: ""; display: block; width: 38%; height: 3px; margin: 10px auto 0; border-radius: 2px; background: linear-gradient(90deg, transparent 25%, currentColor 50%, transparent 75%); background-size: 200% 100%; opacity: 0.6; animation: lo-shimmer 1.4s linear infinite; }
+  .lp-cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 220ms ease; }
+  .lp-cover-img.is-shown { opacity: 1; }
+  .lp-cover-draft { position: absolute; inset: 0; overflow: hidden; color: var(--cover-fg, #1b1b1b); pointer-events: none; }
+  .lp-cover-draft-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .lp-cover-draft-img[data-fit="width"] { inset: 50% 0 auto; height: auto; transform: translateY(-50%); }
+  .lp-cover-draft-img[data-fit="height"] { inset: 0 auto 0 50%; width: auto; transform: translateX(-50%); }
+  .lp-cover-center, .lp-cover-bottom { position: absolute; inset-inline: var(--cd-side, 12%); text-align: center; white-space: pre-line; overflow-wrap: anywhere; }
+  .lp-cover-center { top: 50%; transform: translateY(-50%); }
+  .lp-cover-bottom { bottom: var(--cd-bottom, 12%); }
+  .lp-cover-draft p { margin: 0; }
+  .lp-cover-title { font-weight: 700; font-size: calc(var(--cd-title, 28) * var(--u)); line-height: 1.35; }
+  .lp-cover-sub, .lp-cover-author { font-size: calc(var(--cd-sub, 15.4) * var(--u)); line-height: 1.5; }
+  .lp-cover-sub { margin-top: 0.6em !important; }
+  .lp-cover-author { margin-top: 1.6em !important; }
+  .lp-cover-foot { font-size: calc(var(--cd-foot, 13) * var(--u)); line-height: 1.5; }
+  .lp-cover-hint { position: relative; max-width: 76%; padding: 4px 10px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--cover-bg, #fff) 82%, transparent); font: 500 max(11px, calc(6.5 * var(--u))) / 1.6 var(--font-sans); text-align: center; opacity: 0.75; }
+  .lp-cover-busy { position: absolute; inset: auto 0 0; height: 3px; background: linear-gradient(90deg, transparent 20%, var(--color-accent) 50%, transparent 80%); background-size: 200% 100%; opacity: 0.7; animation: lo-shimmer 1.2s linear infinite; }
   .lo-screen.is-edit .lo-sheet { box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(16, 16, 20, 0.08), 0 0 0 1px rgba(37, 99, 235, 0.18); }
   /* skeleton pages with the shimmer while nothing is laid out yet */
   .lo-sheet.is-skeleton { display: flex; flex-direction: column; gap: 3.6%; padding: 12% 12% 9%; }
@@ -922,7 +938,8 @@
   @media (prefers-reduced-motion: reduce) {
     .lo-spread, .lo-stage.is-out-next .lo-spread, .lo-stage.is-out-prev .lo-spread { transition: none; }
     .lo-pill.is-saving .lo-pill-dot, .lo-pill.is-pages .lo-pill-dot, .lo-pill-dot.is-live { animation: none; }
-    .lo-sheet.is-skeleton > span, .lp-skeleton > span, .lo-thumb.is-pending .lo-thumb-img, .ed-source-skeleton, .ed-sheet-skeleton, .ed-snap-skeleton span, .lp-cover.is-loading .lp-cover-hint::after { animation: none; }
+    .lo-sheet.is-skeleton > span, .lp-skeleton > span, .lo-thumb.is-pending .lo-thumb-img, .ed-source-skeleton, .ed-sheet-skeleton, .ed-snap-skeleton span, .lp-cover-busy { animation: none; }
+    .lp-cover-img { transition: none; }
     .lo-diagram-block, .lo-thumb, .lp-line.is-moved, .bp-acc-head .icon, .app-shell:has([data-rail]) .sidebar, .bp-drop, .bp-drop-progress > span, .bp-swatch, .bp-swatch-cover, .bp-color-box { transition: none; }
     .bp-panel, .ed-pop, .ed-drawer, .lp-line.is-flash, .lp-line.is-applied, .bp-changes-skel span { animation: none; }
   }

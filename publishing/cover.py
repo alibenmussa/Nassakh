@@ -30,8 +30,9 @@ the outline, the links and the named destinations point at page objects, so they
 and writes `/PageLabels` — the cover «غلاف» (a PDF text string, UTF-16BE with its BOM), the interior from
 1 — so a viewer's page numbers are the printed ones.
 
-**The book page's cover** (`cover_payload`, `api:cover`): rendered in the request when missing (one page,
-well under a second), cached by `cover_hash` (the cover's settings and image sha, the trim and margins,
+**The book page's cover** (`cover_payload`, `api:cover`, and the answer of every stylesheet save): rendered in
+the request when missing (one page, well under a second; the page's own first paint only reads the cache,
+`render=False`), cached by `cover_hash` (the cover's settings and image sha, the trim and margins,
 the texts it prints, the faces' files and the renderer's version) under `media/books/<id>/cover/<hash>/`
 (`cover.pdf`, `cover.webp` 1100 px tall like the page sheets, `cover-2x.webp`), the newest `KEEP` kept.
 """
@@ -521,10 +522,11 @@ def prune_covers(root: Path, keep: str) -> None:
 EMPTY_PAYLOAD = {"hash": None, "image_1x": None, "image_2x": None, "width": None, "height": None}
 
 
-def cover_payload(book) -> dict:
+def cover_payload(book, *, render: bool = True) -> dict:
     """`api:cover`: `{mode, hash, image_1x, image_2x, width, height}` of the book's cover (a `books.Book`),
     rendered now when this hash has no files yet; the images and sizes are null for mode `none` and for an
-    image cover without its image. `width` / `height` are the 1× image's pixels."""
+    image cover without its image. `width` / `height` are the 1× image's pixels. `render=False` never
+    renders (the book page's first paint: a cached render, else `pending: true` and no images)."""
     from django.conf import settings
     from django.core.files.storage import default_storage
 
@@ -545,6 +547,8 @@ def cover_payload(book) -> dict:
     name = cover_folder(book.pk, digest)
     folder = Path(settings.MEDIA_ROOT) / name
     if not all((folder / file).is_file() for file in COVER_FILES):
+        if not render:
+            return {"mode": setup.cover.mode, **EMPTY_PAYLOAD, "hash": digest, "pending": True}
         write_cover_files(model, fonts, folder)
         prune_covers(folder.parent, digest)
     else:

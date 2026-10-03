@@ -1782,6 +1782,36 @@ def cover_choices(book: Book, sheet: StyleSheet, settings: dict | None = None) -
     }
 
 
+def cached_cover(book: Book) -> dict | None:
+    """The book page's first paint (D80): the cover's render when it is cached (`publishing.cover.
+    cover_payload` without rendering: `pending` when it is not), None for a book without a cover or when the
+    cover cannot be read; a cover problem never breaks the page."""
+    from publishing.cover import cover_payload
+
+    try:
+        payload = cover_payload(book, render=False)
+    except Exception:  # noqa: BLE001 - the page then asks api:cover, which reports it
+        log.warning("cover of book %s could not be read for the book page", book.pk, exc_info=True)
+        return None
+    return payload if payload.get("mode") not in (None, "none") else None
+
+
+def cover_after_save(book: Book, body: dict) -> dict | None:
+    """The cover's render to answer a stylesheet save with (D80): rendered now (a page, well under a second)
+    when the book has a cover, so the book page swaps it in without asking api:cover again; None without a
+    cover or when the render failed (the page then asks api:cover, which reports it)."""
+    from publishing.cover import cover_payload
+
+    try:
+        payload = cover_payload(book)
+    except Exception:  # noqa: BLE001 - the page asks api:cover, which reports it
+        log.warning("cover of book %s could not be rendered after a save", book.pk, exc_info=True)
+        return None
+    front = body.get("front_matter") if isinstance(body, dict) else None
+    touched = isinstance(front, dict) and "cover" in front
+    return payload if touched or payload.get("mode") not in (None, "none") else None
+
+
 def _cover_image_id(book: Book, value) -> tuple[int | None, bool]:
     """A posted `image`: `(id, ok)` — None for none; not ok for anything that is not an image of this
     book."""

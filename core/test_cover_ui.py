@@ -164,8 +164,14 @@ def test_cover_section_and_sheet_in_the_template(editor):
     stage = _between(body, 'class="lo-sheet lo-sheet-cover"', 'data-sheet="right"')
     assert 'data-sheet="cover"' in stage and "x-show=\"phase === 'pages' && onCover\"" in stage
     assert 'class="lp-page lp-cover"' in stage and 'role="button" tabindex="0"' in stage
-    assert '@click="openCoverSection()"' in stage and '@keydown.enter.prevent="openCoverSection()"' in stage
+    assert '@click="onCoverSheet()"' in stage and '@keydown.enter.prevent="onCoverSheet()"' in stage
     assert 'x-text="coverHint" data-cover-hint' in stage and ':srcset="coverSrcset' in stage
+    # the draft between a change and its render (the texts, the picture in its fit), the render fading in over
+    # it, the thin bar while one is on its way
+    assert ':style="coverDraftStyle" aria-hidden="true" data-cover-draft' in stage
+    assert 'x-for="(p, i) in coverDraft.center"' in stage and 'x-for="(p, i) in coverDraft.bottom"' in stage
+    assert ":data-fit=\"coverDraft.image.fit\"" in stage and ":class=\"{ 'is-shown': coverFresh }\"" in stage
+    assert 'x-show="coverBusy" aria-hidden="true" data-cover-busy' in stage
     assert 'x-show="phase === \'pages\' && !onCover" x-cloak data-sheet="right"' in body
 
 
@@ -187,6 +193,12 @@ def test_cover_css_rules_in_the_source():
         ".lp-cover { display: grid; place-items: center; background: var(--cover-bg, #fff);",
         ".lp-cover:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }",
         ".lp-cover-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%;",
+        ".lp-cover-img.is-shown { opacity: 1; }",
+        ".lp-cover-draft { position: absolute; inset: 0; overflow: hidden; color: var(--cover-fg, #1b1b1b);",
+        ".lp-cover-center { top: 50%; transform: translateY(-50%); }",
+        ".lp-cover-bottom { bottom: var(--cd-bottom, 12%); }",
+        ".lp-cover-title { font-weight: 700; font-size: calc(var(--cd-title, 28) * var(--u)); line-height: 1.35; }",
+        ".lp-cover-busy { position: absolute; inset: auto 0 0; height: 3px;",
         ".lo-thumb-cover .lo-thumb-img { background: var(--cover-bg, #fff); }",
         ".bp-cover-modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }",
         "border: 1.5px dashed var(--color-border-strong);",
@@ -209,7 +221,7 @@ def test_cover_css_rules_in_the_source():
     ):
         assert rule in css, rule
     reduced = css[css.rindex("@media (prefers-reduced-motion: reduce)") :]
-    assert ".lp-cover.is-loading .lp-cover-hint::after { animation: none; }" in reduced
+    assert ".lp-cover-busy { animation: none; }" in reduced and ".lp-cover-img { transition: none; }" in reduced
     assert ".bp-drop, .bp-drop-progress > span, .bp-swatch, .bp-swatch-cover, .bp-color-box {" in reduced
 
 
@@ -376,7 +388,8 @@ const coverGets = () => gets().filter((u) => u === '/api/books/80/cover/').lengt
   v.setCoverMode('info');
   const beforeTurn = { turning: v.turning, onCover: v.onCover, hasCover: v.hasCover, label: v.coverModeLabel };
   await fire(200); await settle();
-  const onCover = { onCover: v.onCover, cursor: v.cursor, current: v.current, counter: v.counterText, numbers: v.shownNumbers, shown: v.shown, rightLines: v._dom.sheets.right.lines.innerHTML, address: replaced.slice(-1)[0], thumbCurrent: coverThumb().classList.contains('is-current'), thumbHidden: hidden(), hint: v.coverHint, img: v.coverImageUrl, style: v.coverSheetStyle, pageCount: v.pageCount, footprint: v.footprint.text, live: v.liveMessage, canBack: v.canTurn(-1), canNext: v.canTurn(1), pages: v.pages.length, focus: v.focusChapter };
+  const onCover = { onCover: v.onCover, cursor: v.cursor, current: v.current, counter: v.counterText, numbers: v.shownNumbers, shown: v.shown, rightLines: v._dom.sheets.right.lines.innerHTML, address: replaced.slice(-1)[0], thumbCurrent: coverThumb().classList.contains('is-current'), thumbHidden: hidden(), hint: v.coverHint, img: v.coverImageUrl, style: v.coverSheetStyle, pageCount: v.pageCount, footprint: v.footprint.text, live: v.liveMessage, canBack: v.canTurn(-1), canNext: v.canTurn(1), pages: v.pages.length, focus: v.focusChapter,
+    busy: v.coverBusy, fresh: v.coverFresh, draft: v.coverDraft, draftStyle: v.coverDraftStyle };
   await fire(400); await settle();
   out.info = { beforeTurn, onCover, puts: puts(), relayoutPosts: calls.filter((c) => c[0] === 'POST' && c[1].includes('relayout')).length, coverGets: coverGets(), img: v.coverImageUrl, srcset: v.coverSrcset, thumbSrc: coverThumb().childNodes[0].childNodes[0].getAttribute('src'), thumbBlank: coverThumb().classList.contains('is-blank'), pill: v.sheetSave.state, mode: v.coverValues.mode, hint: v.coverHint, state: v.coverState };
   // ---- the turns: forward lands page 1 (the cursor waited there), back returns to the cover, Home is page 1;
@@ -414,7 +427,7 @@ const coverGets = () => gets().filter((u) => u === '/api/books/80/cover/').lengt
   const mid = { state: v.coverUpload.state, percent: v.coverUpload.percent, text: v.coverUploadText, url: xhr.url, method: xhr.method, csrf: xhr.headers['X-CSRFToken'], accept: xhr.headers.Accept, form: xhr.form.entries.map((e) => [e[0], e[1] && e[1].name ? e[1].name : e[1], e[2]]), again: await v.uploadCoverImage({ name: 'b.jpg', type: 'image/jpeg', size: 10 }) };
   xhr.respond(201, pick(UP, '→ 201 (turned upright)'));
   await p; await settle();
-  const uploaded = { upload: v.coverUpload, image: v.coverImage, info: v.coverImageInfo, note: v.coverImageNote, live: v.liveMessage, hint: v.coverHint, waiting: pending(400).length };
+  const uploaded = { upload: v.coverUpload, image: v.coverImage, info: v.coverImageInfo, note: v.coverImageNote, live: v.liveMessage, hint: v.coverHint, waiting: pending(400).length, draft: v.coverDraft };
   coverAnswer = pick(API, 'image 801, fit fill');
   await fire(400); await settle();
   out.image = { turnedBack, empty, badType, tooBig, mid, uploaded, puts: puts(), img: v.coverImageUrl, infoAfter: v.coverImageInfo, payloadImage: v.coverChoices.image && v.coverChoices.image.id, coverGets: coverGets() };
@@ -592,8 +605,21 @@ def test_cover_component_under_node_against_the_contract(tmp_path):
     assert on["numbers"] == {"right": 0, "left": 0} and on["shown"] == {"right": -1, "left": -1}
     assert on["rightLines"] == "" and on["address"].endswith("#cover")
     assert on["thumbCurrent"] is True and on["thumbHidden"] is False
-    assert on["hint"] == "يُحضَّر الغلاف…" and on["img"] == ""
-    assert on["style"] == "--cover-bg: #ffffff; --cover-fg: #1b1b1b"
+    # no «يُحضَّر» hint on a blank sheet: the draft draws the cover (the book's details, in the render's places:
+    # the title, the subtitle and the author in the middle, the imprint at the foot), the thin bar says the
+    # render is on its way
+    assert on["hint"] == "" and on["img"] == "" and on["busy"] is True and on["fresh"] is False
+    assert on["draft"] == {
+        "center": [
+            {"kind": "title", "text": "الأمالي"},
+            {"kind": "sub", "text": "مجالس في الأدب"},
+            {"kind": "author", "text": "أبو علي القالي"},
+        ],
+        "bottom": [{"kind": "foot", "text": "دار المدار، طرابلس، 2026"}],
+        "image": None,
+    }
+    assert on["style"] == "--cover-bg: #ffffff; --cover-fg: #1b1b1b; --pw: 481.89"
+    assert on["draftStyle"] == "--cd-side: 12.941%; --cd-bottom: 12.500%; --cd-title: 28; --cd-sub: 15.40; --cd-foot: 13"
     assert (
         on["pageCount"] == 5 and on["footprint"] == "5 صفحات" and on["pages"] == 5 and on["live"] == "الغلاف"
     )
@@ -663,7 +689,9 @@ def test_cover_component_under_node_against_the_contract(tmp_path):
         "format": "jpeg",
         "name": "غلاف.jpg",
     }
-    assert up["info"] == up["image"] and up["hint"] == "يُحضَّر الغلاف…" and up["waiting"] == 1
+    assert up["info"] == up["image"] and up["hint"] == "" and up["waiting"] == 1
+    # the draft shows the picture uploaded (its thumb) in its fit at once, before the save and the render
+    assert up["draft"] == {"center": [], "bottom": [], "image": {"src": upload["thumb_url"], "fit": "fill"}}
     assert up["note"] == f"الصورة {LTR}1004 × 1417{PDI} بكسل · نحو 150 نقطة في البوصة على هذا القطع"
     assert image["puts"] == [{"front_matter": {"cover": {"mode": "image", "image": 801}}}]
     assert image["img"] == image_render["image_1x"] and image["coverGets"] == 1
@@ -701,7 +729,7 @@ def test_cover_component_under_node_against_the_contract(tmp_path):
         "bg": "#1d2433",
         "fg": "#f3efe6",
         "checked": "navy",
-        "style": "--cover-bg: #1d2433; --cover-fg: #f3efe6",
+        "style": "--cover-bg: #1d2433; --cover-fg: #f3efe6; --pw: 481.89",
         "dirty": ["front_matter.cover.preset"],
     }
     assert colours["navySaved"] == {
