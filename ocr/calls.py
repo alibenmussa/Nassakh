@@ -41,6 +41,7 @@ JOIN_GAP = 0.8  # components closer than this (× the line height) form one clus
 MIN_PARTS, MAX_PARTS = 2, 4  # a cluster's components: «(», «١», «)»; a bracket may touch the digit
 MIN_CLUSTER, MAX_CLUSTER = 1.0, 3.5  # a cluster's width in line heights («(١)» 2.3, «(١١)» 3.2)
 INSIDE = 3  # px: a component is a word's only this far inside its box (clipped boxes split a call)
+REACH_UP = 0.45  # line pitches searched above the line box (a raised call above a tight band)
 REACH = 5.0  # line heights searched left of the line box (an unboxed call at the line's end lies outside it)
 CORE_SHARE = 0.5  # rows with at least this share of the densest row's ink are the line's core
 MARK_WIDTH = 1.0  # ink narrower than this (× the line height) beside a cluster is a mark («،»), not a word
@@ -213,11 +214,13 @@ def components(gray: np.ndarray, bbox: list[int]) -> list[tuple[int, int, int, i
     return out
 
 
-def search_box(line_bbox: list[int], line_height: float) -> list[int]:
+def search_box(line_bbox: list[int], line_height: float, pitch: float = 0.0) -> list[int]:
     """The line box widened to its left by `REACH` line heights: a call after the line's last boxed word
-    lies outside the box the word boxes make."""
+    lies outside the box the word boxes make. Widened upward by `REACH_UP` × the line `pitch` too: a band
+    of Kraken's (D92) is tighter at the top than Tesseract's line box, and the raised call sits above it."""
     x0, y0, x1, y1 = (int(v) for v in line_bbox)
-    return [max(0, int(x0 - REACH * max(1.0, float(line_height)))), y0, x1, y1]
+    up = int(REACH_UP * pitch)
+    return [max(0, int(x0 - REACH * max(1.0, float(line_height)))), max(0, y0 - up), x1, y1]
 
 
 def core_band(gray: np.ndarray, line_bbox: list[int]) -> tuple[float, float]:
@@ -563,7 +566,7 @@ def ink_candidates(line, gray: np.ndarray, line_height: float, pitch: float = 0.
     boxes = [t["bbox"] for t in tokens if t.get("bbox") and t.get("bq") != WEAK and not hides_no_call(t)]
     top, bottom = core_band(gray, line.bbox)
     centre = (top + bottom) / 2
-    comps = components(gray, search_box(line.bbox, line_height))
+    comps = components(gray, search_box(line.bbox, line_height, pitch))
     found = bracket_calls(comps, boxes, top, pitch)
     for box in call_clusters(comps, boxes, centre, line_height) if OLD_CLUSTERS else []:
         if not any(_overlap_x(box, other) > 0.3 for other in found):

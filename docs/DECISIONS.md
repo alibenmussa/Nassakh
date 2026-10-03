@@ -700,3 +700,12 @@ line). Footnote benchmark (`playground/footnotes-2026-09-30/bench.py --fresh`, c
 after: book 29 24/25 → 24/25, book 31 19/27 → 24/27 (unlinked notes 28 → 16), 32 11/11 → 11/11, 33 13/13 → 12/13, 34 27/29 → 24/29, 35 19/21 → 11/21, 36 10/16 → 10/16, 37 6/8 → 6/8, 38 3/4 → 2/4, 39 3/12 → 2/12 (the eight test books 92/114 → 78/114). The call pass places and filters the calls by the word boxes (D87) and wrote fewer calls on the test books (book 35: 17 → 8), most likely because Kraken's boxes now cover raised call marks that Tesseract's left bare; not yet examined, so the test books lose links while the vowelled book 31 gains them. Kraken reads a page in about 2.9 s (some 2.2 s starting its runner, then about 35 ms a line), once:
 `rebuild_lines` of the 452 pages took 3.1 s a page against 0.4 s with Tesseract's boxes; later rebuilds reuse
 the stored reading.
+
+## D93 — The call pass looks above a tight line box (REACH_UP)
+
+Kraken's bands (D92) are tighter at the top than Tesseract's line boxes, so a raised call «(١)» lay above the
+box and the ink search missed it: calls found fell on books 29–38 after D92 (book 35 17→… 3 of 21 with the
+stored boxes). `search_box` now also reaches `REACH_UP` = 0.45 line pitches above the box. Measured on the
+ten books (hand-marked calls right): 29 24/25, 31 25/27, 32 11/11, 33 12/13, 34 25/29, 35 17/21, 36 12/16,
+37 6/8, 38 3/4, 39 2/12; 137 of 166. The reach is not finely tuned: 0.3 gave the same total (36 better,
+29 and 34 worse). Book 39 (calls read «(م)», small print) is still open.
