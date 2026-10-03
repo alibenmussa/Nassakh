@@ -2837,6 +2837,29 @@ def test_compiled_css_modal_scrolls_page_labels_and_open_bar():
     assert not re.search(r"\.lp-patch\.is-open\{[^}]*box-shadow:0 0 0 calc", css)
 
 
+def test_compiled_css_keeps_the_editors_caret_hack_inline():
+    """The open paragraph is as tall as its text when it ends in a footnote call (owner, 2026-10-03). A block
+    whose last child is not editable (a call, a page mark) gets ProseMirror's `<img class="ProseMirror-separator">`
+    before its trailing `<br>` in Chrome and Safari; the preflight's `img { display: block }` put the two on a
+    line of their own, so the box was a line taller than its text (`flow()` pushed the page's lines down by its
+    measured height) and the caret after the call sat on that empty line. Headless Chromium on the built bundle
+    and sheet: 3 text lines measured 4 lines, 3 with the rule; an empty paragraph keeps 1 line, a paragraph
+    ending in a line break keeps its empty last line. The editors inject no TipTap CSS, so this rule is the only
+    one keeping the image inline (as prosemirror.css)."""
+    css = (ROOT / "static" / "dist" / "app.css").read_text(encoding="utf-8")
+    assert {
+        "display:inline!important",
+        "border:none!important",
+        "margin:0!important",
+        "width:0!important",
+        "height:0!important",
+    } <= _rule(css, "img.ProseMirror-separator")
+    # and the trailing break itself is never hidden: an empty paragraph and a block ending in a line break need it
+    assert not re.search(r"ProseMirror-trailingBreak[^{]*\{[^}]*display:(?:none|block)", css)
+    source = (ROOT / "static" / "src" / "editor" / "index.js").read_text(encoding="utf-8")
+    assert source.count("injectCSS: false") == 2
+
+
 # ---------------------------------------------------------------- the undo toast (UX test, 2026-09-26)
 
 

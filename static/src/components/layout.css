@@ -462,6 +462,12 @@
   .lp-patch.is-body .ed-p:is([data-first="none"], [data-align="center"], [data-align="end"]) { text-indent: 0; }
   .lp-patch .ed-doc { outline: none; white-space: pre-wrap; caret-color: var(--color-accent); font-variant-numeric: lining-nums; }
   .lp-patch .ed-doc ::selection { background: rgba(37, 99, 235, 0.22); }
+  /* a block ending in a footnote call or a page mark (a non-editable last child) gets ProseMirror's caret hack
+     in Chrome and Safari, an empty <img class="ProseMirror-separator"> before its trailing <br>; the preflight's
+     `img { display: block }` set the two on a line of their own (the open paragraph a line taller than its
+     text, the page's lines pushed down, the caret after the call on that empty line). The editor injects no
+     TipTap CSS (`injectCSS: false`), so the image stays inline here as in prosemirror.css and TipTap's own. */
+  img.ProseMirror-separator { display: inline !important; border: none !important; margin: 0 !important; width: 0 !important; height: 0 !important; }
   .lp-patch .ed-p, .lp-patch .ed-h1, .lp-patch .ed-h2, .lp-patch .ed-book-title { margin: 0; font: inherit; line-height: inherit; text-align: inherit; text-align-last: inherit; }
   .lp-patch.is-body .ed-p { text-indent: calc(var(--indent, 0) * var(--u)); }
   .lp-patch .ed-sep { display: block; height: calc(var(--lh, 22.1) * var(--u)); }
