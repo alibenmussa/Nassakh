@@ -66,7 +66,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
-    list_display = ("name", "kind", "org_type", "country", "unlimited", "created_at")
+    list_display = ("name", "kind", "org_type", "country", "unlimited", "overdraft_pages", "created_at")
     list_filter = ("kind", "org_type", "unlimited")
     search_fields = ("name", "country")
     inlines = (MembershipInline,)

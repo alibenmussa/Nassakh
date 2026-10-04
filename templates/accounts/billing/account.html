@@ -30,6 +30,15 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
       <button type="submit" class="btn btn-sm">جعله غير محدود</button>
       {% endif %}
     </form>
+    {% if not organization.unlimited %}
+    <form method="post" action="{% url 'accounts:billing_overdraft' organization.pk %}" class="og-inline-form" data-overdraft>
+      {% csrf_token %}
+      <label class="meta" for="overdraft-pages">السحب على المكشوف</label>
+      <input id="overdraft-pages" class="input" type="number" name="pages" min="0" step="1" value="{{ organization.overdraft_pages }}" dir="ltr" style="width: 7rem">
+      <span class="meta">صفحة</span>
+      <button type="submit" class="btn btn-sm">حفظ</button>
+    </form>
+    {% endif %}
   </div>
 
   {% if form.non_field_errors %}

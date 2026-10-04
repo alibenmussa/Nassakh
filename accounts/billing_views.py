@@ -136,6 +136,28 @@ def set_unlimited(request: HttpRequest, organization_id: int) -> HttpResponse:
 
 
 @login_required
+@require_POST
+def set_overdraft(request: HttpRequest, organization_id: int) -> HttpResponse:
+    """The overdraft limit: pages the account may read past its balance (a debt the next grant pays first)."""
+    _superuser(request)
+    organization = get_object_or_404(Organization, pk=organization_id)
+    try:
+        pages = int(str(request.POST.get("pages") or "0").strip())
+    except ValueError:
+        pages = -1
+    if pages < 0:
+        messages.error(request, "اكتب عدد صفحات صحيحًا (صفر أو أكثر).")
+        return redirect(_account_url(organization.pk))
+    organization.overdraft_pages = pages
+    organization.save(update_fields=["overdraft_pages"])
+    if pages:
+        messages.success(request, f"يستطيع «{organization.name}» أن يقرأ {pages} صفحة بعد نفاد رصيده.")
+    else:
+        messages.success(request, f"لا سحب على المكشوف لـ«{organization.name}».")
+    return redirect(_account_url(organization.pk))
+
+
+@login_required
 def plans(request: HttpRequest) -> HttpResponse:
     """The plans: the list (with how many grants each made) and the form to add one."""
     _superuser(request)

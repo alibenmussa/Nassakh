@@ -61,6 +61,8 @@ class Organization(models.Model):
     country = models.CharField("البلد", max_length=100, blank=True)
     website = models.URLField("الموقع", max_length=300, blank=True)
     unlimited = models.BooleanField("رصيد غير محدود", default=False)
+    # Pages the account may read past its balance (a debt the next grant pays first); 0: none. Superuser-set.
+    overdraft_pages = models.PositiveIntegerField("حد السحب على المكشوف (صفحات)", default=0)
     created_at = models.DateTimeField("أُنشئت في", auto_now_add=True)
 
     class Meta:

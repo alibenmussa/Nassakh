@@ -14,8 +14,9 @@ Every change goes through this module, under `select_for_update` on the organisa
   and the next grant pays the debt first.
 - `release(page)`: the page's hold goes (an error, an exclusion, a run that died).
 - `balance` = the remaining pages of the live grants (started, unexpired, not revoked) − the debt;
-  `available` = balance − holds. Expiry is computed on read; `expire` (`manage.py expire_quota`, daily)
-  writes the `expire` entries for the record.
+  `available` = balance − holds + the account's overdraft limit (`Organization.overdraft_pages`: pages it may
+  read past its balance, on debt; 0 for none). Expiry is computed on read; `expire` (`manage.py
+  expire_quota`, daily) writes the `expire` entries for the record.
 
 The account charged is the book's organisation. Unlimited accounts and books without an organisation are never
 limited nor charged (no hold, no entry). Superusers skip the checks; the book's account is still charged.
@@ -142,8 +143,8 @@ def held(organization: Organization) -> int:
 
 
 def available(organization: Organization, now: datetime | None = None) -> int:
-    """Balance − holds: what a new run may still read."""
-    return balance(organization, now) - held(organization)
+    """Balance − holds + the overdraft limit: what a new run may still read."""
+    return balance(organization, now) - held(organization) + int(organization.overdraft_pages or 0)
 
 
 def charged_account(book) -> Organization | None:
@@ -181,6 +182,7 @@ class Summary:
     next_expiry: datetime | None  # the nearest expiry of a live grant with pages left
     expiring: int  # its pages
     used_this_month: int
+    overdraft: int = 0  # the overdraft limit counted in `available`
 
     @property
     def expiring_soon(self) -> bool:
@@ -240,11 +242,12 @@ def summaries(organizations: Iterable[Organization], now: datetime | None = None
             unlimited=bool(org.unlimited),
             balance=bal,
             held=hold_count,
-            available=bal - hold_count,
+            available=bal - hold_count + int(org.overdraft_pages or 0),
             debt=owed,
             next_expiry=expiry[0] if expiry else None,
             expiring=expiry[1] if expiry else 0,
             used_this_month=-int(used.get(org_id) or 0),
+            overdraft=int(org.overdraft_pages or 0),
         )
     return out
 

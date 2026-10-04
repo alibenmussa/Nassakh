@@ -1025,7 +1025,9 @@ pages the superuser gives or sells.
   of the live grants − the debt; available = balance − holds; pages come from the grant that expires first; every
   change runs under `select_for_update` on the organisation. `consume` never fails: with nothing left the page is
   read on debt, and the next grant pays it first. The book's organisation is charged; unlimited accounts are never
-  held nor charged; superusers are not checked, but their runs are charged.
+  held nor charged; superusers are not checked, but their runs are charged. **Overdraft** (owner, 2026-10-04):
+  `Organization.overdraft_pages`, set by a superuser on «الفوترة», lets the account read that many pages past its
+  balance (available = balance − holds + the limit); the debt shows in the sidebar and the next grant pays it.
 - **Where.** The upload refuses a book whose (pages − skipped) × pages per sheet exceed the available pages (said in
   the browser on choosing the file, checked again on the server). «بدء المعالجة» and «إعادة المعالجة» (book or
   page) check again and hold a page each. `ocr_page_full` charges a page that ends in `ocr_done` under the run

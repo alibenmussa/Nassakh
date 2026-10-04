@@ -23,6 +23,7 @@ urlpatterns = [
     path("billing/<int:organization_id>/", billing_views.account, name="billing_account"),
     path("billing/<int:organization_id>/grants/", billing_views.grant_add, name="billing_grant_add"),
     path("billing/<int:organization_id>/unlimited/", billing_views.set_unlimited, name="billing_unlimited"),
+    path("billing/<int:organization_id>/overdraft/", billing_views.set_overdraft, name="billing_overdraft"),
     path("billing/grants/<int:grant_id>/revoke/", billing_views.grant_revoke, name="billing_grant_revoke"),
     path("organization/", views.organization, name="organization"),
     path("organization/rename/", views.organization_rename, name="organization_rename"),

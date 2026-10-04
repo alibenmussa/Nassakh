@@ -114,6 +114,7 @@
         <span>الرصيد: غير محدود</span>
         {% else %}
         <span{% if nav_quota.available <= 0 %} class="is-empty"{% endif %}>الرصيد: {{ nav_quota.available|ar_pages }}</span>
+        {% if nav_quota.debt %}<span class="meta">عليك {{ nav_quota.debt|ar_pages }} تُخصم من الرصيد القادم</span>{% endif %}
         {% if nav_quota.expiring_soon %}<span class="meta">ينتهي منها {{ nav_quota.expiring|ar_pages }} في <bdi class="num">{{ nav_quota.next_expiry|date:"Y-m-d" }}</bdi></span>{% endif %}
         {% endif %}
       </a>

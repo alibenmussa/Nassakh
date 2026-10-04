@@ -8,7 +8,7 @@
   {% else %}
   <div class="og-number">
     <span class="og-number-value{% if s.available <= 0 %} is-empty{% endif %}"><bdi class="num">{{ s.available }}</bdi></span>
-    <span class="meta">صفحة متاحة</span>
+    <span class="meta">صفحة متاحة{% if s.overdraft %} (مع سحب على المكشوف حتى {{ s.overdraft }}){% endif %}</span>
   </div>
   <div class="og-number">
     <span class="og-number-value"><bdi class="num">{{ s.balance }}</bdi></span>

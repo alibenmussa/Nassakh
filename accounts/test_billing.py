@@ -488,3 +488,41 @@ def test_the_account_page_shows_the_usage_and_the_ledger(client, root, account, 
     assert reverse("books:detail", args=[book.pk]) in body and "INV-9" in body
     assert 'data-entry="consume"' in body and 'data-entry="grant"' in body and "data-grant-form" in body
     assert "الباقة الأساسية" in body  # the plans fill the form
+
+
+# ====================================================================== overdraft
+
+
+def test_an_overdraft_lets_an_account_read_past_its_balance_up_to_its_limit(account, book):
+    billing.grant(account, 2)
+    account.overdraft_pages = 2
+    account.save(update_fields=["overdraft_pages"])
+    assert billing.available(account) == 4 and billing.summary(account).overdraft == 2
+    editor = _member("ed", account)
+    pages = [page_of(book, n) for n in range(1, 6)]
+    with pytest.raises(billing.QuotaExceeded):
+        billing.hold(book, pages, "run", user=editor)  # 5 pages, 4 available
+    assert billing.hold(book, pages[:4], "run", user=editor)
+    for page in pages[:4]:
+        billing.consume(page, "run")
+    assert (billing.balance(account), billing.debt(account), billing.available(account)) == (-2, 2, 0)
+    with pytest.raises(billing.QuotaExceeded):
+        billing.hold(book, pages[4:], "next", user=editor)
+    billing.grant(account, 10)  # pays the debt first
+    assert (billing.balance(account), billing.debt(account), billing.available(account)) == (8, 0, 10)
+    assert ledger_sum(account) == billing.balance(account)
+
+
+def test_only_a_superuser_sets_the_overdraft_limit(client, root, account):
+    url = reverse("accounts:billing_overdraft", args=[account.pk])
+    client.force_login(_member("ed", account, role="admin"))
+    assert client.post(url, {"pages": "50"}).status_code == 404
+    client.force_login(root)
+    client.post(url, {"pages": "50"})
+    account.refresh_from_db()
+    assert account.overdraft_pages == 50
+    client.post(url, {"pages": "-3"})
+    account.refresh_from_db()
+    assert account.overdraft_pages == 50
+    body = client.get(reverse("accounts:billing_account", args=[account.pk])).content.decode()
+    assert "السحب على المكشوف" in body and "مع سحب على المكشوف حتى 50" in body
