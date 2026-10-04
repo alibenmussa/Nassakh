@@ -1,5 +1,6 @@
 /* The organisation (D98): its page (templates/accounts/organization.html, template_apply.html) and the book
-   page's «قوالب المؤسسة» in «التنسيق» (templates/accounts/_book_templates.html, static/src/js/org.js). Classes are
+   page's «قوالب المؤسسة» in «التنسيق» (templates/accounts/_book_templates.html, static/src/js/org.js); the accounts
+   of D106: the sign-up pages, the sidebar's «الرصيد», «الفوترة» (templates/accounts/billing/). Classes are
    prefixed og-. The page is the app's cards and tables; a face is shown in itself (`nk-org-<pk>`). The section in
    «التنسيق» follows the panel's accordions: templates as quiet radio rows, the changes as label · before ← after. */
 @layer components {
@@ -52,4 +53,38 @@
   /* the font menus of «الخطوط» show each face in itself (an organisation's too): app.css's `.menu-item` height
      comes after layout.css's `.lo-font-item` in the build and squashed the sample line to a few pixels */
   .lo-font-menu .lo-font-item { height: auto; }
+
+  /* D106: the sign-up and the login's links (the auth card of app.css, a little wider for the sign-up) */
+  .og-auth-wide { max-width: 440px; }
+  .og-auth-alt { text-align: center; }
+  .og-auth-text { font-size: 13.5px; line-height: 1.7; color: var(--color-text); }
+  .og-auth-email { font-weight: 550; }
+  .og-auth-resend { display: flex; justify-content: center; margin-top: -8px; }
+  .og-auth-kinds { align-self: flex-start; }
+
+  /* D106: the page quota: the sidebar's «الرصيد», the numbers, the «الفوترة» tables */
+  .og-quota {
+    display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: var(--radius-sm);
+    color: var(--color-text-2); font-size: 12.5px; font-weight: 500; font-variant-numeric: tabular-nums;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+  .og-quota:hover { background: var(--color-hover); color: var(--color-text); }
+  .og-quota .is-empty, .og-number-value.is-empty, .og-bill-available.is-empty { color: var(--color-danger-text); }
+  @media (min-width: 901px) {
+    .app-shell:has([data-rail]):not(.is-rail-open) .og-quota { display: none; }
+  }
+  .og-numbers { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+  .og-number { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+  .og-number-value { font-size: 20px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .og-bill-table td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
+  .og-bill-table .status { margin-top: 2px; }
+  .og-bill-name { font-weight: 550; }
+  .og-bill-available { font-weight: 600; }
+  .og-bill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px 16px; }
+  .og-filter { position: relative; display: flex; align-items: center; }
+  .og-filter .icon { position: absolute; inset-inline-start: 9px; color: var(--color-text-3); pointer-events: none; }
+  .og-filter .input { width: 220px; padding-inline-start: 30px; }
+  .og-ledger td { height: 40px; padding-top: 8px; padding-bottom: 8px; }
+  .og-minus { color: var(--color-text-2); }
+  .og-plus { color: var(--color-success); font-weight: 550; }
 }

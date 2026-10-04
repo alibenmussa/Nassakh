@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "assembly",
     "editor",
     "publishing",
+    "research",
 ]
 
 MIDDLEWARE = [
@@ -87,6 +88,15 @@ LOGIN_URL = "accounts:login"
 LOGIN_REDIRECT_URL = "books:list"
 LOGOUT_REDIRECT_URL = "accounts:login"
 
+# D106: the login is the username (accounts made before) or the email (a sign-up's login).
+AUTHENTICATION_BACKENDS = ["accounts.backends.EmailBackend"]  # the email is the login (D106)
+# Sign-up (D106): pages a new account is given (0: none) and for how many days; days the confirmation link
+# stays valid; the site's address for the links in emails (empty: the address of the request).
+SIGNUP_PAGE_QUOTA = env.int("SIGNUP_PAGE_QUOTA", default=0)
+SIGNUP_QUOTA_DAYS = env.int("SIGNUP_QUOTA_DAYS", default=30)
+EMAIL_CONFIRM_DAYS = env.int("EMAIL_CONFIRM_DAYS", default=3)
+SITE_URL = env("SITE_URL", default="")
+
 # ---------------------------------------------------------------- i18n
 
 LANGUAGE_CODE = "ar"
@@ -111,9 +121,26 @@ STORAGES = {
 
 # ---------------------------------------------------------------- email
 
+# D106: the sign-up's confirmation email. EMAIL_BACKEND: the console in development (`runserver` prints the
+# message), `django.core.mail.backends.smtp.EmailBackend` in production with the EMAIL_* values (Django 6.1's
+# MAILERS: the old EMAIL_* settings must not be defined as settings next to it).
 MAILERS = {
-    "default": {"BACKEND": "django.core.mail.backends.console.EmailBackend"},
+    "default": {
+        "BACKEND": env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"),
+        "OPTIONS": {
+            "host": env("EMAIL_HOST", default="localhost"),
+            "port": env.int("EMAIL_PORT", default=587),
+            "username": env("EMAIL_HOST_USER", default=""),
+            "password": env("EMAIL_HOST_PASSWORD", default=""),
+            "use_tls": env.bool("EMAIL_USE_TLS", default=True),
+            "use_ssl": env.bool("EMAIL_USE_SSL", default=False),
+            "timeout": env.int("EMAIL_TIMEOUT", default=20),
+        }
+        if env("EMAIL_BACKEND", default="").endswith("smtp.EmailBackend")
+        else {},
+    },
 }
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="نسّاخ <no-reply@localhost>")
 
 # ---------------------------------------------------------------- celery
 
@@ -213,6 +240,15 @@ NASSAKH = {
     "EXPORT_SOFT_LIMIT_S": env.int("EXPORT_SOFT_LIMIT_S", default=1800),
     "EXPORTS_KEPT": env.int("EXPORTS_KEPT", default=5),
     "EXPORT_VALIDATE": env.bool("EXPORT_VALIDATE", default=True),
+    # D107: days a page clip's signed link stays valid (an AI client shows it without a session).
+    "CLIP_LINK_DAYS": env.int("CLIP_LINK_DAYS", default=7),
+    # D108: the MCP server (`manage.py mcp_serve`): the interface and port it listens on, the /mcp URL clients
+    # connect to (the snippets of «البحث والتحقق»; empty: http://localhost:<port>/mcp) and the calls an access
+    # key may make a minute. Its clip and review links start with SITE_URL.
+    "MCP_HOST": env("MCP_HOST", default="127.0.0.1"),
+    "MCP_PORT": env.int("MCP_PORT", default=8001),
+    "MCP_PUBLIC_URL": env("MCP_PUBLIC_URL", default=""),
+    "MCP_RATE_LIMIT": env.int("MCP_RATE_LIMIT", default=60),
 }
 
 # ---------------------------------------------------------------- rest framework
@@ -258,6 +294,7 @@ LOGGING = {
                 "assembly",
                 "editor",
                 "publishing",
+                "research",
             )
         },
         # WeasyPrint logs every layout step at INFO; its warnings (unsupported CSS) still show.

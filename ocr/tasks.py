@@ -121,8 +121,36 @@ def ocr_page_fast(self, page_id: int, run: str = "", last: bool = False) -> int:
 
 @shared_task(bind=True, max_retries=2, autoretry_for=(OSError,), retry_backoff=True)
 def ocr_page_full(self, page_id: int, run: str = "", last: bool = False) -> int:
-    """Dual-model OCR and finalisation for one page (gpu queue; models stay resident)."""
-    return _run_stage(self, page_id, STAGE_FULL, services.run_full_ocr, HEADLINE_FULL, run, last)
+    """Dual-model OCR and finalisation for one page (gpu queue; models stay resident).
+
+    D106: once the task of the run that holds the page is done (not when it is requeued or retried: those
+    raise), the page is charged to its book's account when it ends in `ocr_done` and its quota hold goes
+    whatever the end (`_settle_quota`). The run key is `run`, else this task's id: a requeue (D104) or a
+    retry keeps it, so a page is never charged twice for one run; the readings again inside the task (D90,
+    D100, D105) are part of it."""
+    current = runs.is_current(page_id, run)
+    _run_stage(self, page_id, STAGE_FULL, services.run_full_ocr, HEADLINE_FULL, run, last)
+    if current:
+        _settle_quota(page_id, run or str(getattr(self.request, "id", "") or ""))
+    return page_id
+
+
+def _settle_quota(page_id: int, run_key: str) -> None:
+    """D106: a page the models read (`ocr_done`, not excluded, its book started) is charged once per run
+    (`accounts.billing.consume`, which releases its hold); any other end (an error, an exclusion, a book
+    back in «التخطيط») releases the hold, at no cost."""
+    from accounts import billing  # the quota (lazy: the tasks module stays light to import)
+
+    page = Page.objects.select_related("book").filter(pk=page_id).first()
+    if page is None:
+        return
+    try:
+        if page.status == Page.Status.OCR_DONE and not page.is_excluded and not page.book.awaits_ocr_start:
+            billing.consume(page, run_key)
+        else:
+            billing.release(page)
+    except Exception:  # noqa: BLE001 - the page keeps its reading; the log says what was not recorded
+        log.exception("ocr_full: page %s: the quota of run %s was not settled", page_id, run_key)
 
 
 @shared_task(bind=True, max_retries=1, autoretry_for=(OSError,), retry_backoff=True)

@@ -46,6 +46,9 @@ class Book(models.Model):
     title = models.CharField("العنوان", max_length=300)
     author = models.CharField("المؤلف", max_length=300, blank=True)
     original_year = models.PositiveIntegerField("سنة النشر الأصلية", null=True, blank=True)
+    # D107: the volume of a multi-volume work, for the citation of a page («ج 2، ص 45»); the editor, publisher
+    # and edition come from the book details of «التنسيق» (`StyleSheet.front_matter["fields"]`).
+    volume = models.CharField("الجزء", max_length=40, blank=True)
     notes = models.TextField("ملاحظات", blank=True)
     source_pdf = models.FileField("ملف PDF", upload_to=book_source_path)
     has_text_layer = models.BooleanField("يحوي طبقة نصية", null=True)

@@ -17,7 +17,7 @@ else
 GPU_POOL := -P solo -c 1
 endif
 
-.PHONY: install kraken db migrate superuser seed-groups web worker gpu-worker css css-watch editor test lint
+.PHONY: install kraken db migrate superuser seed-groups web mcp reindex worker gpu-worker css css-watch editor test lint
 
 install:            ## Python deps (+dev extras) and the frontend build
 	uv pip install --python .venv/bin/python -r pyproject.toml --extra dev
@@ -46,6 +46,12 @@ seed-groups:        ## make sure the admin / editor / proofreader groups exist
 
 web:                ## Django dev server on :8000
 	$(PY) manage.py runserver 8000
+
+mcp:                ## the MCP server (D108): Streamable HTTP at http://127.0.0.1:8001/mcp (MCP_HOST, MCP_PORT)
+	$(PY) manage.py mcp_serve
+
+reindex:            ## rebuild the search index of every book (D107); `make reindex BOOKS="29 31"` for some
+	$(PY) manage.py research_reindex $(BOOKS)
 
 worker:             ## CPU worker: ingest, preprocess, layout, fast OCR, page renders; the re-layout and export queues
 	$(CELERY) -A nassakh worker -Q default,layout,export -c 4 -l info

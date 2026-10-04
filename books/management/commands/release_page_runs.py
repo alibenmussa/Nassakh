@@ -4,13 +4,15 @@ A run claim keeps a second run off a page while its chain is queued or running a
 chain's last task (or its errback). A chain whose queue messages were lost (a purged Redis queue, workers
 reset by hand) leaves its claim until `NASSAKH["RUN_CLAIM_HOURS"]` pass; this frees those pages at once.
 Only do it when no worker is still working on them: a task of the released run that arrives later skips
-a page once a new run holds it, but one that is already running finishes its work.
+a page once a new run holds it, but one that is already running finishes its work. The pages' quota holds
+(D106: pages promised to a run, not read yet) are released with the claims.
 """
 
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
 
+from accounts import billing
 from books.models import Page
 
 
@@ -31,6 +33,7 @@ class Command(BaseCommand):
             if page is not None:
                 pages = pages.filter(number=page)
         held = list(pages.order_by("book_id", "number").values_list("book_id", "number"))
+        billing.release_pages(pages.values_list("pk", flat=True))
         released = pages.update(run_token="", run_claimed_at=None)
         for book_id, number in held:
             self.stdout.write(f"book {book_id} page {number}: released")

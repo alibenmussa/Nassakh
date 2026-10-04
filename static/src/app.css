@@ -11,6 +11,7 @@
 @import "./components/offline.css";
 @import "./components/library.css";
 @import "./components/org.css";
+@import "./components/research.css";
 
 @source "../../templates";
 @source "./js";
@@ -23,6 +24,7 @@
 @source "../../assembly";
 @source "../../editor";
 @source "../../publishing";
+@source "../../research";
 
 /* ------------------------------------------------------------------ tokens (DESIGN.md §2–4) */
 @theme {

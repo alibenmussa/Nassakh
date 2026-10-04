@@ -390,11 +390,15 @@ def text_kind(line: Line) -> str:
 
 def refresh_page_text(page: Page) -> None:
     """Rebuild `final_text` (body, blank line, footnotes by `line_kind`; Western digits) and
-    `n_unresolved` (the open items: `ocr.services.page_open_items`)."""
+    `n_unresolved` (the open items: `ocr.services.page_open_items`), and the page's search index (D107:
+    every action that writes lines ends here)."""
+    from research.index import page_changed  # other app: lazy import
+
     lines = list(_page_lines(page))
     page.final_text = to_western_digits(join_region_texts([(text_kind(line), line.text) for line in lines]))
     page.n_unresolved = page_open_items(page).total
     page.save(update_fields=["final_text", "n_unresolved"])
+    page_changed(page)
 
 
 def _page_state(page: Page) -> dict:
@@ -1596,4 +1600,7 @@ def reopen_page(page: Page, user) -> None:
     page.save(update_fields=["status", "reviewed_by", "reviewed_at"])
     page.lines.update(is_reviewed=False)
     _record(page, LineRevision.Action.REOPEN, None, before, _page_state(page), user)
+    from research.index import page_changed  # the words are unreviewed again (D107)
+
+    page_changed(page)
     _refresh_book(page)

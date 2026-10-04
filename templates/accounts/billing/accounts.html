@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% comment %}
+«الفوترة» (D106; accounts.billing_views.accounts_list), superusers only: every account with its kind, the pages
+available and held, the nearest expiry and the pages read this month; unlimited accounts last. A row opens the
+account. A small filter (Alpine) narrows the rows by name as one types.
+Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Summary)}]).
+{% endcomment %}
+{% load organization %}
+{% block head_title %}الفوترة · نسّاخ{% endblock %}
+{% block title %}الفوترة{% endblock %}
+{% block header_actions %}<a class="btn btn-sm" href="{% url 'accounts:billing_plans' %}">الباقات</a>{% endblock %}
+
+{% block content %}
+<div class="og-page stack-lg" x-data="{ q: '' }">
+  <div class="page-header">
+    <p class="meta">رصيد الصفحات لكل حساب. تُحتسب الصفحة حين تقرؤها النماذج بنجاح؛ التخطيط وإعادته بلا حساب.</p>
+    <label class="og-filter">
+      <span class="sr-only">تصفية الحسابات</span>
+      <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
+      <input type="search" class="input" placeholder="اسم الحساب" x-model="q" dir="auto">
+    </label>
+  </div>
+
+  {% if rows %}
+  <div class="table-wrap">
+    <table class="table og-bill-table">
+      <thead>
+        <tr>
+          <th scope="col">الحساب</th>
+          <th scope="col" class="num">المتاح</th>
+          <th scope="col" class="num">محجوز</th>
+          <th scope="col">أقرب انتهاء</th>
+          <th scope="col" class="num">قُرئ هذا الشهر</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% with org=row.organization s=row.summary %}
+        <tr data-account="{{ org.pk }}" x-show="!q || $el.dataset.name.includes(q.trim())" data-name="{{ org.name }}">
+          <td>
+            <a class="link og-bill-name" href="{% url 'accounts:billing_account' org.pk %}">{{ org.name }}</a>
+            <div class="meta">{{ org.get_kind_display }}{% if org.org_type %} · {{ org.get_org_type_display }}{% endif %}{% if org.country %} · {{ org.country }}{% endif %} · <bdi class="num">{{ org.n_members }}</bdi> {% if org.n_members == 1 %}عضو{% else %}أعضاء{% endif %} · <bdi class="num">{{ org.n_books }}</bdi> كتاب</div>
+          </td>
+          <td class="num">
+            {% if s.unlimited %}<span class="badge">غير محدود</span>
+            {% else %}<span class="og-bill-available{% if s.available <= 0 %} is-empty{% endif %}">{{ s.available }}</span>{% if s.debt %}<div class="meta">دَين {{ s.debt }}</div>{% endif %}{% endif %}
+          </td>
+          <td class="num">{% if s.held %}{{ s.held }}{% else %}<span class="meta">—</span>{% endif %}</td>
+          <td>
+            {% if s.next_expiry %}<bdi class="num">{{ s.next_expiry|date:"Y-m-d" }}</bdi> <span class="meta">({{ s.expiring|ar_pages }})</span>{% if s.expiring_soon %} <span class="badge badge-warning">قريب</span>{% endif %}
+            {% else %}<span class="meta">—</span>{% endif %}
+          </td>
+          <td class="num">{% if s.used_this_month %}{{ s.used_this_month }}{% else %}<span class="meta">0</span>{% endif %}</td>
+        </tr>
+        {% endwith %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p class="empty-title">لا حسابات بعد</p>
+    <p class="empty-text">تظهر هنا الحسابات حين يسجّل الناس من صفحة «حساب جديد».</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

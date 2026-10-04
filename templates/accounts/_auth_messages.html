@@ -1,0 +1,11 @@
+{# The messages of the pages outside the app shell (login, sign-up): the shell's toasts are not there, so they show in the card. #}
+{% if messages %}
+<div class="stack-sm" role="status" aria-live="polite">
+  {% for message in messages %}
+  <div class="banner{% if message.level_tag == 'error' %} banner-danger{% elif message.level_tag != 'warning' %} banner-info{% endif %}">
+    <svg class="icon" aria-hidden="true"><use href="#{% if message.level_tag == 'error' or message.level_tag == 'warning' %}i-alert{% else %}i-info{% endif %}"/></svg>
+    <span>{{ message }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}

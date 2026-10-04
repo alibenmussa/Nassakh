@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% comment %}
+A confirmation link that cannot be used (D106; accounts.views.confirm_email): expired, or broken. A new link is sent
+to the address typed here (rate-limited; the answer is the same whatever the address). Context: expired.
+{% endcomment %}
+{% block head_title %}رابط التأكيد · نسّاخ{% endblock %}
+
+{% block body %}
+<main class="auth-screen">
+  <div class="card auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark brand-mark-lg" aria-hidden="true">ن</span>
+      <h1 class="auth-title">{% if expired %}انتهت صلاحية الرابط{% else %}الرابط غير صالح{% endif %}</h1>
+    </div>
+
+    <p class="og-auth-text">{% if expired %}مضت مدة رابط التأكيد. اكتب بريدك نرسل إليه رابطًا جديدًا.{% else %}لعل الرابط لم يُنسخ كاملًا. اكتب بريدك نرسل إليه رابطًا جديدًا.{% endif %}</p>
+
+    <form method="post" action="{% url 'accounts:signup_resend' %}" class="stack" data-resend>
+      {% csrf_token %}
+      <div class="field">
+        <label class="label" for="cf-email">البريد الإلكتروني</label>
+        <input id="cf-email" type="email" name="email" class="input" dir="ltr" autocomplete="email" required maxlength="254">
+      </div>
+      <button type="submit" class="btn btn-primary w-full">أرسل رابطًا جديدًا</button>
+    </form>
+
+    <p class="og-auth-alt meta"><a class="link" href="{% url 'accounts:login' %}">العودة إلى تسجيل الدخول</a></p>
+  </div>
+</main>
+{% endblock %}

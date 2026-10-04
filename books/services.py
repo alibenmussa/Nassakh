@@ -34,6 +34,7 @@ from django.utils import timezone
 import numpy as np
 import pymupdf
 
+from accounts import billing
 from accounts.services import default_organization, organization_for
 from books import runs
 from books.models import ALL_PAGES_FAILED_MESSAGES, Book, Page
@@ -109,6 +110,8 @@ RERUN_ACTION_LABELS: dict[str, str] = {RELAYOUT_STAGE: "إعادة التخطي�
 # per-page Qari time used when the book has no Qari run yet.
 MODEL_STAGES: frozenset[str] = frozenset({"preprocess", "layout", "ocr", "ocr_full"})
 QARI_FALLBACK_SECONDS = 20.0
+# D106: the run key of the quota holds «بدء المعالجة» places before its pages' runs exist (the runs keep them)
+QUOTA_START_KEY = "start"
 
 # Arabic count forms (`assembly.render.ar_count`): «7 صفحات» and «من 555 صفحة».
 PAGE_FORMS: tuple[str, str, str, str] = ("صفحة واحدة", "صفحتان", "صفحات", "صفحة")
@@ -517,26 +520,34 @@ def start_processing(book: Book) -> None:
         raise ValueError(BROKER_ERROR) from exc
 
 
-def start_ocr(book: Book) -> None:
+def start_ocr(book: Book, user=None) -> None:
     """«بدء المعالجة» (D64): send every prepared page into «المعالجة».
 
     Only from «تم التخطيط» (`needs_guides` with `awaits_ocr_start`). Refused with an Arabic ValueError
     when no page is ready. One conditional UPDATE claims the start (flag → False, status → `ocr`), so
     a double submit or a second tab starts nothing twice; `start_ocr_task` then runs `_enqueue_layout`.
     When the task cannot be queued the claim is undone.
+
+    D106: the prepared pages are held on the book's account first (`accounts.billing.hold`, run key
+    `QUOTA_START_KEY`); for a `user` who is not a superuser the account's available pages are checked, and
+    fewer than the pages to read refuse the start with both numbers (`QuotaExceeded`), nothing started. The
+    holds go back when the start is not claimed or cannot be queued.
     """
-    ready = book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED).exists()
-    if not ready:
+    ready = book.pages.filter(is_excluded=False, status=Page.Status.PREPROCESSED)
+    ready_ids = list(ready.values_list("pk", flat=True))
+    if not ready_ids:
         current = Book.objects.filter(pk=book.pk).values("awaits_ocr_start", "status").first() or {}
         if current and not current["awaits_ocr_start"]:
             raise ValueError(ALREADY_STARTED_ERROR)
         if current.get("status") == Book.Status.PROCESSING:
             raise ValueError(STILL_PREPARING_ERROR)
         raise ValueError(NOTHING_READY_ERROR)
+    held = billing.hold(book, ready_ids, QUOTA_START_KEY, user=user)  # QuotaExceeded: nothing starts
     claimed = Book.objects.filter(pk=book.pk, awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES).update(
         awaits_ocr_start=False, status=Book.Status.OCR, error_message="", updated_at=timezone.now()
     )
     if not claimed:
+        billing.release_pages(held)
         current = Book.objects.filter(pk=book.pk).values("awaits_ocr_start", "status").first() or {}
         if current and not current["awaits_ocr_start"]:
             raise ValueError(ALREADY_STARTED_ERROR)
@@ -555,6 +566,7 @@ def start_ocr(book: Book) -> None:
             awaits_ocr_start=True, status=Book.Status.NEEDS_GUIDES, updated_at=timezone.now()
         )
         book.refresh_from_db(fields=["awaits_ocr_start", "status", "updated_at"])
+        billing.release_pages(held)
         raise ValueError(BROKER_ERROR) from exc
 
 
@@ -633,7 +645,7 @@ def _reset_to_stage_input(page: Page, stage: str) -> None:
     page.save(update_fields=["status", "text_state", "attention_flags"])
 
 
-def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = ""):
+def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = "", user=None):
     """Enqueue the pipeline for one page from `stage` (preprocess | layout | ocr | ocr_fast | ocr_full).
 
     One run per page at a time (`books.runs`, item 29): the page is claimed first, and while another run
@@ -645,6 +657,11 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = ""):
     first). While the book awaits «بدء المعالجة» only `preprocess` runs, and alone (`NOT_STARTED_ERROR`
     for the other stages; the flag is read fresh). A refusal or a failure to queue gives the claim back.
     Stores the chain's task id on the page and returns the AsyncResult.
+
+    D106: a chain the models read holds the page on its book's account (`_quota_hold`) before anything
+    changes; with a `user` (a request: the page's «إعادة المعالجة», its retry) who is not a superuser the
+    account's available pages are checked, and none left refuses the run with the numbers
+    (`accounts.billing.QuotaExceeded`). A refusal or a failure to queue gives the hold back too.
     """
     from books import tasks  # the errback task (lazy: books.tasks imports this module)
 
@@ -659,6 +676,7 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = ""):
     if not token:
         raise ValueError(runs.PAGE_RUN_ACTIVE_ERROR)
     try:
+        _quota_hold(page, stage, layout_stage, token, user)
         if page.status == Page.Status.ERROR:
             page.clear_error()
         if page.status in APPROVED_PAGE_STATUSES:
@@ -671,10 +689,28 @@ def run_stage(page: Page, stage: str, refresh_book: bool = True, run: str = ""):
         result = chain(*signatures).apply_async(link_error=errback)
     except BaseException:
         runs.release(page.pk, token)
+        billing.release(page)
         raise
     page.task_id = str(getattr(result, "id", "") or "")[:64]
     page.save(update_fields=["task_id"])
     return result
+
+
+def reads_with_models(book: Book, stage: str) -> bool:
+    """Whether a run of `book` from `stage` ends with the models' reading (D106: it is held and charged):
+    every stage but `ocr_fast`, once «المعالجة» started (in «التخطيط» a run only prepares the pages)."""
+    return stage in MODEL_STAGES and not awaits_start(book.pk)
+
+
+def _quota_hold(page: Page, stage: str, layout_stage: bool, token: str, user=None) -> None:
+    """D106: a chain the models read holds the page on its book's account (`accounts.billing.hold`: a page
+    held already keeps its hold; with a `user` who is not a superuser, `QuotaExceeded` when the account has
+    no page available). Any other chain drops a hold the page kept from a run that died: the claim just
+    taken shows no other run holds the page."""
+    if layout_stage or stage not in MODEL_STAGES:
+        billing.release(page)
+    else:
+        billing.hold(page.book, [page.pk], token, user=user)
 
 
 def awaits_start(book_id: int) -> bool:
@@ -720,35 +756,44 @@ def approved_page_count(book: Book) -> int:
     return book.pages.filter(is_excluded=False, status__in=APPROVED_PAGE_STATUSES).count()
 
 
-def _claim_book_rerun(book: Book, stage: str) -> tuple[str, int]:
+def _claim_book_rerun(book: Book, stage: str, user=None) -> tuple[str, int]:
     """Validate a book re-run and claim every page it runs with one token (`books.runs`), atomically.
 
     The book row is locked first, so two submits of the same re-run are serialised: the second one finds
-    the pages claimed and is refused (`validate_rerun`). Returns `(token, pages claimed)`.
+    the pages claimed and is refused (`validate_rerun`). A re-run the models read holds its pages on the
+    book's account in the same transaction (D106, run key = the token); with a `user` who is not a superuser
+    fewer available pages than pages to read refuse it with the numbers (`accounts.billing.QuotaExceeded`)
+    and the claims roll back. Returns `(token, pages claimed)`.
     """
     with transaction.atomic():
         Book.objects.select_for_update().filter(pk=book.pk).first()
         validate_rerun(book, stage)
         pages = book.pages.filter(is_excluded=False).exclude(status__in=APPROVED_PAGE_STATUSES)
-        return runs.claim_pages(pages)
+        token, count = runs.claim_pages(pages)
+        if count and reads_with_models(book, stage):
+            claimed = book.pages.filter(run_token=token).values_list("pk", flat=True)
+            billing.hold(book, claimed, token, user=user)
+        return token, count
 
 
-def queue_book_rerun(book: Book, stage: str) -> int:
+def queue_book_rerun(book: Book, stage: str, user=None) -> int:
     """The «⋯» menu's book re-run: validate it, claim its pages and queue `rerun_book_from`.
 
     The claim is taken here, in the request, so a second click (or tab) is refused at once with a clear
     message instead of queueing a second run of every page (item 29). Raises ValueError (Arabic): see
-    `validate_rerun`, and `BROKER_ERROR` when the task cannot be queued (the claims are given back).
-    Returns the number of pages claimed.
+    `validate_rerun`, `QuotaExceeded` (D106: `_claim_book_rerun`, for `user`), and `BROKER_ERROR` when the
+    task cannot be queued (the claims and the quota holds are given back). Returns the number of pages
+    claimed.
     """
     from books.tasks import rerun_book_from
 
-    token, count = _claim_book_rerun(book, stage)
+    token, count = _claim_book_rerun(book, stage, user=user)
     try:
         rerun_book_from.delay(book.pk, stage, run=token)
     except Exception as exc:  # noqa: BLE001 - the broker refused (Redis down): nothing will run
         log.warning("queue_book_rerun: book %s not queued: %s", book.pk, exc)
         runs.release_book(book.pk, token)
+        billing.release_run(token)
         raise ValueError(BROKER_ERROR) from exc
     return count
 
@@ -761,7 +806,8 @@ def rerun_book(book: Book, stage: str, run: str | None = None) -> int:
     reopened, see `APPROVED_PAGE_STATUSES`). Every other page is first put back to the stage's input
     state, then the chains are enqueued and the book status is re-derived (`processing` or `ocr` while
     work is pending), so the book cannot settle before its last page is through. Raises ValueError (see
-    `validate_rerun`); the claims are then given back.
+    `validate_rerun`); the claims are then given back, with the run's quota holds (D106), and so are those of
+    the pages it does not run.
     """
     if run is None:
         run, _count = _claim_book_rerun(book, stage)
@@ -770,6 +816,7 @@ def rerun_book(book: Book, stage: str, run: str | None = None) -> int:
             validate_rerun(book, stage, run=run)
         except ValueError:
             runs.release_book(book.pk, run)
+            billing.release_run(run)
             raise
     pages = list(book.pages.filter(run_token=run).order_by("number"))
     for page in pages:
@@ -778,6 +825,7 @@ def rerun_book(book: Book, stage: str, run: str | None = None) -> int:
     for page in pages:
         if page.status in APPROVED_PAGE_STATUSES or page.is_excluded:
             runs.release(page.pk, run)
+            billing.release(page)
     pages = [page for page in pages if page.status not in APPROVED_PAGE_STATUSES and not page.is_excluded]
     if not pages:
         return 0
@@ -796,6 +844,7 @@ def rerun_book(book: Book, stage: str, run: str | None = None) -> int:
         except BaseException:  # nothing more can be queued: the pages not reached give their claims back
             for rest in pages[i + 1 :]:
                 runs.release(rest.pk, run)
+                billing.release(rest)
             raise
     book.refresh_status()
     return queued
@@ -819,6 +868,8 @@ def toggle_exclude(page: Page) -> Page:
     else:
         page.status = page._completed_status()
     page.save(update_fields=["is_excluded", "status", "error_from", "error_message"])
+    if page.is_excluded:
+        billing.release(page)  # D106: an excluded page is not read, its quota hold goes
     book = page.book
     # A book that has not started yet stays `uploaded`, an ingest error stays; otherwise the derived status
     # may change (the all-failed error is `refresh_status`'s own).

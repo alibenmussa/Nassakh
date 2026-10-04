@@ -249,11 +249,18 @@ def test_nav_context_processor(users):
     request = RequestFactory().get("/")
     request.user = users.admin
     # no organisation yet: the sidebar shows no «المؤسسة» (D98: accounts/test_fonts.py)
-    assert nav(request) == {"is_admin": True, "role": "admin", "role_label": "مدير", "nav_organization": None}
+    expected = {"is_admin": True, "role": "admin", "role_label": "مدير", "nav_organization": None}
+    assert nav(request) == {**expected, "nav_quota": None}  # D106: no organisation, no «الرصيد»
     request.user = users.editor
     assert nav(request)["is_admin"] is False
     request.user = AnonymousUser()
-    assert nav(request) == {"is_admin": False, "role": None, "role_label": "", "nav_organization": None}
+    assert nav(request) == {
+        "is_admin": False,
+        "role": None,
+        "role_label": "",
+        "nav_organization": None,
+        "nav_quota": None,
+    }
 
 
 # ---------------------------------------------------------------- protected media

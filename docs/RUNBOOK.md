@@ -1158,3 +1158,146 @@ is the solo process again.
 | rows «اكتمل جزئيًا» | one model failed inside the job (its error is on the row and on its OcrRun); the other model's reading was kept |
 | pages are read one at a time | the gpu worker was started before `OCR_BACKEND=runpod`: restart it with `make gpu-worker` (threads) |
 | rows stay «قيد التنفيذ» | the gpu worker was stopped mid-request; they read «لم يكتمل (توقّف العامل؟)» after the timeout and can be deleted |
+
+## 19. Accounts, sign-up and the page quota (D106)
+
+Spec `docs/CHALLENGE_SPEC.md` §1. An account is an organisation or an individual (an organisation of one member,
+so D102's scoping holds). A page is one page the models read; every account but an unlimited one reads pages
+from its quota.
+
+**Upgrading.** `make migrate` (`accounts.0004_accounts_quota`, `accounts.0005_unlimited_and_plans`): every
+organisation that exists becomes unlimited (never limited, never charged) and the three plans are seeded
+($49 / 1,500, $149 / 5,000, $349 / 15,000 pages, 365 days). Restart the web server and both workers (the OCR task
+charges the pages). Existing users keep signing in with their username; the login takes an email too.
+
+**Sign-up.** `/accounts/signup/` (linked from the login page), open to anyone: name, email (the login), password,
+then an organisation (name, type, country, website) or an individual account (country). The user is inactive
+until the link of the confirmation email is followed (valid `EMAIL_CONFIRM_DAYS`); it activates the account and
+signs it in, once. The user is the account's admin, in the `editor` group. The login page tells an unconfirmed
+account so (only with its right password) and offers «أرسل رابط التأكيد مجددًا» (one email a minute, five a day
+per address, through the cache). With `SIGNUP_PAGE_QUOTA` > 0 a new account gets that many pages for
+`SIGNUP_QUOTA_DAYS` days.
+
+```sh
+# .env, production
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.example.com
+EMAIL_PORT=587
+EMAIL_HOST_USER=…
+EMAIL_HOST_PASSWORD=…
+DEFAULT_FROM_EMAIL=نسّاخ <no-reply@nassakh.example>
+SITE_URL=https://nassakh.example     # the links in emails; empty: the request's address
+```
+
+In development the console backend prints the email (and its link) in the `make web` terminal.
+
+**«الفوترة»** (superusers, sidebar; `/accounts/billing/`; anyone else gets 404): every account with its
+available pages, held pages, nearest expiry and pages read this month. An account's page: its grants (add one
+from a plan, which fills the pages, validity, price and currency, or by hand: pages, start, expiry date or
+validity in days, amount, currency, reference, note; «إلغاء…» revokes one), «جعله غير محدود», its usage by book
+and its ledger. «الباقات» edits the plans or takes one off sale. Django admin shows the same rows read-only.
+Members see «الرصيد: N صفحة» (or «غير محدود») in the sidebar, with the nearest expiry when it is under 14 days,
+and the live grants and usage by book on «المؤسسة».
+
+**The rules.**
+- Available = the remaining pages of the live grants (started, unexpired, not revoked) − the pages held for runs
+  not read yet. Pages are taken from the grant that expires first.
+- The upload refuses a book whose pages to read, (pages − skipped first − skipped last) × pages per sheet, exceed
+  the available pages: «هذا الكتاب نحو 300 صفحة ورصيدك المتاح 20 صفحة.» (the browser says it on choosing the file;
+  the server checks again; nothing is saved).
+- «بدء المعالجة», the book's «إعادة المعالجة» (or «إعادة التخطيط» of a started book) and a page's re-run or retry
+  check again and refuse with the numbers; otherwise they hold one page each.
+- A page is charged when the models' reading ends with it read (`ocr_done`): once per run (a requeue or a retry is
+  the same run), again for a later re-run. An error, an exclusion or a run that died releases the hold at no cost.
+  Layout, re-layout in «التخطيط» and Tesseract alone are free.
+- Superusers are not checked; the book's account is still charged unless it is unlimited. Unlimited accounts and
+  books without an organisation are never charged.
+- Nothing left (a superuser's run, a guide change that re-reads a page): the page is still charged, on debt;
+  the account's available pages go below zero and its next grant pays the debt first.
+
+**Daily.** `manage.py expire_quota` writes the `expire` entries of the grants that expired (expiry already
+counts when the balance is read; this records it). Cron, once a day:
+
+```sh
+cd /path/to/Nassakh && .venv/bin/python manage.py expire_quota
+```
+
+**The demo account** (once, after D106 lands): `manage.py make_demo_account --email demo@… --password … --books 29 31
+41` creates «حساب التجربة» (unlimited) and its user and moves the books into it, with the faces only they use and
+the templates taken from them; a face other books still use stays, and the moved book falls back to Amiri.
+
+| Symptom | Fix |
+|---|---|
+| no confirmation email arrives | development: look in the `make web` terminal; production: the SMTP settings (the log names the failure: «the confirmation email … could not be sent») |
+| the link in the email points at `localhost` | set `SITE_URL` to the site's https address |
+| «تقرأ هذه المعالجة … ورصيدك المتاح …» | add pages on «الفوترة» (or make the account unlimited) |
+| available pages stay held after a worker was killed | a run whose messages were lost keeps its pages held until the page runs again; `release_page_runs --book ID` releases its claims and holds at once |
+
+## 20. Search, quotation checking and the MCP server (D107, D108)
+
+**What it searches.** The review layer: the `ocr.Line` rows of the account's books (what was checked against the
+page images), not the manuscript. The author's text (`body`: body, verse and heading lines) and the editor's notes
+(`notes`: footnote lines, `ocr.services.line_kind`) are indexed apart, one `research.PageText` row per page and kind,
+each word with its line, its token and its state: `reviewed` (a reviewer settled it, or its page was approved),
+`doubtful` (OCR flagged it, `conf: low`, and nobody settled it) or `unreviewed` (a confident reading nobody checked).
+
+**The index follows the lines by itself:** OCR finalise, every review action (`review.services.refresh_page_text`,
+reopen) and, before each search, a stamp check that rebuilds what changed behind their back. Build it once for the
+books read before D107, and after a change of the normal form (`research.index.INDEX_VERSION`):
+
+```sh
+make reindex                                   # every book with lines
+.venv/bin/python manage.py research_reindex 29 31 41
+```
+
+On PostgreSQL migration `research 0002` adds a `pg_trgm` GIN index on `PageText.norm` (it needs the right to
+`CREATE EXTENSION pg_trgm`; without it a warning is logged and searches still work, row by row).
+
+**The page «البحث والتحقق»** (`/research/`, sidebar, every member): «البحث» (phrase, then every word on a page, then
+fuzzy; المتن / الحواشي; a book), «التحقق من نص» (exact · differs · needs image check · not found · too short, the diff
+word by word, the clip, «نسخ الإحالة»), «ربط مساعد ذكي» (access keys and ready snippets). The same services answer
+`POST /api/research/search`, `POST /api/research/verify`, `GET /api/research/books`,
+`GET /api/research/passages/<id>/`, `GET|POST /api/research/keys`, `POST /api/research/keys/<id>/revoke`.
+
+**Page clips** (`/research/clip/<signed token>/`): a WebP crop of the printed lines, highlighted, served without a
+session for `CLIP_LINK_DAYS` days (7), cached under `media/books/<id>/clips/`. Changing `SECRET_KEY` voids every
+link. Citations take the editor (المحقق), publisher, city and edition from «التنسيق» → book details, the year from
+the book's «سنة النشر الأصلية» and the volume from its «الجزء»; the printed page from `Page.printed_number`, inferred
+from the pages around when it is missing or misread («صفحة المسح N» when nothing is known).
+
+**The MCP server** runs beside Django:
+
+```sh
+make mcp                                       # = manage.py mcp_serve → http://127.0.0.1:8001/mcp
+.venv/bin/python manage.py mcp_serve --host 0.0.0.0 --port 8001
+curl -s http://127.0.0.1:8001/healthz          # {"ok": true, "mcp": "/mcp"}
+```
+
+Streamable HTTP, stateless, JSON responses; tools `list_books`, `search`, `get_passage`, `verify_quote`, `cite`
+(read-only). Every request needs `Authorization: Bearer nsk_…`, a key its user made on «ربط مساعد ذكي» (no key, an
+unknown or revoked one → 401); the key sees its user's books only. `MCP_RATE_LIMIT` calls a minute per key (60);
+every call is logged (`research.ToolCall`, Django admin «سجل استدعاءات الأدوات»). Settings: `MCP_HOST`, `MCP_PORT`,
+`MCP_PUBLIC_URL` (the address shown in the snippets; in production `https://<domain>/mcp`), `SITE_URL` (the start of
+the clip and review links the tools return). In production the web server proxies `/mcp` (and `/healthz` if wanted)
+to it on the same domain; the Host must be the public URL's host or one of `ALLOWED_HOSTS`.
+
+A client, once a key is made (the page shows these with the key filled in):
+
+```sh
+claude mcp add --transport http nassakh https://<domain>/mcp --header "Authorization: Bearer nsk_…"
+```
+
+```json
+{"mcpServers": {"nassakh": {"type": "http", "url": "https://<domain>/mcp", "headers": {"Authorization": "Bearer nsk_…"}}}}
+```
+
+Claude Desktop (config file, Node.js): `{"mcpServers": {"nassakh": {"command": "npx", "args": ["-y", "mcp-remote",
+"https://<domain>/mcp", "--header", "Authorization:${NASSAKH_AUTH}"], "env": {"NASSAKH_AUTH": "Bearer nsk_…"}}}}`.
+
+| Symptom | Fix |
+|---|---|
+| a search finds nothing in a book read before D107 | `manage.py research_reindex <book>` |
+| the client gets 401 | the key is wrong or revoked: make a new one on «ربط مساعد ذكي» |
+| the client gets 421 «Invalid Host header» | add the domain to `ALLOWED_HOSTS` or set `MCP_PUBLIC_URL` |
+| a clip link answers 410 | it is older than `CLIP_LINK_DAYS`: search again for a fresh link |
+| the links in the tools' answers point at `localhost:8000` | set `SITE_URL` to the site's https address |

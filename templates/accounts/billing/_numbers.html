@@ -1,0 +1,32 @@
+{# An account's numbers (D106): «غير محدود», or available / balance / held / read this month (+ the debt and the nearest expiry). Context: s (accounts.billing.Summary). #}
+{% load organization %}<div class="og-numbers" data-quota-numbers>
+  {% if s.unlimited %}
+  <div class="og-number">
+    <span class="og-number-value">غير محدود</span>
+    <span class="meta">لا يُحدّ هذا الحساب ولا تُحتسب صفحاته</span>
+  </div>
+  {% else %}
+  <div class="og-number">
+    <span class="og-number-value{% if s.available <= 0 %} is-empty{% endif %}"><bdi class="num">{{ s.available }}</bdi></span>
+    <span class="meta">صفحة متاحة</span>
+  </div>
+  <div class="og-number">
+    <span class="og-number-value"><bdi class="num">{{ s.balance }}</bdi></span>
+    <span class="meta">الرصيد{% if s.debt %} (بعد دَين {{ s.debt }}){% endif %}</span>
+  </div>
+  <div class="og-number">
+    <span class="og-number-value"><bdi class="num">{{ s.held }}</bdi></span>
+    <span class="meta">محجوزة لصفحات تُقرأ الآن</span>
+  </div>
+  {% endif %}
+  <div class="og-number">
+    <span class="og-number-value"><bdi class="num">{{ s.used_this_month }}</bdi></span>
+    <span class="meta">قُرئت هذا الشهر</span>
+  </div>
+  {% if not s.unlimited and s.next_expiry %}
+  <div class="og-number">
+    <span class="og-number-value"><bdi class="num">{{ s.next_expiry|date:"Y-m-d" }}</bdi></span>
+    <span class="meta">ينتهي فيه {{ s.expiring|ar_pages }}{% if s.expiring_soon %} · قريبًا{% endif %}</span>
+  </div>
+  {% endif %}
+</div>

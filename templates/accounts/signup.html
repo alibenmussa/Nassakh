@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% comment %}
+«حساب جديد» (D106; accounts.views.signup): open to anyone, linked from the login page. The person (name, email: the
+login, password), then the account kind: an organisation (its name, type, country, website) or an individual (the
+country). The organisation's fields show only for an organisation (a small Alpine state); the server checks the same.
+Context: form (SignUpForm), kinds (Organization.Kind).
+{% endcomment %}
+{% block head_title %}حساب جديد · نسّاخ{% endblock %}
+
+{% block body %}
+<main class="auth-screen">
+  <div class="card auth-card og-auth-wide">
+    <div class="auth-brand">
+      <span class="brand-mark brand-mark-lg" aria-hidden="true">ن</span>
+      <h1 class="auth-title">حساب جديد في نسّاخ</h1>
+      <p class="meta">لمؤسسة تنشر الكتب أو تحقّقها، أو لباحث بمفرده. كتب الحساب لا يراها غير أعضائه.</p>
+    </div>
+
+    {% include "accounts/_auth_messages.html" %}
+    {% if form.non_field_errors %}
+    <div class="banner banner-danger" role="alert">
+      <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+      <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'accounts:signup' %}" class="stack" novalidate
+          x-data="{ kind: '{{ form.kind.value|default:kinds.ORGANIZATION|escapejs }}' }" data-signup>
+      {% csrf_token %}
+
+      {% include "books/_field.html" with field=form.full_name %}
+      {% include "books/_field.html" with field=form.email %}
+      {% include "books/_field.html" with field=form.password %}
+
+      <div class="field">
+        <span class="label" id="su-kind-label">{{ form.kind.label }}</span>
+        <div class="segmented og-auth-kinds" role="radiogroup" aria-labelledby="su-kind-label">
+          {% for value, label in kinds.choices %}
+          <label>
+            <input type="radio" name="{{ form.kind.html_name }}" value="{{ value }}" x-model="kind"{% if form.kind.value == value or not form.kind.value and value == kinds.ORGANIZATION %} checked{% endif %}>
+            <span>{% if value == kinds.ORGANIZATION %}مؤسسة{% else %}حساب فردي{% endif %}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <p class="help" x-show="kind === '{{ kinds.ORGANIZATION }}'">دار نشر أو مركز بحث أو جامعة أو مكتبة.</p>
+        <p class="help" x-show="kind === '{{ kinds.INDIVIDUAL }}'" x-cloak>لباحث أو محقّق يعمل وحده.</p>
+        {% for error in form.kind.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+      </div>
+
+      <div class="stack" x-show="kind === '{{ kinds.ORGANIZATION }}'" {% if form.kind.value == kinds.INDIVIDUAL %}x-cloak{% endif %} data-org-fields>
+        <div class="field">
+          <label class="label" for="{{ form.org_name.id_for_label }}">{{ form.org_name.label }}<span class="req" aria-hidden="true">*</span></label>
+          {{ form.org_name }}
+          {% for error in form.org_name.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+        </div>
+        <div class="field">
+          <label class="label" for="{{ form.org_type.id_for_label }}">{{ form.org_type.label }}<span class="req" aria-hidden="true">*</span></label>
+          {{ form.org_type }}
+          {% for error in form.org_type.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+        </div>
+      </div>
+
+      {% include "books/_field.html" with field=form.country %}
+      <div x-show="kind === '{{ kinds.ORGANIZATION }}'" {% if form.kind.value == kinds.INDIVIDUAL %}x-cloak{% endif %}>
+        {% include "books/_field.html" with field=form.website %}
+      </div>
+
+      <button type="submit" class="btn btn-primary w-full">إنشاء الحساب</button>
+      <p class="help">نرسل إلى بريدك رابطًا يفعّل الحساب.</p>
+    </form>
+
+    <p class="og-auth-alt meta">لك حساب؟ <a class="link" href="{% url 'accounts:login' %}">سجّل الدخول</a></p>
+  </div>
+</main>
+{% endblock %}

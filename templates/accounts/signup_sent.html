@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% comment %}
+«تحقق من بريدك» (D106; accounts.views.signup_sent): after the sign-up, the address the confirmation link went to and
+«أرسل الرابط مجددًا» (rate-limited). Context: email, days (the link's validity, in words).
+{% endcomment %}
+{% block head_title %}تحقق من بريدك · نسّاخ{% endblock %}
+
+{% block body %}
+<main class="auth-screen">
+  <div class="card auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark brand-mark-lg" aria-hidden="true">ن</span>
+      <h1 class="auth-title">تحقق من بريدك</h1>
+    </div>
+
+    {% include "accounts/_auth_messages.html" %}
+
+    <p class="og-auth-text">أرسلنا رابط التأكيد إلى <bdi dir="ltr" class="og-auth-email">{{ email }}</bdi>. افتحه لتفعيل حسابك؛ يبقى صالحًا {{ days }}.</p>
+    <p class="help">لم تصلك الرسالة؟ تفقّد مجلد الرسائل غير المرغوب فيها، أو اطلب رابطًا جديدًا.</p>
+
+    <form method="post" action="{% url 'accounts:signup_resend' %}" class="stack-sm" data-resend>
+      {% csrf_token %}
+      <input type="hidden" name="email" value="{{ email }}">
+      <input type="hidden" name="back" value="sent">
+      <button type="submit" class="btn w-full">أرسل الرابط مجددًا</button>
+    </form>
+
+    <p class="og-auth-alt meta"><a class="link" href="{% url 'accounts:login' %}">العودة إلى تسجيل الدخول</a></p>
+  </div>
+</main>
+{% endblock %}

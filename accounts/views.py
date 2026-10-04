@@ -1,8 +1,10 @@
-"""Login and logout as function-based views around `django.contrib.auth`; the organisation's page (D98):
-its fonts (upload, rename, remove, restore, delete) and its format templates (from a book, rename, update,
-delete, apply to a book after a preview of the changes); the organisation's font files. The page is the
-organisation of the user's membership; a user without one gets 403 «لا تنتمي إلى مؤسسة بعد…»; a superuser
-works in the first organisation or the one chosen with the switcher (`organization_switch`, D102)."""
+"""Login and logout as function-based views around `django.contrib.auth`; the sign-up (D106: the form,
+«تحقق من بريدك», the confirmation link, sending the link again); the organisation's page (D98): its fonts
+(upload, rename, remove, restore, delete), its format templates (from a book, rename, update, delete, apply
+to a book after a preview of the changes) and its page quota, read-only (D106); the organisation's font
+files. The page is the organisation of the user's membership; a user without one gets 403 «لا تنتمي إلى
+مؤسسة بعد…»; a superuser works in the first organisation or the one chosen with the switcher
+(`organization_switch`, D102)."""
 
 from __future__ import annotations
 
@@ -21,9 +23,10 @@ from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_GET, require_POST
 
+from accounts import billing, styles
 from accounts import fonts as org_fonts
-from accounts import styles
-from accounts.forms import LoginForm
+from accounts import signup as signups
+from accounts.forms import LoginForm, SignUpForm
 from accounts.models import FONT_STYLE_LABELS, FONT_STYLES, Organization, OrganizationFont, StyleTemplate
 from accounts.services import (
     NOT_A_MEMBER,
@@ -55,7 +58,11 @@ def login(request: HttpRequest) -> HttpResponse:
             return redirect(next_url or settings.LOGIN_REDIRECT_URL)
     else:
         form = LoginForm(request)
-    return render(request, "accounts/login.html", {"form": form, "next": next_url})
+    return render(
+        request,
+        "accounts/login.html",
+        {"form": form, "next": next_url, "unconfirmed_email": form.unconfirmed_email},
+    )
 
 
 @require_POST
@@ -63,6 +70,84 @@ def logout(request: HttpRequest) -> HttpResponse:
     """End the session (POST only) and return to the login page."""
     auth_logout(request)
     return redirect(settings.LOGOUT_REDIRECT_URL)
+
+
+# ====================================================================== sign-up (D106)
+
+SIGNUP_EMAIL_KEY = "nassakh_signup_email"  # the address «تحقق من بريدك» names
+RESEND_ANSWER = "إن كان لهذا البريد حساب لم يُفعَّل بعد فقد أرسلنا إليه رابطًا جديدًا. تفقّد بريدك بعد قليل."
+
+
+@sensitive_post_parameters("password")
+@csrf_protect
+@never_cache
+def signup(request: HttpRequest) -> HttpResponse:
+    """«حساب جديد»: open to anyone. Creates the inactive account (`accounts.signup.create_account`), sends the
+    confirmation email and shows «تحقق من بريدك»."""
+    if request.user.is_authenticated:
+        return redirect(settings.LOGIN_REDIRECT_URL)
+    if request.method == "POST":
+        form = SignUpForm(request.POST)
+        if form.is_valid():
+            user = signups.create_account(form.cleaned_data)
+            signups.may_send(user.email)  # the first email counts: «أرسل الرابط مجددًا» waits a minute
+            if not signups.send_confirmation(user, request):
+                messages.error(
+                    request, "أُنشئ حسابك لكن تعذّر إرسال رسالة التأكيد الآن. اطلبها مجددًا بعد قليل."
+                )
+            request.session[SIGNUP_EMAIL_KEY] = user.email
+            return redirect("accounts:signup_sent")
+    else:
+        form = SignUpForm()
+    return render(request, "accounts/signup.html", {"form": form, "kinds": Organization.Kind})
+
+
+@never_cache
+@require_GET
+def signup_sent(request: HttpRequest) -> HttpResponse:
+    """«تحقق من بريدك»: the address the link went to and «أرسل الرابط مجددًا»."""
+    email = request.session.get(SIGNUP_EMAIL_KEY, "")
+    if not email:
+        return redirect("accounts:signup")
+    return render(
+        request,
+        "accounts/signup_sent.html",
+        {"email": email, "days": signups.days_phrase(signups.confirm_days())},
+    )
+
+
+@csrf_protect
+@require_POST
+def signup_resend(request: HttpRequest) -> HttpResponse:
+    """Send the confirmation link again (rate-limited); the answer is the same whatever the address."""
+    email = " ".join(str(request.POST.get("email") or "").split())[:254]
+    if email:
+        signups.resend(email, request)
+    messages.info(request, RESEND_ANSWER)
+    back = request.POST.get("back")
+    if back == "sent" and request.session.get(SIGNUP_EMAIL_KEY):
+        return redirect("accounts:signup_sent")
+    return redirect("accounts:login")
+
+
+@never_cache
+@require_GET
+def confirm_email(request: HttpRequest, token: str) -> HttpResponse:
+    """The link of the confirmation email: activates the account and signs it in (once); an expired or broken
+    link says so and offers a new one."""
+    try:
+        user, activated = signups.confirm(token)
+    except signups.ConfirmError as exc:
+        return render(request, "accounts/confirm_failed.html", {"expired": exc.code == "expired"}, status=400)
+    if not activated:
+        if request.user.is_authenticated and request.user.pk == user.pk:
+            return redirect(settings.LOGIN_REDIRECT_URL)
+        messages.info(request, "حسابك مفعّل من قبل. سجّل الدخول ببريدك وكلمة المرور.")
+        return redirect("accounts:login")
+    auth_login(request, user, backend="accounts.backends.EmailBackend")
+    request.session.pop(SIGNUP_EMAIL_KEY, None)
+    messages.success(request, "فُعّل حسابك. أهلًا بك في نسّاخ.")
+    return redirect(settings.LOGIN_REDIRECT_URL)
 
 
 # ====================================================================== the organisation's page
@@ -158,6 +243,10 @@ def organization(request: HttpRequest) -> HttpResponse:
             "max_mb": org_fonts.max_bytes() // (1024 * 1024),
             "accept": ",".join(org_fonts.EXTENSIONS),
             "members": organization.memberships.count(),
+            # D106: the page quota, read-only (the superuser manages it on «الفوترة»)
+            "quota": billing.summary(organization),
+            "quota_grants": list(billing.live_grants(organization).select_related("plan")),
+            "quota_usage": billing.usage_by_book(organization)[:50],
         },
     )
 

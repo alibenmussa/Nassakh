@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% comment %}
+An account on «الفوترة» (D106; accounts.billing_views.account), superusers only:
+- its numbers (available, balance, held, debt, read this month) and «غير محدود»;
+- «الأرصدة»: every grant with its state (live, not started, expired, revoked) and «إلغاء…»; the form adds one from a plan
+  (a small Alpine component fills pages, validity, amount and currency from the chosen plan) or by hand;
+- «الاستعمال حسب الكتاب» and «السجل» (the ledger, newest first; signed pages).
+Context: organization, summary, grants ([{grant, state}]), ledger, usage, members, plans, form (GrantForm).
+{% endcomment %}
+{% load organization %}
+{% block head_title %}{{ organization.name }} · الفوترة · نسّاخ{% endblock %}
+{% block title %}{{ organization.name }}{% endblock %}
+{% block header_actions %}<a class="btn btn-ghost btn-sm" href="{% url 'accounts:billing' %}">كل الحسابات</a>{% endblock %}
+
+{% block content %}
+<div class="og-page stack-lg">
+  <div class="page-header">
+    <p class="meta">
+      {{ organization.get_kind_display }}{% if organization.org_type %} · {{ organization.get_org_type_display }}{% endif %}{% if organization.country %} · {{ organization.country }}{% endif %}{% if organization.website %} · <a class="link" href="{{ organization.website }}" rel="noopener noreferrer" target="_blank" dir="ltr">{{ organization.website }}</a>{% endif %}
+      · أُنشئ <bdi class="num">{{ organization.created_at|date:"Y-m-d" }}</bdi>
+      · {% for m in members %}<bdi dir="auto">{{ m.user.get_full_name|default:m.user.get_username }}</bdi> <span dir="ltr">({{ m.user.email|default:m.user.get_username }}{% if not m.user.is_active %}، غير مفعّل{% endif %})</span>{% if not forloop.last %}، {% endif %}{% empty %}لا أعضاء{% endfor %}
+    </p>
+    <form method="post" action="{% url 'accounts:billing_unlimited' organization.pk %}" class="og-inline-form" data-unlimited>
+      {% csrf_token %}
+      <input type="hidden" name="unlimited" value="{% if organization.unlimited %}0{% else %}1{% endif %}">
+      {% if organization.unlimited %}
+      <span class="badge badge-accent">غير محدود</span>
+      <button type="submit" class="btn btn-sm">إيقاف «غير محدود»</button>
+      {% else %}
+      <button type="submit" class="btn btn-sm">جعله غير محدود</button>
+      {% endif %}
+    </form>
+  </div>
+
+  {% if form.non_field_errors %}
+  <div class="banner banner-danger" role="alert">
+    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+    <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+  </div>
+  {% endif %}
+
+  {# ---------------------------------------------------------------- numbers #}
+  {% include "accounts/billing/_numbers.html" with s=summary %}
+
+  {# ---------------------------------------------------------------- grants #}
+  <section class="card stack" id="grants" aria-labelledby="bl-grants-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-grants-title">الأرصدة</h2>
+      <span class="meta">تُؤخذ الصفحات من الرصيد الذي ينتهي أولًا؛ الملغى والمنتهي لا يُحتسبان</span>
+    </div>
+    {% if grants %}
+    <div class="table-wrap">
+      <table class="table og-bill-table">
+        <thead>
+          <tr>
+            <th scope="col">الرصيد</th>
+            <th scope="col" class="num">الصفحات</th>
+            <th scope="col" class="num">المتبقي</th>
+            <th scope="col">المدة</th>
+            <th scope="col">المبلغ والمرجع</th>
+            <th scope="col"><span class="sr-only">إجراءات</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in grants %}
+          {% with g=row.grant %}
+          <tr data-grant="{{ g.pk }}" data-state="{{ row.state }}">
+            <td>
+              <div>{{ g.get_kind_display }}{% if g.plan %} · {{ g.plan.name }}{% endif %}</div>
+              <div class="status">
+                <span class="dot {% if row.state == 'live' %}dot-success{% elif row.state == 'future' %}dot-accent{% else %}dot-neutral{% endif %}" aria-hidden="true"></span>
+                {% if row.state == 'live' %}ساري{% elif row.state == 'future' %}لم يبدأ{% elif row.state == 'expired' %}انتهى{% else %}ملغى <bdi class="num">{{ g.revoked_at|date:"Y-m-d" }}</bdi>{% endif %}
+              </div>
+              {% if g.note %}<div class="meta">{{ g.note }}</div>{% endif %}
+            </td>
+            <td class="num">{{ g.pages }}</td>
+            <td class="num">{% if row.state == 'live' or row.state == 'future' %}{{ g.remaining }}{% else %}<span class="meta">{{ g.remaining }}</span>{% endif %}</td>
+            <td>
+              <bdi class="num">{{ g.starts_at|date:"Y-m-d" }}</bdi> ←
+              {% if g.expires_at %}<bdi class="num">{{ g.expires_at|date:"Y-m-d" }}</bdi>{% else %}<span class="meta">لا ينتهي</span>{% endif %}
+            </td>
+            <td>
+              {% if g.amount is not None %}<bdi class="num" dir="ltr">{{ g.amount }} {{ g.currency }}</bdi>{% else %}<span class="meta">—</span>{% endif %}
+              {% if g.reference %}<div class="meta">المرجع: <bdi dir="auto">{{ g.reference }}</bdi></div>{% endif %}
+              <div class="meta">{{ g.created_by.get_username|default:"النظام" }} · <bdi class="num">{{ g.created_at|date:"Y-m-d" }}</bdi></div>
+            </td>
+            <td class="og-actions" x-data="{ ask: false }">
+              {% if row.state != 'revoked' %}
+              <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true">إلغاء…</button>
+              <template x-teleport="body">
+                <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
+                  <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="bl-revoke-{{ g.pk }}" @keydown.escape.stop.prevent="ask = false">
+                    <h2 class="rv-modal-title" id="bl-revoke-{{ g.pk }}">إلغاء رصيد {{ g.pages|ar_pages }}؟</h2>
+                    <p class="meta">لا تُحتسب صفحاته المتبقية (<bdi class="num">{{ g.remaining }}</bdi>) بعد الآن، ويُسجَّل ذلك في السجل. لا يمكن التراجع؛ يُضاف رصيد جديد إن لزم.</p>
+                    <form method="post" action="{% url 'accounts:billing_grant_revoke' g.pk %}" class="rv-modal-actions">
+                      {% csrf_token %}
+                      <button type="button" class="btn" @click="ask = false">تراجع</button>
+                      <button type="submit" class="btn btn-danger">إلغاء الرصيد</button>
+                    </form>
+                  </div>
+                </div>
+              </template>
+              {% endif %}
+            </td>
+          </tr>
+          {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="help">لا رصيد لهذا الحساب بعد.{% if not organization.unlimited %} لا يبدأ معالجة كتاب حتى يُضاف له رصيد.{% endif %}</p>
+    {% endif %}
+
+    {# the form: from a plan (its values fill the blanks) or by hand #}
+    <form method="post" action="{% url 'accounts:billing_grant_add' organization.pk %}" class="og-upload stack" novalidate data-grant-form
+          x-data="{ fill(select) { const o = select.selectedOptions[0]; const f = select.form; if (!o || !o.value) return; f.pages.value = o.dataset.pages; f.days.value = o.dataset.days; f.expires_on.value = ''; f.amount.value = o.dataset.price; f.currency.value = o.dataset.currency; f.kind.value = 'purchase'; } }">
+      {% csrf_token %}
+      <h3 class="group-label">إضافة رصيد</h3>
+      <div class="og-bill-grid">
+        <div class="field">
+          <label class="label" for="bl-plan">{{ form.plan.label }}</label>
+          <select id="bl-plan" name="plan" class="select" @change="fill($el)">
+            <option value="">بلا باقة</option>
+            {% for plan in plans %}<option value="{{ plan.pk }}" data-pages="{{ plan.pages }}" data-days="{{ plan.validity_days }}" data-price="{{ plan.price }}" data-currency="{{ plan.currency }}"{% if form.plan.value|stringformat:'s' == plan.pk|stringformat:'s' %} selected{% endif %}>{{ plan.name }} · {{ plan.pages|ar_pages }} · {{ plan.price }} {{ plan.currency }}</option>{% endfor %}
+          </select>
+        </div>
+        {% include "books/_field.html" with field=form.kind %}
+        {% include "books/_field.html" with field=form.pages %}
+        {% include "books/_field.html" with field=form.starts_on %}
+        {% include "books/_field.html" with field=form.expires_on %}
+        {% include "books/_field.html" with field=form.days %}
+        {% include "books/_field.html" with field=form.amount %}
+        {% include "books/_field.html" with field=form.currency %}
+        {% include "books/_field.html" with field=form.reference %}
+        {% include "books/_field.html" with field=form.note %}
+      </div>
+      <div><button type="submit" class="btn btn-primary btn-sm">إضافة الرصيد</button></div>
+    </form>
+  </section>
+
+  {# ---------------------------------------------------------------- usage #}
+  <section class="card stack" id="usage" aria-labelledby="bl-usage-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-usage-title">الاستعمال حسب الكتاب</h2>
+      <span class="meta">صفحات قرأتها النماذج، وكل إعادة معالجة ناجحة تُحتسب من جديد</span>
+    </div>
+    {% include "accounts/billing/_usage.html" with link_books=True %}
+  </section>
+
+  {# ---------------------------------------------------------------- ledger #}
+  <section class="card stack" id="ledger" aria-labelledby="bl-ledger-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-ledger-title">السجل</h2>
+      <span class="meta">آخر 200 قيد، الأحدث أولًا</span>
+    </div>
+    {% if ledger %}
+    <div class="table-wrap">
+      <table class="table og-bill-table og-ledger">
+        <thead>
+          <tr>
+            <th scope="col">في</th>
+            <th scope="col">القيد</th>
+            <th scope="col" class="num">الصفحات</th>
+            <th scope="col">التفاصيل</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in ledger %}
+          <tr data-entry="{{ e.kind }}">
+            <td><bdi class="num">{{ e.created_at|date:"Y-m-d H:i" }}</bdi></td>
+            <td>{{ e.get_kind_display }}</td>
+            <td class="num"><bdi dir="ltr" class="{% if e.pages < 0 %}og-minus{% else %}og-plus{% endif %}">{% if e.pages > 0 %}+{% endif %}{{ e.pages }}</bdi></td>
+            <td class="meta">
+              {% if e.book %}<a class="link" href="{% url 'books:detail' e.book_id %}">{{ e.book.title }}</a>{% if e.page %} · ص <bdi class="num">{{ e.page.number }}</bdi>{% endif %}{% elif e.kind == 'consume' %}كتاب محذوف{% endif %}
+              {% if e.grant_id %}{% if e.book %} · {% endif %}الرصيد #<bdi class="num">{{ e.grant_id }}</bdi>{% endif %}
+              {% if e.note %} · {{ e.note }}{% endif %}
+              {% if e.user %} · {{ e.user.get_username }}{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="help">لا قيود بعد.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

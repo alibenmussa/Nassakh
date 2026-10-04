@@ -37,6 +37,7 @@
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></symbol>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+  <symbol id="i-verify" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/><path d="M8.3 11.2l1.9 1.9 3.5-3.7"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 7L4 12l5 5"/><path d="M4 12h9.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
   <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 7l5 5-5 5"/><path d="M20 12h-9.5a5.5 5.5 0 0 0 0 11H13"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
@@ -56,6 +57,8 @@
   <symbol id="i-merge" viewBox="0 0 24 24"><path d="M7 4v4.5a4.5 4.5 0 0 0 4.5 4.5H19"/><path d="M7 20v-3.5A4.5 4.5 0 0 1 11.5 12"/><path d="M15.5 9.5L19 13l-3.5 3.5"/></symbol>
   {# the organisation's page (its fonts and format templates) #}
   <symbol id="i-building" viewBox="0 0 24 24"><path d="M5 20.5V5a1.5 1.5 0 0 1 1.5-1.5h7A1.5 1.5 0 0 1 15 5v15.5"/><path d="M15 9.5h2.5A1.5 1.5 0 0 1 19 11v9.5M3.5 20.5h17M8.5 7.5h3M8.5 11h3M8.5 14.5h3"/></symbol>
+  {# «الفوترة» (D106): the accounts' page quota #}
+  <symbol id="i-receipt" viewBox="0 0 24 24"><path d="M6 3.5h12v17l-2.5-1.5-2 1.5-1.5-1.5-1.5 1.5-2-1.5L6 20.5z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/></symbol>
   {# the connection cover (offline.js) #}
   <symbol id="i-wifi-off" viewBox="0 0 24 24"><path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 4.2-2.4M19 12.9a10 10 0 0 0-3-2.1M2 9.3a14.5 14.5 0 0 1 4.4-2.6M22 9.3A14.5 14.5 0 0 0 11 5.6"/><path d="M12 20h.01" stroke-width="2.4"/></symbol>
 </svg>
@@ -78,10 +81,21 @@
         <svg class="icon" aria-hidden="true"><use href="#i-book"/></svg>
         <span>الكتب</span>
       </a>
+      {# D107: search and quotation checking over the account's books, and the keys of an MCP client (D108) #}
+      <a class="nav-item{% if request.resolver_match.namespace == 'research' %} is-active{% endif %}" href="{% url 'research:home' %}" title="البحث والتحقق: ابحث في نصوص الكتب وتحقّق من نص منقول">
+        <svg class="icon" aria-hidden="true"><use href="#i-verify"/></svg>
+        <span>البحث والتحقق</span>
+      </a>
       {% if nav_organization %}
       <a class="nav-item{% if request.resolver_match.url_name == 'organization' or request.resolver_match.url_name == 'template_apply' %} is-active{% endif %}" href="{% url 'accounts:organization' %}" title="المؤسسة: الخطوط وقوالب التنسيق">
         <svg class="icon" aria-hidden="true"><use href="#i-building"/></svg>
         <span>المؤسسة</span>
+      </a>
+      {% endif %}
+      {% if user.is_superuser %}
+      <a class="nav-item{% if request.resolver_match.url_name == 'billing' or request.resolver_match.url_name == 'billing_account' or request.resolver_match.url_name == 'billing_plans' %} is-active{% endif %}" href="{% url 'accounts:billing' %}" title="الفوترة: رصيد الصفحات لكل حساب">
+        <svg class="icon" aria-hidden="true"><use href="#i-receipt"/></svg>
+        <span>الفوترة</span>
       </a>
       {% endif %}
       {% if is_admin %}
@@ -93,6 +107,17 @@
     </nav>
 
     <div class="sidebar-footer">
+      {% if nav_quota %}{% load organization %}
+      {# D106: the account's page quota (pages the models may still read); the nearest expiry when under 14 days #}
+      <a class="og-quota" href="{% url 'accounts:organization' %}#quota" title="رصيد الصفحات: كل صفحة تقرؤها النماذج تُحتسب" data-nav-quota>
+        {% if nav_quota.unlimited %}
+        <span>الرصيد: غير محدود</span>
+        {% else %}
+        <span{% if nav_quota.available <= 0 %} class="is-empty"{% endif %}>الرصيد: {{ nav_quota.available|ar_pages }}</span>
+        {% if nav_quota.expiring_soon %}<span class="meta">ينتهي منها {{ nav_quota.expiring|ar_pages }} في <bdi class="num">{{ nav_quota.next_expiry|date:"Y-m-d" }}</bdi></span>{% endif %}
+        {% endif %}
+      </a>
+      {% endif %}
       <div class="user-line">
         <span class="user-avatar" aria-hidden="true">{{ user.get_username|first|upper }}</span>
         <span class="min-w-0">

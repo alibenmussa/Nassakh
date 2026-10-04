@@ -26,6 +26,7 @@ class BookForm(forms.ModelForm):
             "title",
             "author",
             "original_year",
+            "volume",
             "notes",
             "source_pdf",
             "skip_first",
@@ -40,6 +41,7 @@ class BookForm(forms.ModelForm):
             "original_year": forms.NumberInput(
                 attrs={**INPUT, "min": 1, "max": 2100, "dir": "ltr", "inputmode": "numeric"}
             ),
+            "volume": forms.TextInput(attrs={**INPUT, "maxlength": 40}),
             "notes": forms.Textarea(attrs={**INPUT, "rows": 3}),
             "source_pdf": forms.ClearableFileInput(attrs={**INPUT, "accept": "application/pdf,.pdf"}),
             "skip_first": forms.NumberInput(
@@ -65,6 +67,7 @@ class BookForm(forms.ModelForm):
         help_texts = {
             "title": "كما يظهر على صفحة العنوان.",
             "original_year": "سنة الطبعة الأصلية بالأرقام، مثل 1966. اختياري.",
+            "volume": "لكتاب من عدة أجزاء: رقم هذا الجزء، يظهر في الإحالة إلى صفحاته. اختياري.",
             "notes": "ملاحظات داخلية عن النسخة أو المصدر. اختيارية.",
             "source_pdf": (
                 f"ملف PDF واحد للكتاب كاملًا، حتى {MAX_PDF_MB} ميغابايت. "
@@ -95,8 +98,11 @@ class BookForm(forms.ModelForm):
             "split_ratio": {"invalid": "أدخل نسبة بين 0.2 و0.8."},
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, available: int | None = None, **kwargs):
+        """`available`: the pages the account may still have read (D106, `accounts.billing.allowance`); None
+        when nothing limits it (a superuser, an unlimited account)."""
         super().__init__(*args, **kwargs)
+        self.available = available
         self.fields["source_pdf"].required = True
         self.fields["pages_per_sheet"].required = True
         self.fields["split_ratio"].required = False
@@ -158,6 +164,15 @@ class BookForm(forms.ModelForm):
                 f"الملف يحوي {self._pdf_page_count} صفحة؛ "
                 f"قيم التجاوز ({skip_first} + {skip_last}) لا تترك أي صفحة.",
             )
+        elif self._pdf_page_count and self.available is not None:
+            # D106: the pages the models will read must fit the account's available pages; nothing is saved
+            from accounts.billing import UPLOAD_REFUSED, QuotaExceeded, upload_pages
+
+            pages = upload_pages(
+                self._pdf_page_count, skip_first, skip_last, cleaned.get("pages_per_sheet") or 1
+            )
+            if pages > self.available:
+                self.add_error(None, str(QuotaExceeded(pages, self.available, UPLOAD_REFUSED)))
         return cleaned
 
     @property

@@ -15,12 +15,20 @@ group: `accounts.services.is_org_admin`) adds and removes its fonts and manages 
 - `StyleTemplate` (D98): a named set of the stylesheet's values (`editor.services.STYLESHEET_FIELDS` without
   the book's own details and cover), taken from a book and applied to others through the stylesheet's own
   validation (`accounts.styles`).
+
+D106 (docs/CHALLENGE_SPEC.md §1): an account is an organisation (`kind` organization) or a person
+(`individual`: an organisation of one member, so D102's scoping holds unchanged); `SignUp` marks a user who
+signed up on the site and confirms their email. The page quota: `Plan` (a package the superuser sells),
+`QuotaGrant` (pages given to an account), `QuotaHold` (a page queued for model reading, not read yet) and
+`QuotaEntry` (the append-only ledger). Every change goes through `accounts.billing`.
 """
 
 from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
+from django.utils import timezone
 
 FONT_STYLES: tuple[str, ...] = ("regular", "bold", "italic", "bold_italic")
 FONT_STYLE_LABELS: dict[str, str] = {
@@ -32,9 +40,27 @@ FONT_STYLE_LABELS: dict[str, str] = {
 
 
 class Organization(models.Model):
-    """An institution or publisher: owns books, fonts and format templates."""
+    """An account (D106): an institution or publisher, or a person (`individual`); owns books, fonts and
+    format templates. `unlimited` accounts are never limited or charged (the ones that existed before
+    D106); every other one reads pages from its quota (`accounts.billing`)."""
+
+    class Kind(models.TextChoices):
+        ORGANIZATION = "organization", "مؤسسة"
+        INDIVIDUAL = "individual", "فرد"
+
+    class OrgType(models.TextChoices):
+        PUBLISHER = "publisher", "دار نشر"
+        RESEARCH = "research", "مركز بحث"
+        UNIVERSITY = "university", "جامعة"
+        LIBRARY = "library", "مكتبة"
+        OTHER = "other", "أخرى"
 
     name = models.CharField("الاسم", max_length=200)
+    kind = models.CharField("نوع الحساب", max_length=20, choices=Kind.choices, default=Kind.ORGANIZATION)
+    org_type = models.CharField("نوع المؤسسة", max_length=20, choices=OrgType.choices, blank=True)
+    country = models.CharField("البلد", max_length=100, blank=True)
+    website = models.URLField("الموقع", max_length=300, blank=True)
+    unlimited = models.BooleanField("رصيد غير محدود", default=False)
     created_at = models.DateTimeField("أُنشئت في", auto_now_add=True)
 
     class Meta:
@@ -204,3 +230,206 @@ class StyleTemplate(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.organization_id})"
+
+
+# ====================================================================== sign-up (D106)
+
+
+class SignUp(models.Model):
+    """A user who signed up on the site (D106): inactive until they follow the link of the confirmation email
+    (`confirmed_at`). Only such a user is told on the login page that the account waits for confirmation, may
+    ask for the link again and is activated by it; a user an admin deactivated is not."""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, verbose_name="المستخدم", on_delete=models.CASCADE, related_name="signup"
+    )
+    created_at = models.DateTimeField("سُجّل في", auto_now_add=True)
+    confirmed_at = models.DateTimeField("أُكّد البريد في", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "تسجيل"
+        verbose_name_plural = "التسجيلات"
+
+    def __str__(self) -> str:
+        return f"{self.user} ({'confirmed' if self.confirmed_at else 'pending'})"
+
+
+# ====================================================================== the page quota (D106)
+
+
+class Plan(models.Model):
+    """A package the superuser sells: `pages` valid `validity_days` from the grant's start, at `price`."""
+
+    name = models.CharField("الاسم", max_length=120)
+    pages = models.PositiveIntegerField("الصفحات")
+    validity_days = models.PositiveIntegerField("الصلاحية (أيام)", default=365)
+    price = models.DecimalField("السعر", max_digits=10, decimal_places=2, default=0)
+    currency = models.CharField("العملة", max_length=3, default="USD")
+    active = models.BooleanField("متاحة", default=True)
+    note = models.TextField("ملاحظة", blank=True)
+    created_at = models.DateTimeField("أُنشئت في", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "باقة"
+        verbose_name_plural = "الباقات"
+        ordering = ["pages", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.pages})"
+
+
+class QuotaGrant(models.Model):
+    """Pages given to an account. `remaining` is what is left of it; it counts while it is live (started,
+    not expired, not revoked: `accounts.billing.live_q`). An expired or revoked grant counts for nothing;
+    `manage.py expire_quota` and `billing.revoke` record that in the ledger and set `remaining` to 0."""
+
+    class Kind(models.TextChoices):
+        SIGNUP = "signup", "رصيد التسجيل"
+        PURCHASE = "purchase", "شراء"
+        BONUS = "bonus", "هدية"
+        TRIAL = "trial", "تجربة"
+        ADJUSTMENT = "adjustment", "تسوية"
+
+    organization = models.ForeignKey(
+        Organization, verbose_name="الحساب", on_delete=models.CASCADE, related_name="quota_grants"
+    )
+    kind = models.CharField("النوع", max_length=20, choices=Kind.choices, default=Kind.PURCHASE)
+    plan = models.ForeignKey(
+        Plan, verbose_name="الباقة", null=True, blank=True, on_delete=models.SET_NULL, related_name="grants"
+    )
+    pages = models.PositiveIntegerField("الصفحات")
+    remaining = models.PositiveIntegerField("المتبقي")
+    starts_at = models.DateTimeField("يبدأ في", default=timezone.now)
+    expires_at = models.DateTimeField("ينتهي في", null=True, blank=True)
+    amount = models.DecimalField("المبلغ", max_digits=10, decimal_places=2, null=True, blank=True)
+    currency = models.CharField("العملة", max_length=3, blank=True)
+    reference = models.CharField("المرجع", max_length=120, blank=True)
+    note = models.TextField("ملاحظة", blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="أضافه",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    created_at = models.DateTimeField("أُضيف في", auto_now_add=True)
+    revoked_at = models.DateTimeField("أُلغي في", null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="ألغاه",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+
+    class Meta:
+        verbose_name = "رصيد ممنوح"
+        verbose_name_plural = "الأرصدة الممنوحة"
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["organization", "expires_at"], name="quota_grant_org_expiry")]
+
+    def __str__(self) -> str:
+        return f"{self.pages} → {self.organization_id} ({self.kind})"
+
+    def state(self, now=None) -> str:
+        """`live` | `future` | `expired` | `revoked` (for the screens)."""
+        now = now or timezone.now()
+        if self.revoked_at is not None:
+            return "revoked"
+        if self.expires_at is not None and self.expires_at <= now:
+            return "expired"
+        if self.starts_at > now:
+            return "future"
+        return "live"
+
+
+class QuotaHold(models.Model):
+    """A page queued for model reading and not read yet: pages promised. One per page (one run per page at a
+    time, `books.runs`); the run that reads it consumes it, any other end releases it (`accounts.billing`)."""
+
+    organization = models.ForeignKey(
+        Organization, verbose_name="الحساب", on_delete=models.CASCADE, related_name="quota_holds"
+    )
+    page = models.OneToOneField(
+        "books.Page", verbose_name="الصفحة", on_delete=models.CASCADE, related_name="quota_hold"
+    )
+    run_key = models.CharField("التشغيل", max_length=64, blank=True)
+    created_at = models.DateTimeField("حُجز في", auto_now_add=True)
+
+    class Meta:
+        verbose_name = "صفحة محجوزة"
+        verbose_name_plural = "الصفحات المحجوزة"
+
+    def __str__(self) -> str:
+        return f"{self.page_id} ({self.run_key})"
+
+
+class QuotaEntry(models.Model):
+    """The ledger (append-only): every change of an account's pages, signed. `consume` rows are unique per
+    (page, run key): a retried task never charges twice. Rows without a grant are the account's debt: pages
+    read with no live grant (`consume`, −1) and their repayment from a later grant (`adjust`, +n, paired with
+    the grant's own −n)."""
+
+    class Kind(models.TextChoices):
+        GRANT = "grant", "منح"
+        CONSUME = "consume", "قراءة صفحة"
+        EXPIRE = "expire", "انتهاء الصلاحية"
+        REVOKE = "revoke", "إلغاء"
+        ADJUST = "adjust", "تسوية"
+
+    organization = models.ForeignKey(
+        Organization, verbose_name="الحساب", on_delete=models.CASCADE, related_name="quota_entries"
+    )
+    kind = models.CharField("النوع", max_length=10, choices=Kind.choices)
+    pages = models.IntegerField("الصفحات")
+    grant = models.ForeignKey(
+        QuotaGrant,
+        verbose_name="الرصيد",
+        null=True,
+        blank=True,
+        on_delete=models.RESTRICT,
+        related_name="entries",
+    )
+    book = models.ForeignKey(
+        "books.Book",
+        verbose_name="الكتاب",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    page = models.ForeignKey(
+        "books.Page",
+        verbose_name="الصفحة",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    run_key = models.CharField("التشغيل", max_length=64, blank=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="المستخدم",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+    )
+    note = models.CharField("ملاحظة", max_length=300, blank=True)
+    created_at = models.DateTimeField("في", default=timezone.now, editable=False, db_index=True)
+
+    class Meta:
+        verbose_name = "قيد رصيد"
+        verbose_name_plural = "سجل الرصيد"
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["organization", "kind", "created_at"], name="quota_entry_org_kind")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["page", "run_key"], condition=Q(kind="consume"), name="quota_consume_once"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.kind} {self.pages:+d} ({self.organization_id})"

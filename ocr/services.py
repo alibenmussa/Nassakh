@@ -2105,6 +2105,9 @@ def finalize_page(page: Page) -> ComposedPage | None:
             fields += ["status", "error_from", "error_message"]
         page.save(update_fields=fields)
     _refresh_book_status(page)
+    from research.index import page_changed  # the search index follows the new lines (D107)
+
+    page_changed(page)
     from . import numbers  # the numbers pass reads the new lines' Arabic-Indic numbers (D50)
 
     numbers.schedule(page)

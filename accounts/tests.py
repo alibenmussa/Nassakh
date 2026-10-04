@@ -16,7 +16,7 @@ LOGIN_URL = "/accounts/login/"
 
 @pytest.fixture
 def user(db):
-    return User.objects.create_user("ali", password="secret-pass")
+    return User.objects.create_user("ali", email="Ali@Example.org", password="secret-pass")
 
 
 @pytest.mark.django_db
@@ -26,14 +26,14 @@ def test_login_page_renders_the_card(client):
     body = response.content.decode()
     assert 'lang="ar" dir="rtl"' in body
     assert "نسّاخ" in body
-    assert "اسم المستخدم" in body and "كلمة المرور" in body
-    assert 'name="username"' in body and 'type="password"' in body
+    assert "البريد الإلكتروني" in body and "كلمة المرور" in body
+    assert 'name="username"' in body and 'type="email"' in body and 'type="password"' in body
 
 
 def test_login_with_wrong_password_shows_an_arabic_error(client, user):
-    response = client.post(reverse("accounts:login"), {"username": "ali", "password": "wrong"})
+    response = client.post(reverse("accounts:login"), {"username": "ali@example.org", "password": "wrong"})
     assert response.status_code == 200
-    assert "اسم المستخدم أو كلمة المرور غير صحيحة" in response.content.decode()
+    assert "البريد الإلكتروني أو كلمة المرور غير صحيحة" in response.content.decode()
     assert "_auth_user_id" not in client.session
 
 
@@ -41,12 +41,13 @@ def test_login_with_missing_fields_shows_field_errors(client, user):
     response = client.post(reverse("accounts:login"), {"username": "", "password": ""})
     assert response.status_code == 200
     body = response.content.decode()
-    assert "أدخل اسم المستخدم." in body and "أدخل كلمة المرور." in body
+    assert "أدخل بريدك الإلكتروني." in body and "أدخل كلمة المرور." in body
 
 
 def test_login_redirects_to_next_when_it_is_local(client, user):
     response = client.post(
-        reverse("accounts:login") + "?next=/admin/", {"username": "ali", "password": "secret-pass"}
+        reverse("accounts:login") + "?next=/admin/",
+        {"username": "ALI@example.org", "password": "secret-pass"},
     )
     assert response.status_code == 302
     assert response["Location"] == "/admin/"
@@ -57,7 +58,7 @@ def test_login_ignores_an_external_next(client, user):
     with override_settings(LOGIN_REDIRECT_URL="/admin/"):
         response = client.post(
             reverse("accounts:login"),
-            {"username": "ali", "password": "secret-pass", "next": "https://evil.example/"},
+            {"username": "ALI@example.org", "password": "secret-pass", "next": "https://evil.example/"},
         )
     assert response.status_code == 302
     assert response["Location"] == "/admin/"
@@ -65,7 +66,8 @@ def test_login_ignores_an_external_next(client, user):
 
 def test_login_redirects_to_login_redirect_url_by_default(client, user):
     with override_settings(LOGIN_REDIRECT_URL="/admin/"):
-        response = client.post(reverse("accounts:login"), {"username": "ali", "password": "secret-pass"})
+        form = {"username": "ALI@example.org", "password": "secret-pass"}
+        response = client.post(reverse("accounts:login"), form)
     assert response.status_code == 302 and response["Location"] == "/admin/"
 
 

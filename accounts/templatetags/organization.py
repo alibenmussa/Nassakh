@@ -21,3 +21,25 @@ def org_font_faces(owner) -> str:
     css = org_sample_css(organization)
     # the rules carry only `nk-org-<pk>` families and reversed URLs of content-named files
     return mark_safe(f"<style data-org-fonts>{css}</style>") if css else ""
+
+
+@register.filter
+def ar_pages(n) -> str:
+    """«صفحة واحدة», «صفحتان», «5 صفحات», «300 صفحة» (D106: the page quota's numbers in words)."""
+    from accounts.billing import pages_phrase
+
+    try:
+        return pages_phrase(int(n))
+    except (TypeError, ValueError):
+        return ""
+
+
+@register.filter
+def ar_days(n) -> str:
+    """«يوم واحد», «يومين», «7 أيام», «365 يومًا»."""
+    from accounts.signup import days_phrase
+
+    try:
+        return days_phrase(int(n))
+    except (TypeError, ValueError):
+        return ""

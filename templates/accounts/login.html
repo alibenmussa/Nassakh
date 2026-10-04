@@ -10,11 +10,21 @@
       <p class="meta">إحياء الكتب العربية المصوّرة</p>
     </div>
 
+    {% include "accounts/_auth_messages.html" %}
+
     {% if form.non_field_errors %}
     <div class="banner banner-danger" role="alert">
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
       <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
     </div>
+    {% endif %}
+    {% if unconfirmed_email %}
+    {# D106: a sign-up that has not followed its confirmation link yet (said only when the password is right) #}
+    <form method="post" action="{% url 'accounts:signup_resend' %}" class="og-auth-resend" data-resend>
+      {% csrf_token %}
+      <input type="hidden" name="email" value="{{ unconfirmed_email }}">
+      <button type="submit" class="btn btn-sm">أرسل رابط التأكيد مجددًا</button>
+    </form>
     {% endif %}
 
     <form method="post" action="{% url 'accounts:login' %}" class="stack" novalidate>
@@ -35,6 +45,8 @@
 
       <button type="submit" class="btn btn-primary w-full">تسجيل الدخول</button>
     </form>
+
+    <p class="og-auth-alt meta">ليس لك حساب؟ <a class="link" href="{% url 'accounts:signup' %}">أنشئ حسابًا</a></p>
   </div>
 </main>
 {% endblock %}

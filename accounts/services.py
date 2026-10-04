@@ -50,13 +50,14 @@ def safe_next_url(request: HttpRequest) -> str:
 
 
 def default_organization():
-    """The first organisation, created (named `NASSAKH["ORGANIZATION_NAME"]`) when there is none."""
+    """The first organisation, created (named `NASSAKH["ORGANIZATION_NAME"]`) when there is none. It is the
+    owner's own: unlimited (D106), as every organisation that existed before the page quota."""
     from .models import Organization
 
     organization = Organization.objects.order_by("id").first()
     if organization is None:
         name = settings.NASSAKH.get("ORGANIZATION_NAME") or "المؤسسة"
-        organization = Organization.objects.create(name=name)
+        organization = Organization.objects.create(name=name, unlimited=True)
     return organization
 
 

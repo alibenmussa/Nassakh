@@ -11,6 +11,8 @@ Mount points (each app fills its own `urls.py`; this file stays untouched):
 - `/books/`                 editor and layout pages (Phase 5)    namespace `editor`
 - `/books/`                 the export page and downloads (6)    namespace `publishing`
 - `/ocr/`                   ocr HTML routes (none in Phase 2)    namespace `ocr`
+- `/research/`              «البحث والتحقق» and the page clips    namespace `research`
+                            (D107; the MCP server, D108, is its own ASGI app: `manage.py mcp_serve`)
 - `/api/`                   JSON routes from books/processing/ocr/review/assembly/editor/publishing/accounts
                             `api_urlpatterns`, all in the single namespace `api` (reverse as
                             `api:<name>`; the «التخطيط» mode's `api:book_guides` and
@@ -29,6 +31,7 @@ from editor import urls as editor_urls
 from ocr import urls as ocr_urls
 from processing import urls as processing_urls
 from publishing import urls as publishing_urls
+from research import urls as research_urls
 from review import urls as review_urls
 
 api_urlpatterns = (
@@ -40,6 +43,7 @@ api_urlpatterns = (
     + editor_urls.api_urlpatterns
     + publishing_urls.api_urlpatterns
     + accounts_urls.api_urlpatterns
+    + research_urls.api_urlpatterns
 )
 
 urlpatterns = [
@@ -52,6 +56,7 @@ urlpatterns = [
     path("books/", include("editor.urls")),
     path("books/", include("publishing.urls")),
     path("ocr/", include("ocr.urls")),
+    path("research/", include("research.urls")),
     path("api/", include((api_urlpatterns, "api"))),
     # Media always goes through the login-protected view. With DEBUG on this is what serves
     # uploads locally; in production nginx can front it (X-Accel-Redirect) without URL changes.

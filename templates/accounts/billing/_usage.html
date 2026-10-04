@@ -1,0 +1,25 @@
+{# Pages read per book (D106). Context: usage ([{book_id, title, pages, last}]), link_books (link each book to its dashboard). #}
+{% if usage %}
+<div class="table-wrap">
+  <table class="table og-bill-table" data-usage>
+    <thead>
+      <tr>
+        <th scope="col">الكتاب</th>
+        <th scope="col" class="num">الصفحات المقروءة</th>
+        <th scope="col">آخر قراءة</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in usage %}
+      <tr>
+        <td>{% if row.book_id %}{% if link_books %}<a class="link" href="{% url 'books:detail' row.book_id %}">{{ row.title }}</a>{% else %}{{ row.title }}{% endif %}{% else %}<span class="meta">كتب محذوفة</span>{% endif %}</td>
+        <td class="num">{{ row.pages }}</td>
+        <td><bdi class="num">{{ row.last|date:"Y-m-d" }}</bdi></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="help">لم تُقرأ صفحة بعد.</p>
+{% endif %}

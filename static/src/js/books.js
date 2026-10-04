@@ -78,6 +78,19 @@
     if (two) return { text: `${file} · تُستخرج ${span}، وفي كل منها صفحتان ${pagesNote}.`, error: false };
     return { text: `${file} · تُستخرج ${span}${from === to ? '' : ` (${arCount(sheets, PAGE_FORMS)})`}.`, error: false };
   }
+  // D106: the form's quota line. `available` is null when nothing limits the account (no line). Once the file's
+  // pages are known: the pages its models will read, (count − skipped) × pages per sheet, and `error` when they
+  // are more than available (the form is not sent; the server checks the same, books/forms.py).
+  function quotaLine({ available = null, count = null, skipFirst = 0, skipLast = 0, perSheet = 1 } = {}) {
+    if (available === null || available === undefined || available === '') return { text: '', error: false };
+    const left = Number(available) || 0;
+    const shown = arCount(Math.max(0, left), PAGE_FORMS);
+    if (!(Number(count) > 0)) return { text: `رصيدك المتاح: ${shown}.`, error: false };
+    const sheets = Math.max(0, Number(count) - Math.max(0, parseInt(skipFirst, 10) || 0) - Math.max(0, parseInt(skipLast, 10) || 0));
+    const pages = sheets * (Number(perSheet) === 2 ? 2 : 1);
+    if (pages > left) return { text: `هذا الكتاب نحو ${arCount(pages, PAGE_FORMS_GEN)} ورصيدك المتاح ${shown}.`, error: true };
+    return { text: `رصيدك المتاح: ${shown} · يقرأ هذا الكتاب نحو ${arCount(pages, PAGE_FORMS_GEN)}.`, error: false };
+  }
   // A guides block's full bands as the compact `b` of api:book_guides: [kind, y0, y1] (+ x0, x1 for the page
   // number), kinds h / b / f / p.
   const KIND_CODES = { running_header: 'h', body: 'b', footnote: 'f', page_number: 'p' };
@@ -109,7 +122,7 @@
     return `تُترك ${arCount(n, PAGE_FORMS)} لم تُراجَع بعد، وتُضاف حين تُراجَع.`;
   }
 
-  window.NassakhBooks = Object.assign(window.NassakhBooks || {}, { arCount, PAGE_FORMS, PAGE_FORMS_GEN, pdfPageCount, rangeLine, compactBands, KIND_CODES, CONVERT, convertLabel, convertLeftOut });
+  window.NassakhBooks = Object.assign(window.NassakhBooks || {}, { arCount, PAGE_FORMS, PAGE_FORMS_GEN, pdfPageCount, rangeLine, quotaLine, compactBands, KIND_CODES, CONVERT, convertLabel, convertLeftOut });
 })();
 
 document.addEventListener('alpine:init', () => {
@@ -130,6 +143,7 @@ document.addEventListener('alpine:init', () => {
     sourcePages: null, // the page count the chosen PDF declares, null when unknown
     skipFirst: Number(cfg.skipFirst) || 0,
     skipLast: Number(cfg.skipLast) || 0,
+    available: cfg.available === undefined || cfg.available === null || cfg.available === '' ? null : Number(cfg.available), // D106
     probeId: 0,
 
     // The skip fields are plain Django widgets: their values are read on input (no x-model on them).
@@ -142,6 +156,10 @@ document.addEventListener('alpine:init', () => {
     },
     get range() {
       return window.NassakhBooks.rangeLine({ count: this.sourcePages, skipFirst: this.skipFirst, skipLast: this.skipLast, perSheet: this.pagesPerSheet });
+    },
+    // D106: «رصيدك المتاح: N صفحة», and the refusal once the file's pages are known (null `available`: no limit)
+    get quota() {
+      return window.NassakhBooks.quotaLine({ available: this.available, count: this.sourcePages, skipFirst: this.skipFirst, skipLast: this.skipLast, perSheet: this.pagesPerSheet });
     },
     async onFile(event) {
       const file = event && event.target && event.target.files ? event.target.files[0] : null;

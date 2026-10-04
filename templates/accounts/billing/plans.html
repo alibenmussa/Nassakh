@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% comment %}
+The plans on «الفوترة» (D106; accounts.billing_views.plans), superusers only: each plan (pages, validity, price, on sale
+or not, grants made from it) with «تعديل» (inline form), and the form to add one. A plan changed later leaves the grants
+made from it as they were. Context: plans (n_grants), form (PlanForm).
+{% endcomment %}
+{% load organization %}
+{% block head_title %}الباقات · الفوترة · نسّاخ{% endblock %}
+{% block title %}الباقات{% endblock %}
+{% block header_actions %}<a class="btn btn-ghost btn-sm" href="{% url 'accounts:billing' %}">كل الحسابات</a>{% endblock %}
+
+{% block content %}
+<div class="og-page stack-lg">
+  <p class="meta">الباقات التي تُباع؛ تظهر في «إضافة رصيد» لكل حساب ما دامت متاحة.</p>
+
+  <section class="card stack" aria-labelledby="bl-plans-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-plans-title">الباقات</h2>
+    </div>
+    {% if plans %}
+    <div class="table-wrap">
+      <table class="table og-bill-table">
+        <thead>
+          <tr>
+            <th scope="col">الباقة</th>
+            <th scope="col" class="num">الصفحات</th>
+            <th scope="col" class="num">الصلاحية</th>
+            <th scope="col" class="num">السعر</th>
+            <th scope="col" class="num">مُنحت</th>
+            <th scope="col"><span class="sr-only">إجراءات</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for plan in plans %}
+          <tr data-plan="{{ plan.pk }}" x-data="{ edit: false }">
+            <td>
+              <div>{{ plan.name }}</div>
+              <div class="status"><span class="dot {% if plan.active %}dot-success{% else %}dot-neutral{% endif %}" aria-hidden="true"></span>{% if plan.active %}متاحة{% else %}موقوفة{% endif %}</div>
+              {% if plan.note %}<div class="meta">{{ plan.note }}</div>{% endif %}
+              <form method="post" action="{% url 'accounts:billing_plan_edit' plan.pk %}" class="og-edit-form stack-sm" x-show="edit" x-cloak @keydown.escape="edit = false">
+                {% csrf_token %}
+                <div class="og-bill-grid">
+                  <div class="field"><label class="label" for="pl-name-{{ plan.pk }}">الاسم</label><input id="pl-name-{{ plan.pk }}" name="name" class="input" value="{{ plan.name }}" maxlength="120" required dir="auto"></div>
+                  <div class="field"><label class="label" for="pl-pages-{{ plan.pk }}">الصفحات</label><input id="pl-pages-{{ plan.pk }}" name="pages" type="number" min="1" class="input" value="{{ plan.pages }}" required dir="ltr"></div>
+                  <div class="field"><label class="label" for="pl-days-{{ plan.pk }}">الصلاحية (أيام)</label><input id="pl-days-{{ plan.pk }}" name="validity_days" type="number" min="1" class="input" value="{{ plan.validity_days }}" required dir="ltr"></div>
+                  <div class="field"><label class="label" for="pl-price-{{ plan.pk }}">السعر</label><input id="pl-price-{{ plan.pk }}" name="price" type="number" step="0.01" min="0" class="input" value="{{ plan.price|stringformat:'s' }}" required dir="ltr"></div>
+                  <div class="field"><label class="label" for="pl-cur-{{ plan.pk }}">العملة</label><input id="pl-cur-{{ plan.pk }}" name="currency" class="input" value="{{ plan.currency }}" maxlength="3" required dir="ltr"></div>
+                  <div class="field"><label class="label" for="pl-note-{{ plan.pk }}">ملاحظة</label><input id="pl-note-{{ plan.pk }}" name="note" class="input" value="{{ plan.note }}" dir="auto"></div>
+                </div>
+                <label class="check"><input type="checkbox" name="active"{% if plan.active %} checked{% endif %}><span>متاحة للبيع</span></label>
+                <div class="og-inline-form"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
+              </form>
+            </td>
+            <td class="num">{{ plan.pages }}</td>
+            <td class="num">{{ plan.validity_days|ar_days }}</td>
+            <td class="num"><bdi dir="ltr">{{ plan.price }} {{ plan.currency }}</bdi></td>
+            <td class="num">{{ plan.n_grants }}</td>
+            <td class="og-actions"><button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit" :aria-expanded="edit ? 'true' : 'false'">تعديل</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="help">لا باقات بعد.</p>
+    {% endif %}
+
+    <form method="post" action="{% url 'accounts:billing_plans' %}" class="og-upload stack" novalidate data-plan-form>
+      {% csrf_token %}
+      <h3 class="group-label">باقة جديدة</h3>
+      {% if form.non_field_errors %}<p class="field-error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+      <div class="og-bill-grid">
+        {% include "books/_field.html" with field=form.name %}
+        {% include "books/_field.html" with field=form.pages %}
+        {% include "books/_field.html" with field=form.validity_days %}
+        {% include "books/_field.html" with field=form.price %}
+        {% include "books/_field.html" with field=form.currency %}
+        {% include "books/_field.html" with field=form.note %}
+      </div>
+      <label class="check"><input type="checkbox" name="active"{% if form.active.value %} checked{% endif %}><span>متاحة للبيع</span></label>
+      <div><button type="submit" class="btn btn-primary btn-sm">إضافة الباقة</button></div>
+    </form>
+  </section>
+</div>
+{% endblock %}

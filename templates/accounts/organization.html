@@ -8,9 +8,11 @@ The organisation's page (D98; accounts.views.organization): its fonts and its fo
 - «قوالب التنسيق»: each template with its summary and the book it came from; «تطبيق على كتاب…» opens the changes it
   brings to a chosen book before applying (accounts:template_apply); editors save a book's format as a template; admins
   rename, update from a book and delete.
+- «الرصيد» (D106): the account's page quota, read-only: its numbers, its live grants, the pages read per book.
 A superuser among several organisations gets a switcher (`organizations`, D102).
 Context: organization, organizations, is_org_admin, can_edit_books, fonts, removed_fonts ([{font, styles, books, more, used,
-used_phrase, templates, licence_line}]), templates ([{template, summary}]), books, sample_css, max_mb, accept, members.
+used_phrase, templates, licence_line}]), templates ([{template, summary}]), books, sample_css, max_mb, accept, members,
+quota (accounts.billing.Summary), quota_grants, quota_usage.
 {% endcomment %}
 {% block head_title %}المؤسسة · {{ organization.name }} · نسّاخ{% endblock %}
 {% block title %}{{ organization.name }}{% endblock %}
@@ -44,6 +46,45 @@ used_phrase, templates, licence_line}]), templates ([{template, summary}]), book
     </form>
     {% endif %}
   </div>
+
+  {# ------------------------------------------------------------------ the page quota (D106, read-only) #}
+  <section class="card stack" id="quota" aria-labelledby="og-quota-title">
+    <div class="card-header">
+      <h2 class="section-title" id="og-quota-title">الرصيد</h2>
+      <span class="meta">كل صفحة تقرؤها النماذج بنجاح تُحتسب صفحةً، وإعادة معالجتها تُحتسب من جديد؛ التخطيط بلا حساب</span>
+    </div>
+    {% include "accounts/billing/_numbers.html" with s=quota %}
+    {% if not quota.unlimited %}
+    {% if quota_grants %}
+    <div class="table-wrap">
+      <table class="table og-bill-table" data-quota-grants>
+        <thead>
+          <tr>
+            <th scope="col">الرصيد</th>
+            <th scope="col" class="num">الصفحات</th>
+            <th scope="col" class="num">المتبقي</th>
+            <th scope="col">ينتهي في</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in quota_grants %}
+          <tr>
+            <td>{{ g.get_kind_display }}{% if g.plan %} · {{ g.plan.name }}{% endif %}</td>
+            <td class="num">{{ g.pages }}</td>
+            <td class="num">{{ g.remaining }}</td>
+            <td>{% if g.expires_at %}<bdi class="num">{{ g.expires_at|date:"Y-m-d" }}</bdi>{% else %}<span class="meta">لا ينتهي</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="help">لا رصيد ساريًا للحساب. لزيادته تواصل مع إدارة نسّاخ.</p>
+    {% endif %}
+    <h3 class="group-label">الاستعمال حسب الكتاب</h3>
+    {% include "accounts/billing/_usage.html" with usage=quota_usage link_books=True %}
+    {% endif %}
+  </section>
 
   {# ------------------------------------------------------------------ fonts #}
   <section class="card stack" id="fonts" aria-labelledby="og-fonts-title">

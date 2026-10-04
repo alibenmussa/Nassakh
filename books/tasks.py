@@ -15,6 +15,7 @@ import logging
 from celery import chord, group, shared_task
 from django.core.exceptions import ObjectDoesNotExist
 
+from accounts import billing
 from books import runs, services
 from books.models import Book, Page
 
@@ -139,6 +140,7 @@ def _enqueue_layout(book: Book) -> int:
             queued += 1
         except ValueError as exc:  # a run already holds the page (books.runs): it is not queued twice
             log.warning("book %s page %s: layout not queued: %s", book.pk, page.number, exc)
+            billing.release(page, services.QUOTA_START_KEY)  # D106: «بدء المعالجة»'s hold of a page not read
     if queued < len(pages):
         book.refresh_status()
     return queued
@@ -183,14 +185,16 @@ def page_run_failed(*args, page_id: int = 0, run: str = "") -> int:
     """Errback of a page chain (`services.run_stage`'s `link_error`): a task of the run failed outside its
     own error handling (the hard time limit, a lost worker), so the rest of the chain never runs.
 
-    The run's claim is given back (`books.runs`), and a page still waiting in the pipeline is marked failed
-    in that task's stage, so the book settles and the retry button appears instead of the page waiting for
-    work nobody runs. Nothing happens when the page no longer holds this run (superseded or released).
-    Celery calls it with the failed task's `(request, exc, traceback)`, or with its id (old-style errback).
+    The run's claim is given back (`books.runs`) with the page's quota hold (D106), and a page still waiting
+    in the pipeline is marked failed in that task's stage, so the book settles and the retry button appears
+    instead of the page waiting for work nobody runs. Nothing happens when the page no longer holds this run
+    (superseded or released). Celery calls it with the failed task's `(request, exc, traceback)`, or with its
+    id (old-style errback).
     """
     page = Page.objects.select_related("book").filter(pk=page_id).first()
     if page is None or not runs.release(page_id, run):
         return page_id
+    billing.release(page)  # D106: a page the run never read costs nothing
     request = args[0] if args else None
     exc = args[1] if len(args) > 1 else None
     log.warning("page %s: run %s died in %s: %r", page_id, run, getattr(request, "task", "?"), exc)

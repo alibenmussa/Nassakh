@@ -4,7 +4,7 @@
 
 {% block content %}
 <form method="post" enctype="multipart/form-data" class="form-column stack-lg" novalidate
-      x-data="bookForm({ pagesPerSheet: '{{ form.pages_per_sheet.value|default:1|escapejs }}', splitRatio: '{{ form.split_ratio.value|default:'0.5'|escapejs }}', skipFirst: '{{ form.skip_first.value|default:0|escapejs }}', skipLast: '{{ form.skip_last.value|default:0|escapejs }}' })"
+      x-data="bookForm({ pagesPerSheet: '{{ form.pages_per_sheet.value|default:1|escapejs }}', splitRatio: '{{ form.split_ratio.value|default:'0.5'|escapejs }}', skipFirst: '{{ form.skip_first.value|default:0|escapejs }}', skipLast: '{{ form.skip_last.value|default:0|escapejs }}', available: {% if available is None %}null{% else %}{{ available }}{% endif %} })"
       @submit="submitting = true">
   {% csrf_token %}
 
@@ -24,6 +24,7 @@
     <div class="field-row">
       {% include "books/_field.html" with field=form.author %}
       {% include "books/_field.html" with field=form.original_year %}
+      {% include "books/_field.html" with field=form.volume %}
     </div>
     {% include "books/_field.html" with field=form.notes %}
   </section>
@@ -48,6 +49,10 @@
       <p class="help" id="{{ form.source_pdf.id_for_label }}_help">{{ form.source_pdf.help_text }}</p>
       {% for error in form.source_pdf.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
     </div>
+    {% if available is not None %}{% load organization %}
+    {# D106: the account's available pages; once the browser counts the file's pages, a book that needs more is refused here (the server checks the same) #}
+    <p class="range-line" :class="{ 'is-error': quota.error }" role="status" aria-live="polite" x-text="quota.text" data-quota-line>رصيدك المتاح: {{ available|ar_pages }}.</p>
+    {% endif %}
   </section>
 
   <section class="card stack">
@@ -104,7 +109,7 @@
   </section>
 
   <div class="form-actions">
-    <button type="submit" class="btn btn-primary" :disabled="submitting">
+    <button type="submit" class="btn btn-primary" :disabled="submitting || quota.error">
       <span x-show="!submitting">استخراج الصفحات</span>
       <span x-show="submitting" x-cloak class="inline-flex items-center gap-2"><span class="spinner spinner-sm"></span> يُرفع الملف…</span>
     </button>

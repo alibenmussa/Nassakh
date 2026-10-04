@@ -14,6 +14,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from accounts import billing
 from accounts.services import NOT_A_MEMBER, current_organization
 from books import services, shelf
 from books.access import books_for, get_book_or_404, get_page_or_404, has_organization
@@ -44,13 +45,15 @@ def book_create(request: HttpRequest) -> HttpResponse:
     opens the dashboard in «التخطيط» (D66); the message gives the exact kept range. If the extraction
     cannot be queued the book stays `uploaded` and its dashboard offers «استخراج الصفحات». The book belongs
     to the user's organisation (the one a superuser works in); a user without one adds no book and goes back
-    to the books home, which says why (D102)."""
+    to the books home, which says why (D102). The pages its models will read must fit the account's available
+    pages (D106, `BookForm(available=)`): otherwise the form says both numbers and nothing is saved."""
     organization = current_organization(request)
     if organization is None:
         messages.error(request, NOT_A_MEMBER)
         return redirect("books:list")
+    available = billing.allowance(organization, request.user)  # D106: None when nothing limits the account
     if request.method == "POST":
-        form = BookForm(request.POST, request.FILES)
+        form = BookForm(request.POST, request.FILES, available=available)
         if form.is_valid():
             data = {key: value for key, value in form.cleaned_data.items() if key != "source_pdf"}
             book = services.create_book(
@@ -67,8 +70,8 @@ def book_create(request: HttpRequest) -> HttpResponse:
                 messages.success(request, services.extraction_message(book))
             return redirect("books:detail", book.pk)
     else:
-        form = BookForm()
-    return render(request, "books/form.html", {"form": form})
+        form = BookForm(available=available)
+    return render(request, "books/form.html", {"form": form, "available": available})
 
 
 @login_required
@@ -131,10 +134,11 @@ def start(request: HttpRequest, book_id: int) -> HttpResponse:
 @role_required("editor")
 @require_POST
 def start_ocr(request: HttpRequest, book_id: int) -> HttpResponse:
-    """«بدء المعالجة» (D64): send the prepared pages into «المعالجة», then today's dashboard."""
+    """«بدء المعالجة» (D64): send the prepared pages into «المعالجة», then today's dashboard. Refused with the
+    numbers when the account has fewer pages available than it would read (D106)."""
     book = get_book_or_404(request.user, book_id)
     try:
-        services.start_ocr(book)
+        services.start_ocr(book, user=request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
     else:
@@ -160,6 +164,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
     Every editor of the book may re-run it (D101, superseding item 29's super-admin rule): the «⋯» menu's
     «إعادة التخطيط» (`preprocess`) and «إعادة المعالجة» (`ocr`), the retry of a failed page. A run already
     holding a page refuses the re-run with a message (`books.runs`): a second click never queues a second run.
+    A re-run the models read is refused with the numbers when the account cannot pay for it (D106).
     """
     book = get_book_or_404(request.user, book_id)
     stage = request.POST.get("stage") or request.GET.get("stage") or ""
@@ -170,7 +175,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
     label = services.STAGE_LABELS[stage]
     if number is None:
         try:
-            services.queue_book_rerun(book, stage)
+            services.queue_book_rerun(book, stage, user=request.user)
         except ValueError as exc:
             messages.error(request, str(exc))
             return redirect("books:detail", book.pk)
@@ -183,7 +188,7 @@ def rerun(request: HttpRequest, book_id: int, number: int | None = None) -> Http
 
     page = get_page_or_404(request.user, book=book, number=number)
     try:
-        services.run_stage(page, stage)
+        services.run_stage(page, stage, user=request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
     else:

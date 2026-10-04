@@ -998,3 +998,86 @@ reads again, so the cost is a failure's. Measured on Runpod: the 5 pages of book
 Also seen: Runpod connections reset («Connection reset by peer», 4 attempts) while 4 pages were read at once over
 the owner's café Wi-Fi; one at a time they did not. A server in a data centre should not see it; RUNPOD_RETRIES
 can be raised if it does.
+
+## D106 — Accounts of organisations and individuals, open sign-up confirmed by email, the email as the login, and a page quota (2026-10-04, challenge, CHALLENGE_SPEC §1)
+
+**Why.** For the challenge Nassakh becomes a service: anyone signs up, as an organisation or a researcher alone,
+every book belongs to an account, and a page the models read costs a Runpod GPU's time, so an account reads from
+pages the superuser gives or sells.
+
+**Decision.**
+- **Accounts.** `Organization` gains `kind` (organization | individual), `org_type`, `country`, `website` and
+  `unlimited`. An individual is an organisation of one member, so D102's scoping holds unchanged. Every
+  organisation that existed before is unlimited (migration 0005); new sign-ups are not.
+- **Sign-up** (`/accounts/signup/`): an inactive user, its organisation, a `Membership` as ADMIN, the `editor`
+  group (never the cross-organisation `admin` group), a `SignUp` row (tells a sign-up waiting for its email from a
+  user an admin deactivated), and a `signup` grant when `SIGNUP_PAGE_QUOTA` > 0. An Arabic email carries a signed
+  link valid `EMAIL_CONFIRM_DAYS`; it activates and signs in once. The login page tells an unconfirmed sign-up so
+  (only with its right password) and sends the link again (one a minute, five a day). Mail goes through Django
+  6.1's `MAILERS` (console in development, SMTP from env).
+- **The email is the login**, in any case (owner, 2026-10-04): `accounts.signals` stores the email in lower case
+  and makes it the username on every save (sign-up, admin, `createsuperuser`, shell); `accounts.backends.
+  EmailBackend` looks the lower-cased email up; a username that is not an email signs no one in. Migration 0006
+  converted the users that existed (a user with no email cannot sign in until one is set).
+- **The quota (`accounts.billing`).** `Plan` (seeded: $49 / 1,500, $149 / 5,000, $349 / 15,000 pages, 365 days),
+  `QuotaGrant` (pages, remaining, start, expiry, amount, reference, revocable), `QuotaHold` (one per page queued for
+  the models), `QuotaEntry` (append-only ledger; `consume` unique per page and run key). Balance = remaining pages
+  of the live grants − the debt; available = balance − holds; pages come from the grant that expires first; every
+  change runs under `select_for_update` on the organisation. `consume` never fails: with nothing left the page is
+  read on debt, and the next grant pays it first. The book's organisation is charged; unlimited accounts are never
+  held nor charged; superusers are not checked, but their runs are charged.
+- **Where.** The upload refuses a book whose (pages − skipped) × pages per sheet exceed the available pages (said in
+  the browser on choosing the file, checked again on the server). «بدء المعالجة» and «إعادة المعالجة» (book or
+  page) check again and hold a page each. `ocr_page_full` charges a page that ends in `ocr_done` under the run
+  token or the task id (a D104 requeue or a retry is the same run; D90/D100/D105 readings are part of it); an
+  error, an exclusion or a dead run releases the hold at no cost. Layout is free. Guide edits that re-read pages
+  and a re-included page are charged without a check.
+- **Screens.** «الفوترة» (superusers; 404 for others): every account with available, held, nearest expiry and
+  this month's pages; an account's grants (from a plan or by hand, revoke), «غير محدود», usage by book and
+  ledger; the plans. Members see «الرصيد: N صفحة» or «غير محدود» in the sidebar (with an expiry under 14 days)
+  and the live grants on «المؤسسة». `manage.py expire_quota` (daily), `manage.py make_demo_account`.
+
+## D107 — Search and quotation checking over the reviewed text (2026-10-04, challenge track 04, CHALLENGE_SPEC §2)
+
+**Why.** The application promised that a researcher or any AI assistant searches these books, checks a quotation
+and goes back to the printed page, with the author's text kept apart from the editor's notes. Nassakh holds that
+text already: lines checked against the page images, each word with its box and whether OCR doubted it.
+
+**Decision.**
+- App `research`. The source is the review layer (`ocr.Line`), not the manuscript (edited for publishing). Body,
+  verse and heading lines are `body`, footnote lines `notes` (`line_kind`); running heads and page numbers are
+  skipped; footnote call marks are apparatus, not words.
+- Normal form (`research.normalize`): no tashkeel, tatweel or punctuation; أ إ آ ٱ → ا, ى → ي, ة → ه, ؤ → و,
+  ئ → ي, Persian ی ک folded, digits Western; the raw word is kept for the diff.
+- `PageText` per page × kind: `words [{line, i, text, norm, state}]`, `norm`, `stamp`. States: `reviewed` (a
+  reviewer's resolution, or a reviewed line), `doubtful` (`conf: low`, unresolved or the chooser's), `unreviewed`.
+  Rebuilt by hooks in `finalize_page`, `refresh_page_text` and `reopen_page` (never breaking the action), checked
+  stale before every answer; `manage.py research_reindex` for older books.
+- Search: phrase (also across a page break, the running head left out), then all words, then fuzzy
+  (`partial_ratio` ≥ 85); filters books and kind; a `pg_trgm` index pre-filters on PostgreSQL.
+- `verify_quote`: word alignment over the best window; ratio < 0.6 → `not_found` («لم يوجد في كتب هذا الحساب»,
+  never «مختلق»); a difference on a reviewed or confident word → `differs` with each change; differences only on
+  doubtful readings → `needs_image_check` with the clip (the reading may be wrong, not the quotation); vowels only →
+  `exact` with `diacritics_differ`; attribution `note_not_author` («هذا من حاشية المحقق لا من متن المؤلف»),
+  `body_not_editor`, `other_book`.
+- Printed page: the page's own reading when two neighbours agree on its offset, else the neighbours' offset, else
+  «صفحة المسح N». Citation from the «التنسيق» book details, `original_year` and the new `Book.volume`.
+- Clips: `/research/clip/<signed token>/`, a WebP crop with the lines highlighted and doubtful words underlined,
+  valid `CLIP_LINK_DAYS` (7), no session needed, cached under `books/<id>/clips/`.
+- Page «البحث والتحقق» (`/research/`): search, check a quotation, «ربط مساعد ذكي» (access keys).
+
+## D108 — The MCP server (2026-10-04, challenge, CHALLENGE_SPEC §3)
+
+**Why.** No chat assistant inside Nassakh: any MCP client is the assistant, and it sees only its account's books.
+
+**Decision.**
+- The official SDK (`mcp` 2.3, `MCPServer`), Streamable HTTP, stateless, JSON responses, at `/mcp`;
+  `manage.py mcp_serve` (uvicorn), Procfile `mcp:`, `make mcp`; `/healthz` open.
+- Auth: `research.AccessKey` (`nsk_` + 32 urlsafe bytes, SHA-256 stored, shown once, revocable on the page),
+  resolved by the SDK's token verifier on every request; no key, a revoked key or a deactivated user → 401. OAuth
+  can replace the verifier later (D109).
+- Tools `list_books`, `search`, `get_passage`, `verify_quote`, `cite`: read-only, closed world, typed output
+  schemas, an Arabic summary then the JSON. The server's instructions: cite the printed page and the clip, say
+  «يحتاج مطابقة مع الصورة» rather than «محرّف», keep body and notes apart.
+- ORM calls through `sync_to_async`; 60 calls a minute per key from the `ToolCall` log (key, tool, ms, status).
+  A superuser's key sees every organisation's books (D102).
