@@ -269,7 +269,7 @@ def test_the_page_needs_an_organisation(org, other_org):
     member = user("member", "proofreader", other_org)
     page = logged(member).get(reverse("accounts:organization"))
     assert page.status_code == 200 and "دار أخرى" in page.content.decode()
-    assert "قالب جديد من تنسيق كتاب" not in page.content.decode()  # a proofreader saves none
+    assert "data-template-create" not in page.content.decode()  # a proofreader saves none
 
 
 # ====================================================================== the component under Node

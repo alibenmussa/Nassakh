@@ -15,8 +15,10 @@
 
     {% include "accounts/_auth_messages.html" %}
 
-    <p class="og-auth-text">أرسلنا رابط التأكيد إلى <bdi dir="ltr" class="og-auth-email">{{ email }}</bdi>. افتحه لتفعيل حسابك؛ يبقى صالحًا {{ days }}.</p>
-    <p class="help">لم تصلك الرسالة؟ تفقّد مجلد الرسائل غير المرغوب فيها، أو اطلب رابطًا جديدًا.</p>
+    <div class="og-auth-text stack-sm">
+      <p>أرسلنا رابط التفعيل إلى <bdi dir="ltr" class="og-auth-email">{{ email }}</bdi>.</p>
+      <p class="meta">الرابط صالح {{ days }}. إن لم تصلك الرسالة فانظر في البريد غير المرغوب فيه.</p>
+    </div>
 
     <form method="post" action="{% url 'accounts:signup_resend' %}" class="stack-sm" data-resend>
       {% csrf_token %}
@@ -25,7 +27,7 @@
       <button type="submit" class="btn w-full">أرسل الرابط مجددًا</button>
     </form>
 
-    <p class="og-auth-alt meta"><a class="link" href="{% url 'accounts:login' %}">العودة إلى تسجيل الدخول</a></p>
+    <p class="og-auth-alt meta"><a class="link" href="{% url 'accounts:login' %}">تسجيل الدخول</a></p>
   </div>
 </main>
 {% endblock %}

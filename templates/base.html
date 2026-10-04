@@ -109,13 +109,11 @@
     <div class="sidebar-footer">
       {% if nav_quota %}{% load organization %}
       {# D106: the account's page quota (pages the models may still read); the nearest expiry when under 14 days #}
-      <a class="og-quota" href="{% url 'accounts:organization' %}#quota" title="رصيد الصفحات: كل صفحة تقرؤها النماذج تُحتسب" data-nav-quota>
-        {% if nav_quota.unlimited %}
-        <span>الرصيد: غير محدود</span>
-        {% else %}
-        <span{% if nav_quota.available <= 0 %} class="is-empty"{% endif %}>الرصيد: {{ nav_quota.available|ar_pages }}</span>
-        {% if nav_quota.debt %}<span class="meta">عليك {{ nav_quota.debt|ar_pages }} تُخصم من الرصيد القادم</span>{% endif %}
-        {% if nav_quota.expiring_soon %}<span class="meta">ينتهي منها {{ nav_quota.expiring|ar_pages }} في <bdi class="num">{{ nav_quota.next_expiry|date:"Y-m-d" }}</bdi></span>{% endif %}
+      <a class="og-quota{% if not nav_quota.unlimited and nav_quota.available <= 0 %} is-empty{% endif %}" href="{% url 'accounts:organization' %}#quota" title="رصيد الصفحات" data-nav-quota>
+        <span class="og-quota-row"><span>الرصيد</span><span class="og-quota-value">{% if nav_quota.unlimited %}غير محدود{% else %}{{ nav_quota.available|ar_pages }}{% endif %}</span></span>
+        {% if not nav_quota.unlimited %}
+        {% if nav_quota.debt %}<span class="og-quota-sub"><span class="dot dot-danger" aria-hidden="true"></span>دَين {{ nav_quota.debt|ar_pages }}</span>
+        {% elif nav_quota.expiring_soon %}<span class="og-quota-sub"><span class="dot dot-warning" aria-hidden="true"></span>{{ nav_quota.expiring|ar_pages }} تنتهي <bdi class="num">{{ nav_quota.next_expiry|date:"Y-m-d" }}</bdi></span>{% endif %}
         {% endif %}
       </a>
       {% endif %}

@@ -35,6 +35,22 @@ def ar_pages(n) -> str:
 
 
 @register.filter
+def ar_count(n, forms: str) -> str:
+    """A count in Arabic from four comma-separated forms, «one,two,few,many»: `{{ n|ar_count:"عضو
+    واحد,عضوان,أعضاء,عضوًا" }}` → «لا أعضاء», «عضو واحد», «عضوان», «5 أعضاء», «12 عضوًا» (Western digits)."""
+    from accounts.billing import pages_phrase
+
+    parts = tuple(part.strip() for part in str(forms).split(","))
+    if len(parts) != 4:
+        return str(n)
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        return ""
+    return f"لا {parts[2]}" if count == 0 else pages_phrase(count, parts)  # type: ignore[arg-type]
+
+
+@register.filter
 def ar_days(n) -> str:
     """«يوم واحد», «يومين», «7 أيام», «365 يومًا»."""
     from accounts.signup import days_phrase

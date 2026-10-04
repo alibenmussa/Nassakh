@@ -391,8 +391,8 @@ def test_the_sidebar_shows_the_balance_and_a_near_expiry(client, account):
     billing.grant(account, 120, days=5)
     client.force_login(_member("m1", account))
     body = client.get(reverse("books:list")).content.decode()
-    assert "الرصيد: 120 صفحة" in body and "data-nav-quota" in body
-    assert "ينتهي منها 120 صفحة في" in body
+    assert 'class="og-quota-value">120 صفحة<' in body and "data-nav-quota" in body
+    assert "120 صفحة تنتهي" in body and "dot-warning" in body
     assert reverse("accounts:billing") not in body  # «الفوترة» is the superusers'
 
 
@@ -402,7 +402,8 @@ def test_the_sidebar_says_unlimited_and_shows_billing_to_a_superuser(client, roo
     default_organization()
     client.force_login(root)
     body = client.get(reverse("books:list")).content.decode()
-    assert "الرصيد: غير محدود" in body and reverse("accounts:billing") in body and "الفوترة" in body
+    assert 'class="og-quota-value">غير محدود<' in body and reverse("accounts:billing") in body
+    assert "الفوترة" in body
 
 
 def test_the_organisation_page_lists_the_live_grants_and_the_usage(client, account, book):

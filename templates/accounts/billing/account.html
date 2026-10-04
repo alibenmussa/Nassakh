@@ -1,10 +1,12 @@
 {% extends "base.html" %}
 {% comment %}
 An account on «الفوترة» (D106; accounts.billing_views.account), superusers only:
-- its numbers (available, balance, held, debt, read this month) and «غير محدود»;
-- «الأرصدة»: every grant with its state (live, not started, expired, revoked) and «إلغاء…»; the form adds one from a plan
-  (a small Alpine component fills pages, validity, amount and currency from the chosen plan) or by hand;
-- «الاستعمال حسب الكتاب» and «السجل» (the ledger, newest first; signed pages).
+- who the account is, then «الرصيد»: the numbers at a glance and, under a hairline, the two settings: «غير محدود» and the
+  overdraft limit;
+- «الأرصدة»: every grant with its state (live, not started, expired, revoked) and «إلغاء…» behind a confirmation; the form
+  that adds one, from a plan (a small Alpine component fills pages, validity, amount and currency from the chosen plan) or
+  by hand, folded under «إضافة رصيد» (open when it came back with errors);
+- «الاستعمال حسب الكتاب», «السجل» (the ledger, newest first; signed pages), «الأعضاء».
 Context: organization, summary, grants ([{grant, state}]), ledger, usage, members, plans, form (GrantForm).
 {% endcomment %}
 {% load organization %}
@@ -14,59 +16,98 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
 
 {% block content %}
 <div class="og-page stack-lg">
-  <div class="page-header">
-    <p class="meta">
-      {{ organization.get_kind_display }}{% if organization.org_type %} · {{ organization.get_org_type_display }}{% endif %}{% if organization.country %} · {{ organization.country }}{% endif %}{% if organization.website %} · <a class="link" href="{{ organization.website }}" rel="noopener noreferrer" target="_blank" dir="ltr">{{ organization.website }}</a>{% endif %}
+  <div class="og-head">
+    <p class="og-facts">
+      {% if organization.unlimited %}<span class="badge badge-accent">غير محدود</span> · {% endif %}{{ organization.get_kind_display }}{% if organization.org_type %} · {{ organization.get_org_type_display }}{% endif %}{% if organization.country %} · {{ organization.country }}{% endif %}{% if organization.website %} · <a class="link" href="{{ organization.website }}" rel="noopener noreferrer" target="_blank" dir="ltr">{{ organization.website }}</a>{% endif %}
       · أُنشئ <bdi class="num">{{ organization.created_at|date:"Y-m-d" }}</bdi>
-      · {% for m in members %}<bdi dir="auto">{{ m.user.get_full_name|default:m.user.get_username }}</bdi> <span dir="ltr">({{ m.user.email|default:m.user.get_username }}{% if not m.user.is_active %}، غير مفعّل{% endif %})</span>{% if not forloop.last %}، {% endif %}{% empty %}لا أعضاء{% endfor %}
     </p>
-    <form method="post" action="{% url 'accounts:billing_unlimited' organization.pk %}" class="og-inline-form" data-unlimited>
-      {% csrf_token %}
-      <input type="hidden" name="unlimited" value="{% if organization.unlimited %}0{% else %}1{% endif %}">
-      {% if organization.unlimited %}
-      <span class="badge badge-accent">غير محدود</span>
-      <button type="submit" class="btn btn-sm">إيقاف «غير محدود»</button>
-      {% else %}
-      <button type="submit" class="btn btn-sm">جعله غير محدود</button>
+  </div>
+
+  {# ---------------------------------------------------------------- the numbers and the two settings #}
+  <section class="card og-section" id="balance" aria-labelledby="bl-balance-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-balance-title">الرصيد</h2>
+    </div>
+    {% include "accounts/billing/_numbers.html" with s=summary %}
+    <div class="og-settings">
+      <form method="post" action="{% url 'accounts:billing_unlimited' organization.pk %}" class="og-inline-form" data-unlimited>
+        {% csrf_token %}
+        <input type="hidden" name="unlimited" value="{% if organization.unlimited %}0{% else %}1{% endif %}">
+        <button type="submit" class="btn btn-sm">{% if organization.unlimited %}إيقاف «غير محدود»{% else %}جعله غير محدود{% endif %}</button>
+      </form>
+      {% if not organization.unlimited %}
+      <form method="post" action="{% url 'accounts:billing_overdraft' organization.pk %}" class="og-inline-form" data-overdraft>
+        {% csrf_token %}
+        <label class="label" for="overdraft-pages">السحب على المكشوف</label>
+        <input id="overdraft-pages" class="input is-short" type="number" name="pages" min="0" step="1" value="{{ organization.overdraft_pages }}" dir="ltr">
+        <span class="meta">صفحة</span>
+        <button type="submit" class="btn btn-ghost btn-sm">حفظ</button>
+      </form>
       {% endif %}
-    </form>
-    {% if not organization.unlimited %}
-    <form method="post" action="{% url 'accounts:billing_overdraft' organization.pk %}" class="og-inline-form" data-overdraft>
-      {% csrf_token %}
-      <label class="meta" for="overdraft-pages">السحب على المكشوف</label>
-      <input id="overdraft-pages" class="input" type="number" name="pages" min="0" step="1" value="{{ organization.overdraft_pages }}" dir="ltr" style="width: 7rem">
-      <span class="meta">صفحة</span>
-      <button type="submit" class="btn btn-sm">حفظ</button>
-    </form>
-    {% endif %}
-  </div>
-
-  {% if form.non_field_errors %}
-  <div class="banner banner-danger" role="alert">
-    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
-    <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
-  </div>
-  {% endif %}
-
-  {# ---------------------------------------------------------------- numbers #}
-  {% include "accounts/billing/_numbers.html" with s=summary %}
+    </div>
+  </section>
 
   {# ---------------------------------------------------------------- grants #}
-  <section class="card stack" id="grants" aria-labelledby="bl-grants-title">
+  <section class="card og-section" id="grants" aria-labelledby="bl-grants-title"
+           x-data="{ adding: {% if form.is_bound %}true{% else %}false{% endif %}, fill(select) { const o = select.selectedOptions[0]; const f = select.form; if (!o || !o.value) return; f.pages.value = o.dataset.pages; f.days.value = o.dataset.days; f.expires_on.value = ''; f.amount.value = o.dataset.price; f.currency.value = o.dataset.currency; f.kind.value = 'purchase'; } }">
     <div class="card-header">
-      <h2 class="section-title" id="bl-grants-title">الأرصدة</h2>
-      <span class="meta">تُؤخذ الصفحات من الرصيد الذي ينتهي أولًا؛ الملغى والمنتهي لا يُحتسبان</span>
+      <div class="og-section-title">
+        <h2 class="section-title" id="bl-grants-title">الأرصدة</h2>
+        {% if grants %}<span class="og-count"><bdi class="num">{{ grants|length }}</bdi></span>{% endif %}
+      </div>
+      <button type="button" class="btn btn-sm" @click="adding = !adding; if (adding) $nextTick(() => $refs.plan.focus())" :aria-expanded="adding ? 'true' : 'false'" aria-controls="bl-grant-form">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+        <span>إضافة رصيد</span>
+      </button>
     </div>
+
+    {# the form: from a plan (its values fill the blanks) or by hand #}
+    <form method="post" action="{% url 'accounts:billing_grant_add' organization.pk %}" class="og-form" id="bl-grant-form" novalidate data-grant-form x-show="adding" {% if not form.is_bound %}x-cloak{% endif %} @keydown.escape="adding = false">
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+      <div class="banner banner-danger" role="alert">
+        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+        <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+      </div>
+      {% endif %}
+      <div class="og-grid">
+        <div class="field">
+          <label class="label" for="bl-plan">{{ form.plan.label }}</label>
+          <select id="bl-plan" name="plan" class="select" x-ref="plan" @change="fill($el)">
+            <option value="">بلا باقة</option>
+            {% for plan in plans %}<option value="{{ plan.pk }}" data-pages="{{ plan.pages }}" data-days="{{ plan.validity_days }}" data-price="{{ plan.price }}" data-currency="{{ plan.currency }}"{% if form.plan.value|stringformat:'s' == plan.pk|stringformat:'s' %} selected{% endif %}>{{ plan.name }} · {{ plan.pages|ar_pages }} · {{ plan.price|stringformat:'s' }} {{ plan.currency }}</option>{% endfor %}
+          </select>
+        </div>
+        {% include "books/_field.html" with field=form.kind %}
+        {% include "books/_field.html" with field=form.pages %}
+      </div>
+      <div class="og-grid">
+        {% include "books/_field.html" with field=form.starts_on %}
+        {% include "books/_field.html" with field=form.expires_on %}
+        {% include "books/_field.html" with field=form.days %}
+      </div>
+      <div class="og-grid">
+        {% include "books/_field.html" with field=form.amount %}
+        {% include "books/_field.html" with field=form.currency %}
+        {% include "books/_field.html" with field=form.reference %}
+        {% include "books/_field.html" with field=form.note %}
+      </div>
+      <div class="og-form-actions">
+        <button type="submit" class="btn btn-primary btn-sm">إضافة الرصيد</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="adding = false">إلغاء</button>
+      </div>
+    </form>
+
     {% if grants %}
     <div class="table-wrap">
-      <table class="table og-bill-table">
+      <table class="table og-table">
         <thead>
           <tr>
             <th scope="col">الرصيد</th>
-            <th scope="col" class="num">الصفحات</th>
             <th scope="col" class="num">المتبقي</th>
+            <th scope="col" class="num">من</th>
             <th scope="col">المدة</th>
-            <th scope="col">المبلغ والمرجع</th>
+            <th scope="col">المبلغ</th>
             <th scope="col"><span class="sr-only">إجراءات</span></th>
           </tr>
         </thead>
@@ -80,27 +121,26 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
                 <span class="dot {% if row.state == 'live' %}dot-success{% elif row.state == 'future' %}dot-accent{% else %}dot-neutral{% endif %}" aria-hidden="true"></span>
                 {% if row.state == 'live' %}ساري{% elif row.state == 'future' %}لم يبدأ{% elif row.state == 'expired' %}انتهى{% else %}ملغى <bdi class="num">{{ g.revoked_at|date:"Y-m-d" }}</bdi>{% endif %}
               </div>
-              {% if g.note %}<div class="meta">{{ g.note }}</div>{% endif %}
+              {% if g.note %}<div class="og-row-meta">{{ g.note }}</div>{% endif %}
             </td>
-            <td class="num">{{ g.pages }}</td>
             <td class="num">{% if row.state == 'live' or row.state == 'future' %}{{ g.remaining }}{% else %}<span class="meta">{{ g.remaining }}</span>{% endif %}</td>
+            <td class="num meta">{{ g.pages }}</td>
             <td>
               <bdi class="num">{{ g.starts_at|date:"Y-m-d" }}</bdi> ←
               {% if g.expires_at %}<bdi class="num">{{ g.expires_at|date:"Y-m-d" }}</bdi>{% else %}<span class="meta">لا ينتهي</span>{% endif %}
             </td>
             <td>
-              {% if g.amount is not None %}<bdi class="num" dir="ltr">{{ g.amount }} {{ g.currency }}</bdi>{% else %}<span class="meta">—</span>{% endif %}
-              {% if g.reference %}<div class="meta">المرجع: <bdi dir="auto">{{ g.reference }}</bdi></div>{% endif %}
-              <div class="meta">{{ g.created_by.get_username|default:"النظام" }} · <bdi class="num">{{ g.created_at|date:"Y-m-d" }}</bdi></div>
+              {% if g.amount is not None %}<bdi class="num" dir="ltr">{{ g.amount|stringformat:'s' }} {{ g.currency }}</bdi>{% else %}<span class="meta">—</span>{% endif %}
+              <div class="og-row-meta">{% if g.reference %}<bdi dir="auto">{{ g.reference }}</bdi> · {% endif %}{{ g.created_by.get_username|default:"النظام" }} · <bdi class="num">{{ g.created_at|date:"Y-m-d" }}</bdi></div>
             </td>
-            <td class="og-actions" x-data="{ ask: false }">
+            <td class="og-row-actions" x-data="{ ask: false }">
               {% if row.state != 'revoked' %}
               <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true">إلغاء…</button>
               <template x-teleport="body">
                 <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
                   <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="bl-revoke-{{ g.pk }}" @keydown.escape.stop.prevent="ask = false">
                     <h2 class="rv-modal-title" id="bl-revoke-{{ g.pk }}">إلغاء رصيد {{ g.pages|ar_pages }}؟</h2>
-                    <p class="meta">لا تُحتسب صفحاته المتبقية (<bdi class="num">{{ g.remaining }}</bdi>) بعد الآن، ويُسجَّل ذلك في السجل. لا يمكن التراجع؛ يُضاف رصيد جديد إن لزم.</p>
+                    <p class="meta">تسقط صفحاته المتبقية (<bdi class="num">{{ g.remaining }}</bdi>) ويُسجَّل ذلك. لا تراجع عن هذا.</p>
                     <form method="post" action="{% url 'accounts:billing_grant_revoke' g.pk %}" class="rv-modal-actions">
                       {% csrf_token %}
                       <button type="button" class="btn" @click="ask = false">تراجع</button>
@@ -118,54 +158,27 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
       </table>
     </div>
     {% else %}
-    <p class="help">لا رصيد لهذا الحساب بعد.{% if not organization.unlimited %} لا يبدأ معالجة كتاب حتى يُضاف له رصيد.{% endif %}</p>
+    <div class="og-empty"><p>لا رصيد بعد.{% if not organization.unlimited %} لا يبدأ الحساب معالجة كتاب حتى يُضاف له رصيد.{% endif %}</p></div>
     {% endif %}
-
-    {# the form: from a plan (its values fill the blanks) or by hand #}
-    <form method="post" action="{% url 'accounts:billing_grant_add' organization.pk %}" class="og-upload stack" novalidate data-grant-form
-          x-data="{ fill(select) { const o = select.selectedOptions[0]; const f = select.form; if (!o || !o.value) return; f.pages.value = o.dataset.pages; f.days.value = o.dataset.days; f.expires_on.value = ''; f.amount.value = o.dataset.price; f.currency.value = o.dataset.currency; f.kind.value = 'purchase'; } }">
-      {% csrf_token %}
-      <h3 class="group-label">إضافة رصيد</h3>
-      <div class="og-bill-grid">
-        <div class="field">
-          <label class="label" for="bl-plan">{{ form.plan.label }}</label>
-          <select id="bl-plan" name="plan" class="select" @change="fill($el)">
-            <option value="">بلا باقة</option>
-            {% for plan in plans %}<option value="{{ plan.pk }}" data-pages="{{ plan.pages }}" data-days="{{ plan.validity_days }}" data-price="{{ plan.price }}" data-currency="{{ plan.currency }}"{% if form.plan.value|stringformat:'s' == plan.pk|stringformat:'s' %} selected{% endif %}>{{ plan.name }} · {{ plan.pages|ar_pages }} · {{ plan.price }} {{ plan.currency }}</option>{% endfor %}
-          </select>
-        </div>
-        {% include "books/_field.html" with field=form.kind %}
-        {% include "books/_field.html" with field=form.pages %}
-        {% include "books/_field.html" with field=form.starts_on %}
-        {% include "books/_field.html" with field=form.expires_on %}
-        {% include "books/_field.html" with field=form.days %}
-        {% include "books/_field.html" with field=form.amount %}
-        {% include "books/_field.html" with field=form.currency %}
-        {% include "books/_field.html" with field=form.reference %}
-        {% include "books/_field.html" with field=form.note %}
-      </div>
-      <div><button type="submit" class="btn btn-primary btn-sm">إضافة الرصيد</button></div>
-    </form>
   </section>
 
   {# ---------------------------------------------------------------- usage #}
-  <section class="card stack" id="usage" aria-labelledby="bl-usage-title">
+  <section class="card og-section" id="usage" aria-labelledby="bl-usage-title">
     <div class="card-header">
       <h2 class="section-title" id="bl-usage-title">الاستعمال حسب الكتاب</h2>
-      <span class="meta">صفحات قرأتها النماذج، وكل إعادة معالجة ناجحة تُحتسب من جديد</span>
     </div>
     {% include "accounts/billing/_usage.html" with link_books=True %}
   </section>
 
   {# ---------------------------------------------------------------- ledger #}
-  <section class="card stack" id="ledger" aria-labelledby="bl-ledger-title">
+  <section class="card og-section" id="ledger" aria-labelledby="bl-ledger-title">
     <div class="card-header">
       <h2 class="section-title" id="bl-ledger-title">السجل</h2>
-      <span class="meta">آخر 200 قيد، الأحدث أولًا</span>
+      <span class="meta">آخر 200 قيد</span>
     </div>
     {% if ledger %}
     <div class="table-wrap">
-      <table class="table og-bill-table og-ledger">
+      <table class="table og-table og-ledger">
         <thead>
           <tr>
             <th scope="col">في</th>
@@ -182,7 +195,7 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
             <td class="num"><bdi dir="ltr" class="{% if e.pages < 0 %}og-minus{% else %}og-plus{% endif %}">{% if e.pages > 0 %}+{% endif %}{{ e.pages }}</bdi></td>
             <td class="meta">
               {% if e.book %}<a class="link" href="{% url 'books:detail' e.book_id %}">{{ e.book.title }}</a>{% if e.page %} · ص <bdi class="num">{{ e.page.number }}</bdi>{% endif %}{% elif e.kind == 'consume' %}كتاب محذوف{% endif %}
-              {% if e.grant_id %}{% if e.book %} · {% endif %}الرصيد #<bdi class="num">{{ e.grant_id }}</bdi>{% endif %}
+              {% if e.grant_id %}{% if e.book %} · {% endif %}رصيد #<bdi class="num">{{ e.grant_id }}</bdi>{% endif %}
               {% if e.note %} · {{ e.note }}{% endif %}
               {% if e.user %} · {{ e.user.get_username }}{% endif %}
             </td>
@@ -192,7 +205,27 @@ Context: organization, summary, grants ([{grant, state}]), ledger, usage, member
       </table>
     </div>
     {% else %}
-    <p class="help">لا قيود بعد.</p>
+    <p class="meta">لا قيود بعد.</p>
+    {% endif %}
+  </section>
+
+  {# ---------------------------------------------------------------- members #}
+  <section class="card og-section" id="members" aria-labelledby="bl-members-title">
+    <div class="card-header">
+      <h2 class="section-title" id="bl-members-title">الأعضاء</h2>
+    </div>
+    {% if members %}
+    <ul class="og-members">
+      {% for m in members %}
+      <li class="og-member">
+        <bdi dir="auto">{{ m.user.get_full_name|default:m.user.get_username }}</bdi>
+        <span class="meta" dir="ltr">{{ m.user.email|default:m.user.get_username }}</span>
+        <span class="meta">· {{ m.get_role_display }}{% if not m.user.is_active %} · غير مفعّل{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="meta">لا أعضاء.</p>
     {% endif %}
   </section>
 </div>

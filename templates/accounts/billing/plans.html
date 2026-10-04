@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% comment %}
 The plans on «الفوترة» (D106; accounts.billing_views.plans), superusers only: each plan (pages, validity, price, on sale
-or not, grants made from it) with «تعديل» (inline form), and the form to add one. A plan changed later leaves the grants
-made from it as they were. Context: plans (n_grants), form (PlanForm).
+or not, grants made from it) with «تعديل», which opens a form in a row beneath; the form that adds one is folded under
+«باقة جديدة» (open when it came back with errors). A plan changed later leaves the grants made from it as they were.
+Context: plans (n_grants), form (PlanForm).
 {% endcomment %}
 {% load organization %}
 {% block head_title %}الباقات · الفوترة · نسّاخ{% endblock %}
@@ -11,15 +12,45 @@ made from it as they were. Context: plans (n_grants), form (PlanForm).
 
 {% block content %}
 <div class="og-page stack-lg">
-  <p class="meta">الباقات التي تُباع؛ تظهر في «إضافة رصيد» لكل حساب ما دامت متاحة.</p>
-
-  <section class="card stack" aria-labelledby="bl-plans-title">
+  <section class="card og-section" aria-labelledby="bl-plans-title" x-data="{ adding: {% if form.is_bound %}true{% else %}false{% endif %} }">
     <div class="card-header">
-      <h2 class="section-title" id="bl-plans-title">الباقات</h2>
+      <div class="og-section-title">
+        <h2 class="section-title" id="bl-plans-title">الباقات</h2>
+        <span class="meta">تظهر المتاحة منها في «إضافة رصيد»</span>
+      </div>
+      {% if plans %}
+      <button type="button" class="btn btn-sm" @click="adding = !adding; if (adding) $nextTick(() => $refs.name.focus())" :aria-expanded="adding ? 'true' : 'false'" aria-controls="bl-plan-form">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+        <span>باقة جديدة</span>
+      </button>
+      {% endif %}
     </div>
+
+    <form method="post" action="{% url 'accounts:billing_plans' %}" class="og-form" id="bl-plan-form" novalidate data-plan-form x-show="adding" {% if not form.is_bound %}x-cloak{% endif %} @keydown.escape="adding = false">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<p class="field-error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
+      <div class="og-grid">
+        <div class="field">
+          <label class="label" for="{{ form.name.id_for_label }}">{{ form.name.label }}<span class="req" aria-hidden="true">*</span></label>
+          <input type="text" name="{{ form.name.html_name }}" id="{{ form.name.id_for_label }}" class="input" value="{{ form.name.value|default:'' }}" maxlength="120" dir="auto" x-ref="name">
+          {% for error in form.name.errors %}<p class="field-error" role="alert">{{ error }}</p>{% endfor %}
+        </div>
+        {% include "books/_field.html" with field=form.pages %}
+        {% include "books/_field.html" with field=form.validity_days %}
+        {% include "books/_field.html" with field=form.price %}
+        {% include "books/_field.html" with field=form.currency %}
+        {% include "books/_field.html" with field=form.note %}
+      </div>
+      <label class="check"><input type="checkbox" name="active"{% if form.active.value %} checked{% endif %}><span>متاحة للبيع</span></label>
+      <div class="og-form-actions">
+        <button type="submit" class="btn btn-primary btn-sm">إضافة الباقة</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="adding = false">إلغاء</button>
+      </div>
+    </form>
+
     {% if plans %}
     <div class="table-wrap">
-      <table class="table og-bill-table">
+      <table class="table og-table">
         <thead>
           <tr>
             <th scope="col">الباقة</th>
@@ -30,16 +61,25 @@ made from it as they were. Context: plans (n_grants), form (PlanForm).
             <th scope="col"><span class="sr-only">إجراءات</span></th>
           </tr>
         </thead>
-        <tbody>
-          {% for plan in plans %}
-          <tr data-plan="{{ plan.pk }}" x-data="{ edit: false }">
+        {% for plan in plans %}
+        <tbody data-plan="{{ plan.pk }}" x-data="{ edit: false }">
+          <tr>
             <td>
-              <div>{{ plan.name }}</div>
+              <div class="og-name">{{ plan.name }}</div>
               <div class="status"><span class="dot {% if plan.active %}dot-success{% else %}dot-neutral{% endif %}" aria-hidden="true"></span>{% if plan.active %}متاحة{% else %}موقوفة{% endif %}</div>
-              {% if plan.note %}<div class="meta">{{ plan.note }}</div>{% endif %}
-              <form method="post" action="{% url 'accounts:billing_plan_edit' plan.pk %}" class="og-edit-form stack-sm" x-show="edit" x-cloak @keydown.escape="edit = false">
+              {% if plan.note %}<div class="og-row-meta">{{ plan.note }}</div>{% endif %}
+            </td>
+            <td class="num">{{ plan.pages }}</td>
+            <td class="num">{{ plan.validity_days|ar_days }}</td>
+            <td class="num"><bdi dir="ltr">{{ plan.price|stringformat:'s' }} {{ plan.currency }}</bdi></td>
+            <td class="num">{{ plan.n_grants }}</td>
+            <td class="og-row-actions"><button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit" :aria-expanded="edit ? 'true' : 'false'">تعديل</button></td>
+          </tr>
+          <tr class="og-edit-row" x-show="edit" x-cloak>
+            <td colspan="6">
+              <form method="post" action="{% url 'accounts:billing_plan_edit' plan.pk %}" class="stack-sm" @keydown.escape="edit = false">
                 {% csrf_token %}
-                <div class="og-bill-grid">
+                <div class="og-grid">
                   <div class="field"><label class="label" for="pl-name-{{ plan.pk }}">الاسم</label><input id="pl-name-{{ plan.pk }}" name="name" class="input" value="{{ plan.name }}" maxlength="120" required dir="auto"></div>
                   <div class="field"><label class="label" for="pl-pages-{{ plan.pk }}">الصفحات</label><input id="pl-pages-{{ plan.pk }}" name="pages" type="number" min="1" class="input" value="{{ plan.pages }}" required dir="ltr"></div>
                   <div class="field"><label class="label" for="pl-days-{{ plan.pk }}">الصلاحية (أيام)</label><input id="pl-days-{{ plan.pk }}" name="validity_days" type="number" min="1" class="input" value="{{ plan.validity_days }}" required dir="ltr"></div>
@@ -48,38 +88,20 @@ made from it as they were. Context: plans (n_grants), form (PlanForm).
                   <div class="field"><label class="label" for="pl-note-{{ plan.pk }}">ملاحظة</label><input id="pl-note-{{ plan.pk }}" name="note" class="input" value="{{ plan.note }}" dir="auto"></div>
                 </div>
                 <label class="check"><input type="checkbox" name="active"{% if plan.active %} checked{% endif %}><span>متاحة للبيع</span></label>
-                <div class="og-inline-form"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
+                <div class="og-form-actions"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
               </form>
             </td>
-            <td class="num">{{ plan.pages }}</td>
-            <td class="num">{{ plan.validity_days|ar_days }}</td>
-            <td class="num"><bdi dir="ltr">{{ plan.price }} {{ plan.currency }}</bdi></td>
-            <td class="num">{{ plan.n_grants }}</td>
-            <td class="og-actions"><button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit" :aria-expanded="edit ? 'true' : 'false'">تعديل</button></td>
           </tr>
-          {% endfor %}
         </tbody>
+        {% endfor %}
       </table>
     </div>
     {% else %}
-    <p class="help">لا باقات بعد.</p>
+    <div class="og-empty">
+      <p>لا باقات بعد.</p>
+      <button type="button" class="btn btn-sm" x-show="!adding" @click="adding = true; $nextTick(() => $refs.name.focus())">باقة جديدة</button>
+    </div>
     {% endif %}
-
-    <form method="post" action="{% url 'accounts:billing_plans' %}" class="og-upload stack" novalidate data-plan-form>
-      {% csrf_token %}
-      <h3 class="group-label">باقة جديدة</h3>
-      {% if form.non_field_errors %}<p class="field-error" role="alert">{{ form.non_field_errors|join:" " }}</p>{% endif %}
-      <div class="og-bill-grid">
-        {% include "books/_field.html" with field=form.name %}
-        {% include "books/_field.html" with field=form.pages %}
-        {% include "books/_field.html" with field=form.validity_days %}
-        {% include "books/_field.html" with field=form.price %}
-        {% include "books/_field.html" with field=form.currency %}
-        {% include "books/_field.html" with field=form.note %}
-      </div>
-      <label class="check"><input type="checkbox" name="active"{% if form.active.value %} checked{% endif %}><span>متاحة للبيع</span></label>
-      <div><button type="submit" class="btn btn-primary btn-sm">إضافة الباقة</button></div>
-    </form>
   </section>
 </div>
 {% endblock %}

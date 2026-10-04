@@ -1,77 +1,85 @@
 {% extends "base.html" %}
 {% comment %}
-The organisation's page (D98; accounts.views.organization): its fonts and its format templates.
-- «خطوط المؤسسة»: each face shown in itself (`nk-org-<pk>`, publishing.fonts.org_sample_css) with its files, its
-  letters, the books that use it and its licence notice; its admins add files (TTF, OTF, WOFF2: checked, one face per
-  family, the licence confirmed), rename a face, remove it (the books that use it fall back to Amiri with a notice, said
-  in the confirmation) and restore or delete a removed one (for good only when no book uses it).
-- «قوالب التنسيق»: each template with its summary and the book it came from; «تطبيق على كتاب…» opens the changes it
-  brings to a chosen book before applying (accounts:template_apply); editors save a book's format as a template; admins
-  rename, update from a book and delete.
-- «الرصيد» (D106): the account's page quota, read-only: its numbers, its live grants, the pages read per book.
-A superuser among several organisations gets a switcher (`organizations`, D102).
-Context: organization, organizations, is_org_admin, can_edit_books, fonts, removed_fonts ([{font, styles, books, more, used,
-used_phrase, templates, licence_line}]), templates ([{template, summary}]), books, sample_css, max_mb, accept, members,
-quota (accounts.billing.Summary), quota_grants, quota_usage.
+The account's page (D98, D106; accounts.views.organization): who the account is, its balance, its fonts, its format
+templates. One card a thing; each a list of rows with the row's actions on its end side, the details behind
+«التفاصيل», and the section's form folded under one button in its header.
+- the identity line: kind · type · country · members; admins rename; a superuser among several organisations switches
+  (`organizations`, D102);
+- «الرصيد» (D106, read-only): the pages available, the live grants, the usage by book behind a disclosure;
+- «الخطوط»: each face in itself (`nk-org-<pk>`, publishing.fonts.org_sample_css); admins add files (TTF, OTF, WOFF2;
+  one face per family; the licence confirmed), rename, remove (the books that use it fall back to Amiri, said in the
+  confirmation), restore or delete a removed one (for good only when no book uses it);
+- «قوالب التنسيق»: «تطبيق على كتاب…» opens the changes before applying (accounts:template_apply); editors save a book's
+  format as a template; admins rename, update from a book and delete from the row's menu.
+Context: organization, organizations, is_org_admin, can_edit_books, fonts, removed_fonts ([{font, styles, books, more,
+used, used_phrase, templates, licence_line}]), templates ([{template, summary}]), books, sample_css, max_mb, accept,
+members, quota (accounts.billing.Summary), quota_grants, quota_usage.
 {% endcomment %}
-{% block head_title %}المؤسسة · {{ organization.name }} · نسّاخ{% endblock %}
+{% load organization %}
+{% block head_title %}{{ organization.name }} · نسّاخ{% endblock %}
 {% block title %}{{ organization.name }}{% endblock %}
 {% block extra_head %}{% if sample_css %}<style data-org-fonts>{{ sample_css|safe }}</style>{% endif %}{% endblock %}
 
 {% block content %}
 <div class="og-page stack-lg">
-  <div class="page-header">
-    <p class="meta">الخطوط وقوالب التنسيق التي تشترك فيها كتب المؤسسة · <bdi class="num">{{ members }}</bdi> {% if members == 1 %}عضو{% else %}أعضاء{% endif %}</p>
+  {# ------------------------------------------------------------------ who the account is #}
+  <div class="og-head" x-data="{ edit: false }">
+    <p class="og-facts" x-show="!edit">
+      {{ organization.get_kind_display }}{% if organization.org_type %} · {{ organization.get_org_type_display }}{% endif %}{% if organization.country %} · {{ organization.country }}{% endif %}
+      · {{ members|ar_count:"عضو واحد,عضوان,أعضاء,عضوًا" }}
+    </p>
     {% if is_org_admin %}
-    <div x-data="{ edit: false }" class="og-rename">
-      <button type="button" class="btn btn-ghost btn-sm" x-show="!edit" @click="edit = true; $nextTick(() => $refs.orgName.focus())">تغيير اسم المؤسسة</button>
-      <form method="post" action="{% url 'accounts:organization_rename' %}" class="og-inline-form" x-show="edit" x-cloak @keydown.escape="edit = false">
-        {% csrf_token %}
-        <label class="sr-only" for="og-org-name">اسم المؤسسة</label>
-        <input id="og-org-name" type="text" name="name" class="input" value="{{ organization.name }}" maxlength="200" required x-ref="orgName" dir="auto">
-        <button type="submit" class="btn btn-sm">حفظ</button>
-        <button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button>
-      </form>
-    </div>
-    {% endif %}
-    {% if organizations %}
-    {# a superuser works in any organisation (D102): its page, and the organisation of the books they add #}
-    <form method="post" action="{% url 'accounts:organization_switch' %}" class="og-inline-form">
+    <form method="post" action="{% url 'accounts:organization_rename' %}" class="og-inline-form" x-show="edit" x-cloak @keydown.escape="edit = false">
       {% csrf_token %}
-      <label class="meta" for="og-switch">العمل في مؤسسة أخرى</label>
-      <select id="og-switch" name="organization" class="select" onchange="this.form.submit()">
-        {% for item in organizations %}<option value="{{ item.pk }}"{% if item.pk == organization.pk %} selected{% endif %}>{{ item.name }}</option>{% endfor %}
-      </select>
-      <noscript><button type="submit" class="btn btn-sm">انتقال</button></noscript>
+      <label class="sr-only" for="og-org-name">الاسم</label>
+      <input id="og-org-name" type="text" name="name" class="input" value="{{ organization.name }}" maxlength="200" required x-ref="orgName" dir="auto">
+      <button type="submit" class="btn btn-sm">حفظ</button>
+      <button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button>
     </form>
     {% endif %}
+    <div class="og-head-actions">
+      {% if organizations %}
+      {# a superuser works in any organisation (D102): its page, and the organisation of the books they add #}
+      <form method="post" action="{% url 'accounts:organization_switch' %}" class="og-inline-form">
+        {% csrf_token %}
+        <label class="meta" for="og-switch">العمل في</label>
+        <select id="og-switch" name="organization" class="select" onchange="this.form.submit()">
+          {% for item in organizations %}<option value="{{ item.pk }}"{% if item.pk == organization.pk %} selected{% endif %}>{{ item.name }}</option>{% endfor %}
+        </select>
+        <noscript><button type="submit" class="btn btn-sm">انتقال</button></noscript>
+      </form>
+      {% endif %}
+      {% if is_org_admin %}
+      <button type="button" class="btn btn-ghost btn-sm" x-show="!edit" @click="edit = true; $nextTick(() => $refs.orgName.focus())">تغيير الاسم</button>
+      {% endif %}
+    </div>
   </div>
 
-  {# ------------------------------------------------------------------ the page quota (D106, read-only) #}
-  <section class="card stack" id="quota" aria-labelledby="og-quota-title">
+  {# ------------------------------------------------------------------ the balance (D106, read-only) #}
+  <section class="card og-section" id="quota" aria-labelledby="og-quota-title">
     <div class="card-header">
       <h2 class="section-title" id="og-quota-title">الرصيد</h2>
-      <span class="meta">كل صفحة تقرؤها النماذج بنجاح تُحتسب صفحةً، وإعادة معالجتها تُحتسب من جديد؛ التخطيط بلا حساب</span>
+      {% if not quota.unlimited %}<span class="meta">تُحتسب الصفحة حين تقرؤها النماذج</span>{% endif %}
     </div>
     {% include "accounts/billing/_numbers.html" with s=quota %}
     {% if not quota.unlimited %}
     {% if quota_grants %}
     <div class="table-wrap">
-      <table class="table og-bill-table" data-quota-grants>
+      <table class="table og-table" data-quota-grants>
         <thead>
           <tr>
             <th scope="col">الرصيد</th>
-            <th scope="col" class="num">الصفحات</th>
             <th scope="col" class="num">المتبقي</th>
-            <th scope="col">ينتهي في</th>
+            <th scope="col" class="num">من</th>
+            <th scope="col">ينتهي</th>
           </tr>
         </thead>
         <tbody>
           {% for g in quota_grants %}
           <tr>
             <td>{{ g.get_kind_display }}{% if g.plan %} · {{ g.plan.name }}{% endif %}</td>
-            <td class="num">{{ g.pages }}</td>
             <td class="num">{{ g.remaining }}</td>
+            <td class="num meta">{{ g.pages }}</td>
             <td>{% if g.expires_at %}<bdi class="num">{{ g.expires_at|date:"Y-m-d" }}</bdi>{% else %}<span class="meta">لا ينتهي</span>{% endif %}</td>
           </tr>
           {% endfor %}
@@ -79,259 +87,282 @@ quota (accounts.billing.Summary), quota_grants, quota_usage.
       </table>
     </div>
     {% else %}
-    <p class="help">لا رصيد ساريًا للحساب. لزيادته تواصل مع إدارة نسّاخ.</p>
+    <div class="og-empty"><p>لا رصيد ساريًا. لزيادته تواصل مع إدارة نسّاخ.</p></div>
     {% endif %}
-    <h3 class="group-label">الاستعمال حسب الكتاب</h3>
-    {% include "accounts/billing/_usage.html" with usage=quota_usage link_books=True %}
+    <details class="og-details">
+      <summary>الاستعمال حسب الكتاب</summary>
+      <div class="og-details-body">{% include "accounts/billing/_usage.html" with usage=quota_usage link_books=True %}</div>
+    </details>
     {% endif %}
   </section>
 
   {# ------------------------------------------------------------------ fonts #}
-  <section class="card stack" id="fonts" aria-labelledby="og-fonts-title">
+  <section class="card og-section" id="fonts" aria-labelledby="og-fonts-title" x-data="{ adding: false, names: [], confirm: false }">
     <div class="card-header">
-      <h2 class="section-title" id="og-fonts-title">خطوط المؤسسة</h2>
-      <span class="meta">تظهر في قائمة الخطوط في «التنسيق» بعد خطوط نسّاخ، وتدخل في المعاينة وملفات PDF وWord وEPUB</span>
+      <div class="og-section-title">
+        <h2 class="section-title" id="og-fonts-title">الخطوط</h2>
+        {% if fonts %}<span class="og-count"><bdi class="num">{{ fonts|length }}</bdi></span>{% endif %}
+      </div>
+      {% if is_org_admin and fonts %}
+      <button type="button" class="btn btn-sm" @click="adding = !adding; if (adding) $nextTick(() => $refs.files.focus())" :aria-expanded="adding ? 'true' : 'false'" aria-controls="og-font-form">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+        <span>إضافة خط</span>
+      </button>
+      {% endif %}
     </div>
-
-    {% if fonts %}
-    <div class="table-wrap">
-      <table class="table og-fonts">
-        <thead>
-          <tr>
-            <th scope="col">الخط</th>
-            <th scope="col">الملفات</th>
-            <th scope="col">الاستعمال</th>
-            {% if is_org_admin %}<th scope="col"><span class="sr-only">إجراءات</span></th>{% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in fonts %}
-          <tr data-font="{{ row.font.key }}">
-            <td>
-              <div class="og-font-name" style="font-family: 'nk-org-{{ row.font.pk }}', var(--font-sans)">{{ row.font.name }}</div>
-              <div class="og-font-sample" style="font-family: 'nk-org-{{ row.font.pk }}', var(--font-sans)" dir="rtl">{% if row.font.arabic %}نسّاخ يُخرج الكتاب صفحةً صفحة{% endif %}{% if row.font.arabic and row.font.latin %} · {% endif %}{% if row.font.latin %}<bdi>Nassakh 1234</bdi>{% endif %}</div>
-              <div class="meta"><bdi dir="ltr">{{ row.font.family }}</bdi>{% if row.licence_line %} · <span class="og-licence" title="{{ row.font.licence }}">{{ row.licence_line|truncatechars:70 }}</span>{% endif %}</div>
-            </td>
-            <td>
-              <div class="og-badges">{% for label in row.styles %}<span class="badge">{{ label }}</span>{% endfor %}</div>
-              <div class="meta">{% if row.font.arabic %}حروف عربية{% endif %}{% if row.font.arabic and row.font.latin %} و{% endif %}{% if row.font.latin %}لاتينية وأرقام{% endif %}</div>
-            </td>
-            <td>
-              {% if row.used %}
-              <div>{{ row.used_phrase }}</div>
-              <div class="meta">{% for book in row.books %}<a class="link" href="{% url 'editor:layout' book.pk %}?tab=format">{{ book.title }}</a>{% if not forloop.last %}، {% endif %}{% endfor %}{% if row.more %} و<bdi class="num">{{ row.more }}</bdi> غيرها{% endif %}</div>
-              {% else %}
-              <span class="meta">لا يستعمله كتاب بعد</span>
-              {% endif %}
-              {% if row.templates %}<div class="meta">في القوالب: {{ row.templates|join:"، " }}</div>{% endif %}
-            </td>
-            {% if is_org_admin %}
-            <td class="og-actions" x-data="{ edit: false, ask: false }">
-              <button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit" :aria-expanded="edit ? 'true' : 'false'">تعديل</button>
-              <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true" data-remove-font>حذف…</button>
-              <form method="post" action="{% url 'accounts:font_edit' row.font.pk %}" class="og-edit-form stack-sm" x-show="edit" x-cloak @keydown.escape="edit = false">
-                {% csrf_token %}
-                <label class="label" for="og-font-name-{{ row.font.pk }}">الاسم في قائمة الخطوط</label>
-                <input id="og-font-name-{{ row.font.pk }}" type="text" name="name" class="input" value="{{ row.font.name }}" maxlength="120" required dir="auto">
-                <label class="label" for="og-font-licence-{{ row.font.pk }}">الترخيص</label>
-                <textarea id="og-font-licence-{{ row.font.pk }}" name="licence" class="input" rows="3" dir="auto">{{ row.font.licence }}</textarea>
-                <div class="og-inline-form"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
-              </form>
-              <template x-teleport="body">
-                <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
-                  <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-remove-{{ row.font.pk }}" @keydown.escape.stop.prevent="ask = false">
-                    <h2 class="rv-modal-title" id="og-remove-{{ row.font.pk }}">حذف الخط «{{ row.font.name }}» من خطوط المؤسسة؟</h2>
-                    {% if row.used %}
-                    <p class="meta">يستعمله {{ row.used_phrase }}: {% for book in row.books %}«{{ book.title }}»{% if not forloop.last %}، {% endif %}{% endfor %}{% if row.more %} و<bdi class="num">{{ row.more }}</bdi> غيرها{% endif %}. تُرتَّب صفحاتها بخط أميري، ويظهر تنبيه بذلك في «التنسيق» وقبل الإخراج، حتى يُختار خط آخر أو يُعاد هذا الخط.</p>
-                    {% else %}
-                    <p class="meta">لا يستعمله كتاب. يبقى في «الخطوط المحذوفة» ويمكن إعادته.</p>
-                    {% endif %}
-                    <form method="post" action="{% url 'accounts:font_remove' row.font.pk %}" class="rv-modal-actions">
-                      {% csrf_token %}
-                      <button type="button" class="btn" @click="ask = false">إلغاء</button>
-                      <button type="submit" class="btn btn-danger">حذف الخط</button>
-                    </form>
-                  </div>
-                </div>
-              </template>
-            </td>
-            {% endif %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <p class="help">لا خطوط للمؤسسة بعد. {% if is_org_admin %}ارفع ملفات خط (عادي وعريض) فيظهر في قائمة الخطوط لكل كتب المؤسسة.{% else %}يضيفها مدير المؤسسة.{% endif %}</p>
-    {% endif %}
 
     {% if is_org_admin %}
-    <form method="post" action="{% url 'accounts:font_upload' %}" enctype="multipart/form-data" class="og-upload stack" x-data="{ names: [], confirm: false }" data-font-upload>
+    <form method="post" action="{% url 'accounts:font_upload' %}" enctype="multipart/form-data" class="og-form" id="og-font-form" x-show="adding" x-cloak @keydown.escape="adding = false" data-font-upload>
       {% csrf_token %}
-      <h3 class="group-label">إضافة خط</h3>
       <div class="field">
-        <span class="label" id="og-files-label">ملفات الخط<span class="req" aria-hidden="true">*</span></span>
+        <span class="label" id="og-files-label">ملفات الخط</span>
         <div class="file-pick">
-          <input type="file" name="files" id="og-files" class="file-pick-input" accept="{{ accept }}" multiple required aria-labelledby="og-files-label" aria-describedby="og-files-help" @change="names = Array.from($event.target.files || []).map((f) => f.name)">
+          <input type="file" name="files" id="og-files" class="file-pick-input" accept="{{ accept }}" multiple required aria-labelledby="og-files-label" aria-describedby="og-files-help" x-ref="files" @change="names = Array.from($event.target.files || []).map((f) => f.name)">
           <label class="btn file-pick-btn" for="og-files">
             <svg class="icon icon-sm" aria-hidden="true"><use href="#i-upload"/></svg>
-            <span>اختيار ملفات الخط</span>
+            <span>اختيار الملفات</span>
           </label>
           <span class="file-pick-name" :class="{ 'is-empty': !names.length }" x-text="names.length ? names.join('، ') : 'لم يُختر ملف'" dir="auto">لم يُختر ملف</span>
         </div>
-        <p class="help" id="og-files-help">TTF أو OTF أو WOFF2، حتى {{ max_mb }} ميغابايت للملف. ملفات العائلة الواحدة (عادي، عريض، مائل) تصير خطًّا واحدًا؛ يُعرف الوزن من الملف نفسه. لا تُقبل الخطوط المتغيّرة ولا ما يمنع ترخيصه التضمين.</p>
+        <p class="help" id="og-files-help">TTF أو OTF أو WOFF2، حتى {{ max_mb }} ميغابايت للملف. ملفات العائلة الواحدة (عادي، عريض، مائل) تصير خطًا واحدًا.</p>
       </div>
-      <div class="field-row">
+      <div class="og-grid">
         <div class="field">
-          <label class="label" for="og-font-name">الاسم في قائمة الخطوط</label>
-          <input type="text" name="name" id="og-font-name" class="input" maxlength="120" dir="auto" placeholder="اسم العائلة في الملف إن بقي فارغًا">
+          <label class="label" for="og-font-name">الاسم</label>
+          <input type="text" name="name" id="og-font-name" class="input" maxlength="120" dir="auto" placeholder="اسم العائلة في الملف">
         </div>
         <div class="field">
-          <label class="label" for="og-font-licence">الترخيص (اختياري)</label>
-          <input type="text" name="licence" id="og-font-licence" class="input" maxlength="2000" dir="auto" placeholder="يُؤخذ من الملف إن بقي فارغًا">
+          <label class="label" for="og-font-licence">الترخيص</label>
+          <input type="text" name="licence" id="og-font-licence" class="input" maxlength="2000" dir="auto" placeholder="يُؤخذ من الملف">
         </div>
       </div>
-      <label class="lo-check og-confirm">
+      <label class="og-confirm">
         <input type="checkbox" name="confirm" value="on" x-model="confirm" required>
-        <span>أقرّ بأن للمؤسسة ترخيصًا يسمح بتضمين هذا الخط في ملفات PDF وEPUB وWord التي تُخرجها.</span>
+        <span>للمؤسسة ترخيص يسمح بتضمين هذا الخط في ملفات PDF وEPUB وWord التي تُخرجها.</span>
       </label>
-      <div><button type="submit" class="btn btn-primary btn-sm" :disabled="!names.length || !confirm">إضافة الخط</button></div>
+      <div class="og-form-actions">
+        <button type="submit" class="btn btn-primary btn-sm" :disabled="!names.length || !confirm">إضافة الخط</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="adding = false">إلغاء</button>
+      </div>
     </form>
     {% endif %}
 
-    {% if removed_fonts %}
-    <div class="og-removed stack-sm">
-      <h3 class="group-label">الخطوط المحذوفة</h3>
-      <ul class="og-removed-list">
-        {% for row in removed_fonts %}
-        <li class="og-removed-item" data-removed-font="{{ row.font.key }}" x-data="{ ask: false }">
-          <span class="grow"><span>{{ row.font.name }}</span> <span class="meta">· حُذف {{ row.font.removed_at|date:"Y-m-d" }}{% if row.used %} · يستعمله {{ row.used_phrase }} (تُرتَّب بخط أميري){% endif %}</span></span>
-          {% if is_org_admin %}
-          <form method="post" action="{% url 'accounts:font_restore' row.font.pk %}" class="contents">{% csrf_token %}<button type="submit" class="btn btn-sm">إعادة</button></form>
-          {% if not row.used %}
-          <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true">حذف نهائي…</button>
-          <template x-teleport="body">
-            <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
-              <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-purge-{{ row.font.pk }}" @keydown.escape.stop.prevent="ask = false">
-                <h2 class="rv-modal-title" id="og-purge-{{ row.font.pk }}">حذف الخط «{{ row.font.name }}» وملفاته نهائيًا؟</h2>
-                <p class="meta">لا يستعمله كتاب. لا يمكن إعادته بعد هذا؛ يلزم رفع ملفاته من جديد.</p>
-                <form method="post" action="{% url 'accounts:font_delete' row.font.pk %}" class="rv-modal-actions">
-                  {% csrf_token %}
-                  <button type="button" class="btn" @click="ask = false">إلغاء</button>
-                  <button type="submit" class="btn btn-danger">حذف نهائي</button>
-                </form>
-              </div>
+    {% if fonts %}
+    <ul class="og-list">
+      {% for row in fonts %}
+      <li class="og-row" data-font="{{ row.font.key }}" x-data="{ edit: false, ask: false }">
+        <div class="og-row-main">
+          <div class="og-font-name" style="font-family: 'nk-org-{{ row.font.pk }}', var(--font-sans)">{{ row.font.name }}</div>
+          <div class="og-font-sample" style="font-family: 'nk-org-{{ row.font.pk }}', var(--font-sans)" dir="rtl">{% if row.font.arabic %}نسّاخ يُخرج الكتاب صفحةً صفحة{% endif %}{% if row.font.arabic and row.font.latin %} · {% endif %}{% if row.font.latin %}<bdi>Nassakh 1234</bdi>{% endif %}</div>
+          <div class="og-row-meta">{{ row.styles|join:" · " }} · {% if row.used %}يستعمله {{ row.used_phrase }}{% else %}لا يستعمله كتاب بعد{% endif %}</div>
+          <details class="og-details">
+            <summary>التفاصيل</summary>
+            <div class="og-details-body">
+              <div>العائلة في الملف: <bdi dir="ltr">{{ row.font.family }}</bdi> · {% if row.font.arabic %}حروف عربية{% endif %}{% if row.font.arabic and row.font.latin %} و{% endif %}{% if row.font.latin %}لاتينية وأرقام{% endif %}</div>
+              {% if row.used %}<div>الكتب: {% for book in row.books %}<a class="link" href="{% url 'editor:layout' book.pk %}?tab=format">{{ book.title }}</a>{% if not forloop.last %}، {% endif %}{% endfor %}{% if row.more %} و<bdi class="num">{{ row.more }}</bdi> غيرها{% endif %}</div>{% endif %}
+              {% if row.templates %}<div>القوالب: {{ row.templates|join:"، " }}</div>{% endif %}
+              {% if row.font.licence %}<div>الترخيص: <span title="{{ row.font.licence }}">{{ row.licence_line|truncatechars:90 }}</span></div>{% endif %}
             </div>
-          </template>
-          {% endif %}
-          {% endif %}
-        </li>
-        {% endfor %}
-      </ul>
+          </details>
+        </div>
+        {% if is_org_admin %}
+        <div class="og-row-actions">
+          <button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit" :aria-expanded="edit ? 'true' : 'false'">تعديل</button>
+          <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true" data-remove-font>حذف…</button>
+        </div>
+        <form method="post" action="{% url 'accounts:font_edit' row.font.pk %}" class="og-row-detail" x-show="edit" x-cloak @keydown.escape="edit = false">
+          {% csrf_token %}
+          <div class="og-grid">
+            <div class="field">
+              <label class="label" for="og-font-name-{{ row.font.pk }}">الاسم</label>
+              <input id="og-font-name-{{ row.font.pk }}" type="text" name="name" class="input" value="{{ row.font.name }}" maxlength="120" required dir="auto">
+            </div>
+            <div class="field is-wide">
+              <label class="label" for="og-font-licence-{{ row.font.pk }}">الترخيص</label>
+              <textarea id="og-font-licence-{{ row.font.pk }}" name="licence" class="input" rows="2" dir="auto">{{ row.font.licence }}</textarea>
+            </div>
+          </div>
+          <div class="og-form-actions"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
+        </form>
+        <template x-teleport="body">
+          <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
+            <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-remove-{{ row.font.pk }}" @keydown.escape.stop.prevent="ask = false">
+              <h2 class="rv-modal-title" id="og-remove-{{ row.font.pk }}">حذف الخط «{{ row.font.name }}»؟</h2>
+              {% if row.used %}
+              <p class="meta">يستعمله {{ row.used_phrase }}: {% for book in row.books %}«{{ book.title }}»{% if not forloop.last %}، {% endif %}{% endfor %}{% if row.more %} و<bdi class="num">{{ row.more }}</bdi> غيرها{% endif %}. تُرتَّب صفحاتها بخط أميري حتى يُختار لها خط آخر أو يُعاد هذا الخط.</p>
+              {% else %}
+              <p class="meta">لا يستعمله كتاب. يبقى في «الخطوط المحذوفة» ويمكن إعادته.</p>
+              {% endif %}
+              <form method="post" action="{% url 'accounts:font_remove' row.font.pk %}" class="rv-modal-actions">
+                {% csrf_token %}
+                <button type="button" class="btn" @click="ask = false">إلغاء</button>
+                <button type="submit" class="btn btn-danger">حذف الخط</button>
+              </form>
+            </div>
+          </div>
+        </template>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="og-empty">
+      <p>لا خطوط بعد. {% if is_org_admin %}ارفع ملفات خط فيظهر في قائمة الخطوط لكل كتب المؤسسة.{% else %}يضيفها مدير المؤسسة.{% endif %}</p>
+      {% if is_org_admin %}<button type="button" class="btn btn-sm" x-show="!adding" @click="adding = true; $nextTick(() => $refs.files.focus())">إضافة خط</button>{% endif %}
     </div>
+    {% endif %}
+
+    {% if removed_fonts %}
+    <details class="og-details">
+      <summary>الخطوط المحذوفة <bdi class="num">({{ removed_fonts|length }})</bdi></summary>
+      <div class="og-details-body">
+        <ul class="og-removed-list">
+          {% for row in removed_fonts %}
+          <li class="og-removed-item" data-removed-font="{{ row.font.key }}" x-data="{ ask: false }">
+            <span class="grow"><span>{{ row.font.name }}</span> <span class="meta">· حُذف <bdi class="num">{{ row.font.removed_at|date:"Y-m-d" }}</bdi>{% if row.used %} · يستعمله {{ row.used_phrase }}، تُرتَّب بخط أميري{% endif %}</span></span>
+            {% if is_org_admin %}
+            <form method="post" action="{% url 'accounts:font_restore' row.font.pk %}" class="contents">{% csrf_token %}<button type="submit" class="btn btn-sm">إعادة</button></form>
+            {% if not row.used %}
+            <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true">حذف نهائي…</button>
+            <template x-teleport="body">
+              <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
+                <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-purge-{{ row.font.pk }}" @keydown.escape.stop.prevent="ask = false">
+                  <h2 class="rv-modal-title" id="og-purge-{{ row.font.pk }}">حذف الخط «{{ row.font.name }}» وملفاته نهائيًا؟</h2>
+                  <p class="meta">لا يمكن إعادته بعد هذا.</p>
+                  <form method="post" action="{% url 'accounts:font_delete' row.font.pk %}" class="rv-modal-actions">
+                    {% csrf_token %}
+                    <button type="button" class="btn" @click="ask = false">إلغاء</button>
+                    <button type="submit" class="btn btn-danger">حذف نهائي</button>
+                  </form>
+                </div>
+              </div>
+            </template>
+            {% endif %}
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </details>
     {% endif %}
   </section>
 
   {# ------------------------------------------------------------------ templates #}
-  <section class="card stack" id="templates" aria-labelledby="og-templates-title">
+  <section class="card og-section" id="templates" aria-labelledby="og-templates-title" x-data="{ adding: false }">
     <div class="card-header">
-      <h2 class="section-title" id="og-templates-title">قوالب التنسيق</h2>
-      <span class="meta">القالب يحفظ القطع والهوامش والخطوط والأحجام وإعدادات الصفحة؛ بيانات الكتاب والغلاف لا تدخل فيه</span>
+      <div class="og-section-title">
+        <h2 class="section-title" id="og-templates-title">قوالب التنسيق</h2>
+        {% if templates %}<span class="og-count"><bdi class="num">{{ templates|length }}</bdi></span>{% endif %}
+      </div>
+      {% if can_edit_books and books and templates %}
+      <button type="button" class="btn btn-sm" @click="adding = !adding; if (adding) $nextTick(() => $refs.newBook.focus())" :aria-expanded="adding ? 'true' : 'false'" aria-controls="og-template-form">
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plus"/></svg>
+        <span>قالب جديد</span>
+      </button>
+      {% endif %}
     </div>
 
-    {% if templates %}
-    <div class="table-wrap">
-      <table class="table og-templates">
-        <thead>
-          <tr>
-            <th scope="col">القالب</th>
-            <th scope="col">التنسيق</th>
-            <th scope="col"><span class="sr-only">إجراءات</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in templates %}
-          {% with template=row.template %}
-          <tr data-template="{{ template.pk }}">
-            <td>
-              <div>{{ template.name }}</div>
-              {% if template.description %}<div class="meta">{{ template.description }}</div>{% endif %}
-              <div class="meta">{% if template.source_book %}من «{{ template.source_book.title }}» · {% endif %}حُدّث {{ template.updated_at|date:"Y-m-d" }}</div>
-            </td>
-            <td><bdi class="meta">{{ row.summary }}</bdi></td>
-            <td class="og-actions" x-data="{ edit: false, update: false, ask: false }">
-              {% if can_edit_books %}<a class="btn btn-sm" href="{% url 'accounts:template_apply' template.pk %}">تطبيق على كتاب…</a>{% endif %}
-              {% if is_org_admin %}
-              <button type="button" class="btn btn-ghost btn-sm" @click="edit = !edit; update = false" :aria-expanded="edit ? 'true' : 'false'">تعديل</button>
-              <button type="button" class="btn btn-ghost btn-sm" @click="update = !update; edit = false" :aria-expanded="update ? 'true' : 'false'">تحديث من كتاب</button>
-              <button type="button" class="btn btn-ghost btn-sm btn-danger" @click="ask = true">حذف…</button>
-              <form method="post" action="{% url 'accounts:template_edit' template.pk %}" class="og-edit-form stack-sm" x-show="edit" x-cloak @keydown.escape="edit = false">
-                {% csrf_token %}
-                <label class="label" for="og-tpl-name-{{ template.pk }}">الاسم</label>
-                <input id="og-tpl-name-{{ template.pk }}" type="text" name="name" class="input" value="{{ template.name }}" maxlength="120" required dir="auto">
-                <label class="label" for="og-tpl-desc-{{ template.pk }}">الوصف</label>
-                <input id="og-tpl-desc-{{ template.pk }}" type="text" name="description" class="input" value="{{ template.description }}" maxlength="300" dir="auto">
-                <div class="og-inline-form"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
-              </form>
-              <form method="post" action="{% url 'accounts:template_update' template.pk %}" class="og-edit-form stack-sm" x-show="update" x-cloak @keydown.escape="update = false">
-                {% csrf_token %}
-                <label class="label" for="og-tpl-book-{{ template.pk }}">يأخذ القالب تنسيق الكتاب كما هو الآن</label>
-                <select id="og-tpl-book-{{ template.pk }}" name="book" class="select" required>
-                  {% for book in books %}<option value="{{ book.pk }}"{% if template.source_book_id == book.pk %} selected{% endif %}>{{ book.title }}</option>{% endfor %}
-                </select>
-                <div class="og-inline-form"><button type="submit" class="btn btn-sm">تحديث القالب</button><button type="button" class="btn btn-ghost btn-sm" @click="update = false">إلغاء</button></div>
-              </form>
-              <template x-teleport="body">
-                <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
-                  <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-tpl-delete-{{ template.pk }}" @keydown.escape.stop.prevent="ask = false">
-                    <h2 class="rv-modal-title" id="og-tpl-delete-{{ template.pk }}">حذف القالب «{{ template.name }}»؟</h2>
-                    <p class="meta">الكتب التي طُبّق عليها تبقى على تنسيقها؛ يُحذف القالب وحده.</p>
-                    <form method="post" action="{% url 'accounts:template_delete' template.pk %}" class="rv-modal-actions">
-                      {% csrf_token %}
-                      <button type="button" class="btn" @click="ask = false">إلغاء</button>
-                      <button type="submit" class="btn btn-danger">حذف القالب</button>
-                    </form>
-                  </div>
-                </div>
-              </template>
-              {% endif %}
-            </td>
-          </tr>
-          {% endwith %}
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <p class="help">لا قوالب بعد. احفظ تنسيق كتاب قالبًا، هنا أو من «التنسيق» في صفحة الكتاب، ثم طبّقه على كتب أخرى.</p>
-    {% endif %}
-
-    {% if can_edit_books %}
-    {% if books %}
-    <form method="post" action="{% url 'accounts:template_create' %}" class="og-upload stack" data-template-create>
+    {% if can_edit_books and books %}
+    <form method="post" action="{% url 'accounts:template_create' %}" class="og-form" id="og-template-form" x-show="adding" x-cloak @keydown.escape="adding = false" data-template-create>
       {% csrf_token %}
-      <h3 class="group-label">قالب جديد من تنسيق كتاب</h3>
-      <div class="field-row">
+      <p class="og-form-title">قالب جديد من تنسيق كتاب</p>
+      <div class="og-grid">
         <div class="field">
-          <label class="label" for="og-new-book">الكتاب<span class="req" aria-hidden="true">*</span></label>
-          <select id="og-new-book" name="book" class="select" required>
+          <label class="label" for="og-new-book">الكتاب</label>
+          <select id="og-new-book" name="book" class="select" required x-ref="newBook">
             {% for book in books %}<option value="{{ book.pk }}">{{ book.title }}</option>{% endfor %}
           </select>
         </div>
         <div class="field">
-          <label class="label" for="og-new-name">اسم القالب<span class="req" aria-hidden="true">*</span></label>
+          <label class="label" for="og-new-name">اسم القالب</label>
           <input id="og-new-name" type="text" name="name" class="input" maxlength="120" required dir="auto" placeholder="مثل: سلسلة التراث 17×24">
         </div>
+        <div class="field">
+          <label class="label" for="og-new-desc">وصف قصير</label>
+          <input id="og-new-desc" type="text" name="description" class="input" maxlength="300" dir="auto">
+        </div>
       </div>
-      <div class="field">
-        <label class="label" for="og-new-desc">الوصف (اختياري)</label>
-        <input id="og-new-desc" type="text" name="description" class="input" maxlength="300" dir="auto">
+      <div class="og-form-actions">
+        <button type="submit" class="btn btn-primary btn-sm">حفظ القالب</button>
+        <button type="button" class="btn btn-ghost btn-sm" @click="adding = false">إلغاء</button>
       </div>
-      <div><button type="submit" class="btn btn-sm">حفظ القالب</button></div>
     </form>
-    {% else %}
-    <p class="help">لا كتب في المؤسسة بعد يؤخذ منها تنسيق.</p>
     {% endif %}
+
+    {% if templates %}
+    <ul class="og-list">
+      {% for row in templates %}
+      {% with template=row.template %}
+      <li class="og-row" data-template="{{ template.pk }}" x-data="{ menu: false, edit: false, update: false, ask: false }">
+        <div class="og-row-main">
+          <div class="og-row-title">{{ template.name }}</div>
+          {% if template.description %}<div class="og-row-meta">{{ template.description }}</div>{% endif %}
+          <div class="og-row-meta"><bdi>{{ row.summary }}</bdi></div>
+          <div class="og-row-meta">{% if template.source_book %}من «{{ template.source_book.title }}» · {% endif %}<bdi class="num">{{ template.updated_at|date:"Y-m-d" }}</bdi></div>
+        </div>
+        <div class="og-row-actions">
+          {% if can_edit_books %}<a class="btn btn-sm" href="{% url 'accounts:template_apply' template.pk %}">تطبيق على كتاب…</a>{% endif %}
+          {% if is_org_admin %}
+          <button type="button" class="btn-icon btn-icon-sm" @click="menu = !menu" :aria-expanded="menu ? 'true' : 'false'" aria-haspopup="menu" aria-label="إجراءات أخرى" title="إجراءات أخرى">
+            <svg class="icon" aria-hidden="true"><use href="#i-more"/></svg>
+          </button>
+          <div class="menu og-menu" role="menu" x-show="menu" x-cloak @click.outside="menu = false" @keydown.escape.window="menu = false" x-transition.opacity.duration.120ms>
+            <button type="button" class="menu-item" role="menuitem" @click="menu = false; update = false; edit = true">تغيير الاسم والوصف</button>
+            <button type="button" class="menu-item" role="menuitem" @click="menu = false; edit = false; update = true">تحديث من كتاب</button>
+            <div class="menu-sep"></div>
+            <button type="button" class="menu-item is-danger" role="menuitem" @click="menu = false; ask = true">حذف…</button>
+          </div>
+          {% endif %}
+        </div>
+        {% if is_org_admin %}
+        <form method="post" action="{% url 'accounts:template_edit' template.pk %}" class="og-row-detail" x-show="edit" x-cloak @keydown.escape="edit = false">
+          {% csrf_token %}
+          <div class="og-grid">
+            <div class="field">
+              <label class="label" for="og-tpl-name-{{ template.pk }}">الاسم</label>
+              <input id="og-tpl-name-{{ template.pk }}" type="text" name="name" class="input" value="{{ template.name }}" maxlength="120" required dir="auto">
+            </div>
+            <div class="field">
+              <label class="label" for="og-tpl-desc-{{ template.pk }}">الوصف</label>
+              <input id="og-tpl-desc-{{ template.pk }}" type="text" name="description" class="input" value="{{ template.description }}" maxlength="300" dir="auto">
+            </div>
+          </div>
+          <div class="og-form-actions"><button type="submit" class="btn btn-sm">حفظ</button><button type="button" class="btn btn-ghost btn-sm" @click="edit = false">إلغاء</button></div>
+        </form>
+        <form method="post" action="{% url 'accounts:template_update' template.pk %}" class="og-row-detail" x-show="update" x-cloak @keydown.escape="update = false">
+          {% csrf_token %}
+          <div class="field">
+            <label class="label" for="og-tpl-book-{{ template.pk }}">يأخذ القالب تنسيق هذا الكتاب كما هو الآن</label>
+            <select id="og-tpl-book-{{ template.pk }}" name="book" class="select" required>
+              {% for book in books %}<option value="{{ book.pk }}"{% if template.source_book_id == book.pk %} selected{% endif %}>{{ book.title }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="og-form-actions"><button type="submit" class="btn btn-sm">تحديث القالب</button><button type="button" class="btn btn-ghost btn-sm" @click="update = false">إلغاء</button></div>
+        </form>
+        <template x-teleport="body">
+          <div class="rv-scrim" x-show="ask" x-cloak x-transition.opacity.duration.150ms @click.self="ask = false">
+            <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="og-tpl-delete-{{ template.pk }}" @keydown.escape.stop.prevent="ask = false">
+              <h2 class="rv-modal-title" id="og-tpl-delete-{{ template.pk }}">حذف القالب «{{ template.name }}»؟</h2>
+              <p class="meta">الكتب التي طُبّق عليها تبقى على تنسيقها.</p>
+              <form method="post" action="{% url 'accounts:template_delete' template.pk %}" class="rv-modal-actions">
+                {% csrf_token %}
+                <button type="button" class="btn" @click="ask = false">إلغاء</button>
+                <button type="submit" class="btn btn-danger">حذف القالب</button>
+              </form>
+            </div>
+          </div>
+        </template>
+        {% endif %}
+      </li>
+      {% endwith %}
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="og-empty">
+      <p>لا قوالب بعد. احفظ تنسيق كتاب قالبًا ثم طبّقه على كتب أخرى.</p>
+      {% if can_edit_books and books %}<button type="button" class="btn btn-sm" x-show="!adding" @click="adding = true; $nextTick(() => $refs.newBook.focus())">قالب جديد</button>
+      {% elif can_edit_books %}<p class="meta">يلزم كتاب في المؤسسة يؤخذ منه التنسيق.</p>{% endif %}
+    </div>
     {% endif %}
   </section>
 </div>

@@ -378,15 +378,15 @@ def test_a_superuser_switches_the_organisation_they_work_in(ours, theirs, editor
     root = User.objects.create_superuser("root", password="pass-1234")
     client = _client(root)
     page = client.get(reverse("accounts:organization")).content.decode()
-    assert "العمل في مؤسسة أخرى" in page and "دار الثانية" in page
+    assert 'id="og-switch"' in page and "العمل في" in page and "دار الثانية" in page
     switch = reverse("accounts:organization_switch")
     assert client.post(switch, {"organization": theirs["organization"].pk}).status_code == 302
     assert client.session[ORGANIZATION_SESSION_KEY] == theirs["organization"].pk
-    assert "<title>المؤسسة · دار الثانية" in client.get(reverse("accounts:organization")).content.decode()
+    assert "<title>دار الثانية · نسّاخ" in client.get(reverse("accounts:organization")).content.decode()
     assert client.post(switch, {"organization": "x"}).status_code == 404
     assert _client(editor).post(switch, {"organization": theirs["organization"].pk}).status_code == 403
     page = _client(editor).get(reverse("accounts:organization")).content.decode()
-    assert "العمل في مؤسسة أخرى" not in page
+    assert 'id="og-switch"' not in page
 
 
 def test_the_user_admin_sets_the_organisation(ours, editor):

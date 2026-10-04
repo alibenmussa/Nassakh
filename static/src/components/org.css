@@ -1,29 +1,83 @@
-/* The organisation (D98): its page (templates/accounts/organization.html, template_apply.html) and the book
-   page's «قوالب المؤسسة» in «التنسيق» (templates/accounts/_book_templates.html, static/src/js/org.js); the accounts
-   of D106: the sign-up pages, the sidebar's «الرصيد», «الفوترة» (templates/accounts/billing/). Classes are
-   prefixed og-. The page is the app's cards and tables; a face is shown in itself (`nk-org-<pk>`). The section in
-   «التنسيق» follows the panel's accordions: templates as quiet radio rows, the changes as label · before ← after. */
+/* The account pages (D98, D106). Classes are prefixed og-.
+   - the organisation's page (templates/accounts/organization.html, template_apply.html): an identity line, then one
+     card per thing — the balance, the fonts, the format templates — each a quiet list of rows with the row's actions
+     on its end side, details behind a disclosure, and the section's form folded under one button in its header;
+   - the book page's «قوالب المؤسسة» in «التنسيق» (templates/accounts/_book_templates.html, static/src/js/org.js):
+     templates as quiet radio rows, the changes as label · before ← after;
+   - the sign-up and login cards (the auth card of app.css), the sidebar's «الرصيد», «الفوترة» (templates/accounts/billing/).
+   The look is the review screen's: hairlines, muted text, one accent, dialogs as rv-modal. */
 @layer components {
   .og-page { max-width: 1040px; }
-  .og-rename, .og-inline-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .og-inline-form .input, .og-inline-form .select { width: auto; min-width: 220px; max-width: 100%; }
 
-  /* fonts */
+  /* ---------------------------------------------------------------- the page's identity line and inline forms */
+  .og-head { display: flex; align-items: center; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; min-height: 30px; }
+  .og-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .og-facts { margin: 0; font-size: 13px; color: var(--color-text-2); }
+  .og-facts .badge { vertical-align: 1px; margin-inline-end: 2px; }
+  .og-inline-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .og-inline-form .input, .og-inline-form .select { width: auto; min-width: 200px; max-width: 100%; }
+  .og-inline-form .input.is-short { min-width: 0; width: 6.5rem; }
+
+  /* ---------------------------------------------------------------- a section: a card with a header and one folded form */
+  .og-section { display: flex; flex-direction: column; gap: 12px; }
+  .og-section > .card-header { margin-bottom: 0; }
+  .og-section-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .og-count { font-size: 12px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .og-form { display: flex; flex-direction: column; gap: 12px; padding-top: 14px; border-top: 1px solid var(--color-border); }
+  .og-form-title { font-size: 13px; font-weight: 600; color: var(--color-text); }
+  .og-form-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .og-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 16px; }
+  .og-grid .field.is-wide { grid-column: 1 / -1; }
+  .og-confirm { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--color-text-2); cursor: pointer; }
+  .og-confirm input { margin-top: 4px; accent-color: var(--color-accent); }
+  .og-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 4px 0; font-size: 13px; color: var(--color-text-2); }
+  .og-empty p { margin: 0; }
+
+  /* ---------------------------------------------------------------- the balance: one big number, a few small ones */
+  .og-balance { display: flex; flex-direction: column; gap: 4px; }
+  .og-big { font-size: 30px; font-weight: 600; line-height: 1.15; letter-spacing: -0.02em; color: var(--color-text); font-variant-numeric: tabular-nums; }
+  .og-big.is-empty { color: var(--color-danger-text); }
+  .og-big-label { font-size: 12.5px; color: var(--color-text-2); }
+  .og-stats { display: flex; flex-wrap: wrap; gap: 4px 20px; margin-top: 8px; font-size: 12.5px; color: var(--color-text-3); }
+  .og-stat-value { font-weight: 600; color: var(--color-text-2); font-variant-numeric: tabular-nums; }
+  .og-note { margin: 6px 0 0; font-size: 12.5px; color: var(--color-text-2); }
+  .og-note.is-danger { color: var(--color-danger-text); }
+  .og-note.is-warning { color: var(--color-warning-text); }
+
+  /* ---------------------------------------------------------------- rows: a list divided by hairlines, actions on the end side */
+  .og-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+  .og-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; padding: 12px 0; border-top: 1px solid var(--color-border); }
+  .og-row:first-child { border-top: 0; padding-top: 2px; }
+  .og-row:last-child { padding-bottom: 2px; }
+  .og-row-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .og-row-title { font-size: 14px; font-weight: 550; color: var(--color-text); overflow-wrap: anywhere; }
+  .og-row-meta { font-size: 12px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .og-row-actions { position: relative; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .og-row-detail { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--radius-md); background: var(--color-bg-subtle); }
+  .og-row-detail .label { font-size: 12px; }
+  .og-menu { position: absolute; top: calc(100% + 4px); inset-inline-end: 0; min-width: 180px; z-index: 40; }
+  .og-menu .menu-item { height: 32px; }
+
+  /* a disclosure: a quiet line that opens the details beneath */
+  .og-details > summary { display: inline-flex; align-items: center; gap: 4px; list-style: none; font-size: 12px; color: var(--color-text-3); cursor: pointer; user-select: none; }
+  .og-details > summary::-webkit-details-marker { display: none; }
+  .og-details > summary::after { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; transition: transform 150ms ease; }
+  .og-details[open] > summary { color: var(--color-text-2); }
+  .og-details[open] > summary::after { transform: rotate(180deg); }
+  .og-details > summary:hover { color: var(--color-text); }
+  .og-details > summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 3px; }
+  .og-details-body { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; font-size: 12.5px; line-height: 1.6; color: var(--color-text-2); }
+  .og-details-body .link { color: var(--color-accent-text); }
+  .og-section > .og-details > .og-details-body { padding-top: 10px; }
+
+  /* fonts: a face shown in itself */
   .og-font-name { font-size: 17px; line-height: 1.5; color: var(--color-text); }
   .og-font-sample { font-size: 15px; line-height: 1.6; color: var(--color-text-2); }
-  .og-licence { color: var(--color-text-3); }
-  .og-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
-  .og-actions { white-space: nowrap; text-align: end; }
-  .og-actions .og-edit-form { white-space: normal; text-align: start; min-width: 260px; margin-top: 8px; }
-  .og-fonts td, .og-templates td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
-  .og-upload { padding-top: 16px; border-top: 1px solid var(--color-border); }
-  .og-confirm { align-items: flex-start; line-height: 1.6; }
-  .og-confirm input { margin-top: 4px; }
-  .og-removed { padding-top: 12px; border-top: 1px solid var(--color-border); }
-  .og-removed-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-  .og-removed-item { display: flex; align-items: center; gap: 8px; min-height: 36px; font-size: 13px; }
+  .og-removed-list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+  .og-removed-item { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 13px; }
+  .og-removed-item .grow { flex: 1; min-width: 0; }
 
-  /* «قوالب المؤسسة» in «التنسيق» */
+  /* ---------------------------------------------------------------- «قوالب المؤسسة» in «التنسيق» */
   .og-tpls { display: flex; flex-direction: column; gap: 4px; }
   .og-tpl {
     display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 8px 10px;
@@ -54,37 +108,65 @@
      comes after layout.css's `.lo-font-item` in the build and squashed the sample line to a few pixels */
   .lo-font-menu .lo-font-item { height: auto; }
 
-  /* D106: the sign-up and the login's links (the auth card of app.css, a little wider for the sign-up) */
+  /* ---------------------------------------------------------------- the sign-up and the login (the auth card of app.css) */
   .og-auth-wide { max-width: 440px; }
   .og-auth-alt { text-align: center; }
   .og-auth-text { font-size: 13.5px; line-height: 1.7; color: var(--color-text); }
+  .og-auth-text p { margin: 0; }
   .og-auth-email { font-weight: 550; }
-  .og-auth-resend { display: flex; justify-content: center; margin-top: -8px; }
-  .og-auth-kinds { align-self: flex-start; }
+  .og-auth-foot { margin: -8px 0 0; text-align: center; }
+  /* the two kinds of account, as cards */
+  .og-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .og-kind { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease; }
+  .og-kind:hover { background: var(--color-bg-subtle); }
+  .og-kind:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); }
+  .og-kind:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .og-kind input { position: absolute; opacity: 0; pointer-events: none; }
+  .og-kind-title { font-size: 13px; font-weight: 550; color: var(--color-text); }
+  .og-kind-text { font-size: 12px; line-height: 1.5; color: var(--color-text-3); }
+  .og-kind:has(input:checked) .og-kind-text { color: var(--color-text-2); }
+  /* the login's «لم يُفعَّل حسابك بعد» with its button */
+  .og-auth-note { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  .og-auth-note .btn { background: transparent; border-color: currentColor; color: inherit; }
+  .og-auth-note .btn:hover { background: rgba(255, 255, 255, 0.5); }
 
-  /* D106: the page quota: the sidebar's «الرصيد», the numbers, the «الفوترة» tables */
-  .og-quota {
-    display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: var(--radius-sm);
-    color: var(--color-text-2); font-size: 12.5px; font-weight: 500; font-variant-numeric: tabular-nums;
-    transition: background-color 120ms ease, color 120ms ease;
-  }
+  /* ---------------------------------------------------------------- the sidebar's «الرصيد» */
+  .og-quota { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: var(--radius-sm); color: var(--color-text-2); font-size: 12.5px; transition: background-color 120ms ease, color 120ms ease; }
   .og-quota:hover { background: var(--color-hover); color: var(--color-text); }
-  .og-quota .is-empty, .og-number-value.is-empty, .og-bill-available.is-empty { color: var(--color-danger-text); }
+  .og-quota-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+  .og-quota-value { font-weight: 600; color: var(--color-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .og-quota.is-empty .og-quota-value { color: var(--color-danger-text); }
+  .og-quota-sub { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+  .og-quota-sub .dot { width: 6px; height: 6px; }
   @media (min-width: 901px) {
     .app-shell:has([data-rail]):not(.is-rail-open) .og-quota { display: none; }
   }
-  .og-numbers { display: flex; flex-wrap: wrap; gap: 8px 32px; }
-  .og-number { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
-  .og-number-value { font-size: 20px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
-  .og-bill-table td { vertical-align: top; padding-top: 12px; padding-bottom: 12px; }
-  .og-bill-table .status { margin-top: 2px; }
-  .og-bill-name { font-weight: 550; }
-  .og-bill-available { font-weight: 600; }
-  .og-bill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px 16px; }
+
+  /* ---------------------------------------------------------------- «الفوترة»: the tables */
+  .og-table td { vertical-align: top; padding-top: 10px; padding-bottom: 10px; }
+  .og-table .status { margin-top: 2px; }
+  .og-table .og-row-meta { margin-top: 2px; }
+  .og-name { font-weight: 550; }
+  .og-avail { font-weight: 600; font-size: 14px; }
+  .og-avail.is-empty, .og-debt { color: var(--color-danger-text); }
   .og-filter { position: relative; display: flex; align-items: center; }
   .og-filter .icon { position: absolute; inset-inline-start: 9px; color: var(--color-text-3); pointer-events: none; }
   .og-filter .input { width: 220px; padding-inline-start: 30px; }
   .og-ledger td { height: 40px; padding-top: 8px; padding-bottom: 8px; }
   .og-minus { color: var(--color-text-2); }
   .og-plus { color: var(--color-success); font-weight: 550; }
+  /* a row's inline edit, as a second row under it */
+  .og-edit-row > td { padding: 12px 14px 14px; background: var(--color-bg-subtle); }
+  .og-edit-row > td .og-grid { margin-bottom: 10px; }
+  .og-settings { display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid var(--color-border); }
+  .og-settings .label { font-size: 12.5px; color: var(--color-text-2); font-weight: 500; }
+  .og-members { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .og-member { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+
+  @media (max-width: 560px) {
+    .og-kinds { grid-template-columns: 1fr; }
+    .og-row { grid-template-columns: minmax(0, 1fr); }
+    .og-row-actions { justify-content: flex-start; }
+    .og-filter .input { width: 100%; }
+  }
 }

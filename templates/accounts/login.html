@@ -1,4 +1,9 @@
 {% extends "base.html" %}
+{% comment %}
+The login card: the email (the login, D106) and the password. A sign-up that has not followed its confirmation link yet
+is told so in one note with the button that sends the link again (only when the password was right:
+`unconfirmed_email`). Context: form (LoginForm), next, unconfirmed_email.
+{% endcomment %}
 {% block head_title %}تسجيل الدخول · نسّاخ{% endblock %}
 
 {% block body %}
@@ -12,19 +17,21 @@
 
     {% include "accounts/_auth_messages.html" %}
 
-    {% if form.non_field_errors %}
+    {% if unconfirmed_email %}
+    {# D106: the account waits for its email; the error's text and the button together #}
+    <div class="banner banner-info og-auth-note" role="status">
+      <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
+      <form method="post" action="{% url 'accounts:signup_resend' %}" data-resend>
+        {% csrf_token %}
+        <input type="hidden" name="email" value="{{ unconfirmed_email }}">
+        <button type="submit" class="btn btn-sm">أرسل الرابط مجددًا</button>
+      </form>
+    </div>
+    {% elif form.non_field_errors %}
     <div class="banner banner-danger" role="alert">
       <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
       <span>{% for error in form.non_field_errors %}{{ error }}{% if not forloop.last %} {% endif %}{% endfor %}</span>
     </div>
-    {% endif %}
-    {% if unconfirmed_email %}
-    {# D106: a sign-up that has not followed its confirmation link yet (said only when the password is right) #}
-    <form method="post" action="{% url 'accounts:signup_resend' %}" class="og-auth-resend" data-resend>
-      {% csrf_token %}
-      <input type="hidden" name="email" value="{{ unconfirmed_email }}">
-      <button type="submit" class="btn btn-sm">أرسل رابط التأكيد مجددًا</button>
-    </form>
     {% endif %}
 
     <form method="post" action="{% url 'accounts:login' %}" class="stack" novalidate>

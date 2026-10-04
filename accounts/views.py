@@ -75,7 +75,7 @@ def logout(request: HttpRequest) -> HttpResponse:
 # ====================================================================== sign-up (D106)
 
 SIGNUP_EMAIL_KEY = "nassakh_signup_email"  # the address «تحقق من بريدك» names
-RESEND_ANSWER = "إن كان لهذا البريد حساب لم يُفعَّل بعد فقد أرسلنا إليه رابطًا جديدًا. تفقّد بريدك بعد قليل."
+RESEND_ANSWER = "إن كان لهذا البريد حساب ينتظر التفعيل فقد أرسلنا إليه رابطًا جديدًا."
 
 
 @sensitive_post_parameters("password")
@@ -142,7 +142,7 @@ def confirm_email(request: HttpRequest, token: str) -> HttpResponse:
     if not activated:
         if request.user.is_authenticated and request.user.pk == user.pk:
             return redirect(settings.LOGIN_REDIRECT_URL)
-        messages.info(request, "حسابك مفعّل من قبل. سجّل الدخول ببريدك وكلمة المرور.")
+        messages.info(request, "حسابك مفعّل من قبل؛ سجّل الدخول.")
         return redirect("accounts:login")
     auth_login(request, user, backend="accounts.backends.EmailBackend")
     request.session.pop(SIGNUP_EMAIL_KEY, None)
@@ -302,7 +302,7 @@ def font_upload(request: HttpRequest) -> HttpResponse:
             messages.error(request, message)
         return redirect(_page_url("fonts"))
     names = "، ".join(f"«{font.name}»" for font in added)
-    messages.success(request, f"أُضيف إلى خطوط المؤسسة: {names}. يظهر في قائمة الخطوط في «التنسيق».")
+    messages.success(request, f"أُضيف إلى خطوط المؤسسة: {names}.")
     return redirect(_page_url("fonts"))
 
 

@@ -58,7 +58,8 @@ def test_the_login_page_links_to_the_sign_up(client):
     body = client.get(reverse("accounts:login")).content.decode()
     assert reverse("accounts:signup") in body and "أنشئ حسابًا" in body
     body = client.get(reverse("accounts:signup")).content.decode()
-    assert "حساب جديد في نسّاخ" in body and 'name="kind"' in body and 'name="org_type"' in body
+    assert "حساب جديد" in body and 'name="kind"' in body and 'name="org_type"' in body
+    assert "og-kind" in body and "باحث أو محقّق" in body  # the two kinds, as cards
 
 
 def test_an_organisation_signs_up_inactive_with_a_confirmation_email(client, mailoutbox):

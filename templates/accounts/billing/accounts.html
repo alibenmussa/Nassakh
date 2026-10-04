@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% comment %}
-«الفوترة» (D106; accounts.billing_views.accounts_list), superusers only: every account with its kind, the pages
-available and held, the nearest expiry and the pages read this month; unlimited accounts last. A row opens the
-account. A small filter (Alpine) narrows the rows by name as one types.
+«الفوترة» (D106; accounts.billing_views.accounts_list), superusers only: every account in one table — name and kind,
+the pages available (a debt under it), held, the nearest expiry, the pages read this month; unlimited accounts last.
+The name opens the account. A small filter (Alpine) narrows the rows by name as one types.
 Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Summary)}]).
 {% endcomment %}
 {% load organization %}
@@ -12,8 +12,8 @@ Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Su
 
 {% block content %}
 <div class="og-page stack-lg" x-data="{ q: '' }">
-  <div class="page-header">
-    <p class="meta">رصيد الصفحات لكل حساب. تُحتسب الصفحة حين تقرؤها النماذج بنجاح؛ التخطيط وإعادته بلا حساب.</p>
+  <div class="og-head">
+    <p class="og-facts">{{ rows|length|ar_count:"حساب واحد,حسابان,حسابات,حسابًا" }}</p>
     <label class="og-filter">
       <span class="sr-only">تصفية الحسابات</span>
       <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg>
@@ -23,14 +23,14 @@ Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Su
 
   {% if rows %}
   <div class="table-wrap">
-    <table class="table og-bill-table">
+    <table class="table og-table">
       <thead>
         <tr>
           <th scope="col">الحساب</th>
           <th scope="col" class="num">المتاح</th>
           <th scope="col" class="num">محجوز</th>
           <th scope="col">أقرب انتهاء</th>
-          <th scope="col" class="num">قُرئ هذا الشهر</th>
+          <th scope="col" class="num">هذا الشهر</th>
         </tr>
       </thead>
       <tbody>
@@ -38,16 +38,18 @@ Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Su
         {% with org=row.organization s=row.summary %}
         <tr data-account="{{ org.pk }}" x-show="!q || $el.dataset.name.includes(q.trim())" data-name="{{ org.name }}">
           <td>
-            <a class="link og-bill-name" href="{% url 'accounts:billing_account' org.pk %}">{{ org.name }}</a>
-            <div class="meta">{{ org.get_kind_display }}{% if org.org_type %} · {{ org.get_org_type_display }}{% endif %}{% if org.country %} · {{ org.country }}{% endif %} · <bdi class="num">{{ org.n_members }}</bdi> {% if org.n_members == 1 %}عضو{% else %}أعضاء{% endif %} · <bdi class="num">{{ org.n_books }}</bdi> كتاب</div>
+            <a class="link og-name" href="{% url 'accounts:billing_account' org.pk %}">{{ org.name }}</a>
+            <div class="og-row-meta">{{ org.get_kind_display }}{% if org.org_type %} · {{ org.get_org_type_display }}{% endif %}{% if org.country %} · {{ org.country }}{% endif %} · {{ org.n_members|ar_count:"عضو واحد,عضوان,أعضاء,عضوًا" }} · {{ org.n_books|ar_count:"كتاب واحد,كتابان,كتب,كتابًا" }}</div>
           </td>
           <td class="num">
             {% if s.unlimited %}<span class="badge">غير محدود</span>
-            {% else %}<span class="og-bill-available{% if s.available <= 0 %} is-empty{% endif %}">{{ s.available }}</span>{% if s.debt %}<div class="meta">دَين {{ s.debt }}</div>{% endif %}{% endif %}
+            {% elif s.available > 0 %}<span class="og-avail">{{ s.available }}</span>
+            {% else %}<span class="og-avail is-empty">0</span>{% endif %}
+            {% if s.debt %}<div class="og-row-meta og-debt">دَين {{ s.debt }}</div>{% endif %}
           </td>
           <td class="num">{% if s.held %}{{ s.held }}{% else %}<span class="meta">—</span>{% endif %}</td>
           <td>
-            {% if s.next_expiry %}<bdi class="num">{{ s.next_expiry|date:"Y-m-d" }}</bdi> <span class="meta">({{ s.expiring|ar_pages }})</span>{% if s.expiring_soon %} <span class="badge badge-warning">قريب</span>{% endif %}
+            {% if s.next_expiry %}<bdi class="num">{{ s.next_expiry|date:"Y-m-d" }}</bdi> <span class="meta">({{ s.expiring }})</span>{% if s.expiring_soon %} <span class="badge badge-warning">قريب</span>{% endif %}
             {% else %}<span class="meta">—</span>{% endif %}
           </td>
           <td class="num">{% if s.used_this_month %}{{ s.used_this_month }}{% else %}<span class="meta">0</span>{% endif %}</td>
@@ -60,7 +62,7 @@ Context: rows ([{organization (n_members, n_books), summary (accounts.billing.Su
   {% else %}
   <div class="empty-state">
     <p class="empty-title">لا حسابات بعد</p>
-    <p class="empty-text">تظهر هنا الحسابات حين يسجّل الناس من صفحة «حساب جديد».</p>
+    <p class="empty-text">تظهر هنا الحسابات حين يسجّل الناس من «حساب جديد».</p>
   </div>
   {% endif %}
 </div>

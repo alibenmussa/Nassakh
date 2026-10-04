@@ -28,7 +28,7 @@ class LoginForm(AuthenticationForm):
             "البريد الإلكتروني أو كلمة المرور غير صحيحة. تأكد من الكتابة ثم حاول مجددًا."
         ),
         "inactive": "هذا الحساب غير مفعّل. تواصل مع مدير النظام.",
-        "unconfirmed": "لم يُفعَّل حسابك بعد. افتح رابط التأكيد الذي أرسلناه إلى بريدك، أو اطلب رابطًا جديدًا.",
+        "unconfirmed": "لم يُفعَّل حسابك بعد. افتح الرابط الذي أرسلناه إلى بريدك، أو اطلب رابطًا جديدًا.",
     }
 
     def __init__(self, request=None, *args, **kwargs):
@@ -85,14 +85,13 @@ class SignUpForm(forms.Form):
         label="البريد الإلكتروني",
         max_length=150,
         widget=forms.EmailInput(attrs={**LTR, "autocomplete": "email"}),
-        help_text="به تسجّل الدخول، وإليه يصل رابط التأكيد.",
         error_messages={"required": "أدخل بريدك الإلكتروني.", "invalid": "أدخل بريدًا إلكترونيًا صحيحًا."},
     )
     password = forms.CharField(
         label="كلمة المرور",
         strip=False,
         widget=forms.PasswordInput(attrs={**LTR, "autocomplete": "new-password"}),
-        help_text="8 أحرف على الأقل، لا أرقام وحدها ولا كلمة شائعة.",
+        help_text="8 أحرف على الأقل.",
         error_messages={"required": "أدخل كلمة المرور."},
     )
     kind = forms.ChoiceField(
@@ -122,14 +121,13 @@ class SignUpForm(forms.Form):
         error_messages={"required": "أدخل البلد."},
     )
     website = forms.URLField(
-        label="الموقع",
+        label="الموقع (اختياري)",
         max_length=300,
         required=False,
         assume_scheme="https",
         widget=forms.TextInput(
             attrs={**LTR, "autocomplete": "url", "inputmode": "url", "placeholder": "https://"}
         ),
-        help_text="اختياري.",
         error_messages={"invalid": "أدخل عنوانًا صحيحًا، مثل https://example.org"},
     )
 
@@ -142,9 +140,7 @@ class SignUpForm(forms.Form):
         if email and (
             users.filter(email__iexact=email).exists() or users.filter(username__iexact=email).exists()
         ):
-            raise ValidationError(
-                "هذا البريد مسجّل من قبل. سجّل الدخول به، أو اطلب رابط التأكيد من صفحة الدخول."
-            )
+            raise ValidationError("هذا البريد مسجّل من قبل. سجّل الدخول به.")
         return email
 
     def clean(self):
@@ -207,22 +203,21 @@ class GrantForm(forms.Form):
         label="يبدأ في",
         required=False,
         widget=forms.DateInput(attrs={**INPUT, "type": "date", "dir": "ltr"}),
-        help_text="فارغًا: الآن.",
+        help_text="فارغًا: اليوم.",
         error_messages={"invalid": "اكتب تاريخًا صحيحًا."},
     )
     expires_on = forms.DateField(
         label="ينتهي في",
         required=False,
         widget=forms.DateInput(attrs={**INPUT, "type": "date", "dir": "ltr"}),
-        help_text="آخر يوم يُستعمل فيه.",
         error_messages={"invalid": "اكتب تاريخًا صحيحًا."},
     )
     days = forms.IntegerField(
-        label="أو الصلاحية (أيام)",
+        label="أو صلاحية (أيام)",
         min_value=1,
         required=False,
         widget=forms.NumberInput(attrs={**INPUT, "dir": "ltr", "inputmode": "numeric", "min": 1}),
-        help_text="من يوم البدء. فارغان معًا: لا ينتهي.",
+        help_text="فارغان معًا: لا ينتهي.",
         error_messages={"min_value": "اكتب عدد أيام أكبر من صفر.", "invalid": "اكتب عددًا صحيحًا."},
     )
     amount = forms.DecimalField(
@@ -246,8 +241,7 @@ class GrantForm(forms.Form):
         label="المرجع",
         max_length=120,
         required=False,
-        widget=forms.TextInput(attrs={**INPUT, "dir": "auto"}),
-        help_text="رقم الإيصال أو الفاتورة.",
+        widget=forms.TextInput(attrs={**INPUT, "dir": "auto", "placeholder": "رقم الإيصال أو الفاتورة"}),
     )
     note = forms.CharField(
         label="ملاحظة",
