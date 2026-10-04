@@ -1083,3 +1083,18 @@ text already: lines checked against the page images, each word with its box and 
   «يحتاج مطابقة مع الصورة» rather than «محرّف», keep body and notes apart.
 - ORM calls through `sync_to_async`; 60 calls a minute per key from the `ToolCall` log (key, tool, ms, status).
   A superuser's key sees every organisation's books (D102).
+
+**D107 addendum (2026-10-04, owner: "good as function, bad as UI/UX").** The page was redrawn in the review screen's
+manner: three parts (البحث · التحقق من نص · ربط مساعد), hairlines over boxes, one neutral verdict card for every
+status (dot and label carry the tone; the sentence never accuses the writer), the diff as the book's words in flow
+with the quotation's word small and struck beside a difference, the changes table on demand. «جرّب مثالًا»
+(`services.example_quote`, `GET /api/research/example`) draws 7 confident words of one line of the account's own
+text, so a first visitor sees an `exact` result in one click.
+
+**D108 addendum (2026-10-04).** Besides `Authorization: Bearer`, a key may travel in the URL `/mcp/k/<key>` for
+clients whose connector dialog takes only a URL (Claude's and ChatGPT's custom connectors; OAuth stays D109).
+`research.mcp_server.KeyInPath` rewrites the ASGI scope in place (path → `/mcp`, header set) before the SDK's
+verifier; `RedactKeys` on uvicorn's handlers keeps keys out of every log line. The secret URL is a password:
+revoking the key voids it. A reverse proxy in front must not log that path in full (deployment). «ربط مساعد» walks
+through Claude, ChatGPT, Claude Code, Cursor, VS Code and a generic client, with the steps checked against each
+vendor's docs on 2026-10-04.

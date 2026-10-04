@@ -27,10 +27,14 @@ def research_page(request: HttpRequest) -> HttpResponse:
         "urls": {
             "search": reverse("api:research_search"),
             "verify": reverse("api:research_verify"),
+            "example": reverse("api:research_example"),
             "keys": reverse("api:research_keys"),
             "revoke": reverse("api:research_key_revoke", args=[0]).replace("/0/", "/__id__/", 1),
         },
         "mcp_url": keys.public_url(),
+        # the web clients (Claude, ChatGPT) connect from their servers: a local public URL works only once
+        # the site is deployed
+        "public_local": keys.public_is_local(),
         "books": [{"id": book.id, "title": book.title} for book in books],
         "rate_limit": keys.rate_limit(),
         "clip_days": clips.link_days(),

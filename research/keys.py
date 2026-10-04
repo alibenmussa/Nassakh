@@ -6,6 +6,10 @@ unknown or revoked key, or a deactivated user): the MCP server's token verifier 
 so a revoked key stops at once. Each tool call is logged (`log_call`) and a key may make
 `NASSAKH["MCP_RATE_LIMIT"]` calls a minute (`rate_limited`, counted from the log, so it holds across server
 processes). Keys are made and revoked by their user on the «البحث والتحقق» page (`research.api`).
+
+A key is presented as `Authorization: Bearer nsk_…`, or — for the clients that take only a URL (Claude's
+and ChatGPT's custom connectors) — inside the secret connection URL `<public>/mcp/k/<key>` (`secret_url`;
+`research.mcp_server.KeyInPath` moves it into the header).
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.db.models import Count, Q
@@ -27,6 +32,8 @@ SHOWN_PREFIX = 12  # «nsk_» and the first 8 characters, to tell keys apart
 NAME_MAX = 80
 TOUCH_EVERY = timedelta(minutes=1)  # `last_used_at` is written at most this often
 KEY_NOT_FOUND = "المفتاح غير موجود."
+KEY_SEGMENT = "k"  # `/mcp/k/<key>`: the key as a path segment, for URL-only clients
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
 
 def hash_key(raw: str) -> str:
@@ -80,7 +87,20 @@ def site_url() -> str:
 def public_url() -> str:
     """The MCP endpoint clients connect to: `NASSAKH["MCP_PUBLIC_URL"]`, else the local server's `/mcp`."""
     value = settings.NASSAKH.get("MCP_PUBLIC_URL") or ""
-    return str(value or f"http://localhost:{settings.NASSAKH.get('MCP_PORT', 8001)}/mcp")
+    return str(value or f"http://localhost:{settings.NASSAKH.get('MCP_PORT', 8001)}/mcp").rstrip("/")
+
+
+def secret_url(raw: str) -> str:
+    """The connection URL that carries `raw` itself (`<public>/mcp/k/<key>`), for a client that takes only a
+    URL; it is as secret as the key, and revoking the key voids it."""
+    return f"{public_url()}/{KEY_SEGMENT}/{raw}"
+
+
+def public_is_local() -> bool:
+    """True when the public URL names this machine (localhost, 127.0.0.1…): a web client's servers cannot
+    reach it until the site is deployed; a client on this machine can."""
+    host = (urlsplit(public_url()).hostname or "").lower()
+    return host in LOCAL_HOSTS
 
 
 def rate_limit() -> int:

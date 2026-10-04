@@ -2,10 +2,13 @@
 
 - POST /api/research/search              `{query, kind?, book_ids?, limit?, offset?}` → `SearchResult`
 - POST /api/research/verify              `{quote, book_id?, attributed_to?}` → `VerifyResult`
+- GET  /api/research/example             → `ExampleQuote` (a sentence of the account's text), or
+                                           `{quote: null, book: null}` when there is none yet
 - GET  /api/research/books               → `BooksResult` (the account's books)
 - GET  /api/research/passages/<id>/      `?context=` → `Passage`
-- GET  /api/research/keys                → `{keys, mcp_url}` (the user's keys, never the keys themselves)
-- POST /api/research/keys                `{name}` → 201 `{key, secret, mcp_url}` (`secret`: shown this once)
+- GET  /api/research/keys                → `{keys, mcp_url, public_local}` (the user's keys, never the keys)
+- POST /api/research/keys                `{name}` → 201 `{key, secret, secret_url, mcp_url, public_local}`
+                                           (`secret` and `secret_url`: shown this once)
 - POST /api/research/keys/<id>/revoke    → `{key}`
 
 The same services as the MCP tools (`research.services`), scoped to the user's books (`books.access`): a
@@ -94,6 +97,13 @@ def verify(request: Request) -> Response:
 
 
 @api_view(["GET"])
+def example(request: Request) -> Response:
+    """A sentence of the account's text to try the check with (`services.example_quote`)."""
+    result = services.example_quote(request.user)
+    return Response(result.model_dump(mode="json") if result is not None else {"quote": None, "book": None})
+
+
+@api_view(["GET"])
 def books(request: Request) -> Response:
     """The account's books (`services.list_books`)."""
     return Response(services.list_books(request.user).model_dump(mode="json"))
@@ -117,9 +127,21 @@ def access_keys(request: Request) -> Response:
         if not name:
             return Response({"detail": "سمِّ المفتاح أولًا."}, status=status.HTTP_400_BAD_REQUEST)
         key, secret = keys.make_key(request.user, name)
-        payload = {"key": keys.key_item(key), "secret": secret, "mcp_url": keys.public_url()}
+        payload = {
+            "key": keys.key_item(key),
+            "secret": secret,
+            "secret_url": keys.secret_url(secret),
+            "mcp_url": keys.public_url(),
+            "public_local": keys.public_is_local(),
+        }
         return Response(payload, status=status.HTTP_201_CREATED)
-    return Response({"keys": keys.keys_of(request.user), "mcp_url": keys.public_url()})
+    return Response(
+        {
+            "keys": keys.keys_of(request.user),
+            "mcp_url": keys.public_url(),
+            "public_local": keys.public_is_local(),
+        }
+    )
 
 
 @api_view(["POST"])

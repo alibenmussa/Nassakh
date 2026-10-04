@@ -186,6 +186,13 @@ class VerifyResult(BaseModel):
     citation: str | None = None
 
 
+class ExampleQuote(BaseModel):
+    """A sentence from the account's own text, for the page's «جرّب مثالًا» (`services.example_quote`)."""
+
+    quote: str = Field(description="A run of words of one line of the author's text, as printed.")
+    book: BookRef
+
+
 class BookInfo(BaseModel):
     id: int
     title: str

@@ -5,8 +5,11 @@ assistant — through the official MCP Python SDK (`mcp` 2.x, `MCPServer`).
   runs it with uvicorn beside Django (Procfile `mcp:`); `/healthz` answers without a key.
 - **Auth:** `Authorization: Bearer nsk_…`, an access key its user made on the «البحث والتحقق» page
   (`research.keys`). The SDK's token-verifier hook (`KeyVerifier`, `MCPServer(token_verifier=…)`) resolves
-  the key on every request; no key, an unknown or a revoked one → 401 before any tool runs. OAuth (a
-  sign-in from claude.ai) can replace the verifier later (D109) without touching the tools.
+  the key on every request; no key, an unknown or a revoked one → 401 before any tool runs. A client that
+  takes only a URL (Claude's and ChatGPT's custom connectors) connects with the secret URL `/mcp/k/<key>`:
+  `KeyInPath` moves the key from the path into the header before the app sees the request, and the server
+  never logs it (`RedactKeys`, `log_config`). OAuth (a sign-in from claude.ai) can replace the verifier
+  later (D109) without touching the tools.
 - **Tools** (read-only, closed world): `list_books`, `search`, `get_passage`, `verify_quote`, `cite`. Each
   answers a typed structured result (`research.schemas`, the tool's output schema) and, as text, a short
   Arabic summary followed by the same result as JSON (for clients that read only the text). Every tool
@@ -19,8 +22,10 @@ assistant — through the official MCP Python SDK (`mcp` 2.x, `MCPServer`).
   one of `ALLOWED_HOSTS`.
 """
 
+import copy
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Annotated, Literal
@@ -49,7 +54,12 @@ from .schemas import BooksResult, Citation, Passage, SearchResult, VerifyResult
 log = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
+KEY_PATH_PREFIX = f"{MCP_PATH}/{keys.KEY_SEGMENT}/"  # `/mcp/k/<key>`: the key inside the URL
 SEARCH_LIMIT = 20
+# a key written in a path, and a bare key anywhere (the page's shown prefix, `nsk_` + 8, is shorter and stays)
+_KEY_IN_PATH = re.compile(re.escape(KEY_PATH_PREFIX) + r"[^/\s\"'?#]+")
+_BARE_KEY = re.compile(re.escape(keys.KEY_PREFIX) + r"[A-Za-z0-9_\-]{20,}")
+REDACTED = "…"
 
 INSTRUCTIONS = """\
 Nassakh holds printed Arabic books (heritage texts and their critical editions) that this user's
@@ -122,6 +132,65 @@ class KeyVerifier:
             subject=str(key.user_id),
             claims={"key_id": key.pk, "user_id": key.user_id},
         )
+
+
+class KeyInPath:
+    """ASGI wrapper around the server's app: a request to `/mcp/k/<key>` reaches the app as a request to
+    `/mcp` carrying `Authorization: Bearer <key>` (an Authorization header the request brought is replaced),
+    so a client that takes only a URL connects with the secret URL and meets the same verifier, 401s, rate
+    limit and call log. The scope is rewritten in place: the server's access log, which reads the scope's
+    path when the response starts, sees `/mcp`, never the key."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") == "http":
+            path = str(scope.get("path") or "")
+            if path.startswith(KEY_PATH_PREFIX):
+                key, _slash, rest = path[len(KEY_PATH_PREFIX) :].partition("/")
+                scope["path"] = MCP_PATH + (f"/{rest}" if rest else "")
+                scope["raw_path"] = scope["path"].encode("ascii", "ignore")
+                headers = [
+                    (name, value)
+                    for name, value in scope.get("headers") or []
+                    if name.lower() != b"authorization"
+                ]
+                headers.append((b"authorization", f"Bearer {key}".encode()))
+                scope["headers"] = headers
+        await self.app(scope, receive, send)
+
+
+def redact(value):
+    """`value` with any access key blanked: in a path (`/mcp/k/nsk_…` → `/mcp/k/…`) or on its own."""
+    if not isinstance(value, str):
+        return value
+    return _BARE_KEY.sub(keys.KEY_PREFIX + REDACTED, _KEY_IN_PATH.sub(KEY_PATH_PREFIX + REDACTED, value))
+
+
+class RedactKeys(logging.Filter):
+    """A logging filter that blanks access keys in a record's message and arguments (`redact`); on uvicorn's
+    handlers (`log_config`) it keeps a key out of the access log and of any error line."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact(record.msg)
+        args = record.args
+        if isinstance(args, dict):
+            record.args = {name: redact(value) for name, value in args.items()}
+        elif isinstance(args, tuple):
+            record.args = tuple(redact(value) for value in args)
+        return True
+
+
+def log_config() -> dict:
+    """uvicorn's logging config with `RedactKeys` on every handler (`manage.py mcp_serve` passes it)."""
+    import uvicorn.config
+
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config.setdefault("filters", {})["redact_keys"] = {"()": f"{__name__}.RedactKeys"}
+    for handler in config.get("handlers", {}).values():
+        handler.setdefault("filters", []).append("redact_keys")
+    return config
 
 
 def _key_id() -> int:
@@ -406,11 +475,13 @@ def transport_security() -> TransportSecuritySettings:
 
 
 def build_app(server: MCPServer | None = None):
-    """The ASGI app of `server` (a new `build_server()` when None): Streamable HTTP at `/mcp`, stateless,
-    JSON responses, Bearer keys required. Its lifespan runs the server's session manager."""
-    return (server or build_server()).streamable_http_app(
+    """The ASGI app of `server` (a new `build_server()` when None): Streamable HTTP at `/mcp` (and, through
+    `KeyInPath`, at `/mcp/k/<key>`), stateless, JSON responses, Bearer keys required. Its lifespan runs the
+    server's session manager."""
+    app = (server or build_server()).streamable_http_app(
         streamable_http_path=MCP_PATH,
         json_response=True,
         stateless_http=True,
         transport_security=transport_security(),
     )
+    return KeyInPath(app)

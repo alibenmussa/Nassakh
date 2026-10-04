@@ -1281,7 +1281,7 @@ every call is logged (`research.ToolCall`, Django admin «سجل استدعاء�
 the clip and review links the tools return). In production the web server proxies `/mcp` (and `/healthz` if wanted)
 to it on the same domain; the Host must be the public URL's host or one of `ALLOWED_HOSTS`.
 
-A client, once a key is made (the page shows these with the key filled in):
+A client, once a key is made («ربط مساعد» walks through each one and shows these with the key filled in):
 
 ```sh
 claude mcp add --transport http nassakh https://<domain>/mcp --header "Authorization: Bearer nsk_…"
@@ -1291,8 +1291,13 @@ claude mcp add --transport http nassakh https://<domain>/mcp --header "Authoriza
 {"mcpServers": {"nassakh": {"type": "http", "url": "https://<domain>/mcp", "headers": {"Authorization": "Bearer nsk_…"}}}}
 ```
 
-Claude Desktop (config file, Node.js): `{"mcpServers": {"nassakh": {"command": "npx", "args": ["-y", "mcp-remote",
-"https://<domain>/mcp", "--header", "Authorization:${NASSAKH_AUTH}"], "env": {"NASSAKH_AUTH": "Bearer nsk_…"}}}}`.
+Cursor takes the same `mcpServers` block without `type` (`~/.cursor/mcp.json`); VS Code `.vscode/mcp.json` uses
+`servers` instead of `mcpServers`. **Claude (claude.ai and the desktop app) and ChatGPT** take only a URL in their
+custom-connector dialogs, so they get the **secret URL** `https://<domain>/mcp/k/nsk_…`: `research.mcp_server.KeyInPath`
+moves the key from the path into the `Authorization` header (same verifier, same 401, same rate limit and log), the
+scope is rewritten in place and `RedactKeys` sits on uvicorn's handlers (`log_config`), so no log line prints a key.
+The URL is a password: revoking the key voids it. Those two connect from their servers, so they need the deployed
+https address (`MCP_PUBLIC_URL`); the header clients work against a local server too.
 
 | Symptom | Fix |
 |---|---|

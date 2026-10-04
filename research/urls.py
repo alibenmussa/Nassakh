@@ -19,6 +19,7 @@ urlpatterns = [
 api_urlpatterns = [
     path("research/search", api.search, name="research_search"),
     path("research/verify", api.verify, name="research_verify"),
+    path("research/example", api.example, name="research_example"),
     path("research/books", api.books, name="research_books"),
     path("research/passages/<str:passage_id>/", api.passage, name="research_passage"),
     path("research/keys", api.access_keys, name="research_keys"),

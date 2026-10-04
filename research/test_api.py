@@ -40,8 +40,32 @@ def test_the_page_lists_the_users_books_and_links_from_the_sidebar(reader, libra
     assert 'href="/research/"' in body and "البحث والتحقق" in body
     config = json.loads(body.split('id="research-config" type="application/json">')[1].split("</script>")[0])
     assert {b["title"] for b in config["books"]} == {"مختصر صحيح البخاري", "كتاب آخر"}  # never «كتاب سري»
-    assert config["mcp_url"].endswith("/mcp")
+    assert config["mcp_url"].endswith("/mcp") and config["public_local"] is True  # the default: localhost
+    assert config["urls"]["example"] == reverse("api:research_example")
     assert "كتاب سري" not in body
+    # the three parts and the one-click example
+    assert "ربط مساعد" in body and "جرّب مثالًا" in body and "لن يظهر مرة أخرى" in body
+
+
+def test_the_example_is_a_sentence_of_the_accounts_text_that_verifies_exact(reader, stranger, library):
+    client = _client(reader)
+    for _ in range(5):  # drawn at random: every draw must hold
+        example = client.get(reverse("api:research_example")).json()
+        assert example["book"]["id"] in {library["book"].pk, library["other"].pk}
+        assert len(example["quote"].split()) == 7
+        checked = _post(client, "research_verify", {"quote": example["quote"]}).json()
+        assert checked["status"] == "exact", example
+        assert not any(word.endswith("~") for word in example["quote"].split())  # never a doubtful reading
+    # the other account draws from its own book only
+    theirs = _client(stranger).get(reverse("api:research_example")).json()
+    assert theirs["book"]["id"] == library["secret"].pk
+
+
+def test_no_text_means_no_example(db):
+    from django.contrib.auth.models import User
+
+    lonely = User.objects.create_user("lonely", password="pass-1234")
+    assert _client(lonely).get(reverse("api:research_example")).json() == {"quote": None, "book": None}
 
 
 def test_the_page_needs_a_session(client):
@@ -91,11 +115,13 @@ def test_access_keys_are_made_shown_once_listed_and_revoked(reader, stranger):
     assert made.status_code == 201
     secret = made.json()["secret"]
     assert secret.startswith("nsk_") and len(secret) > 40
+    assert made.json()["secret_url"] == f"{made.json()['mcp_url']}/k/{secret}"  # for the URL-only clients
+    assert made.json()["public_local"] is True
     row = AccessKey.objects.get(user=reader)
     assert row.key_hash == keys.hash_key(secret) and secret not in json.dumps(made.json()["key"])
     listed = client.get(reverse("api:research_keys")).json()
     assert [k["name"] for k in listed["keys"]] == ["حاسوب المكتب"]
-    assert "secret" not in json.dumps(listed["keys"])
+    assert "secret" not in json.dumps(listed["keys"]) and "public_local" in listed
     assert keys.resolve_key(secret).pk == row.pk
     # another user cannot revoke it
     assert _post(_client(stranger), "research_key_revoke", {}, row.pk).status_code == 404
@@ -103,6 +129,15 @@ def test_access_keys_are_made_shown_once_listed_and_revoked(reader, stranger):
     assert revoked.status_code == 200 and revoked.json()["key"]["active"] is False
     assert keys.resolve_key(secret) is None
     assert _post(client, "research_keys", {"name": ""}).status_code == 400
+
+
+def test_the_public_url_decides_the_secret_url_and_whether_it_is_local(settings):
+    settings.NASSAKH = {**settings.NASSAKH, "MCP_PUBLIC_URL": "https://nassakh.example/mcp/"}
+    assert keys.public_url() == "https://nassakh.example/mcp"
+    assert keys.secret_url("nsk_abc") == "https://nassakh.example/mcp/k/nsk_abc"
+    assert keys.public_is_local() is False
+    settings.NASSAKH = {**settings.NASSAKH, "MCP_PUBLIC_URL": "http://127.0.0.1:8001/mcp"}
+    assert keys.public_is_local() is True
 
 
 def test_a_key_of_a_deactivated_user_stops_working(reader):

@@ -22,9 +22,17 @@ class Command(BaseCommand):
     def handle(self, *args, host=None, port=None, log_level="info", **options) -> None:
         import uvicorn
 
-        from research.mcp_server import MCP_PATH, build_app, public_url
+        from research.mcp_server import MCP_PATH, build_app, log_config, public_url
 
         host = host or settings.NASSAKH.get("MCP_HOST", "127.0.0.1")
         port = int(port or settings.NASSAKH.get("MCP_PORT", 8001))
         self.stdout.write(f"MCP server on http://{host}:{port}{MCP_PATH} (public URL: {public_url()})")
-        uvicorn.run(build_app(), host=host, port=port, log_level=log_level, proxy_headers=True)
+        # `log_config`: uvicorn's own, with the filter that keeps a key of `/mcp/k/<key>` out of every line
+        uvicorn.run(
+            build_app(),
+            host=host,
+            port=port,
+            log_level=log_level,
+            proxy_headers=True,
+            log_config=log_config(),
+        )

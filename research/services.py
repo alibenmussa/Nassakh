@@ -29,6 +29,7 @@ passage runs onto the next page: stable while the lines are (review renumbers no
 from __future__ import annotations
 
 import bisect
+import random
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
@@ -59,6 +60,7 @@ from .schemas import (
     CitationParts,
     DiacriticDifference,
     DiffSegment,
+    ExampleQuote,
     Hit,
     PageRef,
     Passage,
@@ -69,6 +71,8 @@ from .schemas import (
 )
 
 MIN_QUOTE_WORDS = 3
+EXAMPLE_WORDS = 7  # «جرّب مثالًا»: this many consecutive words of one line
+EXAMPLE_PAGES = 40  # the body pages looked at for one
 NOT_FOUND_RATIO = 0.6
 FUZZY_MIN = 85.0
 MAX_LIMIT = 50
@@ -846,6 +850,45 @@ def verify_quote(
         result.ratio = round(best.ratio, 3) if best is not None else 0.0
         return result
     return _verdict(result, words, best, attributed_to, attribution, base_url)
+
+
+def example_quote(user) -> ExampleQuote | None:
+    """A sentence of the account's own text for the page's «جرّب مثالًا»: `EXAMPLE_WORDS` consecutive words
+    of one line of the author's text, none a doubtful reading or a bare number, from a page drawn at random
+    among the first `EXAMPLE_PAGES` indexed body pages (so a click shows a different sentence; each verifies
+    `exact`). None when no page holds such a run."""
+    ids = _book_ids(user)
+    if not ids:
+        return None
+    rows = list(
+        PageText.objects.filter(book_id__in=ids, kind="body")
+        .exclude(words=[])
+        .only("id", "book_id", "words")
+        .order_by("book_id", "page__number")[:EXAMPLE_PAGES]
+    )
+    random.shuffle(rows)
+    for row in rows:
+        run = _example_run(row.words)
+        if run:
+            details = book_details(Book.objects.filter(pk=row.book_id))[row.book_id]
+            return ExampleQuote(quote=" ".join(word["text"] for word in run), book=details.ref())
+    return None
+
+
+def _example_word(word: dict) -> bool:
+    norm = str(word.get("norm") or "")
+    return bool(norm) and not norm.isdigit() and word.get("state") != index.DOUBTFUL
+
+
+def _example_run(words: Sequence[dict]) -> list[dict] | None:
+    """One run of `EXAMPLE_WORDS` words on one line, every word confident or reviewed (drawn at random among
+    the page's runs); None when the page has none."""
+    runs = []
+    for start in range(0, len(words) - EXAMPLE_WORDS + 1):
+        window = words[start : start + EXAMPLE_WORDS]
+        if len({word.get("line") for word in window}) == 1 and all(_example_word(word) for word in window):
+            runs.append(list(window))
+    return random.choice(runs) if runs else None
 
 
 def _states(words: Sequence[dict]) -> str | None:

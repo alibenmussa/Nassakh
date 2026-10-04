@@ -2,14 +2,16 @@
 {% load static %}
 {% comment %}
 «البحث والتحقق» (D107, D108; research.views.research_page, static/src/js/research.js, static/src/components/research.css).
-Three tabs over the account's books, as the review layer holds their text (the lines checked against the page images):
-- «البحث»: words or a phrase, the kind (المتن / الحواشي) and the book → hits with their printed page, the match marked
-  (a doubtful reading underlined in amber), the clip of the printed lines, «نسخ الإحالة», the page in review;
-- «التحقق من نص»: a quotation, its book and whom it is attributed to → a status card (colour + one sentence), the book's
-  passage word by word against the quotation, the clip and the citation;
-- «ربط مساعد ذكي»: access keys for an MCP client (Claude Code, Claude Desktop, any Streamable HTTP client): the address,
-  a new key shown once, ready snippets, the keys with their use, «إلغاء».
-Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days), has_books, member.
+Three parts over the account's books, as the review layer holds their text (the lines checked against the page images):
+- «البحث»: a word or a phrase, the kind (المتن / الحواشي) and the book → hits with the book, the printed page and the
+  kind, the snippet with the match marked (a doubtful reading underlined in amber), the clip, «نسخ الإحالة», the page;
+- «التحقق من نص»: a quotation, its book and whom it is attributed to → one calm status card (a dot, a label, the
+  server's sentence), the book's passage word by word, the clip and the citation; «جرّب مثالًا» fills a sentence of
+  the account's own text;
+- «ربط مساعد»: pick the client (Claude, ChatGPT, Claude Code, Cursor, VS Code, another), make a key for it (shown
+  once), copy exactly what it needs — the secret URL `/mcp/k/<key>` for the clients that take only a URL, the URL
+  and the header for the rest — then the connections with «إلغاء».
+Context: books (BookInfo), config (urls, mcp_url, public_local, books, rate_limit, clip_days), has_books, member.
 {% endcomment %}
 {% block head_title %}البحث والتحقق · نسّاخ{% endblock %}
 {% block title %}البحث والتحقق{% endblock %}
@@ -21,10 +23,6 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
 </svg>
 <div class="rs-page" x-data="researchTabs" @keydown.window.slash="if (!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) { $event.preventDefault(); open('search'); $nextTick(() => document.getElementById('rs-query') && document.getElementById('rs-query').focus()); }">
   <div class="rs-head">
-    <p class="rs-lede">
-      {% if has_books %}نصوص {{ books|length }} {% if books|length == 1 %}كتاب{% elif books|length == 2 %}كتابين{% elif books|length <= 10 %}كتب{% else %}كتابًا{% endif %} كما رُوجعت على صورها؛ متن المؤلف وحواشي المحقق منفصلان، وكل نتيجة تعود إلى الصفحة المطبوعة.
-      {% else %}ابحث في نصوص كتب حسابك وتحقّق من نصّ منقول قبل نشره.{% endif %}
-    </p>
     <div class="segmented rs-tabs" role="tablist" aria-label="البحث والتحقق" @keydown="key($event)">
       <button type="button" role="tab" id="rs-tab-search" aria-controls="rs-panel-search" :aria-selected="tab === 'search' ? 'true' : 'false'" :tabindex="tab === 'search' ? 0 : -1" :class="{ 'is-selected': tab === 'search' }" @click="open('search')">
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-search"/></svg><span>البحث</span>
@@ -33,15 +31,18 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
         <svg class="icon icon-sm" aria-hidden="true"><use href="#i-verify"/></svg><span>التحقق من نص</span>
       </button>
       <button type="button" role="tab" id="rs-tab-connect" aria-controls="rs-panel-connect" :aria-selected="tab === 'connect' ? 'true' : 'false'" :tabindex="tab === 'connect' ? 0 : -1" :class="{ 'is-selected': tab === 'connect' }" @click="open('connect')">
-        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plug"/></svg><span>ربط مساعد ذكي</span>
+        <svg class="icon icon-sm" aria-hidden="true"><use href="#i-plug"/></svg><span>ربط مساعد</span>
       </button>
     </div>
+    {% if has_books %}{% with n=books|length %}
+    <p class="meta rs-scope">{% if n == 1 %}كتاب واحد{% elif n == 2 %}كتابان{% elif n <= 10 %}{{ n }} كتب{% else %}{{ n }} كتابًا{% endif %} · النص كما رُوجع على الصور</p>
+    {% endwith %}{% endif %}
   </div>
 
   {% if not has_books %}
   {% if member %}
     {% url 'books:list' as books_url %}
-    {% include "partials/_empty_state.html" with icon="i-book" title="لا نص للبحث فيه بعد" text="يُبحث في الكتب بعد أن تُقرأ صفحاتها. ارفع كتابًا وابدأ معالجته، ثم عُد إلى هنا." action_url=books_url action_label="الكتب" %}
+    {% include "partials/_empty_state.html" with icon="i-book" title="لا نص للبحث فيه بعد" text="يُبحث في الكتب بعد قراءة صفحاتها. ارفع كتابًا وابدأ معالجته، ثم عُد إلى هنا." action_url=books_url action_label="الكتب" %}
   {% else %}
     {% include "partials/_empty_state.html" with icon="i-book" title="لا كتب لك بعد" text="حسابك غير مرتبط بمؤسسة؛ اطلب من مدير مؤسستك إضافتك إليها." %}
   {% endif %}
@@ -49,11 +50,11 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
 
   {# ------------------------------------------------------------------ search #}
   <section id="rs-panel-search" role="tabpanel" aria-labelledby="rs-tab-search" x-show="tab === 'search'" x-data="researchSearch" class="rs-panel">
-    <form class="rs-searchbar" @submit.prevent="run()" role="search">
+    <form class="rs-bar" @submit.prevent="run()" role="search">
       <label class="rs-query">
         <span class="sr-only">كلمات البحث</span>
         <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
-        <input id="rs-query" type="search" x-model="query" dir="auto" maxlength="500" autocomplete="off" placeholder="كلمات أو عبارة من الكتب…" {% if not has_books %}disabled{% endif %}>
+        <input id="rs-query" type="search" x-model="query" dir="auto" maxlength="500" autocomplete="off" placeholder="كلمة أو عبارة من الكتب" {% if not has_books %}disabled{% endif %}>
         <kbd class="kbd" aria-hidden="true">/</kbd>
       </label>
       <div class="segmented" role="radiogroup" aria-label="في">
@@ -75,16 +76,15 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
 
     <template x-if="result">
       <div class="rs-results-wrap">
-        <p class="meta rs-count" aria-live="polite" x-text="result.message"></p>
+        <p class="meta rs-count" aria-live="polite" x-text="countText"></p>
         <ol class="rs-results" x-show="hits.length">
           <template x-for="hit in hits" :key="hit.passage_id + hit.mode">
             <li class="rs-hit">
               <div class="rs-hit-meta">
                 <span class="rs-hit-book" x-text="hit.book.title"></span>
-                <span class="rs-sep" aria-hidden="true">·</span>
                 <span class="rs-hit-page num" x-text="pageLabel(hit.page, hit.end_page)" :title="hit.page.printed_source === 'inferred' ? 'رقم الصفحة مستنتج من الصفحات المجاورة' : ''"></span>
                 <span class="rs-kind" :class="'is-' + hit.kind"><span class="dot" aria-hidden="true"></span><span x-text="kindLabel[hit.kind]"></span></span>
-                <span class="badge" x-show="hit.mode !== 'phrase'" x-text="hit.mode === 'fuzzy' ? `${modeLabel.fuzzy} ${Math.round(hit.score)}٪` : modeLabel[hit.mode]"></span>
+                <span class="badge" x-show="hit.mode !== 'phrase'" x-text="modeText(hit)"></span>
                 <span class="rs-review" :class="'is-' + hit.review_state" x-text="reviewLabel[hit.review_state]"></span>
               </div>
               <p class="rs-snippet" dir="rtl"><span class="rs-ctx" x-text="hit.before"></span> <mark class="rs-match"><template x-for="w in matchWords(hit)" :key="w.key"><span><span :class="{ 'rs-doubt': w.doubtful }" :title="w.doubtful ? 'قراءة غير محسومة' : null" x-text="w.text"></span> </span></template></mark><span class="rs-ctx" x-text="hit.after"></span></p>
@@ -96,7 +96,7 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
                   <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ الإحالة</span>
                 </button>
                 <a class="btn btn-ghost btn-sm" :href="hit.review_url" target="_blank" rel="noopener">
-                  <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-external"/></svg><span>فتح في المراجعة</span>
+                  <svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-external"/></svg><span>فتح الصفحة</span>
                 </a>
               </div>
               <figure class="rs-clip" x-show="openClip === hit.passage_id" x-cloak>
@@ -113,22 +113,24 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
 
   {# ------------------------------------------------------------------ verify #}
   <section id="rs-panel-verify" role="tabpanel" aria-labelledby="rs-tab-verify" x-show="tab === 'verify'" x-cloak x-data="researchVerify" class="rs-panel">
-    <form class="card stack rs-verify-form" @submit.prevent="run()">
-      <div class="field">
+    <form class="rs-verify" @submit.prevent="run()">
+      <div class="rs-verify-head">
         <label class="label" for="rs-quote">النص المنقول</label>
-        <textarea id="rs-quote" class="input rs-quote" x-model="quote" dir="auto" rows="4" maxlength="4000" placeholder="الصق العبارة كما نُقلت، ثلاث كلمات على الأقل…" @keydown.meta.enter.prevent="run()" @keydown.ctrl.enter.prevent="run()" {% if not has_books %}disabled{% endif %}></textarea>
-        <p class="help">يُقارَن النص كلمةً كلمة بنصوص كتب الحساب بعد توحيد الهمزات والتاء المربوطة والألف المقصورة؛ ويُذكر اختلاف الشكل وحده.</p>
+        {% if has_books %}
+        <button type="button" class="btn btn-ghost btn-sm rs-example" @click="example()" :disabled="busy" title="جملة من كتب حسابك، تُفحص فورًا">جرّب مثالًا</button>
+        {% endif %}
       </div>
+      <textarea id="rs-quote" class="input rs-quote" x-model="quote" dir="auto" rows="3" maxlength="4000" placeholder="الصق النص كما نُقل، ثلاث كلمات فأكثر" @keydown.meta.enter.prevent="run()" @keydown.ctrl.enter.prevent="run()" {% if not has_books %}disabled{% endif %}></textarea>
       <div class="rs-verify-row">
-        <div class="field">
-          <label class="label" for="rs-verify-book">في كتاب</label>
+        <label class="rs-inline-field">
+          <span class="rs-inline-label">الكتاب</span>
           <select id="rs-verify-book" class="select" x-model="book">
-            <option value="">أي كتاب في الحساب</option>
+            <option value="">أي كتاب</option>
             <template x-for="b in books" :key="b.id"><option :value="b.id" x-text="b.title"></option></template>
           </select>
-        </div>
-        <div class="field">
-          <span class="label" id="rs-attr-label">يُنسب إلى</span>
+        </label>
+        <div class="rs-inline-field">
+          <span class="rs-inline-label" id="rs-attr-label">منسوب إلى</span>
           <div class="segmented" role="radiogroup" aria-labelledby="rs-attr-label">
             <label><input type="radio" value="unknown" x-model="attributed">غير محدد</label>
             <label><input type="radio" value="author" x-model="attributed">المؤلف</label>
@@ -148,77 +150,72 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
 
     <template x-if="result">
       <div class="rs-verdict-wrap">
+        {# one card for every verdict: the dot and the label carry the tone, the sentence is the server's and never accuses the writer #}
         <div id="rs-verdict" class="rs-verdict" :class="'is-' + tone" tabindex="-1" role="status" aria-live="polite">
-          <svg class="icon rs-verdict-icon" aria-hidden="true"><use :href="'#' + status[result.status].icon"/></svg>
+          <span class="dot rs-verdict-dot" aria-hidden="true"></span>
           <div class="rs-verdict-body">
             <p class="rs-verdict-label" x-text="status[result.status].label"></p>
             <p class="rs-verdict-text" x-text="result.message"></p>
-            <p class="meta" x-show="found">
-              <span x-text="result.book && result.book.title"></span> ·
-              <span class="num" x-text="pageLabel(result.page, result.end_page)"></span> ·
-              <span x-text="kindLabel[result.kind]"></span> ·
-              <span x-text="reviewLabel[result.review_state]"></span>
-              <span x-show="result.status !== 'exact'" x-text="` · تطابق الكلمات ${Math.round(result.ratio * 100)}٪`"></span>
+            <p class="rs-verdict-note" x-show="result.attribution && result.attribution !== 'ok'">
+              <svg class="icon icon-sm" aria-hidden="true"><use href="#i-flag"/></svg><span x-text="result.attribution_message"></span>
             </p>
+            <p class="meta rs-verdict-meta" x-show="found" x-text="metaText"></p>
           </div>
-        </div>
-
-        <div class="banner" x-show="result.attribution && result.attribution !== 'ok'" role="note">
-          <svg class="icon" aria-hidden="true"><use href="#i-flag"/></svg><span x-text="result.attribution_message"></span>
         </div>
 
         <template x-if="found">
           <div class="rs-found">
-            <section class="card stack" aria-labelledby="rs-diff-title">
-              <div class="card-header">
+            <section class="rs-passage" aria-labelledby="rs-diff-title">
+              <div class="rs-passage-head">
                 <h2 class="section-title" id="rs-diff-title">النص في الكتاب</h2>
                 <span class="meta rs-legend" x-show="result.changes.length">
                   <span class="rs-key is-diff">مختلف</span>
                   <span class="rs-key is-image">قراءة غير محسومة</span>
                 </span>
               </div>
+              {# the book's words in flow; where the quotation differs, its word follows the book's, small and struck #}
               <p class="rs-diff" dir="rtl"><template x-for="p in pieces" :key="p.key"><span>
                 <template x-if="p.kind === 'same'"><span x-text="p.text"></span></template>
-                <template x-if="p.kind === 'replaced'"><span class="rs-change" :class="{ 'is-image': p.image }"><del x-text="p.text"></del><ins x-text="p.quote"></ins></span></template>
-                <template x-if="p.kind === 'missing'"><del class="rs-change rs-missing" :class="{ 'is-image': p.image }" x-text="p.text" title="في الكتاب وليس في النص"></del></template>
-                <template x-if="p.kind === 'added'"><ins class="rs-change rs-added" :class="{ 'is-image': p.image }" x-text="p.text" title="في النص وليس في الكتاب"></ins></template>
+                <template x-if="p.kind === 'replaced'"><span class="rs-change" :class="{ 'is-image': p.image }"><span class="rs-book-word" x-text="p.text" title="في الكتاب"></span><s class="rs-quote-word" x-text="p.quote" title="في النص"></s></span></template>
+                <template x-if="p.kind === 'missing'"><span class="rs-change rs-missing" :class="{ 'is-image': p.image }" x-text="p.text" title="في الكتاب وليس في النص"></span></template>
+                <template x-if="p.kind === 'added'"><span class="rs-change rs-added" :class="{ 'is-image': p.image }"><s class="rs-quote-word" x-text="p.text" title="في النص وليس في الكتاب"></s></span></template>
                 <template x-if="p.kind === 'moved'"><span class="rs-change rs-moved" x-text="p.text" title="في غير موضعه"></span></template>
               </span> </template></p>
               <template x-if="result.diacritics.length">
-                <p class="meta">اختلاف الشكل: <template x-for="(d, n) in result.diacritics" :key="n"><span><bdi x-text="d.quote"></bdi> ← في الكتاب <bdi x-text="d.source"></bdi><span x-show="n < result.diacritics.length - 1">، </span></span></template></p>
+                <p class="meta rs-diacritics">اختلاف الشكل: <template x-for="(d, n) in result.diacritics" :key="n"><span><bdi x-text="d.quote"></bdi> ← في الكتاب <bdi x-text="d.source"></bdi><span x-show="n < result.diacritics.length - 1">، </span></span></template></p>
               </template>
               <template x-if="result.changes.length">
-                <div class="table-wrap">
-                  <table class="table rs-changes">
-                    <thead><tr><th scope="col">الاختلاف</th><th scope="col">في النص</th><th scope="col">في الكتاب</th><th scope="col">قراءة الكتاب</th></tr></thead>
-                    <tbody>
-                      <template x-for="(c, n) in result.changes" :key="n">
-                        <tr>
-                          <td x-text="changeLabel[c.type]"></td>
-                          <td class="rs-word" x-text="c.quote || '—'"></td>
-                          <td class="rs-word" x-text="c.source || '—'"></td>
-                          <td><span class="status"><span class="dot" :class="c.needs_image ? 'dot-warning' : (c.source_state === 'reviewed' ? 'dot-success' : 'dot-neutral')"></span><span x-text="c.needs_image ? 'غير محسومة: طابقها مع الصورة' : (c.source_state === 'reviewed' ? 'مراجَعة' : 'واثقة، لم تُراجَع')"></span></span></td>
-                        </tr>
-                      </template>
-                    </tbody>
-                  </table>
-                </div>
+                <details class="rs-changes">
+                  <summary class="rs-changes-summary"><svg class="icon icon-sm icon-mirror rs-changes-chevron" aria-hidden="true"><use href="#i-chevron-end"/></svg><span x-text="changesTitle"></span></summary>
+                  <div class="table-wrap">
+                    <table class="table rs-changes-table">
+                      <thead><tr><th scope="col">الاختلاف</th><th scope="col">في النص</th><th scope="col">في الكتاب</th><th scope="col">قراءة الكتاب</th></tr></thead>
+                      <tbody>
+                        <template x-for="(c, n) in result.changes" :key="n">
+                          <tr>
+                            <td class="meta" x-text="changeLabel[c.type]"></td>
+                            <td class="rs-word" x-text="c.quote || '—'"></td>
+                            <td class="rs-word" x-text="c.source || '—'"></td>
+                            <td><span class="status"><span class="dot" :class="c.needs_image ? 'dot-warning' : (c.source_state === 'reviewed' ? 'dot-success' : 'dot-neutral')"></span><span x-text="c.needs_image ? 'غير محسومة: طابقها مع الصورة' : (c.source_state === 'reviewed' ? 'مراجَعة' : 'واثقة، لم تُراجَع')"></span></span></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
               </template>
             </section>
 
-            <figure class="card rs-clip rs-clip-card">
+            <figure class="rs-clip rs-clip-block">
               <template x-for="url in result.clip_urls" :key="url"><img :src="url" alt="صورة الأسطر من الصفحة المطبوعة" loading="lazy"></template>
               <figcaption class="meta">الصفحة المطبوعة، والموضع مظلَّل<span x-show="result.status === 'needs_image_check'"> والكلمات غير المحسومة مسطَّرة</span> · <a class="link" :href="result.clip_url" target="_blank" rel="noopener">فتح الصورة</a></figcaption>
             </figure>
 
-            <div class="card rs-cite">
-              <div class="rs-cite-text">
-                <span class="group-label">الإحالة</span>
-                <p x-text="result.citation"></p>
-              </div>
+            <div class="rs-cite">
+              <p class="rs-cite-text" x-text="result.citation"></p>
               <div class="rs-cite-actions">
                 <button type="button" class="btn" @click="cite()"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ الإحالة</span></button>
-                <a class="btn btn-ghost" :href="result.review_url" target="_blank" rel="noopener"><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-external"/></svg><span>فتح في المراجعة</span></a>
+                <a class="btn btn-ghost" :href="result.review_url" target="_blank" rel="noopener"><svg class="icon icon-sm icon-mirror" aria-hidden="true"><use href="#i-external"/></svg><span>فتح الصفحة</span></a>
               </div>
             </div>
           </div>
@@ -227,72 +224,73 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
     </template>
   </section>
 
-  {# ------------------------------------------------------------------ connect an AI assistant #}
-  <section id="rs-panel-connect" role="tabpanel" aria-labelledby="rs-tab-connect" x-show="tab === 'connect'" x-cloak x-data="researchKeys" class="rs-panel">
-    <div class="card stack">
-      <div class="card-header">
-        <h2 class="section-title">ربط مساعد ذكي</h2>
-        <span class="meta">MCP · للقراءة فقط</span>
-      </div>
-      <p class="rs-prose">اربط Claude أو أي مساعد يدعم بروتوكول MCP بكتب حسابك: يبحث فيها، ويتحقّق من النصوص المنقولة كلمةً كلمة، ويُحيل إلى الصفحة المطبوعة مع صورة أسطرها. لا يرى المساعد إلا كتب حسابك، ولا يغيّر فيها شيئًا.</p>
-      <div class="rs-address">
-        <span class="group-label">عنوان الخادم</span>
-        <code dir="ltr" x-text="url"></code>
-        <button type="button" class="btn btn-sm" @click="copy(url)"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ</span></button>
-      </div>
-      <form class="rs-newkey" @submit.prevent="create()">
-        <label class="label" for="rs-key-name">مفتاح جديد</label>
-        <div class="rs-newkey-row">
-          <input id="rs-key-name" class="input" type="text" x-model="name" maxlength="80" placeholder="اسم يميّزه، مثل: حاسوب المكتب" dir="auto">
-          <button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !name.trim()">إنشاء مفتاح</button>
-        </div>
-        <p class="help">يعمل المفتاح باسمك، وحدّه <bdi class="num" x-text="rateLimit"></bdi> استدعاءً في الدقيقة. احفظه كما تحفظ كلمة المرور.</p>
-      </form>
-      <div class="banner banner-danger" x-show="error" x-cloak role="alert"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span x-text="error"></span></div>
+  {# ------------------------------------------------------------------ connect an assistant #}
+  <section id="rs-panel-connect" role="tabpanel" aria-labelledby="rs-tab-connect" x-show="tab === 'connect'" x-cloak x-data="researchConnect" class="rs-panel rs-connect">
+    <p class="rs-connect-lede">يقرأ المساعد كتب حسابك فقط، ولا يغيّر فيها شيئًا.</p>
 
-      <div class="rs-fresh" x-show="fresh" x-cloak role="status">
-        <p class="rs-fresh-title"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span>انسخ المفتاح الآن؛ لن يظهر مرة أخرى.</span></p>
-        <div class="rs-secret">
-          <code dir="ltr" x-text="fresh && fresh.secret"></code>
-          <button type="button" class="btn btn-sm" @click="copy(fresh.secret)"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ المفتاح</span></button>
-          <button type="button" class="btn btn-ghost btn-sm" @click="forget()">تم</button>
-        </div>
-      </div>
-
-      <div class="rs-snippets">
-        <div class="rs-snippets-head">
-          <span class="group-label">الإعداد في المساعد</span>
-          <div class="segmented" role="radiogroup" aria-label="المساعد">
-            <label><input type="radio" value="code" x-model="client">Claude Code</label>
-            <label><input type="radio" value="desktop" x-model="client">Claude Desktop</label>
-            <label><input type="radio" value="http" x-model="client">عميل آخر</label>
-          </div>
-        </div>
-        <p class="help" x-show="client === 'code'">نفّذ هذا الأمر في الطرفية مرة واحدة.</p>
-        <p class="help" x-show="client === 'desktop'" x-cloak>أضِفه إلى ملف claude_desktop_config.json ثم أعد تشغيل Claude Desktop (يلزم Node.js).</p>
-        <p class="help" x-show="client === 'http'" x-cloak>لأي عميل يدعم Streamable HTTP، ولملف ‎.mcp.json في مشروع Claude Code.</p>
-        <div class="rs-code">
-          <pre dir="ltr"><code x-text="snippet"></code></pre>
-          <button type="button" class="btn btn-sm rs-code-copy" @click="copy(snippet)"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ</span></button>
-        </div>
-        <p class="help" x-show="!fresh">يظهر مفتاحك في الإعداد بدل <bdi dir="ltr">nsk_…</bdi> حين تنشئه.</p>
-      </div>
+    <div class="rs-clients" role="radiogroup" aria-label="المساعد">
+      <template x-for="c in clients" :key="c.id">
+        <button type="button" class="rs-client" role="radio" :aria-checked="client === c.id ? 'true' : 'false'" :class="{ 'is-selected': client === c.id }" @click="pick(c.id)">
+          <span class="rs-client-name" x-text="c.name"></span>
+          <span class="rs-client-sub" x-text="c.sub"></span>
+        </button>
+      </template>
     </div>
 
-    <section class="stack" aria-labelledby="rs-keys-title">
-      <h2 class="section-title" id="rs-keys-title">مفاتيحك</h2>
-      <p class="meta" x-show="loaded && !keys.length">لا مفاتيح بعد.</p>
+    <ol class="rs-steps">
+      {# step 1, every client: a key for this connection #}
+      <li class="rs-step">
+        <div class="rs-step-body">
+          <template x-if="!fresh">
+            <div class="rs-step-stack">
+              <p class="rs-step-text">أنشئ مفتاحًا لهذا الاتصال.</p>
+              <form class="rs-keyform" @submit.prevent="create()">
+                <label class="sr-only" for="rs-key-name">اسم الاتصال</label>
+                <input id="rs-key-name" class="input" type="text" x-model="name" @input="nameTouched = true" maxlength="80" placeholder="اسم الاتصال" dir="auto">
+                <button type="submit" class="btn btn-primary btn-sm" :disabled="busy || !name.trim()">إنشاء المفتاح</button>
+              </form>
+            </div>
+          </template>
+          <template x-if="fresh">
+            <div class="rs-fresh" role="status">
+              <p class="rs-fresh-text"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-check"/></svg><span>أُنشئ مفتاح «<span x-text="fresh.key.name"></span>». يظهر في الخطوات التالية الآن فقط، ولن يظهر مرة أخرى.</span></p>
+              <button type="button" class="btn btn-ghost btn-sm" @click="forget()">إخفاء المفتاح</button>
+            </div>
+          </template>
+          <div class="banner banner-danger rs-step-error" x-show="error" x-cloak role="alert"><svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg><span x-text="error"></span></div>
+        </div>
+      </li>
+      {# the client's own steps; a paste waits (dimmed) until the key exists #}
+      <template x-for="step in steps" :key="step.key">
+        <li class="rs-step" :class="{ 'is-waiting': step.paste && !fresh }">
+          <div class="rs-step-body">
+            <p class="rs-step-text" x-html="step.html"></p>
+            <template x-if="step.paste">
+              <div class="rs-paste">
+                <pre dir="ltr"><code x-text="pastes[step.paste]"></code></pre>
+                <button type="button" class="btn btn-sm rs-paste-copy" :disabled="!fresh && step.paste !== 'url'" @click="copy(pastes[step.paste])" :title="fresh || step.paste === 'url' ? 'نسخ' : 'أنشئ المفتاح أولًا'">
+                  <svg class="icon icon-sm" aria-hidden="true"><use href="#i-copy"/></svg><span>نسخ</span>
+                </button>
+              </div>
+            </template>
+            <p class="meta rs-step-note" x-show="step.note" x-text="step.note"></p>
+          </div>
+        </li>
+      </template>
+    </ol>
+
+    <section class="rs-connections" aria-labelledby="rs-keys-title">
+      <h2 class="section-title" id="rs-keys-title">الاتصالات</h2>
+      <p class="meta" x-show="loaded && !keys.length">لا اتصالات بعد.</p>
       <div class="table-wrap" x-show="keys.length">
         <table class="table rs-keys">
-          <thead><tr><th scope="col">الاسم</th><th scope="col">المفتاح</th><th scope="col">أُنشئ</th><th scope="col">آخر استعمال</th><th scope="col" class="num">الاستدعاءات (30 يومًا)</th><th scope="col"><span class="sr-only">إجراءات</span></th></tr></thead>
+          <thead><tr><th scope="col">الاسم</th><th scope="col">أُنشئ</th><th scope="col">آخر استعمال</th><th scope="col"><span class="sr-only">إجراءات</span></th></tr></thead>
           <tbody>
             <template x-for="k in keys" :key="k.id">
               <tr :class="{ 'is-revoked': !k.active }">
-                <td x-text="k.name"></td>
-                <td><code dir="ltr" x-text="k.prefix + '…'"></code></td>
+                <td><span class="rs-key-name" x-text="k.name"></span> <code class="rs-key-prefix" dir="ltr" x-text="k.prefix + '…'"></code></td>
                 <td class="meta" x-text="dateLabel(k.created_at)"></td>
-                <td class="meta" x-text="k.last_used_at ? dateLabel(k.last_used_at) : 'لم يُستعمل'"></td>
-                <td class="num" x-text="k.calls"></td>
+                <td class="meta" x-text="k.last_used_at ? dateLabel(k.last_used_at) : 'لم يُستعمل بعد'"></td>
                 <td class="rs-key-actions">
                   <button type="button" class="btn btn-ghost btn-sm btn-danger" x-show="k.active" @click="ask(k)">إلغاء…</button>
                   <span class="status" x-show="!k.active"><span class="dot dot-neutral"></span><span>أُلغي</span></span>
@@ -307,11 +305,11 @@ Context: books (BookInfo), config (urls, mcp_url, books, rate_limit, clip_days),
     <template x-teleport="body">
       <div class="rv-scrim" x-show="asking" x-cloak x-transition.opacity.duration.150ms @click.self="asking = null">
         <div class="rv-modal" role="alertdialog" aria-modal="true" aria-labelledby="rs-revoke-title" @keydown.escape.stop.prevent="asking = null">
-          <h2 class="rv-modal-title" id="rs-revoke-title" x-text="asking ? `إلغاء المفتاح «${asking.name}»؟` : ''"></h2>
-          <p class="meta">يتوقف كل مساعد يستعمله فورًا، ولا يمكن إعادته؛ أنشئ مفتاحًا جديدًا عند الحاجة.</p>
+          <h2 class="rv-modal-title" id="rs-revoke-title" x-text="asking ? `إلغاء اتصال «${asking.name}»؟` : ''"></h2>
+          <p class="meta">يتوقف المساعد الذي يستعمله فورًا، ولا يمكن إعادته؛ أنشئ مفتاحًا جديدًا عند الحاجة.</p>
           <div class="rv-modal-actions">
             <button type="button" class="btn" @click="asking = null">تراجع</button>
-            <button type="button" class="btn btn-danger" @click="revoke()" :disabled="busy">إلغاء المفتاح</button>
+            <button type="button" class="btn btn-danger" @click="revoke()" :disabled="busy">إلغاء</button>
           </div>
         </div>
       </div>
