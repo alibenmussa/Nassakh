@@ -95,9 +95,9 @@
     -webkit-line-clamp: 5;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    font-family: "Amiri", "Noto Naskh Arabic", serif;
+    font-family: inherit;
     font-size: 10.5cqi;
-    font-weight: 700;
+    font-weight: 600;
     line-height: 1.5;
     text-wrap: balance;
     overflow-wrap: anywhere;
@@ -111,7 +111,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: "Amiri", "Noto Naskh Arabic", serif;
+    font-family: inherit;
     font-size: 6.4cqi;
     opacity: 0.86;
   }
@@ -178,7 +178,7 @@
   .lb-resume-art:hover .lb-book-face { box-shadow: calc(var(--lb-fore) * 2px) 2px 0 -0.5px var(--lb-paper), calc(var(--lb-fore) * 2px) 2px 0 0 var(--color-border-strong), var(--shadow-hover); }
   .lb-resume-body { min-width: 0; }
   .lb-eyebrow { font-size: 11.5px; font-weight: 600; color: var(--color-text-3); }
-  .lb-resume-title { margin-top: 2px; font-family: "Amiri", "Noto Naskh Arabic", serif; font-size: 28px; font-weight: 700; line-height: 1.4; }
+  .lb-resume-title { margin-top: 2px; font-family: inherit; font-size: 28px; font-weight: 600; line-height: 1.4; }
   .lb-resume-title a { color: var(--color-text); transition: color 120ms ease; }
   .lb-resume-title a:hover { color: var(--color-accent-text); }
   .lb-resume-meta { margin-top: 2px; }
