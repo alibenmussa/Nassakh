@@ -312,6 +312,19 @@ Docker. Take one before the first import of real books and before any risky chan
 back as it was then, losing everything since. They are crash-consistent (PostgreSQL recovers) but they are not a
 substitute for the dumps: a dump restores one database in a minute, and it is on your Mac as well.
 
+### Watchdog
+
+`deploy/watchdog.sh` runs every 5 minutes from cron: it starts a service that is missing or stopped, restarts one that
+is running but `unhealthy`, and notes in `backups/watchdog.log` when the public `/healthz` does not answer 200. It is
+quiet when everything is fine. Install it once:
+
+```sh
+( crontab -l 2>/dev/null | grep -v 'deploy/watchdog.sh' ; echo '*/5 * * * * bash /opt/nassakh/deploy/watchdog.sh' ) | crontab -
+```
+
+For an outside view (the server itself down), add the address to a free uptime monitor (UptimeRobot, Better Stack)
+that checks `https://nassakh.tech/healthz` every 5 minutes and emails you.
+
 ## 13. Changing settings
 
 - Memory limits, ports, the worker's concurrency: `docker-compose.yml`, `deploy/.env.production` (`WORKER_CONCURRENCY`,
