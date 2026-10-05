@@ -1,0 +1,140 @@
+/* The public landing page (templates/core/landing.html; core.views.home for a visitor). Classes are prefixed ld-.
+   The look of the login card and the review screen (DESIGN.md): white, hairlines between sections instead of
+   boxes, one accent, colour only for meaning (the verdict's dot and label, a difference). Larger type than the
+   app (a page to read, 15px / 1.75), IBM Plex Sans Arabic as everywhere, no letter-spacing on Arabic.
+   Motion: one fade of the hero (opacity and transform, 360 ms), off under prefers-reduced-motion (app.css). */
+@layer components {
+  .ld { display: flex; flex-direction: column; min-height: 100dvh; font-size: 15px; line-height: 1.75; color: var(--color-text); background: var(--color-bg); }
+  .ld p { margin: 0; }
+  .ld-wrap { width: 100%; max-width: 1080px; margin-inline: auto; padding-inline: 32px; }
+  .ld-narrow { max-width: 760px; margin-inline: auto; padding-inline: 32px; }
+  .ld-skip { position: absolute; inset-inline-start: 16px; top: -48px; z-index: 60; padding: 8px 12px; border-radius: var(--radius-md); background: var(--color-text); color: var(--color-bg); font-size: 13px; }
+  .ld-skip:focus-visible { top: 12px; }
+
+  /* the header: the brand and the two ways in */
+  .ld-header { border-bottom: 1px solid var(--color-border); background: var(--color-bg); }
+  .ld-header-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
+  .ld-brand { padding-inline: 0; }
+  .ld-brand:hover .brand-name { color: var(--color-text-2); }
+  .ld-header-nav { display: flex; align-items: center; gap: 6px; }
+
+  /* the hero: the claim on the start side, the quotation check drawn on the end side */
+  .ld-hero { display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px 56px; align-items: center; padding-block: 56px 64px; }
+  .ld-hero-copy { display: flex; flex-direction: column; gap: 20px; max-width: 560px; animation: ld-in 360ms ease-out both; }
+  .ld-title { margin: 0; font-size: 30px; line-height: 1.35; font-weight: 600; color: var(--color-text); text-wrap: balance; }
+  .ld-lede { font-size: 16.5px; line-height: 1.8; color: var(--color-text-2); }
+  .ld-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+  .ld-btn { height: 40px; padding-inline: 18px; font-size: 14px; border-radius: var(--radius-md); }
+  .ld-hero-note { font-size: 13px; color: var(--color-text-3); }
+
+  .ld-demo {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+    padding: 16px 20px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-md);
+    animation: ld-in 360ms ease-out 80ms both;
+  }
+  .ld-demo > * + * { border-top: 1px solid var(--color-border); }
+  .ld-demo-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; }
+  .ld-demo-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-text-2); }
+  .ld-demo-title .icon { color: var(--color-text-3); }
+  .ld-demo-block { display: flex; flex-direction: column; gap: 8px; padding-block: 14px; }
+  .ld-demo-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+  .ld-demo-label { font-size: 12.5px; font-weight: 600; color: var(--color-text); }
+  .ld-demo-caption { padding-top: 10px; }
+
+  /* the verdict, as «البحث والتحقق» draws it: a dot and a label in the tone, the sentence in text colour */
+  .ld-verdict { --ld-tone: var(--color-neutral); --ld-tone-text: var(--color-text-2); display: flex; align-items: flex-start; gap: 12px; padding-block: 14px; }
+  .ld-verdict.is-danger { --ld-tone: var(--color-danger); --ld-tone-text: var(--color-danger-text); }
+  .ld-verdict-dot { width: 8px; height: 8px; margin-top: 8px; background: var(--ld-tone); }
+  .ld-verdict-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ld-verdict-label { font-size: 12px; font-weight: 600; line-height: 1.5; color: var(--ld-tone-text); }
+  .ld-verdict-text { font-size: 16px; font-weight: 600; line-height: 1.5; color: var(--color-text); }
+
+  /* the book's words in flow; where the quotation differs, the book's word tinted and underlined, the quotation's after it, small and struck */
+  .ld-diff { font-size: 16.5px; line-height: 2.15; overflow-wrap: anywhere; }
+  .ld-change { --ld-change: var(--color-danger); --ld-change-bg: var(--color-danger-bg); white-space: nowrap; }
+  .ld-book-word { padding: 0 3px; border-radius: 3px; background: var(--ld-change-bg); border-bottom: 1.5px solid var(--ld-change); }
+  .ld-quote-word { font-size: 0.78em; color: var(--color-text-3); text-decoration: line-through; text-decoration-color: var(--ld-change); text-decoration-thickness: 1px; }
+  .ld-legend { display: inline-flex; gap: 12px; }
+  .ld-key { display: inline-flex; align-items: center; gap: 5px; }
+  .ld-key::before { content: ""; width: 14px; height: 0; border-bottom: 2px solid var(--color-danger); }
+  .ld-key.is-quote::before { border-bottom: 0; height: 2px; background: var(--color-text-3); opacity: 0.7; }
+
+  /* the printed page, drawn: a few grey lines, the matching lines shaded */
+  .ld-page { display: flex; flex-direction: column; gap: 9px; padding: 14px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg-subtle); }
+  .ld-page-line { display: block; width: var(--w, 100%); height: 6px; border-radius: 3px; background: var(--color-border-strong); }
+  .ld-page-line.is-hit { background: var(--color-text-3); box-shadow: 0 0 0 4px var(--color-highlight); }
+  .ld-cite { margin: 0; }
+
+  /* the sections: hairlines between them, generous air */
+  .ld-section { border-top: 1px solid var(--color-border); padding-block: 56px; }
+  .ld-h2 { margin: 0 0 20px; font-size: 22px; line-height: 1.4; font-weight: 600; color: var(--color-text); }
+  .ld-h3 { margin: 0; font-size: 15.5px; line-height: 1.5; font-weight: 600; color: var(--color-text); }
+  .ld-intro { color: var(--color-text-2); }
+  .ld-fine { margin-top: 16px; font-size: 13px; color: var(--color-text-3); }
+
+  .ld-steps { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0; padding: 0; list-style: none; counter-reset: none; }
+  .ld-step { display: flex; flex-direction: column; gap: 6px; padding-block: 20px; border-top: 1px solid var(--color-border); color: var(--color-text-2); }
+  .ld-step:first-child { border-top: 0; padding-top: 0; }
+  .ld-step-n { font-size: 12px; font-weight: 600; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+
+  .ld-sides { display: grid; grid-template-columns: minmax(0, 1fr); gap: 48px 64px; }
+  .ld-side { min-width: 0; }
+  .ld-side .ld-intro { margin-bottom: 8px; }
+  .ld-list { margin: 0; padding: 0; list-style: none; }
+  .ld-list > li { padding-block: 14px; border-top: 1px solid var(--color-border); color: var(--color-text-2); }
+  .ld-list > li:last-child { padding-bottom: 0; }
+  .ld-list strong { font-weight: 600; color: var(--color-text); }
+
+  /* the four answers: a dot in the tone, the label, one sentence */
+  .ld-answers { display: flex; flex-direction: column; gap: 10px; margin: 12px 0 0; padding: 14px 16px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg-subtle); }
+  .ld-answer { --ld-tone: var(--color-neutral); --ld-tone-text: var(--color-text-2); display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px 14px; }
+  .ld-answer.is-success { --ld-tone: var(--color-success); --ld-tone-text: #15803d; }
+  .ld-answer.is-danger { --ld-tone: var(--color-danger); --ld-tone-text: var(--color-danger-text); }
+  .ld-answer.is-warning { --ld-tone: var(--color-warning); --ld-tone-text: var(--color-warning-text); }
+  .ld-answer dt { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; color: var(--ld-tone-text); white-space: nowrap; }
+  .ld-answer dt .dot { background: var(--ld-tone); }
+  .ld-answer dd { margin: 0; font-size: 14px; line-height: 1.65; color: var(--color-text-2); }
+
+  /* the clients: plain names, not logos */
+  .ld-clients { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 0; padding: 0; list-style: none; }
+  .ld-clients li { display: inline-flex; align-items: center; height: 30px; padding-inline: 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-pill); font-size: 13px; font-weight: 500; color: var(--color-text); }
+
+  .ld-cta .ld-actions { margin-top: 24px; }
+
+  .ld-footer { margin-top: auto; border-top: 1px solid var(--color-border); padding-block: 24px; }
+  .ld-footer-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 24px; }
+  .ld-footer-brand { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
+  .ld-footer-line { margin: 0; }
+
+  @keyframes ld-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  @media (min-width: 720px) {
+    .ld-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 32px; }
+    .ld-step { padding-block: 0; padding-inline-start: 24px; border-top: 0; border-inline-start: 1px solid var(--color-border); }
+    .ld-step:first-child { padding-inline-start: 0; border-inline-start: 0; }
+    .ld-answer { grid-template-columns: 196px minmax(0, 1fr); }
+  }
+  @media (min-width: 900px) {
+    .ld-hero { grid-template-columns: minmax(0, 1fr) minmax(0, 460px); padding-block: 72px 80px; }
+    .ld-title { font-size: 36px; line-height: 1.3; }
+    .ld-sides { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    .ld-wrap, .ld-narrow { padding-inline: 16px; }
+    .ld-header-row { height: 56px; }
+    .ld-hero { padding-block: 32px 40px; }
+    .ld-title { font-size: 26px; }
+    .ld-lede { font-size: 15.5px; }
+    .ld-section { padding-block: 40px; }
+    .ld-demo { padding-inline: 16px; }
+    .ld-diff { font-size: 15.5px; }
+    .ld-footer-row { flex-direction: column; align-items: flex-start; }
+  }
+}

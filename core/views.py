@@ -1,4 +1,4 @@
-"""Shared views: home redirect, the health check and the media of the books a user may access."""
+"""Shared views: the landing page and home redirect, the health check, the media of a user's books."""
 
 import posixpath
 
@@ -13,7 +13,7 @@ from django.http import (
     HttpResponseNotModified,
     JsonResponse,
 )
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.utils.http import http_date
 from django.views.decorators.http import require_safe
 from django.views.static import was_modified_since
@@ -21,10 +21,16 @@ from django.views.static import was_modified_since
 from core.images import guess_content_type
 
 
-@login_required
+@require_safe
 def home(request: HttpRequest) -> HttpResponse:
-    """Send the signed-in user to the books list."""
-    return redirect("books:list")
+    """Send the signed-in user to the books list; show a visitor the public landing page.
+
+    The landing page (templates/core/landing.html) tells the two sides of the platform, the publisher's and
+    the researcher's, and leads to the sign-up and the login. It is static: no database, nothing computed.
+    """
+    if request.user.is_authenticated:
+        return redirect("books:list")
+    return render(request, "core/landing.html")
 
 
 @require_safe

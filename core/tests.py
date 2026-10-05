@@ -1,5 +1,6 @@
-"""Tests for the shared core helpers: Arabic text, storage paths, roles, media view, template tags."""
+"""Tests for the shared core helpers: Arabic text, storage, roles, media view, landing page, template tags."""
 
+import re
 from types import SimpleNamespace
 
 from django.contrib.auth.models import AnonymousUser, Group, User
@@ -297,11 +298,53 @@ def test_protected_media_requires_login_and_serves_files(client, users):
     assert client.get(reverse("media", kwargs={"path": f"books/{book.pk}/pages"})).status_code == 404
 
 
+# ---------------------------------------------------------------- the landing page and the home redirect
+
+
 @pytest.mark.django_db
-def test_home_redirects_anonymous_to_login(client):
+def test_home_shows_a_visitor_the_landing_page_with_both_ways_in(client):
+    response = client.get(reverse("core:home"))
+    assert response.status_code == 200
+    body = response.content.decode()
+    assert 'lang="ar" dir="rtl"' in body
+    assert body.count("<h1") == 1 and "مربوطٍ بصفحاته" in body
+    assert f'href="{reverse("accounts:signup")}"' in body and f'href="{reverse("accounts:login")}"' in body
+    assert "إنشاء حساب" in body and "تسجيل الدخول" in body
+    # the shell of a signed-in page is not there
+    assert 'class="sidebar' not in body and "تسجيل الخروج" not in body
+    # the head: a title, a description, Open Graph
+    assert "<title>نسّاخ · من الكتاب المطبوع إلى نص مراجَع</title>" in body
+    assert '<meta name="description"' in body
+    assert 'property="og:title"' in body and 'property="og:description"' in body
+
+
+@pytest.mark.django_db
+def test_landing_page_tells_both_sides_and_the_four_answers_without_numbers_or_prices(client):
+    body = client.get(reverse("core:home")).content.decode()
+    assert "للناشر والمحقق" in body and "للباحث ولأي مساعد ذكي" in body
+    for answer in ("مطابق", "مختلف", "يحتاج مطابقة مع الصورة", "لم يوجد"):
+        assert answer in body
+    for client_name in ("Claude", "ChatGPT", "Claude Code", "Cursor", "VS Code"):
+        assert client_name in body
+    assert "الحقوق" in body and "الملك العام" in body
+    # no prices, plans, percentages or claims of accuracy (the owner's rule until production)
+    for forbidden in ("دولار", "خطة", "باقة", "دقة", "٪"):
+        assert forbidden not in body, forbidden
+
+
+@pytest.mark.django_db
+def test_landing_page_requests_nothing_from_other_hosts(client):
+    body = client.get(reverse("core:home")).content.decode()
+    assert not re.search(r'(?:href|src)="(?:https?:)?//', body)
+    assert "fonts.googleapis" not in body and "cdn." not in body
+
+
+@pytest.mark.django_db
+def test_home_sends_a_signed_in_user_to_the_books_list(client):
+    client.force_login(User.objects.create_user("reader", password="x"))
     response = client.get(reverse("core:home"))
     assert response.status_code == 302
-    assert reverse("accounts:login") in response["Location"]
+    assert response["Location"] == reverse("books:list")
 
 
 # ---------------------------------------------------------------- template tags

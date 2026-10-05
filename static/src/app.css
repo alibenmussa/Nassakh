@@ -12,6 +12,7 @@
 @import "./components/library.css";
 @import "./components/org.css";
 @import "./components/research.css";
+@import "./components/landing.css";
 
 @source "../../templates";
 @source "./js";

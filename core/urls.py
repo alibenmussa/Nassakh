@@ -1,4 +1,5 @@
-"""Core routes: the home redirect and `/healthz`. Media serving is wired in `nassakh/urls.py`."""
+"""Core routes: `/` (the landing page for a visitor, the home redirect for a user) and `/healthz`.
+Media serving is wired in `nassakh/urls.py`."""
 
 from django.urls import path
 

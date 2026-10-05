@@ -79,9 +79,11 @@ def test_authenticated_user_is_redirected_away_from_login(client, user):
 
 
 def test_protected_page_redirects_to_login_with_next(client):
-    response = client.get(reverse("core:home"))
+    # `/` itself is the public landing page now; the books list is the first protected page behind it
+    books = reverse("books:list")
+    response = client.get(books)
     assert response.status_code == 302
-    assert response["Location"] == f"{LOGIN_URL}?next=/"
+    assert response["Location"] == f"{LOGIN_URL}?next={books}"
 
 
 def test_logout_requires_post_and_returns_to_login(client, user):
