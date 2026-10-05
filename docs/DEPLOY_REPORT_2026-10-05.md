@@ -11,10 +11,12 @@ Written after the first deploy and a full test of the user journey on the live s
 | Server | Hostinger KVM 4: 4 vCPU, 15 GB RAM, 193 GB disk (11 % used), Ubuntu 26.04.1, x86_64, Docker 29.8.2, Compose 5.6.0, IP 187.7.65.46 |
 | Stack (`/opt/nassakh`) | `caddy`, `web` (gunicorn 3×2), `worker` (cpu, 3 processes), `gpu-worker` (RunPod, 3 threads), `mcp`, `postgres:17`, `redis:7`; `init` runs migrations once per deploy. All healthy. |
 | OCR | `OCR_BACKEND=runpod`, endpoint worker 0.1.2 (RTX PRO 6000 MIG 24 GB tier), Kraken and Tesseract run on the server's CPU |
+| Landing page | `/` for visitors who are not signed in (the chain with two sides, the four quotation answers, MCP assistants, rights); signed-in users still go to the books. Checked at 1280 and 500 px on the live site. |
 | Mail | **console backend**: confirmation emails are printed in `docker compose logs web`. Not sent. See §6. |
 | Access | SSH key only, port 22022, no root login, no passwords; ufw allows 22022, 80, 443; fail2ban on sshd |
 | Code | deployed commit is the newest on the `vps` remote (a private bare repo on the server; GitHub is not involved yet) |
 | Backups | nightly 02:30 `deploy/backup.sh all` (database dump, 7 kept, weekly media archive); a dump is also taken before every deploy |
+| Watchdog | `deploy/watchdog.sh` every 5 min: starts a missing or stopped service, restarts an unhealthy one (tested by stopping `mcp`) |
 | Credentials | `~/nassakh-production-credentials.txt` on the Mac (owner-only): superuser, demo account, the two test users |
 
 ## 2. Accounts on the server
@@ -106,6 +108,7 @@ Give pages to an account: «الفوترة» in the sidebar (superuser). Test co
 5. **Hostinger.** Turn auto-renew off if you want to stop after the month; take a snapshot once the email is set up;
    raise `SECURE_HSTS_SECONDS` (now 3600) when you are sure the domain stays HTTPS-only.
 6. **Disk**: the Docker build cache is 10 GB; `docker builder prune -f` now and then.
+7. **Outside monitoring**: add `https://nassakh.tech/healthz` to a free uptime monitor (UptimeRobot, Better Stack) so you hear about a down server; the watchdog only sees containers.
 
 ## 7. Not tested
 
