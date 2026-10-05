@@ -307,36 +307,71 @@ def test_home_shows_a_visitor_the_landing_page_with_both_ways_in(client):
     assert response.status_code == 200
     body = response.content.decode()
     assert 'lang="ar" dir="rtl"' in body
-    assert body.count("<h1") == 1 and "مربوطٍ بصفحاته" in body
+    assert body.count("<h1") == 1 and "إحياء الكتب الإسلامية للنشر والبحث من أصولها المطبوعة" in body
     assert f'href="{reverse("accounts:signup")}"' in body and f'href="{reverse("accounts:login")}"' in body
     assert "إنشاء حساب" in body and "تسجيل الدخول" in body
     # the shell of a signed-in page is not there
     assert 'class="sidebar' not in body and "تسجيل الخروج" not in body
     # the head: a title, a description, Open Graph
-    assert "<title>نسّاخ · من الكتاب المطبوع إلى نص مراجَع</title>" in body
+    assert "<title>نسّاخ · إحياء الكتب الإسلامية للنشر والبحث من أصولها المطبوعة</title>" in body
     assert '<meta name="description"' in body
     assert 'property="og:title"' in body and 'property="og:description"' in body
+    assert 'src="/static/src/js/landing.js"' in body
 
 
 @pytest.mark.django_db
-def test_landing_page_tells_both_sides_and_the_four_answers_without_numbers_or_prices(client):
+def test_landing_page_follows_the_deck_without_numbers_or_prices(client):
     body = client.get(reverse("core:home")).content.decode()
-    assert "للناشر والمحقق" in body and "للباحث ولأي مساعد ذكي" in body
+    # the deck's order: problem, chain, six stages, the check, MCP, trust and rights, technologies, impact
+    order = [
+        "كتب إسلامية كثيرة ما زالت صورًا لا تُقرأ آليًا",
+        "سلسلة واحدة تخدم الناشر والباحث",
+        "من الصورة إلى الطبعة في ست مراحل",
+        "التحقق من الاقتباس",
+        "خادم MCP للتحقق، للباحث ولأي مساعد ذكي",
+        "ثقة تُرى، وحقوق تُحفظ",
+        "ذكاء اصطناعي في القراءة، وتحقق في الإحالة",
+        "كتب أكثر تعود، ومصادر أوثق يُستشهد بها",
+        "نصٌّ واحد مراجَع",
+    ]
+    main = body[body.index("<main") :]  # the head's description repeats a heading
+    positions = [main.index(text) for text in order]
+    assert positions == sorted(positions)
+    for stage in ("التخطيط", "المعالجة", "المراجعة", "المخطوطة", "الكتاب", "الإخراج"):
+        assert stage in body
+    # the four answers are in the HTML itself (no JS needed to read them), as tabs
     for answer in ("مطابق", "مختلف", "يحتاج مطابقة مع الصورة", "لم يوجد"):
         assert answer in body
+    assert body.count('role="tab"') == 4 and body.count('role="tabpanel"') == 4
+    for tool in ("البحث في الكتب", "جلب المقطع", "التحقق من الاقتباس", "نسبة الكلام", "الإحالة الموثّقة"):
+        assert tool in body
     for client_name in ("Claude", "ChatGPT", "Claude Code", "Cursor", "VS Code"):
         assert client_name in body
-    assert "الحقوق" in body and "الملك العام" in body
+    assert "الملك العام" in body and "مشروع مشارك في تحدي الذكاء الاصطناعي" in body
     # no prices, plans, percentages or claims of accuracy (the owner's rule until production)
     for forbidden in ("دولار", "خطة", "باقة", "دقة", "٪"):
         assert forbidden not in body, forbidden
+    text = re.sub(r"<[^>]+>", " ", main)  # the visible text: the markup positions overlays in percentages
+    assert not re.search(r"\d\s*%", text)
 
 
 @pytest.mark.django_db
-def test_landing_page_requests_nothing_from_other_hosts(client):
+def test_landing_page_requests_nothing_from_other_hosts_and_its_images_exist(client):
+    from django.conf import settings
+
     body = client.get(reverse("core:home")).content.decode()
     assert not re.search(r'(?:href|src)="(?:https?:)?//', body)
     assert "fonts.googleapis" not in body and "cdn." not in body
+    images = re.findall(r'src="/static/(landing/[^"]+)"', body)
+    assert images, "the screenshots of the deck are on the page"
+    for name in images:
+        assert (settings.BASE_DIR / "static" / name).is_file(), name
+    # every screenshot has its size, an Arabic alt, and only the first loads eagerly
+    tags = re.findall(r"<img [^>]*landing/[^>]*>", body)
+    assert len(tags) == len(images)
+    for i, tag in enumerate(tags):
+        assert 'width="' in tag and 'height="' in tag and re.search(r'alt="[^"]*[؀-ۿ]', tag)
+        assert ('loading="lazy"' in tag) == (i > 0)
 
 
 @pytest.mark.django_db

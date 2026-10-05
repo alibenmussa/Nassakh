@@ -1,32 +1,43 @@
 {% extends "base.html" %}
+{% load static %}
 {% comment %}
 The public landing page at `/` for a visitor who is not signed in (core.views.home; a user is sent to the books
-list). One chain with two sides, told in the owner's words: the publisher and the editor make the reviewed text on
-the page images, the researcher and any MCP assistant use it. No statistics, no prices or plans, no testimonials.
-The hero's card is a drawn illustration of «التحقق من نص» on an invented sentence, never a real book's data.
-Static: no context, no Alpine state. Styles: static/src/components/landing.css (classes prefixed ld-).
+list). It follows the owner's presentation slide by slide: the title and the six stages, the problem, the chain
+with two sides, how it works (a sticky stepper with the real screens), the quotation check (interactive), the MCP
+server, trust and rights, the technologies, the impact and the closing card. No statistics, no prices or plans, no
+testimonials. The screenshots are the deck's (static/landing/*.webp, from a public-domain book), shown no larger
+than the deck shows them. The quotation examples are the deck's; «لم يوجد» uses a neutral sentence.
+Motion: static/src/components/landing.css (ld- classes; CSS scroll-driven animations with an IntersectionObserver
+fallback) and static/src/js/landing.js (the stepper, the tabs, the tool list, the header hairline). Everything is in
+the HTML and readable with JS off; `html.ld-static` forces the final state for a screenshot.
 {% endcomment %}
-{% block head_title %}نسّاخ · من الكتاب المطبوع إلى نص مراجَع{% endblock %}
+{% block head_title %}نسّاخ · إحياء الكتب الإسلامية للنشر والبحث من أصولها المطبوعة{% endblock %}
 {% block extra_head %}
-  <meta name="description" content="نسّاخ يحوّل الكتاب الممسوح إلى نص مراجَع مربوط بصور صفحاته: يقرأ الصفحات بنماذج رؤية عربية، ويعرض الكلمات على صورها لتُراجَع، ويُخرج منها طبعة جديدة، ويتيح للباحث ولأي مساعد ذكي البحث والتحقق من الاقتباس والرجوع إلى الصفحة المطبوعة.">
+  <meta name="description" content="نسّاخ يحوّل الكتاب الممسوح إلى نص مراجَع مربوط بصور صفحاته: يقرأ الصفحات بنماذج ذكاء اصطناعي عربية، ويعرض كل كلمة مشكوك فيها أمام صورتها لتُراجَع، ويُخرج منها طبعة جديدة، ويتيح للباحث ولأي مساعد ذكي البحث والتحقق من الاقتباس والرجوع إلى الصفحة المطبوعة.">
   <meta property="og:type" content="website">
   <meta property="og:locale" content="ar_AR">
   <meta property="og:site_name" content="نسّاخ">
-  <meta property="og:title" content="نسّاخ · من الكتاب المطبوع إلى نص مراجَع">
-  <meta property="og:description" content="يقرأ صفحات كتب الملك العام، ويعرض كل كلمة على صورتها لتُراجَع. من النص نفسه يُخرج الناشر طبعته، ويتحقق الباحث وأي مساعد ذكي من الاقتباس ويرجع إلى الصفحة المطبوعة.">
+  <meta property="og:title" content="نسّاخ · إحياء الكتب الإسلامية للنشر والبحث من أصولها المطبوعة">
+  <meta property="og:description" content="سلسلة واحدة تخدم الناشر والباحث: كتاب ممسوح، قراءة آلية ومراجعة بشرية للمواضع المشكوك فيها، نص موثّق كل كلمة فيه مربوطة بموضعها في الصفحة المطبوعة، ومنه طبعة جديدة وخادم MCP للتحقق.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2318181b'/%3E%3Ctext x='16' y='22.5' text-anchor='middle' font-family='IBM Plex Sans Arabic,system-ui,sans-serif' font-size='19' font-weight='600' fill='%23ffffff'%3E%D9%86%3C/text%3E%3C/svg%3E">
+  <script>document.documentElement.classList.add('ld-js')</script>
 {% endblock %}
 
 {% block body %}
 <div class="ld">
   <a class="ld-skip" href="#ld-main">تجاوز إلى المحتوى</a>
 
-  <header class="ld-header">
+  <header class="ld-header" data-ld-header>
     <div class="ld-wrap ld-header-row">
-      <a class="brand ld-brand" href="{% url 'core:home' %}" title="نسّاخ">
+      <a class="ld-brand" href="{% url 'core:home' %}" title="نسّاخ">
         <span class="brand-mark" aria-hidden="true">ن</span>
-        <span class="brand-name">نسّاخ</span>
+        <span class="ld-brand-name">نسّاخ</span>
       </a>
+      <nav class="ld-header-links" aria-label="أقسام الصفحة">
+        <a href="#ld-how">كيف يعمل</a>
+        <a href="#ld-check">التحقق</a>
+        <a href="#ld-mcp">MCP</a>
+      </nav>
       <nav class="ld-header-nav" aria-label="الحساب">
         <a class="btn btn-ghost" href="{% url 'accounts:login' %}">تسجيل الدخول</a>
         <a class="btn btn-primary btn-sm" href="{% url 'accounts:signup' %}">إنشاء حساب</a>
@@ -35,140 +46,448 @@ Static: no context, no Alpine state. Styles: static/src/components/landing.css (
   </header>
 
   <main id="ld-main" class="ld-main">
-    {# ---------------------------------------------------------------- the hero: the claim, and the quotation check drawn #}
-    <section class="ld-wrap ld-hero" aria-labelledby="ld-title">
-      <div class="ld-hero-copy">
-        <h1 class="ld-title" id="ld-title">من صورة الكتاب المطبوع إلى نصٍّ مراجَع، مربوطٍ بصفحاته</h1>
-        <p class="ld-lede">نسّاخ يقرأ صفحات الكتب التي آلت إلى الملك العام، ويعرض كل كلمة على صورتها لتُراجَع. من النص نفسه يُخرج الناشر طبعة جديدة، ويتحقق الباحث وأيّ مساعد ذكي من الاقتباس، ويرجع إلى الصفحة المطبوعة.</p>
-        <div class="ld-actions">
-          <a class="btn btn-primary ld-btn" href="{% url 'accounts:signup' %}">إنشاء حساب</a>
-          <a class="btn ld-btn" href="{% url 'accounts:login' %}">تسجيل الدخول</a>
+    {# ---------------------------------------------------------------- 1 · the title, the six stages, the review moment #}
+    <section class="ld-hero" aria-labelledby="ld-title">
+      <div class="ld-wrap ld-hero-grid">
+        <div class="ld-hero-copy">
+          <p class="ld-hero-challenge ld-in" style="--d: 0ms">
+            <span class="ld-hero-challenge-main">تحدي الذكاء الاصطناعي في خدمة المحتوى الإسلامي</span>
+            <span class="ld-hero-challenge-sub">المسار الرابع: أدوات المعرفة والتحقق لتمكين المعرّفين بالإسلام</span>
+          </p>
+          <h1 class="ld-title" id="ld-title">
+            <span class="ld-wordmark ld-in" style="--d: 60ms">نسّاخ</span>
+            <span class="ld-tagline ld-in" style="--d: 140ms">إحياء الكتب الإسلامية للنشر والبحث من أصولها المطبوعة</span>
+          </h1>
+          <ol class="ld-strip ld-in" style="--d: 220ms" aria-label="المراحل الست">
+            <li class="is-done"><span class="ld-strip-mark" aria-hidden="true"></span>التخطيط</li>
+            <li class="is-done"><span class="ld-strip-mark" aria-hidden="true"></span>المعالجة</li>
+            <li class="is-now" aria-current="step"><span class="ld-strip-mark" aria-hidden="true"></span>المراجعة</li>
+            <li><span class="ld-strip-mark" aria-hidden="true"></span>المخطوطة</li>
+            <li><span class="ld-strip-mark" aria-hidden="true"></span>الكتاب</li>
+            <li><span class="ld-strip-mark" aria-hidden="true"></span>الإخراج</li>
+          </ol>
+          <div class="ld-actions ld-in" style="--d: 300ms">
+            <a class="btn btn-primary ld-btn" href="{% url 'accounts:signup' %}">إنشاء حساب</a>
+            <a class="btn ld-btn" href="{% url 'accounts:login' %}">تسجيل الدخول</a>
+          </div>
+          <p class="ld-hero-note ld-in" style="--d: 360ms">حساب لمؤسسة أو لفرد، يُفعَّل بتأكيد البريد. الكتب في الحساب لا يراها غير أعضائه.</p>
         </div>
-        <p class="ld-hero-note">حساب لمؤسسة أو لفرد. الكتب في الحساب لا يراها غير أعضائه.</p>
+
+        <figure class="ld-hero-shot ld-in" style="--d: 180ms" aria-labelledby="ld-hero-caption">
+          <div class="ld-parallax">
+            <div class="ld-window">
+              <div class="ld-window-bar" aria-hidden="true"><span></span><span></span><span></span><em>المراجعة · كل كلمة مشكوك فيها أمام صورتها</em></div>
+              <div class="ld-window-body">
+                <img src="{% static 'landing/review.webp' %}" width="1400" height="761" alt="شاشة المراجعة في نسّاخ: نص الصفحة في جهة وصورتها المطبوعة في الجهة الأخرى، وكلمة مشكوك فيها مظلَّلة في الاثنين، وفوقها نافذة «اختر القراءة الصحيحة» تعرض قراءات النماذج الثلاثة" fetchpriority="high">
+                {# the doubtful word in the text and on the image, and the popover's appearance, drawn over the screenshot in percentages #}
+                <span class="ld-spot" style="left: 27.4%; top: 41.6%; width: 3.4%; height: 4.6%" aria-hidden="true"></span>
+                <span class="ld-spot" style="left: 71.6%; top: 50.6%; width: 2.6%; height: 4.4%" aria-hidden="true"></span>
+                <span class="ld-veil" style="left: 11%; top: 45.2%; width: 20.6%; height: 34.6%" aria-hidden="true"></span>
+              </div>
+            </div>
+          </div>
+          <figcaption class="ld-hero-caption" id="ld-hero-caption">قراءات النماذج جنبًا إلى جنب، والمراجع يختار أو يصحّح، والكلمة تُظلَّل في الصفحة المطبوعة.</figcaption>
+        </figure>
       </div>
-
-      <figure class="ld-demo" aria-labelledby="ld-demo-caption">
-        <div class="ld-demo-head">
-          <span class="ld-demo-title"><svg class="icon icon-sm" aria-hidden="true"><use href="#i-verify"/></svg>التحقق من نص</span>
-          <span class="meta">مثال توضيحي</span>
-        </div>
-
-        <div class="ld-verdict is-danger">
-          <span class="dot ld-verdict-dot" aria-hidden="true"></span>
-          <div class="ld-verdict-body">
-            <p class="ld-verdict-label">مختلف</p>
-            <p class="ld-verdict-text">يختلف النص عن الكتاب في موضعين.</p>
-          </div>
-        </div>
-
-        <div class="ld-demo-block">
-          <div class="ld-demo-row">
-            <span class="ld-demo-label">النص في الكتاب</span>
-            <span class="meta ld-legend"><span class="ld-key">كلمة الكتاب</span><span class="ld-key is-quote">كلمة النص المنقول</span></span>
-          </div>
-          <p class="ld-diff">وكنت أقابل ما <span class="ld-change"><span class="ld-book-word" title="في الكتاب">أكتبه</span> <s class="ld-quote-word" title="في النص">أنسخه</s></span> بالأصل حرفًا حرفًا، فإن وجدت فيه سقطًا أثبتُّه في <span class="ld-change"><span class="ld-book-word" title="في الكتاب">الحاشية</span> <s class="ld-quote-word" title="في النص">الهامش</s></span> ولم أغيّر المتن.</p>
-        </div>
-
-        <div class="ld-demo-block">
-          <div class="ld-page" aria-hidden="true">
-            <span class="ld-page-line" style="--w: 94%"></span>
-            <span class="ld-page-line" style="--w: 100%"></span>
-            <span class="ld-page-line is-hit" style="--w: 97%"></span>
-            <span class="ld-page-line is-hit" style="--w: 58%"></span>
-            <span class="ld-page-line" style="--w: 91%"></span>
-          </div>
-          <p class="meta ld-cite">الصفحة المطبوعة، والموضع مظلَّل · <bdi class="num">ص 212</bdi> · المتن</p>
-        </div>
-        <figcaption class="meta ld-demo-caption" id="ld-demo-caption">الجملة مُختلَقة للتوضيح، لا من كتاب بعينه.</figcaption>
-      </figure>
     </section>
 
-    {# ---------------------------------------------------------------- the three steps #}
-    <section class="ld-section" aria-labelledby="ld-steps-title">
+    {# ---------------------------------------------------------------- 2 · the problem #}
+    <section class="ld-section" aria-labelledby="ld-problem-title">
       <div class="ld-wrap">
-        <h2 class="ld-h2" id="ld-steps-title">من الصورة إلى النص المراجَع</h2>
-        <ol class="ld-steps">
-          <li class="ld-step">
-            <span class="ld-step-n" aria-hidden="true">1</span>
-            <h3 class="ld-h3">تُقرأ الصفحات</h3>
-            <p>نموذجا رؤية عربيان يقرآن كل صفحة، ويُرجَّح بينهما عند الاختلاف. تُحدَّد مواضع الكلمات على الصورة، ويُفصل المتن عن الحاشية وعن رقم الصفحة.</p>
+        <div class="ld-head ld-r">
+          <p class="ld-label">المشكلة</p>
+          <h2 class="ld-h2" id="ld-problem-title">كتب إسلامية كثيرة ما زالت صورًا لا تُقرأ آليًا</h2>
+        </div>
+        <ol class="ld-cards ld-cards-3">
+          <li class="ld-card ld-r" style="--i: 0">
+            <span class="ld-n" aria-hidden="true">1</span>
+            <h3 class="ld-h3">خارج المكتبات الرقمية</h3>
+            <p>كتب في الملك العام لم تدخل المكتبات الرقمية الشاملة، ولا توجد إلا صورًا ممسوحة.</p>
           </li>
-          <li class="ld-step">
-            <span class="ld-step-n" aria-hidden="true">2</span>
-            <h3 class="ld-h3">تُراجَع على الصورة</h3>
-            <p>كل سطر أمام صورته. الكلمة التي اختلف فيها القارئان أو تردّدا فيها معلَّمة، يحسمها المختص بنظرة إلى الصفحة، لا بإعادة الكتابة.</p>
+          <li class="ld-card ld-r" style="--i: 1">
+            <span class="ld-n" aria-hidden="true">2</span>
+            <h3 class="ld-h3">تفريغ يدوي مكلف</h3>
+            <p>شهور من النسخ لكل كتاب، <span class="ld-u">وأخطاء لا تُرى<i class="ld-u-line ld-r ld-r-x" style="--i: 3" aria-hidden="true"></i></span>، فتتأخر إعادة نشره.</p>
           </li>
-          <li class="ld-step">
-            <span class="ld-step-n" aria-hidden="true">3</span>
-            <h3 class="ld-h3">يخدم النص الطرفين</h3>
-            <p>منه تخرج الطبعة الجديدة، وفيه يبحث الباحث ويتحقق من اقتباسه. كل كلمة فيه تحمل صفحتها وحالة مراجعتها.</p>
+          <li class="ld-card ld-r" style="--i: 2">
+            <span class="ld-n" aria-hidden="true">3</span>
+            <h3 class="ld-h3">نقل بلا رجوع إلى الأصل</h3>
+            <p>اقتباسات محرّفة، وإحالات خاطئة، وكلام المحقق يُنسب إلى المؤلف.</p>
           </li>
         </ol>
       </div>
     </section>
 
-    {# ---------------------------------------------------------------- the two sides, balanced #}
-    <section class="ld-section" aria-label="لمن المنصة">
-      <div class="ld-wrap ld-sides">
-        <div class="ld-side">
-          <h2 class="ld-h2">للناشر والمحقق</h2>
-          <p class="ld-intro">كتب كثيرة آلت إلى الملك العام ولم تدخل المكتبات الرقمية بعد، ولا يوجد منها إلا صور طبعاتها القديمة. تفريغها يدويًا مكلف، ولا يسلم من الخطأ.</p>
-          <ul class="ld-list">
-            <li><strong>يبدأ من الصور.</strong> ملف PDF ممسوح أو صور الصفحات، كما هي.</li>
-            <li><strong>المراجعة على الصورة.</strong> الكلمات المشكوك فيها معلَّمة بلون واحد، والباقي يُقرأ على عجل. المراجع يصحّح ما يراه على الصفحة، لا ما يحفظه.</li>
-            <li><strong>المتن والحاشية وأرقام الصفحات الأصلية مفصولة.</strong> فتبقى الإحالة إلى الطبعة الأصلية ممكنة في الطبعة الجديدة.</li>
-            <li><strong>الطبعة الجديدة بأربعة مخارج.</strong> PDF للطباعة، وPDF للشاشة، وWord، وEPUB، بخطوط المؤسسة وقوالبها.</li>
-          </ul>
+    {# ---------------------------------------------------------------- 3 · the solution: one chain, two sides #}
+    <section class="ld-section" aria-labelledby="ld-chain-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">الحل</p>
+          <h2 class="ld-h2" id="ld-chain-title">سلسلة واحدة تخدم الناشر والباحث</h2>
+          <p class="ld-sub">مراجعة واحدة للنص، ينتفع بها طرفان.</p>
         </div>
-        <div class="ld-side">
-          <h2 class="ld-h2">للباحث ولأي مساعد ذكي</h2>
-          <p class="ld-intro">الاقتباس المنقول من الذاكرة أو بالواسطة يشيع فيه التحريف والإحالة الخاطئة. هنا يُقابَل بالنص كما رُوجع على الصورة.</p>
-          <ul class="ld-list">
-            <li><strong>البحث في نصوص الكتب.</strong> في المتن أو في الحواشي، مع موضع كل نتيجة وصورة سطرها.</li>
-            <li><strong>التحقق من اقتباس كلمةً كلمة.</strong> بأربع إجابات صريحة:
-              <dl class="ld-answers">
-                <div class="ld-answer is-success"><dt><span class="dot" aria-hidden="true"></span>مطابق</dt><dd>النص كما في الكتاب. اختلاف الشكل وحده يُذكر ولا يُعدّ خطأ.</dd></div>
-                <div class="ld-answer is-danger"><dt><span class="dot" aria-hidden="true"></span>مختلف</dt><dd>يُعرض كل موضع اختلاف، وكلمة الكتاب بجوار كلمة النص.</dd></div>
-                <div class="ld-answer is-warning"><dt><span class="dot" aria-hidden="true"></span>يحتاج مطابقة مع الصورة</dt><dd>الفرق في كلمات لم تُحسم قراءتها بعد، فقد يكون النص صحيحًا والخطأ في القراءة. لا يوصف النص بالتحريف.</dd></div>
-                <div class="ld-answer is-neutral"><dt><span class="dot" aria-hidden="true"></span>لم يوجد</dt><dd>ليس في الكتب المتاحة للحساب. لا يُقال إنه مختلَق.</dd></div>
-              </dl>
-            </li>
-            <li><strong>الرجوع إلى الصفحة المطبوعة.</strong> صورة الأسطر، وإحالة جاهزة للنسخ.</li>
-            <li><strong>متن المؤلف غير حواشي المحقق.</strong> الجواب يذكر إن كان النص من المتن أو من حاشية محقق حديث.</li>
-          </ul>
+        <div class="ld-chain" role="list">
+          <div class="ld-node is-muted ld-r" style="--i: 0" role="listitem">
+            <h3 class="ld-node-title">كتاب ممسوح</h3>
+            <p>صور طبعة قديمة</p>
+          </div>
+          <span class="ld-arrow" aria-hidden="true"><i class="ld-arrow-line ld-r ld-r-x" style="--i: 1"></i><i class="ld-arrow-head ld-r ld-r-fade" style="--i: 2"></i></span>
+          <div class="ld-node is-dark ld-r" style="--i: 2" role="listitem">
+            <h3 class="ld-node-title">نسّاخ</h3>
+            <p>قراءة آلية، ومراجعة بشرية للمواضع المشكوك فيها</p>
+          </div>
+          <span class="ld-arrow" aria-hidden="true"><i class="ld-arrow-line ld-r ld-r-x" style="--i: 3"></i><i class="ld-arrow-head ld-r ld-r-fade" style="--i: 4"></i></span>
+          <div class="ld-node ld-r" style="--i: 4" role="listitem">
+            <h3 class="ld-node-title">نص موثّق</h3>
+            <p>كل كلمة مربوطة بموضعها في الصفحة المطبوعة</p>
+          </div>
+          <span class="ld-arrow ld-arrow-fork" aria-hidden="true"><i class="ld-arrow-line ld-r ld-r-x" style="--i: 5"></i><i class="ld-arrow-head ld-r ld-r-fade" style="--i: 6"></i></span>
+          <div class="ld-outs" role="listitem">
+            <div class="ld-node is-out ld-r" style="--i: 6">
+              <p class="ld-node-label">الناشر والمحقق</p>
+              <h3 class="ld-node-title">طبعة جديدة</h3>
+              <p>ورقية أو رقمية</p>
+            </div>
+            <div class="ld-node is-out ld-r" style="--i: 7">
+              <p class="ld-node-label">الباحث والمساعد الذكي</p>
+              <h3 class="ld-node-title">بحث وتحقق وإحالة</h3>
+              <p>عبر خادم MCP</p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    {# ---------------------------------------------------------------- the MCP server #}
-    <section class="ld-section" aria-labelledby="ld-mcp-title">
-      <div class="ld-wrap ld-narrow">
-        <h2 class="ld-h2" id="ld-mcp-title">ربط مساعد ذكي</h2>
-        <p class="ld-intro">المنصة لا تضيف مساعد محادثة من عندها. أيّ مساعد يدعم MCP يتصل بخادمها، فيبحث في الكتب، ويتحقق من الاقتباس، ويرجع إلى الصفحة المطبوعة، وينقل كلمات الكتاب كما هي.</p>
-        <ul class="ld-clients" aria-label="عملاء يمكن ربطها">
+    {# ---------------------------------------------------------------- 4 · how it works: six stages, a sticky stepper, the real screens #}
+    <section class="ld-section" id="ld-how" aria-labelledby="ld-how-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">كيف يعمل</p>
+          <h2 class="ld-h2" id="ld-how-title">من الصورة إلى الطبعة في ست مراحل</h2>
+        </div>
+        <div class="ld-stages" data-ld-stages>
+          <nav class="ld-stepper" aria-label="المراحل">
+            <ol>
+              <li class="is-active"><a href="#ld-stage-1" data-stage="1"><span class="ld-step-mark" aria-hidden="true"></span><span>التخطيط</span></a></li>
+              <li><a href="#ld-stage-2" data-stage="2"><span class="ld-step-mark" aria-hidden="true"></span><span>المعالجة</span></a></li>
+              <li><a href="#ld-stage-3" data-stage="3"><span class="ld-step-mark" aria-hidden="true"></span><span>المراجعة</span></a></li>
+              <li><a href="#ld-stage-4" data-stage="4"><span class="ld-step-mark" aria-hidden="true"></span><span>المخطوطة</span></a></li>
+              <li><a href="#ld-stage-5" data-stage="5"><span class="ld-step-mark" aria-hidden="true"></span><span>الكتاب</span></a></li>
+              <li><a href="#ld-stage-6" data-stage="6"><span class="ld-step-mark" aria-hidden="true"></span><span>الإخراج</span></a></li>
+            </ol>
+          </nav>
+
+          <div class="ld-panels">
+            <article class="ld-stage ld-r" id="ld-stage-1" data-stage="1">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة الأولى</p>
+                <h3 class="ld-h3">التخطيط</h3>
+                <p>تحديد آلي للمتن والحاشية ورقم الصفحة، قابل للتعديل.</p>
+              </div>
+              {# a drawn page: the three regions and their guide lines #}
+              <div class="ld-draw ld-draw-layout" aria-hidden="true">
+                <div class="ld-dpage">
+                  <span class="ld-dregion ld-dregion-head"><b>رقم الصفحة</b></span>
+                  <span class="ld-dregion ld-dregion-body"><b>المتن</b><i style="--w: 100%"></i><i style="--w: 96%"></i><i style="--w: 100%"></i><i style="--w: 92%"></i><i style="--w: 98%"></i><i style="--w: 60%"></i></span>
+                  <span class="ld-dguide"></span>
+                  <span class="ld-dregion ld-dregion-notes"><b>الحاشية</b><i style="--w: 88%"></i><i style="--w: 70%"></i></span>
+                </div>
+              </div>
+            </article>
+
+            <article class="ld-stage ld-r" id="ld-stage-2" data-stage="2">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة الثانية</p>
+                <h3 class="ld-h3">المعالجة</h3>
+                <p>نموذجا ذكاء اصطناعي لقراءة النص العربي، مع الترجيح بينهما عند الاختلاف.</p>
+              </div>
+              <div class="ld-window ld-window-sm">
+                <div class="ld-window-bar" aria-hidden="true"><span></span><span></span><span></span><em>المعالجة</em></div>
+                <div class="ld-window-body">
+                  <img src="{% static 'landing/processing.webp' %}" width="1400" height="761" loading="lazy" alt="شاشة المعالجة في نسّاخ: النص المقروء آليًا بجانب صورة الصفحة، وشريط الصفحات على جانبه، وعدّادات الصفحات التي تنتظر المراجعة أو تحتاج انتباهًا">
+                </div>
+              </div>
+            </article>
+
+            <article class="ld-stage ld-r" id="ld-stage-3" data-stage="3">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة الثالثة</p>
+                <h3 class="ld-h3">المراجعة</h3>
+                <p>المختص يحسم الكلمات المشكوك فيها أمام صورتها.</p>
+              </div>
+              {# the readings popover, drawn as the review screen draws it #}
+              <div class="ld-draw ld-draw-review">
+                <p class="ld-dline" dir="rtl">إلى سبيطلة لم يقم أهلها بما <mark class="ld-dword">يقضي</mark> مهاجمتها، بل الظاهر أنهما</p>
+                <div class="ld-dpop" role="group" aria-label="مثال: اختر القراءة الصحيحة">
+                  <p class="ld-dpop-title">اختر القراءة الصحيحة</p>
+                  <p class="ld-dpop-sub">النموذجان مختلفان.</p>
+                  <ul class="ld-dreadings">
+                    <li class="is-chosen"><kbd>1</kbd><span class="ld-dreading">يقضي</span><span class="ld-dsrc"><i class="dot dot-accent" aria-hidden="true"></i>في النص · Qari v0.3</span></li>
+                    <li><kbd>2</kbd><span class="ld-dreading">يقتضي</span><span class="ld-dsrc">Qari v0.2</span></li>
+                    <li><kbd>3</kbd><span class="ld-dreading">يقتفى</span><span class="ld-dsrc">Tesseract</span></li>
+                  </ul>
+                  <div class="ld-dpop-foot"><span class="ld-dinput">تصحيح…</span><span class="ld-dbtn">حفظ</span></div>
+                </div>
+              </div>
+            </article>
+
+            <article class="ld-stage ld-r" id="ld-stage-4" data-stage="4">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة الرابعة</p>
+                <h3 class="ld-h3">المخطوطة</h3>
+                <p>مراجعة الفقرات والفصول بعد تجميع الكتاب آليًا.</p>
+              </div>
+              {# a drawn manuscript: a heading, paragraphs, the notes apart #}
+              <div class="ld-draw ld-draw-ms" aria-hidden="true">
+                <div class="ld-dms">
+                  <span class="ld-dms-head"><b>عنوان رئيسي</b><i></i></span>
+                  <span class="ld-dms-para"><i style="--w: 100%"></i><i style="--w: 97%"></i><i style="--w: 100%"></i><i style="--w: 72%"></i></span>
+                  <span class="ld-dms-para"><i style="--w: 100%"></i><i style="--w: 94%"></i><i style="--w: 46%"></i></span>
+                  <span class="ld-dms-notes"><b>حواشي المحقق</b><i style="--w: 80%"></i><i style="--w: 52%"></i></span>
+                </div>
+              </div>
+            </article>
+
+            <article class="ld-stage ld-r" id="ld-stage-5" data-stage="5">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة الخامسة</p>
+                <h3 class="ld-h3">الكتاب</h3>
+                <p>تنسيق الطبعة الجديدة، والأصل المطبوع بجانبها.</p>
+              </div>
+              <div class="ld-window ld-window-sm">
+                <div class="ld-window-bar" aria-hidden="true"><span></span><span></span><span></span><em>الكتاب · طبعة جديدة، والأصل المطبوع بجانبها</em></div>
+                <div class="ld-window-body">
+                  <img src="{% static 'landing/editor.webp' %}" width="1400" height="762" loading="lazy" alt="شاشة الكتاب في نسّاخ: صفحة الطبعة الجديدة منسَّقة في الوسط، وصورة الصفحة المطبوعة الأصلية في لوحة جانبية، والعنوان مظلَّل في الاثنتين">
+                </div>
+              </div>
+            </article>
+
+            <article class="ld-stage ld-r" id="ld-stage-6" data-stage="6">
+              <div class="ld-stage-text">
+                <p class="ld-stage-n">المرحلة السادسة</p>
+                <h3 class="ld-h3">الإخراج</h3>
+                <p>PDF للمطبعة وللشاشة، وWord، وEPUB، وخادم MCP للباحثين.</p>
+              </div>
+              <ul class="ld-draw ld-formats" aria-label="مخارج الكتاب">
+                <li><svg class="icon" aria-hidden="true"><use href="#i-printer"/></svg><span>PDF للمطبعة</span></li>
+                <li><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg><span>PDF للشاشة</span></li>
+                <li><svg class="icon" aria-hidden="true"><use href="#i-doc"/></svg><span>Word</span></li>
+                <li><svg class="icon" aria-hidden="true"><use href="#i-book-open"/></svg><span>EPUB</span></li>
+                <li class="is-accent"><svg class="icon" aria-hidden="true"><use href="#i-verify"/></svg><span>خادم MCP</span></li>
+              </ul>
+            </article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {# ---------------------------------------------------------------- 5 · the quotation check, interactive #}
+    <section class="ld-section ld-section-tint" id="ld-check" aria-labelledby="ld-check-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">التحقق من الاقتباس</p>
+          <h2 class="ld-h2" id="ld-check-title">أربع إجابات صريحة، ولا حكم بالتحريف عند الشك</h2>
+          <p class="ld-sub">النص المنقول يُقابَل كلمةً كلمة بالنص كما رُوجع على الصورة. جرّب الإجابات الأربع.</p>
+        </div>
+
+        <div class="ld-check ld-r" data-ld-check>
+          <div class="ld-check-tabs segmented" role="tablist" aria-label="إجابات التحقق">
+            <button type="button" role="tab" id="ld-tab-exact" class="is-selected" aria-selected="true" aria-controls="ld-panel-exact" data-tab="exact"><i class="dot dot-success" aria-hidden="true"></i>مطابق</button>
+            <button type="button" role="tab" id="ld-tab-differs" aria-selected="false" tabindex="-1" aria-controls="ld-panel-differs" data-tab="differs"><i class="dot dot-danger" aria-hidden="true"></i>مختلف</button>
+            <button type="button" role="tab" id="ld-tab-image" aria-selected="false" tabindex="-1" aria-controls="ld-panel-image" data-tab="image"><i class="dot dot-warning" aria-hidden="true"></i>يحتاج مطابقة مع الصورة</button>
+            <button type="button" role="tab" id="ld-tab-none" aria-selected="false" tabindex="-1" aria-controls="ld-panel-none" data-tab="none"><i class="dot dot-neutral" aria-hidden="true"></i>لم يوجد</button>
+          </div>
+
+          <div class="ld-check-panels">
+            <div class="ld-check-panel is-current" role="tabpanel" id="ld-panel-exact" aria-labelledby="ld-tab-exact" tabindex="0" data-panel="exact">
+              <p class="ld-check-kicker">النص المنقول</p>
+              <p class="ld-check-quote">«هذه هي المرة الثانية التي تولى فيها عبد الله بن أبي سرح ولاية طرابلس»</p>
+              <p class="ld-pill is-success">مطابق للأصل</p>
+              <p class="ld-check-note">النص كما في الكتاب. لو اختلف الشكل وحده لذُكر ذلك، ولم يُعدّ خطأ.</p>
+              <p class="ld-check-src">المصدر: الصفحة <bdi class="num">18</bdi> من الطبعة المطبوعة، في المتن · <span class="link">فتح صورة الصفحة</span></p>
+            </div>
+            <div class="ld-check-panel" role="tabpanel" id="ld-panel-differs" aria-labelledby="ld-tab-differs" tabindex="0" data-panel="differs">
+              <p class="ld-check-kicker">النص المنقول</p>
+              <p class="ld-check-quote">«هذه هي المرة الثانية التي تولى فيها <mark class="ld-diff">عمرو بن العاص</mark> ولاية طرابلس»</p>
+              <p class="ld-pill is-danger">مختلف عن الأصل</p>
+              <p class="ld-check-note">في الأصل: <strong>«عبد الله بن أبي سرح»</strong>. يُعرض كل موضع اختلاف، وكلمة الكتاب بجوار كلمة النص.</p>
+              <p class="ld-check-src">المصدر: الصفحة <bdi class="num">18</bdi> من الطبعة المطبوعة، في المتن · <span class="link">فتح صورة الصفحة</span></p>
+            </div>
+            <div class="ld-check-panel" role="tabpanel" id="ld-panel-image" aria-labelledby="ld-tab-image" tabindex="0" data-panel="image">
+              <p class="ld-check-kicker">النص المنقول</p>
+              <p class="ld-check-quote">«إلى سبيطلة لم يقم أهلها بما <mark class="ld-doubt">يقتضي</mark> مهاجمتها»</p>
+              <p class="ld-pill is-warning">يحتاج مطابقة مع الصورة</p>
+              <p class="ld-check-note">الفرق في كلمة لم تُحسم قراءتها بعد (قرأها نموذج «يقضي» وآخر «يقتضي»)، فقد يكون النص صحيحًا والخطأ في القراءة. لا يوصف النص بالتحريف.</p>
+              <p class="ld-check-src">المصدر: الصفحة <bdi class="num">18</bdi> من الطبعة المطبوعة، في المتن · <span class="link">فتح صورة الصفحة</span></p>
+            </div>
+            <div class="ld-check-panel" role="tabpanel" id="ld-panel-none" aria-labelledby="ld-tab-none" tabindex="0" data-panel="none">
+              <p class="ld-check-kicker">النص المنقول</p>
+              <p class="ld-check-quote">«وقد ذكر المؤلف ذلك في الباب الأول من الكتاب»</p>
+              <p class="ld-pill is-neutral">لم يوجد</p>
+              <p class="ld-check-note">ليس في الكتب المتاحة للحساب. لا يُقال إنه مختلَق.</p>
+              <p class="ld-check-src">لا مصدر يُحال إليه.</p>
+            </div>
+          </div>
+        </div>
+
+        <ul class="ld-facts ld-r" style="--i: 1">
+          <li>اختلاف الشكل وحده يُذكر على أنه اختلاف شكل، لا خطأ.</li>
+          <li>كلمة لم تُحسم قراءتها لا تُحسب على الناقل: الجواب «يحتاج مطابقة مع الصورة».</li>
+          <li>كلام في حاشية المحقق يُنبَّه إليه إن نُسب إلى المؤلف.</li>
+        </ul>
+      </div>
+    </section>
+
+    {# ---------------------------------------------------------------- 6 · the MCP server #}
+    <section class="ld-section" id="ld-mcp" aria-labelledby="ld-mcp-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">إضافة التحدي</p>
+          <h2 class="ld-h2" id="ld-mcp-title">خادم MCP للتحقق، للباحث ولأي مساعد ذكي</h2>
+          <p class="ld-sub">نسّاخ لا يضيف مساعد محادثة من عنده. أيّ مساعد يدعم MCP يتصل بخادمه بمفتاح يُنشأ من الحساب ويُلغى منه.</p>
+        </div>
+
+        <div class="ld-mcp" data-ld-mcp>
+          <ol class="ld-tools" aria-label="أدوات الخادم">
+            <li class="ld-tool is-active ld-r" style="--i: 0" data-tool="1">
+              <button type="button" aria-pressed="true"><span class="ld-n" aria-hidden="true">1</span><span class="ld-tool-text"><b>البحث في الكتب</b><span>في المتن أو الحاشية، مع تجاوز فروق الرسم والتشكيل</span></span></button>
+            </li>
+            <li class="ld-tool ld-r" style="--i: 1" data-tool="2">
+              <button type="button" aria-pressed="false"><span class="ld-n" aria-hidden="true">2</span><span class="ld-tool-text"><b>جلب المقطع</b><span>بصفحته المطبوعة، وصورتها، وحالة مراجعته</span></span></button>
+            </li>
+            <li class="ld-tool ld-r" style="--i: 2" data-tool="3">
+              <button type="button" aria-pressed="false"><span class="ld-n" aria-hidden="true">3</span><span class="ld-tool-text"><b>التحقق من الاقتباس</b><span>مطابق، أو مختلف مع عرض الفروق، أو يحتاج مطابقة مع الصورة</span></span></button>
+            </li>
+            <li class="ld-tool ld-r" style="--i: 3" data-tool="4">
+              <button type="button" aria-pressed="false"><span class="ld-n" aria-hidden="true">4</span><span class="ld-tool-text"><b>نسبة الكلام</b><span>للمؤلف في المتن، أم للمحقق في الحاشية</span></span></button>
+            </li>
+            <li class="ld-tool ld-r" style="--i: 4" data-tool="5">
+              <button type="button" aria-pressed="false"><span class="ld-n" aria-hidden="true">5</span><span class="ld-tool-text"><b>الإحالة الموثّقة</b><span>الكتاب والمؤلف والمحقق والطبعة والصفحة</span></span></button>
+            </li>
+          </ol>
+
+          {# a tool call and its result, drawn; never a chat transcript #}
+          <div class="ld-call ld-r" style="--i: 1" aria-live="polite">
+            <div class="ld-call-frame is-current" data-frame="1">
+              <p class="ld-call-kicker">نداء أداة</p>
+              <p class="ld-call-sig"><code>search</code><span>«تولى ولاية طرابلس» · في المتن</span></p>
+              <p class="ld-call-kicker">النتيجة</p>
+              <p class="ld-call-out">مقطع من الصفحة <bdi class="num">18</bdi> المطبوعة، في المتن، مع معرّفه وصورة أسطره. البحث يتجاوز فروق الرسم والتشكيل.</p>
+            </div>
+            <div class="ld-call-frame" data-frame="2">
+              <p class="ld-call-kicker">نداء أداة</p>
+              <p class="ld-call-sig"><code>get_passage</code><span>معرّف المقطع · سطران قبله وبعده</span></p>
+              <p class="ld-call-kicker">النتيجة</p>
+              <p class="ld-call-out">أسطر المقطع كما رُوجعت، وحواشي المحقق على حدة، ورقم الصفحة المطبوعة، وحالة كل كلمة، ورابط صورة الأسطر.</p>
+            </div>
+            <div class="ld-call-frame" data-frame="3">
+              <p class="ld-call-kicker">نداء أداة</p>
+              <p class="ld-call-sig"><code>verify_quote</code><span>«…تولى فيها عمرو بن العاص ولاية طرابلس»</span></p>
+              <p class="ld-call-kicker">النتيجة</p>
+              <p class="ld-call-out"><span class="ld-pill is-danger">مختلف عن الأصل</span> في الأصل: «عبد الله بن أبي سرح». الصفحة <bdi class="num">18</bdi>، في المتن.</p>
+            </div>
+            <div class="ld-call-frame" data-frame="4">
+              <p class="ld-call-kicker">نداء أداة</p>
+              <p class="ld-call-sig"><code>verify_quote</code><span>نص منسوب إلى المؤلف</span></p>
+              <p class="ld-call-kicker">النتيجة</p>
+              <p class="ld-call-out">الكلمات في حاشية المحقق، لا في متن المؤلف. يُذكر ذلك صراحة، فلا يُنقل كلام المحقق على أنه كلام المؤلف.</p>
+            </div>
+            <div class="ld-call-frame" data-frame="5">
+              <p class="ld-call-kicker">نداء أداة</p>
+              <p class="ld-call-sig"><code>cite</code><span>معرّف المقطع</span></p>
+              <p class="ld-call-kicker">النتيجة</p>
+              <p class="ld-call-out">إحالة جاهزة للنسخ: الكتاب، والمؤلف، والمحقق، والطبعة، والصفحة المطبوعة، ورابط يفتح صورة الأسطر.</p>
+            </div>
+          </div>
+        </div>
+
+        <ul class="ld-clients ld-r" aria-label="مساعدات يمكن ربطها">
           <li><bdi>Claude</bdi></li>
           <li><bdi>ChatGPT</bdi></li>
           <li><bdi>Claude Code</bdi></li>
           <li><bdi>Cursor</bdi></li>
           <li><bdi>VS Code</bdi></li>
         </ul>
-        <p class="ld-fine">المفتاح يُنشأ من الحساب ويُلغى منه. بعض العملاء يأخذ عنوان الخادم وحده، وبعضها العنوان مع ترويسة.</p>
       </div>
     </section>
 
-    {# ---------------------------------------------------------------- rights, in plain words #}
-    <section class="ld-section" aria-labelledby="ld-rights-title">
-      <div class="ld-wrap ld-narrow">
-        <h2 class="ld-h2" id="ld-rights-title">الحقوق</h2>
-        <p class="ld-intro">الكتب في حساب مؤسسة أو فرد، ولا يطّلع عليها غير أعضائه. ولا يُفتح لغيرهم إلا ما آل إلى الملك العام. حواشي محقق حديث قد تكون محمية، فتبقى منفصلة عن متن المؤلف، وتُذكر على أنها حواشٍ حين تُنقل.</p>
+    {# ---------------------------------------------------------------- 7 · trust and rights #}
+    <section class="ld-section" aria-labelledby="ld-trust-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">الموثوقية والحقوق</p>
+          <h2 class="ld-h2" id="ld-trust-title">ثقة تُرى، وحقوق تُحفظ</h2>
+        </div>
+        <div class="ld-cards ld-cards-2">
+          <div class="ld-card ld-card-list ld-r" style="--i: 0">
+            <h3 class="ld-h3">الموثوقية</h3>
+            <ul class="ld-list">
+              <li class="ld-r" style="--i: 1">لكل كلمة حالة: <strong>مراجَعة</strong>، أو <strong>آلية</strong>، أو <strong>مشكوك فيها</strong></li>
+              <li class="ld-r" style="--i: 2">كل إحالة تفتح صورة الصفحة المطبوعة</li>
+              <li class="ld-r" style="--i: 3">مراجعة بشرية قبل اعتماد كل صفحة</li>
+              <li class="ld-r" style="--i: 4">عند الشك: «يحتاج مطابقة مع الصورة» بدل حكم خاطئ</li>
+            </ul>
+          </div>
+          <div class="ld-card ld-card-list ld-r" style="--i: 1">
+            <h3 class="ld-h3">الحقوق</h3>
+            <ul class="ld-list">
+              <li class="ld-r" style="--i: 2">الكتب في حساب مؤسسة أو فرد، لا يطّلع عليها غير أعضائه</li>
+              <li class="ld-r" style="--i: 3">تنبيه صريح وتأكيد على ألّا يُتاح للعموم إلا ما خرج إلى <strong>الملك العام</strong></li>
+              <li class="ld-r" style="--i: 4">فصل متن المؤلف عن حواشي المحقق التي قد تكون محمية</li>
+              <li class="ld-r" style="--i: 5">إفصاح كامل عن المكونات ورخصها</li>
+            </ul>
+          </div>
+        </div>
       </div>
     </section>
 
-    {# ---------------------------------------------------------------- the closing call #}
+    {# ---------------------------------------------------------------- 8 · the technologies #}
+    <section class="ld-section" aria-labelledby="ld-tech-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">التقنيات</p>
+          <h2 class="ld-h2" id="ld-tech-title">ذكاء اصطناعي في القراءة، وتحقق في الإحالة</h2>
+        </div>
+        <ul class="ld-chips" aria-label="المكونات">
+          <li class="ld-r" style="--i: 0"><bdi>Qari v0.3</bdi> و<bdi>v0.2</bdi> <small>على <bdi>Qwen2-VL</bdi></small></li>
+          <li class="ld-r" style="--i: 1">الترجيح بين القارئين</li>
+          <li class="ld-r" style="--i: 2"><bdi>Tesseract</bdi> <small>مواضع الكلمات</small></li>
+          <li class="ld-r" style="--i: 3"><bdi>Kraken</bdi> <small>الأرقام</small></li>
+          <li class="ld-r" style="--i: 4">تحليل تخطيط الصفحة</li>
+          <li class="ld-r" style="--i: 5">مطابقة نصية مرنة للعربية</li>
+          <li class="ld-r" style="--i: 6"><bdi>MCP</bdi></li>
+          <li class="ld-r" style="--i: 7"><bdi>Django</bdi> و<bdi>Python</bdi></li>
+        </ul>
+        <p class="ld-licences ld-r" style="--i: 8"><bdi>Qari: Apache 2.0</bdi> · <bdi>Tesseract: Apache 2.0</bdi> · نموذج <bdi>Kraken</bdi> من <bdi>OpenITI: CC0</bdi></p>
+      </div>
+    </section>
+
+    {# ---------------------------------------------------------------- 9 · the impact, and the closing #}
+    <section class="ld-section" aria-labelledby="ld-impact-title">
+      <div class="ld-wrap">
+        <div class="ld-head ld-r">
+          <p class="ld-label">الأثر</p>
+          <h2 class="ld-h2" id="ld-impact-title">كتب أكثر تعود، ومصادر أوثق يُستشهد بها</h2>
+        </div>
+        <div class="ld-impact">
+          <ul class="ld-impact-list">
+            <li class="ld-card ld-r" style="--i: 0"><p class="ld-node-label">للناشر</p><p class="ld-impact-line">كتب إسلامية أكثر تعود إلى النشر بطبعات جديدة</p></li>
+            <li class="ld-card ld-r" style="--i: 1"><p class="ld-node-label">للباحث</p><p class="ld-impact-line">اقتباس يُتحقق منه ويُردّ إلى صفحته المطبوعة</p></li>
+            <li class="ld-card ld-r" style="--i: 2"><p class="ld-node-label">للمحتوى الرقمي</p><p class="ld-impact-line">أقل تحريفًا واختلافًا، وتعريف أوسع بالإسلام</p></li>
+          </ul>
+          <div class="ld-dark ld-r" style="--i: 1">
+            <span class="ld-dark-mark" aria-hidden="true">ن</span>
+            <p class="ld-dark-title">نصٌّ واحد مراجَع</p>
+            <p class="ld-dark-text">طبعة جديدة للناشر، ومصدر موثّق للباحث وللمساعد الذكي.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="ld-section ld-cta" aria-labelledby="ld-cta-title">
-      <div class="ld-wrap ld-narrow">
+      <div class="ld-wrap ld-narrow ld-r">
         <h2 class="ld-h2" id="ld-cta-title">ابدأ بكتاب</h2>
-        <p class="ld-intro">الحساب لمؤسسة، دار نشر أو مركز بحث أو جامعة أو مكتبة، أو لفرد يعمل وحده. بعد تأكيد البريد تمنح إدارة المنصة الحساب رصيده من الصفحات.</p>
+        <p class="ld-sub">الحساب لمؤسسة، دار نشر أو مركز بحث أو جامعة أو مكتبة، أو لفرد يعمل وحده. بعد تأكيد البريد تمنح إدارة المنصة الحساب رصيده من الصفحات.</p>
         <div class="ld-actions">
           <a class="btn btn-primary ld-btn" href="{% url 'accounts:signup' %}">إنشاء حساب</a>
           <a class="btn ld-btn" href="{% url 'accounts:login' %}">تسجيل الدخول</a>
@@ -180,8 +499,10 @@ Static: no context, no Alpine state. Styles: static/src/components/landing.css (
   <footer class="ld-footer">
     <div class="ld-wrap ld-footer-row">
       <span class="ld-footer-brand"><span class="brand-mark" aria-hidden="true">ن</span><span>نسّاخ</span></span>
-      <p class="meta ld-footer-line">مشروع مشارك في تحدي الذكاء الاصطناعي في خدمة المحتوى الإسلامي</p>
+      <p class="ld-footer-line">مشروع مشارك في تحدي الذكاء الاصطناعي في خدمة المحتوى الإسلامي</p>
     </div>
   </footer>
 </div>
 {% endblock %}
+
+{% block scripts %}<script defer src="{% static 'src/js/landing.js' %}"></script>{% endblock %}
