@@ -1,13 +1,21 @@
-"""Shared views: home redirect and the media of the books a user may access."""
+"""Shared views: home redirect, the health check and the media of the books a user may access."""
 
 import posixpath
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.storage import default_storage
-from django.http import FileResponse, Http404, HttpRequest, HttpResponse, HttpResponseNotModified
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseNotModified,
+    JsonResponse,
+)
 from django.shortcuts import redirect
 from django.utils.http import http_date
+from django.views.decorators.http import require_safe
 from django.views.static import was_modified_since
 
 from core.images import guess_content_type
@@ -17,6 +25,12 @@ from core.images import guess_content_type
 def home(request: HttpRequest) -> HttpResponse:
     """Send the signed-in user to the books list."""
     return redirect("books:list")
+
+
+@require_safe
+def healthz(request: HttpRequest) -> JsonResponse:
+    """The container health check (docker-compose.yml): no login, no database, nothing to compute."""
+    return JsonResponse({"ok": True})
 
 
 def _book_of_path(normal: str) -> int | None:

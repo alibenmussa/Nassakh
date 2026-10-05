@@ -1,0 +1,91 @@
+# Caddy for Nassakh (docs/DEPLOY.md): HTTPS from Let's Encrypt (HTTP-01), /static/* from the `static` volume,
+# /mcp* to the MCP server, everything else to Django. SITE_ADDRESS (docker-compose.yml, from
+# deploy/.env.production) is the domain; the default is the production one.
+
+# ------------------------------------------------------------------ logs: no MCP key, ever
+# The MCP server also takes its access key in the URL, `/mcp/k/nsk_...` (D108): that path is a password. Caddy
+# must not write it anywhere. Two kinds of log lines carry a request's `uri`:
+#  - the access log (the `log` directive of the site): `log_skip` leaves every /mcp request out of it;
+#  - the error log: an upstream that is down or slow is logged by `http.log.error` with the whole request,
+#    its `uri` included, to the DEFAULT logger (the global `log` below), whatever the site's `log` says.
+# That logger keeps the errors (a 502 is the first thing to read when something is wrong) but rewrites any
+# `/mcp/...` in `request>uri` to `/mcp/REDACTED` before it is written. The site's access log has the same
+# filter, a second lock should a /mcp request ever reach it. (The Authorization and Cookie headers are
+# redacted by Caddy itself unless `log_credentials` is set; it is not.)
+{
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp (?i)/mcp/[^?#\s]* /mcp/REDACTED
+			}
+		}
+	}
+}
+
+# www -> the bare domain (needs an A record for www too)
+www.{$SITE_ADDRESS:nassakh.tech} {
+	redir https://{$SITE_ADDRESS:nassakh.tech}{uri} permanent
+}
+
+{$SITE_ADDRESS:nassakh.tech} {
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp (?i)/mcp/[^?#\s]* /mcp/REDACTED
+			}
+		}
+	}
+
+	@mcp path /mcp /mcp/*
+	log_skip @mcp
+
+	header {
+		?X-Content-Type-Options nosniff
+		?Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Static files: collectstatic fills the `static` volume (mounted at /srv/static, read-only).
+	# Media is NOT served from here: /media/* goes to Django, which checks who may see each file.
+	handle /static/* {
+		root * /srv
+		encode zstd gzip
+		header Cache-Control "public, max-age=300"
+		file_server
+	}
+
+	# The MCP server: no response buffering (Streamable HTTP may stream), generous timeouts.
+	handle @mcp {
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy mcp:8001 {
+			flush_interval -1
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 10m
+				read_timeout 10m
+			}
+		}
+	}
+
+	# Django. Uploads: a book's PDF may be 500 MB (books.forms.MAX_PDF_MB), plus the form's overhead.
+	# While `web` restarts in a deploy, a request waits up to 20 s for it instead of failing with a 502.
+	handle {
+		request_body {
+			max_size 600MB
+		}
+		encode zstd gzip
+		reverse_proxy web:8000 {
+			lb_try_duration 20s
+			lb_try_interval 500ms
+			transport http {
+				dial_timeout 5s
+			}
+		}
+	}
+}

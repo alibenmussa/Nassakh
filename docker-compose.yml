@@ -1,0 +1,253 @@
+# Nassakh on one VPS (docs/DEPLOY.md). Run it from /opt/nassakh:
+#
+#   ./deploy/deploy.sh            first deploy and every update (git pull, build, up, wait for health)
+#   docker compose logs -f web    one service's logs
+#
+# Compose reads its variables from ./.env, a link to deploy/.env.production (deploy.sh makes it); the services
+# get the same file through `env_file`. Only Caddy publishes ports (80, 443); everything else talks over the
+# `backend` network. That network is not `internal: true` on purpose: the workers reach Runpod and the mail server.
+#
+# One image (Dockerfile) runs web, the two Celery workers, the MCP server and `init`.
+
+name: nassakh
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+# Settings the compose file decides; everything else comes from deploy/.env.production.
+x-app-env: &app-env
+  DATABASE_URL: "postgres://${POSTGRES_USER:-nassakh}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set: fill deploy/.env.production and link it as .env (docs/DEPLOY.md)}@postgres:5432/${POSTGRES_DB:-nassakh}"
+  REDIS_URL: redis://redis:6379/0
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: nassakh-app:latest
+  env_file: deploy/.env.production
+  environment: *app-env
+  init: true
+  restart: unless-stopped
+  networks: [backend]
+  logging: *logging
+  volumes:
+    - media:/data/media
+
+services:
+  # Once per deploy, before anything else of ours starts: migrations, collectstatic into the `static` volume
+  # (Caddy serves it), `check --deploy`. Starts as root only to make the volumes writable, then steps down.
+  init:
+    <<: *app
+    user: "0:0"
+    command: ["/app/deploy/init.sh"]
+    restart: "no"
+    mem_limit: 1g
+    volumes:
+      - media:/data/media
+      - static:/app/staticfiles
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    <<: *app
+    command: ["gunicorn", "nassakh.wsgi:application", "-c", "/app/deploy/gunicorn.conf.py"]
+    mem_limit: 2500m
+    stop_grace_period: 30s
+    # A volumes key replaces the anchor's list, so the media volume is named again. The second line is the
+    # demo-books bundle (docs/DEMO_DATA.md): rsync it to /opt/nassakh/demo-bundle, then import_demo_bundle reads it.
+    volumes:
+      - media:/data/media
+      - /opt/nassakh/demo-bundle:/demo-bundle:ro
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/healthcheck.py", "http://127.0.0.1:8000/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ingest, preprocessing, layout, Tesseract, page renders, re-layout and the Word / PDF / EPUB exports.
+  # The biggest memory limit: Kraken takes about 1.5 GB a page batch, a WeasyPrint export up to 2 GB.
+  worker:
+    <<: *app
+    # Celery's prefork children fork on Linux; nassakh/celery.py sets FORKED_BY_MULTIPROCESSING for the Mac's
+    # spawn, so it is emptied here and Celery takes its ordinary Linux path.
+    environment:
+      <<: *app-env
+      FORKED_BY_MULTIPROCESSING: ""
+    command:
+      - celery
+      - -A
+      - nassakh
+      - worker
+      - -Q
+      - default,layout,export
+      - -c
+      - ${WORKER_CONCURRENCY:-3}
+      - --max-tasks-per-child
+      - "100"
+      - -n
+      - cpu@%h
+      - -l
+      - info
+    mem_limit: 6g
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A nassakh inspect ping -d cpu@$$HOSTNAME -t 15 > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The OCR queue: with OCR_BACKEND=runpod these are HTTP clients of the Runpod endpoint, so threads.
+  gpu-worker:
+    <<: *app
+    environment:
+      <<: *app-env
+      FORKED_BY_MULTIPROCESSING: ""
+    command:
+      - celery
+      - -A
+      - nassakh
+      - worker
+      - -Q
+      - gpu
+      - -P
+      - threads
+      - -c
+      - ${GPU_THREADS:-4}
+      - -n
+      - gpu@%h
+      - -l
+      - info
+    mem_limit: 2g
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A nassakh inspect ping -d gpu@$$HOSTNAME -t 15 > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The MCP server (D108): Streamable HTTP at /mcp, reached through Caddy only. Its secret-URL keys never reach
+  # a log (research.mcp_server.RedactKeys here, deploy/Caddyfile there).
+  mcp:
+    <<: *app
+    command: ["python", "manage.py", "mcp_serve", "--host", "0.0.0.0", "--port", "8001"]
+    mem_limit: 768m
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/healthcheck.py", "http://127.0.0.1:8001/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    networks: [backend]
+    logging: *logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nassakh}
+      POSTGRES_DB: ${POSTGRES_DB:-nassakh}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set: fill deploy/.env.production and link it as .env (docs/DEPLOY.md)}"
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=100"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 2g
+    stop_grace_period: 60s
+    healthcheck:
+      # over TCP: during the first start the image runs a temporary server that listens on its socket only
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # Celery's broker and result store. AOF on, so a restart keeps the queues; `noeviction`: a full Redis refuses
+  # writes instead of dropping queued tasks.
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    networks: [backend]
+    logging: *logging
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "400mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    networks: [backend]
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-nassakh.tech}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - static:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      web:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+
+networks:
+  backend:
+
+# `docker compose down` keeps these; `down -v` would delete them (the database and every book): never run it.
+volumes:
+  pgdata:
+  redisdata:
+  media:
+  static:
+  caddy_data:
+  caddy_config:

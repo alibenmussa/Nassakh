@@ -14,6 +14,10 @@ media/
 staticfiles/
 .env
 
+# Production (docs/DEPLOY.md): the server's secrets, and the nightly database dumps next to the clone
+deploy/.env.production
+/backups/
+
 # IDE / OS
 .idea/
 .vscode/

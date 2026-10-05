@@ -1,0 +1,53 @@
+# What the image build never sees (the context is the repository; see Dockerfile).
+
+# VCS, editors, OS
+.git
+.gitignore
+.github
+.idea
+.vscode
+.claude
+.DS_Store
+**/.DS_Store
+
+# Secrets and local settings: the server's file is deploy/.env.production, read by docker compose, never copied in
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Local environments and build output
+.venv
+.venv-*
+node_modules
+build
+staticfiles
+*.egg-info
+__pycache__
+**/__pycache__
+**/*.py[cod]
+
+# Data and models: books and scans live in the media volume, Kraken's model is downloaded in the build
+media
+models
+workers
+playground
+
+# Test and tool output
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+**/*.log
+docs/_tmp*
+
+# Deployment files that are not part of the image (changing them must not rebuild it)
+Dockerfile
+.dockerignore
+docker-compose*.yml
+deploy/Caddyfile
+deploy/*.md
+deploy/backup.sh
+deploy/bootstrap.sh
+deploy/deploy.sh
+deploy/server-setup.sh

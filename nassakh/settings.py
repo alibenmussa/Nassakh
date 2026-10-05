@@ -20,6 +20,22 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
+# Behind a TLS proxy (production: Caddy, docs/DEPLOY.md). Everything here is off unless the environment turns
+# it on, so the dev server on http keeps working.
+# BEHIND_PROXY: the proxy ends TLS and says so in `X-Forwarded-Proto` (only the proxy can reach this server),
+# so `request.is_secure()` is true and the links and redirects Django makes are https.
+if env.bool("BEHIND_PROXY", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Caddy hands the Host header on unchanged; turn this on only behind a proxy that rewrites it.
+USE_X_FORWARDED_HOST = env.bool("USE_X_FORWARDED_HOST", default=False)
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=False)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=False)
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=False)
+SECURE_REDIRECT_EXEMPT = [r"^healthz$"]  # the container health check speaks plain http
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -274,7 +290,8 @@ LOGGING = {
         "console": {"format": "{asctime} {levelname:<8} {name} {message}", "style": "{"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "console"},
+        # stdout: `docker compose logs` reads it (gunicorn and Celery write their own lines to stderr)
+        "console": {"class": "logging.StreamHandler", "formatter": "console", "stream": "ext://sys.stdout"},
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", default="INFO")},
     "loggers": {

@@ -4,6 +4,8 @@ Everything runs locally on the owner's Apple Silicon Mac (D5): Django dev server
 PostgreSQL and Redis from Homebrew. Commands below are the ones that were run and worked during the
 Phase 2 integration (2026-09-24); run them from the repository root.
 
+**Production** (one VPS, Docker Compose, Caddy, Runpod for the OCR) is `docs/DEPLOY.md`; this runbook is the Mac.
+
 ## 1. Requirements
 
 | What | Version | Notes |

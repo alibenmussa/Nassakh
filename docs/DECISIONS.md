@@ -1117,3 +1117,27 @@ vendor's docs on 2026-10-04.
 - Left out, with reasons: the source PDF, exports, caches, old renders, comparisons of review changes, quota holds
   and ledger, the search index (rebuilt).
 - A book already in the account (same title and source page count) is skipped, or replaced with `--replace`.
+
+## D111 — Deployment: Docker Compose on one VPS (2026-10-05, challenge)
+
+**Why.** The challenge needs a live link that works through the judging window (7–22 Oct 2026), with HTTPS, accounts
+and the MCP server, on a server that is not the owner's Mac.
+
+**Decision.**
+- One Hostinger KVM 4 (4 vCPU, 16 GB, x86_64, Ubuntu 26.04), domain `nassakh.tech`, from one image (`Dockerfile`: Node
+  build of the CSS and editor, Python 3.13 slim, Tesseract ara+eng, WeasyPrint's libraries, Kraken in its own
+  Python 3.11 environment with CPU torch and its model downloaded and checked by SHA-256). The image has no PyTorch
+  or transformers: `OCR_BACKEND=runpod` and every such import is lazy; the server's packages are pinned in
+  `deploy/constraints.txt` (derived from `pyproject.toml` by `deploy/server_requirements.py`).
+- `docker-compose.yml`: `init` (migrate and collectstatic once per deploy), `web` (gunicorn 3×2), `worker`
+  (default, layout, export), `gpu-worker` (threads: HTTP clients of Runpod), `mcp`, `postgres:17`, `redis:7`,
+  `caddy:2`. Only Caddy publishes ports; every service has a memory cap and rotated logs.
+- Caddy: HTTPS from Let's Encrypt, `/static` from the collectstatic volume, `/mcp` proxied without buffering, never
+  logs the MCP secret URL (`log_skip` on the access log, a `request>uri` filter on the error log). Media stays
+  behind Django's access check. Settings for running behind a TLS proxy are env-driven (`BEHIND_PROXY`, secure
+  cookies, HSTS) and off by default. `/healthz` serves the health checks.
+- `deploy/server-setup.sh` (ufw, fail2ban, swap, Docker; reads sshd, never edits it), `deploy.sh` (pull, build, a
+  database dump, up, wait for health, keeps the previous image), `bootstrap.sh`, `backup.sh` (nightly dump, weekly
+  media archive, `expire_quota`). Runbook: `docs/DEPLOY.md`.
+- Until the repository is public the code reaches the server by `git push` over SSH to a bare repository there
+  (`vps` remote), and `deploy.sh`'s `git pull` runs against it. SSH: key only, port 22022, no root login.
