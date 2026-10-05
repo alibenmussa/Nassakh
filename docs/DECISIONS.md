@@ -1141,3 +1141,21 @@ and the MCP server, on a server that is not the owner's Mac.
   media archive, `expire_quota`). Runbook: `docs/DEPLOY.md`.
 - Until the repository is public the code reaches the server by `git push` over SSH to a bare repository there
   (`vps` remote), and `deploy.sh`'s `git pull` runs against it. SSH: key only, port 22022, no root login.
+
+## D112 — Measuring the quotation checker (2026-10-05, challenge track 04, CHALLENGE_SPEC §6)
+
+**Why.** The judging criteria reward consistent results on a test set over repeated runs, a measured benefit and a
+test against a named alternative, with the limits stated.
+
+**Decision.** `manage.py research_eval` generates labelled quotations from the indexed text of the books under test:
+verbatim, typed the way people type, a word replaced, dropped or swapped, a vowel changed, misattributed, built on a
+doubtful OCR reading (the other model's reading), and not in the books. It runs the real `verify_quote` as a
+non-superuser member of an account holding exactly those books (a temporary organisation, user and book move in a
+rolled-back transaction), beside a raw substring search (Ctrl+F, the named alternative), a normal-form search and the
+checker with its doubt switched off. It reports mean and range over 3 seeds, repeatability, speed and index size to
+`docs/CHALLENGE_RESULTS.md` and JSON. Result on books 29, 31, 41: 100% of correctly retyped quotations accepted
+(Ctrl+F: 0%), altered words flagged and located in 100%, misattribution caught in 100% (the searches: 0%), accusation
+at doubtful OCR readings 0.6% (without the doubt feature: 100%), identical answers on re-running a seed. It loses to
+plain search on short absent quotations (6% wrongly matched at 4–5 words) and a 4-of-11 word replacement falls under
+the 0.6 threshold in 32% of cases. Limits: the quotations come from the same OCR text, three books, synthetic
+alterations, no human-labelled set, no language-model comparison.
