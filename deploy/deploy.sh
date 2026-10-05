@@ -77,7 +77,9 @@ main() {
         docker tag nassakh-app:latest nassakh-app:previous || echo "warning: could not tag the previous image"
     fi
     log "build the image (the first build takes 10 to 20 minutes)"
-    docker compose build
+    # One build, through `web`: every app service uses the same image (docker-compose.yml). Building all five at
+    # once into one tag made `docker compose build` fail while it cleaned up the old image (Docker's containerd store).
+    docker compose build web
 
     # a dump of the database before the migrations run: the way back from a bad one (skipped on a first deploy)
     if [ "$(status_of postgres)" = "healthy" ]; then
@@ -88,7 +90,7 @@ main() {
     log "start (init runs the migrations first)"
     # a finished init container is removed, so `up` runs init again: migrations once per deploy
     docker compose rm -f init > /dev/null 2>&1 || true
-    if ! docker compose up -d --remove-orphans; then
+    if ! docker compose up -d --remove-orphans --no-build; then
         echo >&2
         echo "---- init (migrations, collectstatic) ----" >&2
         docker compose logs --no-color --tail 60 init >&2 || true
