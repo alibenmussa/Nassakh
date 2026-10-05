@@ -1098,3 +1098,22 @@ verifier; `RedactKeys` on uvicorn's handlers keeps keys out of every log line. T
 revoking the key voids it. A reverse proxy in front must not log that path in full (deployment). «ربط مساعد» walks
 through Claude, ChatGPT, Claude Code, Cursor, VS Code and a generic client, with the steps checked against each
 vendor's docs on 2026-10-04.
+
+## D110 — Demo bundles: finished books move between databases as an export directory (2026-10-05, challenge deployment)
+
+**Why.** The judges' demo account holds three processed books built on the owner's Mac, and the server starts empty.
+
+**Decision.**
+- `manage.py export_demo_bundle` writes `data.json` (Django-serializer rows, one per line, dates to the
+  microsecond), `manifest.json` and `media/…`. It refuses a directory inside any git work tree (the images are
+  scans of books, never for the repository).
+- `manage.py import_demo_bundle` writes the rows in one transaction under fresh primary keys, as the books of the
+  unlimited demo organisation; every user column becomes the demo user. Files are copied before the commit and
+  removed again on failure, then the search index is built.
+- Rows come from Django's cascade graph from `Book`; `books.bundle.TRAVEL` and `LEFT_OUT` classify every model and
+  an unclassified one stops the export. Ids kept inside JSON are remapped by a registry; a JSONField outside it
+  fails the tests. Ids that name rows the source no longer has become negative, so a stale id can never match
+  another account's line.
+- Left out, with reasons: the source PDF, exports, caches, old renders, comparisons of review changes, quota holds
+  and ledger, the search index (rebuilt).
+- A book already in the account (same title and source page count) is skipped, or replaced with `--replace`.
