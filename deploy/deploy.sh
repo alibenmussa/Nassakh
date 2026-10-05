@@ -31,7 +31,7 @@ image_id() { docker image inspect -f '{{.Id}}' nassakh-app:latest 2> /dev/null |
 # Everything runs inside main(): bash reads the whole function before it runs, so the `git pull` below may replace
 # this very file without breaking the run that is in progress.
 main() {
-    local pull=1 arg before after site code deadline failed pending service
+    local pull=1 arg before site code deadline failed pending service
     for arg in "$@"; do
         case "$arg" in
             --no-pull) pull=0 ;;
@@ -70,15 +70,14 @@ main() {
     echo "commit: $(git rev-parse --short HEAD) $(git log -1 --format=%s | cut -c1-80)"
 
     # -------------------------------------------------------------- build and start
+    # keep the image that runs now, for a quick way back (docs/DEPLOY.md, rollback). Tagged BEFORE the build: the
+    # build moves the `latest` tag, and with Docker's containerd image store the old image's id is gone by then.
     before=$(image_id)
+    if [ -n "$before" ]; then
+        docker tag nassakh-app:latest nassakh-app:previous || echo "warning: could not tag the previous image"
+    fi
     log "build the image (the first build takes 10 to 20 minutes)"
     docker compose build
-
-    # keep the image that ran until now, for a quick way back (docs/DEPLOY.md, rollback)
-    after=$(image_id)
-    if [ -n "$before" ] && [ "$before" != "$after" ]; then
-        docker tag "$before" nassakh-app:previous
-    fi
 
     # a dump of the database before the migrations run: the way back from a bad one (skipped on a first deploy)
     if [ "$(status_of postgres)" = "healthy" ]; then
