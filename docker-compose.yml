@@ -21,6 +21,11 @@ x-logging: &logging
 x-app-env: &app-env
   DATABASE_URL: "postgres://${POSTGRES_USER:-nassakh}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set: fill deploy/.env.production and link it as .env (docs/DEPLOY.md)}@postgres:5432/${POSTGRES_DB:-nassakh}"
   REDIS_URL: redis://redis:6379/0
+  # One thread per Tesseract and per Kraken (torch) process. Left at the default each one starts a thread per core,
+  # and a few of them at once on 4 vCPUs fight over the cores: measured on the first deploy, a Tesseract page took
+  # 340 s on average (up to 615 s) instead of a few seconds. The parallelism comes from the worker processes.
+  OMP_THREAD_LIMIT: "1"
+  OMP_NUM_THREADS: "1"
 
 x-app: &app
   build:
@@ -132,12 +137,13 @@ services:
       - -P
       - threads
       - -c
-      - ${GPU_THREADS:-4}
+      - ${GPU_THREADS:-3}
       - -n
       - gpu@%h
       - -l
       - info
-    mem_limit: 2g
+    # Not only HTTP clients: the stage also runs Kraken (word boxes, ~1.5 GB each) for every thread that is reading.
+    mem_limit: 6g
     stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "celery -A nassakh inspect ping -d gpu@$$HOSTNAME -t 15 > /dev/null 2>&1 || exit 1"]
