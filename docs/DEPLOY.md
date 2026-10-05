@@ -79,6 +79,23 @@ printf 'Host github.com\n  IdentityFile ~/.ssh/nassakh_deploy\n  IdentitiesOnly 
 git clone git@github.com:alibenmussa/Nassakh.git /opt/nassakh
 ```
 
+*No GitHub access at all (how the first deploy of this server was done, before the repository was public):* keep a
+bare repository on the server and push to it from the Mac over SSH. `deploy.sh`'s `git pull` then runs against it
+without any change:
+
+```sh
+# on the server, once
+sudo install -d -o ubuntu -g ubuntu /opt/nassakh-git && git init -q --bare /opt/nassakh-git
+cd /opt/nassakh && git init -q -b main && git remote add origin /opt/nassakh-git
+# on the Mac, once (the key is the one added to the server's ~/.ssh/authorized_keys)
+git remote add vps ssh://ubuntu@<SERVER_IP>:22022/opt/nassakh-git
+GIT_SSH_COMMAND="ssh -i ~/.ssh/nassakh_vps -o IdentitiesOnly=yes" git push vps main
+# on the server, once: take the first commit and track it
+cd /opt/nassakh && git pull origin main && git branch --set-upstream-to=origin/main main
+```
+
+Every update after that is `git push vps main` on the Mac, then `bash deploy/deploy.sh` on the server.
+
 ## 4. Server setup (once)
 
 Installs updates, the firewall (`ufw`: SSH, 80, 443), fail2ban, unattended security upgrades, a 4 GB swap file,
@@ -381,6 +398,19 @@ exports in Amiri; upload the faces on the organisation's page (D98) to use them.
 
 **Never run `docker compose down -v`** (or `docker volume rm`): the volumes hold the database and every book.
 `docker compose down` and `up` are safe.
+
+### OCR pages take minutes instead of seconds
+
+Measured on the first deploy (4 vCPU): a Tesseract page took **340 s on average, up to 615 s**, and the pipeline
+crawled at 2 pages in 8 minutes. Cause: each Tesseract and Kraken (torch) process starts one OpenMP thread per core,
+and three or four of them at once on 4 vCPUs spin against each other. `docker-compose.yml` therefore sets
+`OMP_THREAD_LIMIT=1` and `OMP_NUM_THREADS=1` for every app service; with that a page takes about 1.3 s, and the
+parallelism comes from the worker processes. If pages are slow again, check `docker stats` (a worker at 400 % CPU
+with a long `ocr_page_fast` in `docker compose logs worker`) and that both variables are set in the container
+(`docker compose exec worker env | grep OMP`).
+
+The GPU worker also runs Kraken for the word boxes (about 1.5 GB per reading thread), which is why it has a 6 GB
+limit and `GPU_THREADS=3`. A killed Kraken shows as `Killed` in `docker compose logs gpu-worker`.
 
 ## 16. What is exposed
 
