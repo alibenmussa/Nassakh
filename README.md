@@ -250,21 +250,13 @@ docker compose -f docker-compose.local.yml exec web python manage.py createsuper
 
 ## البنية والتقنيات
 
-```mermaid
-flowchart LR
-  B["المتصفح"] -->|HTTPS| C["Caddy"]
-  A["مساعد ذكي (عميل MCP)"] -->|"HTTPS /mcp"| C
-  C --> W["web: Django"]
-  C --> M["mcp: خادم MCP"]
-  W --> P[("PostgreSQL 17")]
-  M --> P
-  W --> R[("Redis 7")]
-  R --> CW["worker: التخطيط و Tesseract و Kraken والإخراج"]
-  R --> GW["gpu-worker: قراءة Qari"]
-  GW -->|"على الخادم"| RP["RunPod Serverless: Qari v0.3 و v0.2"]
-  GW -.->|"على جهازك"| L["MLX على Mac أو PyTorch على CPU"]
-  CW --> P
-  GW --> P
+```text
+Browser (HTTPS) ─────────┐
+                         ├──> Caddy ──┬──> web: Django ─────────┬──> PostgreSQL 17
+AI assistant (MCP) ──────┘            │                         └──> Redis 7 ──┬──> worker: preparation, Tesseract, Kraken, exports
+                                      └──> mcp: MCP server ──> PostgreSQL 17   └──> gpu-worker: Qari reading
+                                                                                      ├── server: RunPod Serverless (Qari v0.3 + v0.2)
+                                                                                      └── your computer: MLX on Mac, or PyTorch on CPU
 ```
 
 | المكوّن | الاستعمال |
