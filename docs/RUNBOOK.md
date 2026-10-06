@@ -15,7 +15,7 @@ Phase 2 integration (2026-09-24); run them from the repository root.
 | Redis | 7 | `brew services start redis` |
 | Node | 22 | build time only: Tailwind CSS, vendoring Alpine.js and the IBM Plex Sans Arabic fonts |
 | Tesseract | 5.5 with `ara` + `eng` | `brew install tesseract tesseract-lang`; the models are `tessdata_fast` (`tesseract-lang` 4.1.0, `ara` of 2017). Checked 2026-10-03: 5.5.0 installed, 5.5.3 is a bug-fix release (`brew upgrade tesseract`, no recognition or layout change); `tessdata_best` `ara`+`eng` read 49 pages 1.4 points better (CER 16.8 → 15.4 %) at 2.3× the time, not adopted |
-| OCR models | Qari v0.3, Qari v0.2 (merged) | under `OCR_MODELS_DIR` (default `playground/poc/models`): `qari-v0.3/`, `qari-v0.2-merged/`, MLX conversions under `mlx/qari-v0.3`, `mlx/qari-v0.2`; prepared by `playground/poc/prepare_models.py` |
+| OCR models | Qari v0.3, Qari v0.2 (merged) | under `OCR_MODELS_DIR` (default `playground/poc/models`): `qari-v0.3/`, `qari-v0.2-merged/`, MLX conversions under `mlx/qari-v0.3`, `mlx/qari-v0.2`; prepared by `manage.py prepare_models` (`--mlx` for the MLX backend; see `docs/RUN_LOCALLY.md`) |
 | PyTorch | 2.14 with MPS | installed by `make install`; `mlx-vlm` is the optional `mlx` extra |
 
 ## 2. First-time setup
@@ -991,7 +991,7 @@ stays: with unreviewed pages included the convert button reads «تجميع مع
 | `connection refused` on 5433 | `brew services start postgresql@17`; check `pg_isready -p 5433` |
 | default worker: every task fails with `Task handler raised error: ValueError('not enough values to unpack (expected 3, got 0)')` | the prefork children are spawned, not forked, on macOS / Python 3.13; `nassakh/celery.py` sets `FORKED_BY_MULTIPROCESSING=1` for that reason. If it reappears (custom launcher that bypasses `nassakh.celery`), export the variable before `celery worker`, or run the worker with `-P threads` |
 | `tesseract language(s) missing: ['ara']` | `brew install tesseract-lang`; `tesseract --list-langs` must show `ara` and `eng` |
-| page error «تعذّر تحميل محرّك التعرّف …» / `… is not prepared` | weights missing under `OCR_MODELS_DIR`: run `playground/poc/prepare_models.py` (`--mlx` for the MLX backend) or fix `OCR_MODELS_DIR` |
+| page error «تعذّر تحميل محرّك التعرّف …» / `… is not prepared` | weights missing under `OCR_MODELS_DIR`: run `manage.py prepare_models` (`--mlx` for the MLX backend) or fix `OCR_MODELS_DIR` |
 | gpu worker very slow or swapping | both models need about 9 GB; close other GPU-heavy apps, or set `OCR_BACKEND=mlx` (about 1.8× faster in the PoC) |
 | an export stays «في الانتظار» | the worker was started before Phase 6 and does not consume the `export` queue: stop it and `make worker` again (`-Q default,layout,export`) |
 | the export page fails with `relation "publishing_export" does not exist` | `make migrate` (`publishing.0003_export`) |

@@ -1,0 +1,146 @@
+# Nassakh on one computer with Docker and no GPU (docs/RUN_LOCALLY.md, Path B): Linux, Windows or an Intel Mac.
+# Not the production file (docker-compose.yml): no Caddy, plain http on localhost, the OCR models on the CPU.
+#
+#   cp deploy/.env.local.example deploy/.env.local                     then set SECRET_KEY
+#   docker compose -f docker-compose.local.yml build                      the image with CPU-only PyTorch
+#   docker compose -f docker-compose.local.yml run --rm gpu-worker python manage.py prepare_models
+#   docker compose -f docker-compose.local.yml up -d
+#   docker compose -f docker-compose.local.yml exec web python manage.py createsuperuser
+#
+# Then open http://localhost:8000. The MCP server listens on http://localhost:8001/mcp.
+# The ports are bound to 127.0.0.1: other machines on the network cannot reach them.
+
+name: nassakh-local
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://nassakh:nassakh@postgres:5432/nassakh
+  REDIS_URL: redis://redis:6379/0
+  # Qari v0.3 and v0.2 through PyTorch on the CPU; the weights live in the `models` volume
+  # (`manage.py prepare_models` fills it once, about 9 GB downloaded).
+  OCR_BACKEND: torch
+  OCR_DEVICE: cpu
+  OCR_MODELS_DIR: /data/models
+  HF_HOME: /data/models/hf-cache
+  # Celery's prefork children fork on Linux (nassakh/celery.py sets this for the Mac's spawn).
+  FORKED_BY_MULTIPROCESSING: ""
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      OCR_STACK: torch
+  image: nassakh-app:local
+  env_file: deploy/.env.local
+  environment: *app-env
+  init: true
+  restart: unless-stopped
+  volumes:
+    - media:/data/media
+    - models:/data/models
+
+services:
+  # Once per start, before anything else: migrations and collectstatic.
+  init:
+    <<: *app
+    user: "0:0"
+    command: ["/app/deploy/init.sh"]
+    restart: "no"
+    volumes:
+      - media:/data/media
+      - models:/data/models
+      - static:/app/staticfiles
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Django's own server: it serves the static files too (--insecure), as there is no Caddy here.
+  web:
+    <<: *app
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000", "--noreload", "--insecure"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "/app/deploy/healthcheck.py", "http://127.0.0.1:8000/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # Ingest, preprocessing, layout, Tesseract, Kraken, page renders and the exports. Two processes, one
+  # thread each for Tesseract and Kraken.
+  worker:
+    <<: *app
+    environment:
+      <<: *app-env
+      OMP_THREAD_LIMIT: "1"
+      OMP_NUM_THREADS: "1"
+    command: ["celery", "-A", "nassakh", "worker", "-Q", "default,layout,export", "-c", "${WORKER_CONCURRENCY:-2}",
+              "--max-tasks-per-child", "100", "-n", "cpu@%h", "-l", "info"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # The OCR queue: one solo process, so the two models are loaded once and stay in memory
+  # (about 9 GB; OCR_SECONDARY=qari_v03 in deploy/.env.local keeps one model, about 5 GB).
+  gpu-worker:
+    <<: *app
+    command: ["celery", "-A", "nassakh", "worker", "-Q", "gpu", "-P", "solo", "-c", "1", "-n", "gpu@%h", "-l", "info"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  # The MCP server (D108): Streamable HTTP at http://localhost:8001/mcp.
+  mcp:
+    <<: *app
+    command: ["python", "manage.py", "mcp_serve", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nassakh
+      POSTGRES_PASSWORD: nassakh
+      POSTGRES_DB: nassakh
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U nassakh -d nassakh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+# `down` keeps these; `down -v` deletes the database, the books and the downloaded models.
+volumes:
+  pgdata:
+  redisdata:
+  media:
+  models:
+  static:
