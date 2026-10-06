@@ -54,10 +54,9 @@ Written after the first deploy and a full test of the user journey on the live s
 | **Reboot of the server** | all seven services healthy again 16 s after boot with no action; data, firewall, cron intact |
 | Logs of all services after the run | no errors (only a transient Caddy line while `web` restarted during a deploy) |
 
-GPU spend for the test: **61.6 GPU-minutes** (1 h cap, stopped automatically by purging the `gpu` queue; in-flight
-pages finished), about **$0.70** at the 24 GB tier price. The remaining **18 pages** (in «شرح الورقات للمحلي»,
-«الإهابة…» and the end of «الورقات») stay unread; reading them is «إعادة المعالجة» on those books, about 9 more GPU
-minutes.
+GPU use for the test was capped at one GPU hour and stopped automatically by purging the `gpu` queue (in-flight
+pages finished). The remaining **18 pages** (in «شرح الورقات للمحلي»,
+«الإهابة…» and the end of «الورقات») stay unread; reading them is «إعادة المعالجة» on those books.
 
 ## 4. Problems found on the first run, and what was done
 
@@ -102,9 +101,8 @@ Give pages to an account: «الفوترة» in the sidebar (superuser). Test co
    of scanned page images and anything in `.env`-like files, push, make the repository public (the demo scans and the
    bundle are outside the repository by design).
 3. **Test accounts and data**: decide whether to keep `tester1`/`tester2` (see §2).
-4. **Real connectors.** The MCP works with the secret URL and the Bearer header from a plain client. Connecting Claude
-   and ChatGPT from their own settings pages was not tested (it needs your accounts): paste the secret URL from
-   «ربط مساعد» in Claude's Connectors (Add custom connector) and in ChatGPT's Developer mode.
+4. **Real connectors: done on 6 Oct.** The owner connected Claude and ChatGPT from their own settings pages with the
+   secret URL from «ربط مساعد»; both work.
 5. **Hostinger.** Turn auto-renew off if you want to stop after the month; take a snapshot once the email is set up;
    raise `SECURE_HSTS_SECONDS` (now 3600) when you are sure the domain stays HTTPS-only.
 6. **Disk**: the Docker build cache is 10 GB; `docker builder prune -f` now and then.
@@ -112,6 +110,6 @@ Give pages to an account: «الفوترة» in the sidebar (superuser). Test co
 
 ## 7. Not tested
 
-Sending real email; Claude/ChatGPT web connectors; many people at once (the server was checked with one user and
+Many people at once (the server was checked with one user and
 6 books processing together: web 0.4 GB, worker about 1.2 GB, CPU saturated only by the Tesseract pass before the fix);
 a PDF upload near the 500 MB limit; an organisation with several members (no invitation flow exists yet).
