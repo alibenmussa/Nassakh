@@ -6,4 +6,4 @@
 | [nassakh-presentation.pdf](nassakh-presentation.pdf) | العرض التقديمي (18 شريحة) في قالب التحدي. |
 | [nassakh-presentation.pptx](nassakh-presentation.pptx) | العرض نفسه بصيغة PowerPoint. |
 
-التسجيل في الفيديو تم على حساب التجربة المذكور في [README](../README.md) (`video@nassakh.tech`).
+سُجّل الفيديو على حساب التجربة المذكور في [README](../README.md). كان بريده يومها `video@nassakh.tech`، وصار `islamicaich@nassakh.tech`، وكلمة المرور نفسها.

@@ -2,7 +2,7 @@
 
 Three processed books (dev ids 29, 31, 41) were moved from the developer's Mac to the server this way; they are
 the measurement set of `CHALLENGE_RESULTS.md`, in their own account. The judges' test account
-(`video@nassakh.tech`, see the top-level `README.md`) is a separate account whose books were processed on the
+(`islamicaich@nassakh.tech`, see the top-level `README.md`) is a separate account whose books were processed on the
 server. A book travels with
 everything the app shows for it: pages and their images, regions, the reviewed lines, the OCR runs, the review
 history, the assembly runs, the manuscript and its saved versions, the format (with its organisation face and

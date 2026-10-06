@@ -12,7 +12,7 @@
 | الموقع الحي | https://nassakh.tech |
 | الفيديو (1:59) | [deliverables/nassakh-demo-video.mp4](deliverables/nassakh-demo-video.mp4) |
 | العرض التقديمي | [deliverables/nassakh-presentation.pdf](deliverables/nassakh-presentation.pdf) |
-| حساب التجربة: البريد | `video@nassakh.tech` |
+| حساب التجربة: البريد | `islamicaich@nassakh.tech` |
 | حساب التجربة: كلمة المرور | `Nk-yimxMr2D2tjv5g` |
 | المؤسسة | «دار المخطوطات» |
 | الرصيد | 100 صفحة، بقي منها 73 صفحة في 6 أكتوبر 2026. لا سحب على المكشوف. |
@@ -461,7 +461,7 @@ deliverables/ مخرجات التسليم: فيديو العرض، والعرض 
 
 Nassakh turns scanned printed Arabic books (PDF) into reviewed text. Every word is linked to its place on the page image. Publishers export a new edition from that text. Researchers and AI assistants search it, check quotations and go back to the printed page.
 
-- **Live site:** https://nassakh.tech. Test account: `video@nassakh.tech`, password `Nk-yimxMr2D2tjv5g` (shared; please do not delete the books). Video: [deliverables/nassakh-demo-video.mp4](deliverables/nassakh-demo-video.mp4). Slides: [deliverables/nassakh-presentation.pdf](deliverables/nassakh-presentation.pdf).
+- **Live site:** https://nassakh.tech. Test account: `islamicaich@nassakh.tech`, password `Nk-yimxMr2D2tjv5g` (shared; please do not delete the books). Video: [deliverables/nassakh-demo-video.mp4](deliverables/nassakh-demo-video.mp4). Slides: [deliverables/nassakh-presentation.pdf](deliverables/nassakh-presentation.pdf).
 - **Built before the challenge** (tag `challenge-baseline-2026-10-03`, commit `4ae7737`, [docs/challenge/CHALLENGE_BASELINE.md](docs/challenge/CHALLENGE_BASELINE.md)): the six stages from scan to book (layout, OCR with Qari v0.3 and v0.2 on Qwen2-VL plus Tesseract and Kraken, human review, assembly, book layout, export to print PDF, screen PDF, Word and EPUB).
 - **Built on 4 to 6 October 2026** (25 commits after the tag): open sign-up for organisations and individuals with email confirmation and admin-managed page credits (`accounts/`); search and quotation checking over the reviewed text with four answers (exact, differs, needs image check, not found), the printed page and a signed link to the highlighted lines, and a warning when an editor's note is attributed to the author (`research/`); a read-only MCP server with five tools (`research/mcp_server.py`), tested with Claude and ChatGPT; deployment with Docker Compose on one VPS (`deploy/`); an evaluation against plain substring search; a landing page; two verified local-run paths.
 - **Results** ([docs/challenge/CHALLENGE_RESULTS.md](docs/challenge/CHALLENGE_RESULTS.md)): on three books (569 pages), correctly retyped quotations accepted 100% (Ctrl+F: 0%); altered words found and located 100%; misattribution caught 100%; false accusation at doubtful OCR readings 0.6% (100% without that feature); unrelated text answered "not found" 99.4% (Ctrl+F: 100%). Limits: synthetic quotations cut from the same OCR text, three books, no human-labelled set.
