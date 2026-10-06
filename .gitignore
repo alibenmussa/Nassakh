@@ -69,3 +69,6 @@ playground/**/*.webp
 playground/**/*.tif
 playground/**/*.tiff
 playground/**/*.pdf
+
+# Local, never published: business notes, pricing, plans for the SaaS after the challenge
+private/
