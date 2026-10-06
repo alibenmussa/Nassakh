@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv-kraken/
+.venv*/
 *.egg-info/
 build/
 .pytest_cache/
@@ -16,12 +17,13 @@ staticfiles/
 
 # Production (docs/DEPLOY.md): the server's secrets, and the nightly database dumps next to the clone
 deploy/.env.production
-/backups/
+backups/
 
-# IDE / OS
+# IDE / OS / assistant tools (Claude Code keeps its sessions, worktrees and memory in .claude/)
 .idea/
 .vscode/
 .DS_Store
+.claude/
 
 # Node
 node_modules/
@@ -41,7 +43,7 @@ playground/poc/regions/
 models/
 
 # The Runpod worker of the Qari models: its own repository (alibenmussa/nassakh-qari-worker), cloned here
-workers/qari/
+workers/
 
 # Digits experiment: environments, models, crops and intermediate files (the scripts, labels, results and
 # REPORT.md are kept; crops/ and sheets/ are rebuilt by collect.py from the database)
@@ -58,3 +60,12 @@ playground/digits/results_lines_*.json
 playground/digits/*.err
 playground/ux/
 playground/phase7/*.jsonl
+
+# Images and PDFs of book pages are never committed: the books are under copyright (playground/README.md).
+playground/**/*.png
+playground/**/*.jpg
+playground/**/*.jpeg
+playground/**/*.webp
+playground/**/*.tif
+playground/**/*.tiff
+playground/**/*.pdf

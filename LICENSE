@@ -1,0 +1,69 @@
+Nassakh (نسّاخ) — Source-Available Licence
+
+Copyright (c) 2026 Ali Ben Mussa. All rights reserved.
+
+ملخص بالعربية
+-------------
+- الشفرة منشورة للاطلاع. هي ليست مفتوحة المصدر (open source).
+- يجوز لك أن تقرأ الشفرة، وأن تشغّلها على جهازك أو على خادم تجربة للتقييم والمراجعة والتعلّم.
+- لجنة تحدي الذكاء الاصطناعي في خدمة المحتوى الإسلامي تستعمل الشفرة وفق ترخيص التقييم في شروط التحدي.
+- لا يجوز بغير إذن مكتوب: الاستعمال التجاري، أو تقديم نسّاخ خدمةً مستضافة (hosted service) لغيرك، أو إعادة نشر
+  الشفرة أو نسخة معدّلة منها.
+- المكوّنات الخارجية تبقى تحت رخصها. انظر docs/THIRD_PARTY_LICENSES.md.
+- الشفرة تُقدَّم كما هي، بلا ضمان.
+- النص الإنجليزي أدناه هو النص المعتمد.
+
+1. Scope
+--------
+This licence covers the source code, documentation and other files in this repository that Ali Ben Mussa
+("the owner") wrote. It does not cover third-party components. Section 5 explains them.
+
+2. What you may do
+------------------
+You may, free of charge:
+
+a. read and study the source code;
+b. run the software on your own computer, or on a test server that you control, to evaluate it, review it or
+   learn from it;
+c. make changes for these purposes, and keep them private.
+
+The organisers and judges of the Islamic AI Challenge 2026 may also use the software under the evaluation
+licence in the challenge terms. Those terms apply to them in addition to this licence.
+
+3. What you may not do without written permission
+-------------------------------------------------
+You need the owner's written permission to:
+
+a. use the software, or any part of it, for a commercial purpose;
+b. offer the software, or a service built on it, to other people as a hosted or online service;
+c. publish, distribute, sell or sublicense the code, in its original form or as a modified version.
+
+A short quotation of the code in a review, an article or a discussion is not a redistribution. Give the source.
+
+To ask for permission, contact the owner through the repository.
+
+4. Ownership
+------------
+The owner keeps all rights that this licence does not grant. Nothing in this licence transfers ownership.
+Your changes do not give you rights in the owner's code.
+
+5. Third-party components
+-------------------------
+The software uses third-party libraries, models, fonts and services. Each one keeps its own licence and its
+owner's rights. The list and the licences are in docs/THIRD_PARTY_LICENSES.md. If this licence and a
+third-party licence disagree about that component, the third-party licence applies to that component.
+
+6. Content
+----------
+This licence does not cover books, page images or texts that users upload or process with the software.
+Their rights stay with their owners.
+
+7. No warranty
+--------------
+The software is provided "as is", without any warranty of any kind, express or implied. This includes
+warranties of fitness for a purpose and of accuracy of the text that the software reads. The owner is not
+liable for any claim, damage or loss that comes from the software or from its use.
+
+8. End of the permission
+------------------------
+If you break this licence, your permission under it ends at once.

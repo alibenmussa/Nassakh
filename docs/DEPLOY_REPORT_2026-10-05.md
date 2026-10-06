@@ -8,7 +8,7 @@ Written after the first deploy and a full test of the user journey on the live s
 | | |
 |---|---|
 | Address | https://nassakh.tech (also `www`, redirected to the bare domain), Let's Encrypt certificate valid to 3 Jan 2027, HTTP/3 on |
-| Server | Hostinger KVM 4: 4 vCPU, 15 GB RAM, 193 GB disk (11 % used), Ubuntu 26.04.1, x86_64, Docker 29.8.2, Compose 5.6.0, IP 187.7.65.46 |
+| Server | Hostinger KVM 4: 4 vCPU, 15 GB RAM, 193 GB disk (11 % used), Ubuntu 26.04.1, x86_64, Docker 29.8.2, Compose 5.6.0, IP `<server IP>` |
 | Stack (`/opt/nassakh`) | `caddy`, `web` (gunicorn 3×2), `worker` (cpu, 3 processes), `gpu-worker` (RunPod, 3 threads), `mcp`, `postgres:17`, `redis:7`; `init` runs migrations once per deploy. All healthy. |
 | OCR | `OCR_BACKEND=runpod`, endpoint worker 0.1.2 (RTX PRO 6000 MIG 24 GB tier), Kraken and Tesseract run on the server's CPU |
 | Landing page | `/` for visitors who are not signed in (the chain with two sides, the four quotation answers, MCP assistants, rights); signed-in users still go to the books. Checked at 1280 and 500 px on the live site. |
@@ -21,7 +21,7 @@ Written after the first deploy and a full test of the user journey on the live s
 
 ## 2. Accounts on the server
 
-- Superuser `alibenmussa@gmail.com` (login is by email only, any case).
+- Superuser `<superuser email>` (login is by email only, any case).
 - **Demo account** «حساب التجربة» (`demo@nassakh.tech`, unlimited) with the three books over 100 pages: «ولاة طرابلس»
   (294 p), «مختصر صحيح البخاري» (120 p), «تاريخ ليبيا العام» (196 p). Imported from the bundle made on the Mac
   (`docs/DEMO_DATA.md`), manuscripts re-assembled first so the dashboard shows no stale pages.
@@ -78,7 +78,7 @@ minutes.
 ## 5. How to operate it
 
 ```sh
-ssh -i ~/.ssh/nassakh_vps -p 22022 ubuntu@187.7.65.46
+ssh -i ~/.ssh/nassakh_vps -p 22022 ubuntu@<server IP>
 cd /opt/nassakh
 docker compose ps                      # everything should say healthy
 docker compose logs -f web             # or worker, gpu-worker, mcp, caddy
