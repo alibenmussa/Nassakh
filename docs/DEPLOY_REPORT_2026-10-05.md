@@ -12,7 +12,7 @@ Written after the first deploy and a full test of the user journey on the live s
 | Stack (`/opt/nassakh`) | `caddy`, `web` (gunicorn 3×2), `worker` (cpu, 3 processes), `gpu-worker` (RunPod, 3 threads), `mcp`, `postgres:17`, `redis:7`; `init` runs migrations once per deploy. All healthy. |
 | OCR | `OCR_BACKEND=runpod`, endpoint worker 0.1.2 (RTX PRO 6000 MIG 24 GB tier), Kraken and Tesseract run on the server's CPU |
 | Landing page | `/` for visitors who are not signed in (the chain with two sides, the four quotation answers, MCP assistants, rights); signed-in users still go to the books. Checked at 1280 and 500 px on the live site. |
-| Mail | **console backend**: confirmation emails are printed in `docker compose logs web`. Not sent. See §6. |
+| Mail | **Resend** (free plan) over SMTP `smtp.resend.com:587`, sender `نسّاخ <no-reply@nassakh.tech>`; domain verified (DKIM, SPF via `send`/`rsend` CNAMEs, DMARC `p=none`); delivery to Gmail confirmed by the owner on 6 Oct |
 | Access | SSH key only, port 22022, no root login, no passwords; ufw allows 22022, 80, 443; fail2ban on sshd |
 | Code | deployed commit is the newest on the `vps` remote (a private bare repo on the server; GitHub is not involved yet) |
 | Backups | nightly 02:30 `deploy/backup.sh all` (database dump, 7 kept, weekly media archive); a dump is also taken before every deploy |
@@ -93,7 +93,7 @@ Give pages to an account: «الفوترة» in the sidebar (superuser). Test co
 
 ## 6. What is still yours
 
-1. **Email.** Until an SMTP service is set, nobody can confirm a sign-up by email (the link is only in the server log).
+1. **Email: done on 6 Oct** (Resend, see §1). The original note follows for reference: until an SMTP service is set, nobody can confirm a sign-up by email (the link is only in the server log).
    Create an account at Brevo or Resend, add the domain's DNS records they give (SPF, DKIM) in Hostinger, then set
    `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL` in
    `deploy/.env.production` and run `bash deploy/deploy.sh --no-pull`. Outgoing SMTP ports from the Hostinger VPS were
