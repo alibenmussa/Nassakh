@@ -193,7 +193,7 @@ document.addEventListener('alpine:init', () => {
     },
   }));
 
-  // ---------------------------------------------------------------- book dashboard (docs/DASHBOARD_SPEC.md)
+  // ---------------------------------------------------------------- book dashboard (docs/baseline/DASHBOARD_SPEC.md)
   // Two views (D25): «صفحات» stacks static sheet shells whose bodies mount near the viewport and become
   // NassakhDecode.sheet handles (scan + mirrored text pane); «شبكة» shows static tiles. Both are patched from
   // the compact progress poll (no per-page Alpine bindings, no reload at the end of processing).

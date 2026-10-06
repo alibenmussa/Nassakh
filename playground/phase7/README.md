@@ -1,6 +1,6 @@
 # Phase 7 design evidence (2026-09-26)
 
-The working material behind docs/PHASE7_SPEC.md, copied from the session's scratchpad (which does not survive a
+The working material behind docs/baseline/PHASE7_SPEC.md, copied from the session's scratchpad (which does not survive a
 reboot):
 - LAYOUT_DESIGN_FINAL.md — «التخطيط» first, then «المعالجة» (the owner's request);
 - roundtrip_design.md (+ roundtrip_design_notes.md) — the safe round trip, the stage bar, one keymap, names, readiness;

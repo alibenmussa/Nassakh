@@ -167,7 +167,7 @@ class TextGap(models.Model):
 
 class RemoteCall(models.Model):
     """One request to the Runpod endpoint that reads with the Qari models (OCR_BACKEND=runpod,
-    docs/RUNPOD_SPEC.md): the API log in Django admin.
+    docs/baseline/RUNPOD_SPEC.md): the API log in Django admin.
 
     What was asked (never the image), how long Runpod kept it in its queue and on the GPU, what came back
     (never the text) and why it failed. `ocr.runpod` writes the row when the request leaves and completes it

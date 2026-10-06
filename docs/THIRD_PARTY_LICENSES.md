@@ -14,14 +14,12 @@
 
 إذا اختلف إصدار مثبّت عن هذا السجل، فالمرجع بيانات الحزمة نفسها.
 
-## تنبيه للمالك: مكوّنات AGPL-3.0 (known issue)
+## مكوّنات برخصة AGPL-3.0
 
-PyMuPDF وEbookLib تحت رخصة AGPL-3.0. هذه الرخصة تطلب أن يحصل كل من يستعمل البرنامج عبر الشبكة على الشفرة المصدرية الكاملة للبرنامج الذي يجمعها، تحت AGPL-3.0.
-لذلك تحتاج خدمة مستضافة مغلقة الشفرة إلى رخصة Artifex التجارية لـ PyMuPDF وإلى بديل عن EbookLib (أو إذن من مؤلفيها)، وإلا فعليها نشر شفرتها كلها تحت AGPL-3.0.
+- **PyMuPDF** (الإصدار 1.28.2) تحت رخصة AGPL-3.0، أو رخصة Artifex التجارية. نسّاخ يستعملها في قراءة ملفات PDF المرفوعة وتحويل صفحاتها إلى صور (`books/services.py`)، وقراءة طبقة النص في ملفات PDF الرقمية (`ocr/engines/pdf_text.py`)، وصور معاينة الصفحات (`publishing/preview.py`، `publishing/relayout.py`)، وإدراج الغلاف في مخرج PDF (`publishing/cover.py`، `publishing/pdf_export.py`).
+- **EbookLib** (الإصدار 0.20) تحت رخصة AGPL-3.0-or-later. نسّاخ يستعملها في إخراج EPUB (`publishing/epub.py`).
 
-The same note in English: PyMuPDF and EbookLib are AGPL-3.0. A closed, paid hosted service that imports them must
-either buy Artifex's commercial licence for PyMuPDF and replace EbookLib (or get its authors' permission), or publish
-the complete source of the service under AGPL-3.0. The live site today runs with both libraries.
+شفرة نسّاخ متاحة للاطلاع والتقييم، وجميع الحقوق محفوظة (`LICENSE`). المكتبتان أعلاه برخصة AGPL-3.0: PyMuPDF لقراءة ملفات PDF، وEbookLib لإخراج EPUB، وتعمل بهما هذه النسخة والموقع الحي. وسنستبدلهما قبل أي خدمة تجارية مغلقة: pypdfium2 (Apache-2.0 / BSD-3) بدل PyMuPDF، ومولّد EPUB خاص بنسّاخ بدل EbookLib.
 
 مكوّنات أخرى بشرط مشاركة (copyleft) أخف:
 

@@ -182,7 +182,7 @@ bash deploy/deploy.sh --no-pull
 
 (The email is the login. To make another superuser later: `docker compose exec web python manage.py createsuperuser`.)
 
-*The demo books* (`export_demo_bundle` on the Mac makes a bundle; `docs/DEMO_DATA.md`): copy the bundle's folder to
+*The demo books* (`export_demo_bundle` on the Mac makes a bundle; `docs/challenge/DEMO_DATA.md`): copy the bundle's folder to
 the server and import it in a throw-away container that shares the media volume. From your Mac:
 
 ```sh
@@ -194,7 +194,7 @@ On the server (the password is the demo user's; the command's `--help` lists the
 ```sh
 cd /opt/nassakh
 docker compose run --rm -v /home/ubuntu/demo-bundle:/bundle:ro web \
-    python manage.py import_demo_bundle --bundle /bundle --email demo@nassakh.tech --password '<PASSWORD>'
+    python manage.py import_demo_bundle --bundle /bundle --email demo@example.org --password '<PASSWORD>'
 ```
 
 Take a Hostinger snapshot before importing real books (§12).

@@ -1,4 +1,4 @@
-// Manuscript view (Phase 4, docs/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22).
+// Manuscript view (Phase 4, docs/baseline/PHASE4_SPEC.md §4.2): where the owner verifies the assembly (D22).
 //   manuscriptView(config) – the view: polling while a run is on (the steps ticking, the reveal), the document
 //                            swapped in place after re-runs (scroll anchored, focus restored, changed blocks
 //                            flashing), the block «⋯» and its menu, the seam menu, the footnote popover, the

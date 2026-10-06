@@ -1,4 +1,4 @@
-"""Move finished books from one Nassakh database to another: the demo bundle (docs/DEMO_DATA.md).
+"""Move finished books from one Nassakh database to another: the demo bundle (docs/challenge/DEMO_DATA.md).
 
 `export_bundle` writes a directory with everything the app shows for some books; `import_bundle` reads it
 into another database as a copy that belongs to one account. The two management commands

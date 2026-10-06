@@ -1,4 +1,4 @@
-"""The Runpod endpoint against the readings stored for a book (docs/RUNPOD_SPEC.md §8, the gate before
+"""The Runpod endpoint against the readings stored for a book (docs/baseline/RUNPOD_SPEC.md §8, the gate before
 OCR_BACKEND=runpod becomes the default):
 
     manage.py runpod_compare --book ID [--pages 1-5,9] [--max-regions N] [--price-per-second P] [--json FILE]

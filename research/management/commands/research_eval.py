@@ -9,7 +9,7 @@ back: the data is not changed (a stale index may be refreshed). Cases come from 
 same seed gives the same cases. Logic in `research.evaluation`, the page in `research.eval_report`.
 
     manage.py research_eval --books 29 31 41 --absent-books 33 34 35 36 37 38 --seeds 3 --n 60 \\
-        --out docs/CHALLENGE_RESULTS.md --json /tmp/research_eval.json
+        --out docs/challenge/CHALLENGE_RESULTS.md --json /tmp/research_eval.json
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class Command(BaseCommand):
         )
         parser.add_argument("--seeds", type=int, default=defaults.seeds, help="seeds 1..N (default 3)")
         parser.add_argument("--n", type=int, default=defaults.n, help="cases per class per seed (default 60)")
-        parser.add_argument("--out", default="docs/CHALLENGE_RESULTS.md", help="the results page (Markdown)")
+        parser.add_argument("--out", default="docs/challenge/CHALLENGE_RESULTS.md", help="the results page (Markdown)")
         parser.add_argument("--json", default=None, help="also write every number as JSON to this path")
         parser.add_argument("--no-repeat", action="store_true", help="skip running the first seed twice")
         parser.add_argument(

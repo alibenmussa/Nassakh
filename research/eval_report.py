@@ -489,7 +489,7 @@ def render(report: dict, findings: str | None = None) -> str:
     absent = " ".join(str(b) for b in meta["absent_books"])
     command = (
         f".venv/bin/python manage.py research_eval --books {books} --absent-books {absent} "
-        f"--seeds {len(meta['seeds'])} --n {meta['n']} --out docs/CHALLENGE_RESULTS.md "
+        f"--seeds {len(meta['seeds'])} --n {meta['n']} --out docs/challenge/CHALLENGE_RESULTS.md "
         "--json /tmp/research_eval.json"
     )
     sections = [

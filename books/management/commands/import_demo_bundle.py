@@ -2,7 +2,7 @@
 [--dry-run]`.
 
 Reads a bundle made by `export_demo_bundle` into this database as the books of the demo account
-(`books.bundle`, docs/DEMO_DATA.md): the account (an organisation, unlimited) and its user (the email is the
+(`books.bundle`, docs/challenge/DEMO_DATA.md): the account (an organisation, unlimited) and its user (the email is the
 login; the account's admin, in the `editor` group) are created or found; every row gets a fresh primary key;
 the files go to `MEDIA_ROOT/books/<new id>/`; the search index of the new books is built at the end. All
 in one transaction, with the files removed again when anything fails. A book already in the account (same

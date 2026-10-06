@@ -164,7 +164,7 @@ Owner decision. Each text group (body, footnotes) is a flex column with space-be
 geometry (final line boxes, else Tesseract line boxes, else detected boxes, else the region), font size derived
 from the median line height of the page, justified with `text-align-last: start`, shrink-to-fit so the column
 never scrolls. Both panes share one line index, so hovering a text line lights its box on the scan and back.
-Spec: `docs/DASHBOARD_SPEC.md`.
+Spec: `docs/baseline/DASHBOARD_SPEC.md`.
 
 ## D30 — One type size per text group; lines fit by word spacing; paragraph edges shared (2026-09-24)
 Owner feedback: lines of one page showed different font sizes, and full lines with nearly equal widths should
@@ -174,7 +174,7 @@ never per line. Lines fit the way print does: justified word spacing, then up to
 horizontal condense down to 90 %, then an end fade. Line edges within 3 % of the text width snap to the
 paragraph's shared edge; indented first lines, headings and short last lines keep their shape. The scan keeps
 the true boxes. Across pages, the book's median line height (`book_line_h_px` in `api:book_sheets`) sets the
-size when a page agrees within ±20 %. Spec: `docs/DASHBOARD_SPEC.md` §4.6.
+size when a page agrees within ±20 %. Spec: `docs/baseline/DASHBOARD_SPEC.md` §4.6.
 
 ## D31 — Paragraph first lines keep their indent; reviewers can merge and delete words (2026-09-24)
 Owner feedback. (1) On the dashboard, a paragraph's first line is detected by a finer start-edge tolerance
@@ -254,7 +254,7 @@ a line that still looks merged gets the attention flag «سطران مطبوعا
 this to existing pages from their stored runs without calling a model, skipping pages with any review edit.
 
 ## D40–D46 — Phase 5: editor, stylesheet, real-page preview (2026-09-25)
-Owner decisions, detailed in `docs/PHASE5_SPEC.md` §0: one chapter edited at a time (D40); after the first editor save
+Owner decisions, detailed in `docs/baseline/PHASE5_SPEC.md` §0: one chapter edited at a time (D40); after the first editor save
 the manuscript is the source of truth and review drift is resolved per chapter (D41); WeasyPrint renders pages behind
 one engine interface, never the browser (D42); one neutral book model feeds the HTML/PDF renderer now and the Word
 renderer first in Phase 6, EPUB after (D43); footprint rendered in the background and cached by hash (D44); trim
@@ -338,7 +338,7 @@ read (the page row locked as review does; `left_to_reviewer` in the run's params
 split off a number («2 ه» for «٥٢», «4 ه ق» for «٥٥٤ ق») gets its digit but stays a separate word.
 
 
-## D52–D61 — Phase 6: export, Word first (2026-09-26; details and reasons in docs/PHASE6_SPEC.md §0)
+## D52–D61 — Phase 6: export, Word first (2026-09-26; details and reasons in docs/baseline/PHASE6_SPEC.md §0)
 - **D52** Phase 6 in three steps: 6a the export history, the export page and Word; 6b PDF for print and screen as real
   exports; 6c EPUB 3. On the owner's go (§15.1) all three are built in one run.
 - **D53** Nassakh writes the .docx itself (lxml + zipfile, every part in schema order); python-docx only reads files
@@ -383,7 +383,7 @@ Tesseract pass for low-resolution scans (measured worse alone).
   page worse than before D63, D63's geometry kept (book 22: 1,171 right word boxes of 1,298); of the 253 numbers whose
   reading changed on books 19 and 20, 124 are now right against 42 before D63.
 
-## D64–D79 — Phase 7: «التخطيط» first, then «المعالجة»; a safe round trip; trust (2026-09-26; details in docs/PHASE7_SPEC.md §0)
+## D64–D79 — Phase 7: «التخطيط» first, then «المعالجة»; a safe round trip; trust (2026-09-26; details in docs/baseline/PHASE7_SPEC.md §0)
 Approved by the owner on 2026-09-26 ("start with Phase 7 … do the full plan"), with all five questions of §12 answered
 as recommended: the PDF text layer reversed for Chrome/Firefox (one rule, both PDFs, Arabic entries only); flag policy
 v2; unreviewed pages stay in «تجميع المخطوطة» with their count on the button (D35 kept); the moved keys; the names.
@@ -399,7 +399,7 @@ v2; unreviewed pages stay in «تجميع المخطوطة» with their count on
   an edited book; D79 «تصحيح في كل الكتاب».
 - 7d (D81+) is designed after 7c.
 
-## D80 — The cover: a separate page, four modes, in every output (2026-09-27, `docs/COVER_SPEC.md`)
+## D80 — The cover: a separate page, four modes, in every output (2026-09-27, `docs/baseline/COVER_SPEC.md`)
 
 The owner asked for a cover page that is its own page: generated from the book details, an image (fit width, fit
 height or filling the page) or custom text (a centre block and a bottom block), or none. It is rendered alone (one
@@ -414,7 +414,7 @@ restarting at 1; the EPUB has `cover.xhtml` first and the rasterised cover as it
 will reuse. Readiness warns of a missing cover image and of a low resolution.
 
 ## D82 — A misread footnote call is linked to the note it can only be; a year at a note line's start is not a marker (2026-09-28)
-On book 29 («ولاة طرابلس», 294 pages, 114 notes) 63 notes were orphans (`docs/FULLBOOK_TEST_2026-09-28.md`, finding 1):
+On book 29 («ولاة طرابلس», 294 pages, 114 notes) 63 notes were orphans (`docs/baseline/FULLBOOK_TEST_2026-09-28.md`, finding 1):
 the small raised «(١)» of a call comes out of the models as an alef «(ا)» / «(أ)» (12, three glued to the word:
 «أرطاة(ا)»), a quote stroke «(”)» (5), empty brackets «( )» (8), a number with a «١» hung on it, «(١١)» «(٢١)» for
 (١) (٢) (9), or nothing at all (27). Three linker rules in `assembly.pipeline`, each conservative: a call that has its
@@ -434,7 +434,7 @@ false notes 2 → 0, 30 repaired links; the empty-bracket and quote-stroke links
 132, 160, 181, 205, 214: a raised «(١)» or «(٢)» every time). What is left are calls the models dropped altogether:
 those are read from the ink (D83, the call pass), not guessed by the linker.
 
-## D83 — The call pass: the raised «(١)» of a footnote call is read from the ink by Kraken (2026-09-28, `docs/NOTE_CALLS_SPEC.md`)
+## D83 — The call pass: the raised «(١)» of a footnote call is read from the ink by Kraken (2026-09-28, `docs/baseline/NOTE_CALLS_SPEC.md`)
 After D82 book 29 still had 31 orphan notes, mostly calls no model wrote at all: the small raised «(١)» is a third of the
 line's height and sits above the x-height, and Qari and Tesseract skip it or box it into the neighbouring word. Like the
 numbers pass (D50) the call pass (`ocr.calls`, run at the end of the `read_numbers` task, `manage.py read_calls
@@ -1153,7 +1153,7 @@ doubtful OCR reading (the other model's reading), and not in the books. It runs 
 non-superuser member of an account holding exactly those books (a temporary organisation, user and book move in a
 rolled-back transaction), beside a raw substring search (Ctrl+F, the named alternative), a normal-form search and the
 checker with its doubt switched off. It reports mean and range over 3 seeds, repeatability, speed and index size to
-`docs/CHALLENGE_RESULTS.md` and JSON. Result on books 29, 31, 41: 100% of correctly retyped quotations accepted
+`docs/challenge/CHALLENGE_RESULTS.md` and JSON. Result on books 29, 31, 41: 100% of correctly retyped quotations accepted
 (Ctrl+F: 0%), altered words flagged and located in 100%, misattribution caught in 100% (the searches: 0%), accusation
 at doubtful OCR readings 0.6% (without the doubt feature: 100%), identical answers on re-running a seed. It loses to
 plain search on short absent quotations (6% wrongly matched at 4–5 words) and a 4-of-11 word replacement falls under

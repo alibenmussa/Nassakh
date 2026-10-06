@@ -16,7 +16,7 @@ printed with Arabic-Indic digits (`read_page_calls`, after the numbers pass, D50
 4. The token is written back («(N)», Kraken's, low, `call: true`; `apply_token`, `insert_call`), the
    line's text and suggestions follow (`ocr.numbers.token_moves`), one `OcrRun` records the page.
 
-`docs/NOTE_CALLS_SPEC.md` has the design; pure functions first, the service does the I/O.
+`docs/baseline/NOTE_CALLS_SPEC.md` has the design; pure functions first, the service does the I/O.
 """
 
 from __future__ import annotations

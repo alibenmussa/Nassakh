@@ -620,7 +620,7 @@ with Amiri disabled in Font Book, the contents field…) and a 5-minute referenc
 
 ## 14. Phase 7a — «التخطيط» first, then «المعالجة»
 
-Spec `docs/PHASE7_SPEC.md` §3, decisions D64–D70.
+Spec `docs/baseline/PHASE7_SPEC.md` §3, decisions D64–D70.
 
 **Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`books.0007_book_awaits_ocr_start`:
 the pause flag and the new labels; `processing.0004_labels`: labels only; no data change) and `npm run build`, then start
@@ -693,7 +693,7 @@ for all pages, a reset or an undo), `book_guides_preview` (POST), `page_guides_o
 
 ## 15. Phase 7b — trust in the text: reasons, the vote, the second reading, roles
 
-Spec `docs/PHASE7_SPEC.md` §4, decisions D71–D75.
+Spec `docs/baseline/PHASE7_SPEC.md` §4, decisions D71–D75.
 
 **Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`ocr.0004_roles_textgap`: the
 line roles «شعر», «حاشية», «محتوى» and the table `ocr.TextGap`; `review.0004_revision_batch_gap`: `LineRevision.batch`
@@ -841,7 +841,7 @@ looped reading (that start now counts as a second reading); `tesseract`: a regio
 
 ## 16. Phase 7c — the stage bar, review's origin, the page-by-page merge, fix everywhere
 
-Spec `docs/PHASE7_SPEC.md` §5, decisions D76–D79.
+Spec `docs/baseline/PHASE7_SPEC.md` §5, decisions D76–D79.
 
 **Upgrading.** Stop both workers (`make worker`, `make gpu-worker`), then `make migrate` (`editor.0005_base_changes_plan`:
 `Manuscript.base`, `ManuscriptSnapshot.base` and the table `editor_changesplan`; `review.0005_revision_fix`: the action
@@ -1018,7 +1018,7 @@ stays: with unreviewed pages included the convert button reads «تجميع مع
 
 ## 18. Qari on Runpod (`OCR_BACKEND=runpod`)
 
-Spec `docs/RUNPOD_SPEC.md`. The two Qari models run on a Runpod Serverless GPU, through the endpoint of
+Spec `docs/baseline/RUNPOD_SPEC.md`. The two Qari models run on a Runpod Serverless GPU, through the endpoint of
 `nassakh-qari-worker` (its own repository, `alibenmussa/nassakh-qari-worker`). Everything else stays on this
 machine: Tesseract, Kraken, the alignment, the footnotes. **Not the default:** keep `mlx` or `torch` until the
 measurements below pass.
@@ -1163,7 +1163,7 @@ is the solo process again.
 
 ## 19. Accounts, sign-up and the page quota (D106)
 
-Spec `docs/CHALLENGE_SPEC.md` §1. An account is an organisation or an individual (an organisation of one member,
+Spec `docs/challenge/CHALLENGE_SPEC.md` §1. An account is an organisation or an individual (an organisation of one member,
 so D102's scoping holds). A page is one page the models read; every account but an unlimited one reads pages
 from its quota.
 

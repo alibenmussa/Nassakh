@@ -1,4 +1,4 @@
-"""The demo bundle (docs/DEMO_DATA.md): a book exported from one organisation and imported into another
+"""The demo bundle (docs/challenge/DEMO_DATA.md): a book exported from one organisation and imported into another
 comes out whole: every row with a fresh key, every id kept inside JSON remapped, the files in the new book's
 folder, the search index built, and nothing half-imported when something fails.
 

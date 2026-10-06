@@ -1,4 +1,4 @@
-"""`manage.py make_demo_account --email … --password … --books 29 31 41` (D106, docs/CHALLENGE_SPEC.md §1).
+"""`manage.py make_demo_account --email … --password … --books 29 31 41` (D106, docs/challenge/CHALLENGE_SPEC.md §1).
 
 Creates (or brings up to date) the organisation «حساب التجربة» (kind organisation, unlimited) and its user
 (the email is the login; active, the organisation's admin, in the `editor` group), then moves the books into

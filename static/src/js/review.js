@@ -2,7 +2,7 @@
 //   reviewScreen(config)  – the whole screen: scan viewer, lines column, popover, autosave, filmstrip
 //   reviewBar             – the top-bar controls (rendered in base.html's header_actions, outside the
 //                           screen's root) reading Alpine.store('review').bar and calling .act(name, arg)
-// Config = review_payload (docs/PHASE3_SPEC.md §4), read from <script id="review-config">.
+// Config = review_payload (docs/baseline/PHASE3_SPEC.md §4), read from <script id="review-config">.
 // Every action is optimistic: the UI changes at once, the POST follows, a failure rolls back and the
 // save chip offers a retry. Undo, approve and page swaps re-render from the payload the server returns.
 // Motion: chrome 120–200 ms; resolution moments ≤ 400 ms; prefers-reduced-motion drops glides and waves.

@@ -1,4 +1,4 @@
-/* Processing theatre (Phase 3, D23–D25 as amended by D28; docs/DASHBOARD_SPEC.md §3–§10): the book dashboard
+/* Processing theatre (Phase 3, D23–D25 as amended by D28; docs/baseline/DASHBOARD_SPEC.md §3–§10): the book dashboard
    chrome (bk-), the mirrored text pane (fac-), the decode effect of the page-detail text panel (.decode) and the
    animated grid cards. The dashboard carries the review screen's vocabulary one to one; shared values are
    duplicated verbatim and marked `= rv-…` for a later unification. Continuous motion lives only on content in a

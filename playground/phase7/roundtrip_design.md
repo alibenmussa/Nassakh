@@ -1,6 +1,6 @@
 # Phase 7 design: the round trip, navigation, the Arabic keyboard, names and defaults, narrow screens
 
-This part covers the UX test's findings (docs/UX_TEST_2026-09-26.md) on:
+This part covers the UX test's findings (docs/baseline/UX_TEST_2026-09-26.md) on:
 - the round trip between review and an edited book (blocker 1);
 - the Arabic keyboard (blocker 3);
 - navigation between stages;

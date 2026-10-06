@@ -14,7 +14,7 @@ everything happens in memory and nothing is written.
 `--report` writes nothing: for every approved page it rebuilds the tokens the reviewer first saw and
 prints, per book and in total, the flags, useful share and catch rate before 7b and under v2 (with and
 without single-reader flags, and as 7b writes them), the suggestions 7b would make, and the pages with
-zero flags but errors (`ocr.report`, docs/PHASE7_SPEC.md §2.4, §4.6). Without books it covers every
+zero flags but errors (`ocr.report`, docs/baseline/PHASE7_SPEC.md §2.4, §4.6). Without books it covers every
 book with an approved page.
 """
 
@@ -63,7 +63,7 @@ class Command(BaseCommand):
             )
         self.stdout.write(
             "rebuild_lines --report (nothing is written): approved pages as the reviewer first saw them "
-            "(docs/PHASE7_SPEC.md §2.4)"
+            "(docs/baseline/PHASE7_SPEC.md §2.4)"
         )
         self.stdout.write(
             "useful = flags the reviewer acted on; caught = errors that were flagged; "

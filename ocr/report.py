@@ -1,4 +1,4 @@
-"""`rebuild_lines --report` (docs/PHASE7_SPEC.md §2.4, §4.6): flag policy v2 measured on reviewed pages.
+"""`rebuild_lines --report` (docs/baseline/PHASE7_SPEC.md §2.4, §4.6): flag policy v2 measured on reviewed pages.
 
 Read-only. For every approved page (`reviewed`, `assembled`) the tokens the reviewer first saw are rebuilt
 from the review history (`first_seen`): the `before` of each line's first live `LineRevision`, untouched

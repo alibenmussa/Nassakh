@@ -2,7 +2,7 @@
 
 The worker (its own repository, alibenmussa/nassakh-qari-worker) runs Qari v0.3 and v0.2 on a Runpod GPU;
 everything else stays here. One request carries one crop, resized exactly as the local engines resize it,
-and a task per model (request schema 1, docs/RUNPOD_SPEC.md §2). `run_full_ocr` asks both models in one
+and a task per model (request schema 1, docs/baseline/RUNPOD_SPEC.md §2). `run_full_ocr` asks both models in one
 request (`registry.together` → `QariRunpodEngine.read_together` → `prefetch`) and each engine's `recognize`
 takes its own answer (`take`); a call outside such a pair asks for one model alone (`read_one`).
 

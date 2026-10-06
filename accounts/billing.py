@@ -1,4 +1,4 @@
-"""The page quota (D106, docs/CHALLENGE_SPEC.md §1): a page is one page the models read (the cost on Runpod).
+"""The page quota (D106, docs/challenge/CHALLENGE_SPEC.md §1): a page is one page the models read (the cost on Runpod).
 
 Every change goes through this module, under `select_for_update` on the organisation (the account):
 

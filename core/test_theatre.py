@@ -1,4 +1,4 @@
-"""Phase 3 theatre UI as rebuilt by docs/DASHBOARD_SPEC.md: the dashboard's static shells, toolbar and chrome
+"""Phase 3 theatre UI as rebuilt by docs/baseline/DASHBOARD_SPEC.md: the dashboard's static shells, toolbar and chrome
 (Django test client), the text panel's decode hooks, the compiled CSS, and — under Node with a tiny DOM stub —
 the decode engine (D28 dwell-and-veil), the pure text layout, the sheet handle and the dashboard logic."""
 

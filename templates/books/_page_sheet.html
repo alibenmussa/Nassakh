@@ -1,4 +1,4 @@
-{% comment %}One stacked sheet of the dashboard's «صفحات» view (docs/DASHBOARD_SPEC.md §3): a static shell —
+{% comment %}One stacked sheet of the dashboard's «صفحات» view (docs/baseline/DASHBOARD_SPEC.md §3): a static shell —
 server-rendered for every page at first paint, and once more with `t` = None inside <template id="sheet-shell">
 for pages ingested after load (books.js clones and patches it). No per-shell Alpine bindings: books.js patches
 the head (`patchSheet`) from the poll's changed set; the body mounts from <template id="sheet-body"> only while

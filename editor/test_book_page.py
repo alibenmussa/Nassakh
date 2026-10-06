@@ -1,5 +1,5 @@
 """The book page's edit loop under Node (the harness of core/test_layout_ui.py): what the owner's review of
-2026-10-03 found (docs/TODO_REVIEW_2026-10-03.md, editor-core).
+2026-10-03 found (docs/baseline/TODO_REVIEW_2026-10-03.md, editor-core).
 
 - a paragraph made a chapter title splits its chapter: the save's answer asks for a reload; the reload never
   waits on the save it is part of (it did, and every later save, chapter switch and «حفظ نسخة الآن» hung on

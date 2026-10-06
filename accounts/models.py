@@ -16,7 +16,7 @@ group: `accounts.services.is_org_admin`) adds and removes its fonts and manages 
   the book's own details and cover), taken from a book and applied to others through the stylesheet's own
   validation (`accounts.styles`).
 
-D106 (docs/CHALLENGE_SPEC.md §1): an account is an organisation (`kind` organization) or a person
+D106 (docs/challenge/CHALLENGE_SPEC.md §1): an account is an organisation (`kind` organization) or a person
 (`individual`: an organisation of one member, so D102's scoping holds unchanged); `SignUp` marks a user who
 signed up on the site and confirms their email. The page quota: `Plan` (a package the superuser sells),
 `QuotaGrant` (pages given to an account), `QuotaHold` (a page queued for model reading, not read yet) and

@@ -1,5 +1,5 @@
 {
-  "about": "The §3.11 contract of the «التخطيط» mode (docs/PHASE7_SPEC.md). Every file holds real payloads of the books built by `books/tests.py::guides_book` (book 25, pages 812–818 = numbers 1–7, prepared image 1000 × 3000 px); `books/tests.py` checks the live payloads against these files (the `?v=` stamp of image URLs and region ids are normalised). Ratios are of the prepared image, 4 decimals.",
+  "about": "The §3.11 contract of the «التخطيط» mode (docs/baseline/PHASE7_SPEC.md). Every file holds real payloads of the books built by `books/tests.py::guides_book` (book 25, pages 812–818 = numbers 1–7, prepared image 1000 × 3000 px); `books/tests.py` checks the live payloads against these files (the `?v=` stamp of image URLs and region ids are normalised). Ratios are of the prepared image, 4 decimals.",
   "books": {
     "layout": "awaits_ocr_start, needs_guides «تم التخطيط», auto guides (the stored proposal footnote_line 0.781 is inert), pages 1–7 preprocessed; rules on 1, 3–6, a smaller-type block on 7 (doubt footnote_from_type), page 2 without footnotes, a detected page number on every page",
     "preparing": "awaits_ocr_start, processing «قيد التخطيط»: pages 1–3 preprocessed, 4 failed in preprocess, 5–6 uploaded, 7 excluded",

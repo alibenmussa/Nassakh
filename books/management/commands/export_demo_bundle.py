@@ -1,7 +1,7 @@
 """`manage.py export_demo_bundle --books 29 31 41 [--out DIR] [--dry-run] [--force] [--include-pdf]`.
 
 Writes everything the app shows for the given books into a directory (`data.json`, `manifest.json`,
-`media/…`) that `manage.py import_demo_bundle` reads into another database (docs/DEMO_DATA.md). It only
+`media/…`) that `manage.py import_demo_bundle` reads into another database (docs/challenge/DEMO_DATA.md). It only
 reads the database and the media folder. The directory must be outside the repository: the bundle holds the
 scans, which are copyrighted, and must never be committed.
 """

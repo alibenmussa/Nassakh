@@ -1,5 +1,5 @@
 // The processing theatre's motion engine (Phase 3, decisions D23/D24 as amended by D28 — see
-// docs/DASHBOARD_SPEC.md §4–§5): the dwell-and-veil effect on provisional text, the text layout that
+// docs/baseline/DASHBOARD_SPEC.md §4–§5): the dwell-and-veil effect on provisional text, the text layout that
 // mirrors a page's printed lines, the sheet handle of the dashboard, plus a tiny registry for other
 // continuous effects.
 //

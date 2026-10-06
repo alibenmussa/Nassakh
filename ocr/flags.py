@@ -2,7 +2,7 @@
 
 Every region has up to three readers: Qari v0.3 (the primary, whose tokens make the text), Qari v0.2
 (the secondary) and Tesseract. Measured on the stored runs and review outcomes of 14 books
-(docs/PHASE7_SPEC.md §2.4, `manage.py rebuild_lines --report`):
+(docs/baseline/PHASE7_SPEC.md §2.4, `manage.py rebuild_lines --report`):
 
 - `second_readings` gives Qari v0.2's reading of each primary token. Punctuation runs are split off
   both sides first (`split_pieces`), words are compared leniently and marks only against marks, and
